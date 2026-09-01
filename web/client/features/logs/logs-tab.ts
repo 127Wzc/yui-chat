@@ -142,6 +142,17 @@ interface ModelCallDetail extends UnknownRecord {
   persistence?: boolean
 }
 
+interface MemoryExtractionLink {
+  groupId: string
+  windowId: string
+}
+
+interface MemoryExtractionState {
+  loading: boolean
+  error: string
+  window: UnknownRecord | null
+}
+
 interface ConversationItem extends UnknownRecord {
   id?: string
   source?: string
@@ -366,6 +377,44 @@ function modelMetadata(item: LogModelCall = {}): UnknownRecord {
   } catch { return {} }
 }
 
+function memoryExtractionLink(item: LogModelCall = {}): MemoryExtractionLink | null {
+  const link = asRecord(modelMetadata(item).memoryExtraction)
+  const groupId = String(link.groupId || "").trim()
+  const windowId = String(link.windowId || "").trim()
+  return groupId && windowId ? { groupId, windowId } : null
+}
+
+function memoryExtractionKey(item: LogModelCall = {}): string {
+  const link = memoryExtractionLink(item)
+  return link ? `${link.groupId}:${link.windowId}` : ""
+}
+
+function extractionItems(window: UnknownRecord | null | undefined): UnknownRecord[] {
+  const items = asRecord(window).result
+  return Array.isArray(items) ? items.map(item => asRecord(item)) : []
+}
+
+function extractionScopeLabel(item: UnknownRecord = {}): string {
+  const scopeType = String(item.scopeType || "")
+  if (scopeType === "group") return "群公共记忆"
+  const target = String(item.targetName || "").trim() || (item.ownerId ? `QQ ${item.ownerId}` : "成员")
+  return scopeType === "user" ? `${target}个人全局记忆` : `${target}个人群记忆`
+}
+
+function extractionActionLabel(value: unknown): string {
+  const labels: Record<string, string> = { added: "新增", reinforced: "强化", updated: "更新", retracted: "撤回", ignored: "忽略" }
+  const key = String(value || "")
+  return labels[key] || key || "已处理"
+}
+
+function extractionEvidenceLabel(item: UnknownRecord = {}): string {
+  const ids = Array.isArray(item.evidenceMessageIds) ? item.evidenceMessageIds.map(value => String(value || "").trim()).filter(Boolean) : []
+  const count = Number(item.evidenceCount || ids.length || 0)
+  if (!ids.length) return `证据 ${number(count)} 条`
+  const preview = ids.slice(0, 3).join("、")
+  return `证据 ${number(count)} 条 · ${preview}${ids.length > 3 ? "…" : ""}`
+}
+
 function availableTools(item: LogModelCall): number {
   return Number(item.available_tool_count ?? modelMetadata(item).toolCount) || 0
 }
@@ -455,6 +504,7 @@ export const LogsTab = {
     const conversationTurnLoading = ref(false)
     const conversationTurnError = ref("")
     const conversationTurnDetail = ref<LogDetail | null>(null)
+    const memoryExtractionStates = reactive<Record<string, MemoryExtractionState>>({})
     let modelDetailRequest = 0
     let conversationRequest = 0
     let conversationTurnRequest = 0
@@ -516,10 +566,37 @@ export const LogsTab = {
       await resetAndRefresh()
     }
 
+    function extractionState(item: LogModelCall | null | undefined): MemoryExtractionState | null {
+      const key = memoryExtractionKey(item || {})
+      return key ? memoryExtractionStates[key] || null : null
+    }
+
+    async function loadExtractionResult(item: LogModelCall | null | undefined): Promise<void> {
+      if (!item) return
+      const link = memoryExtractionLink(item)
+      const key = memoryExtractionKey(item)
+      if (!link || !key) return
+      const current = memoryExtractionStates[key]
+      if (current?.loading || current?.window) return
+      memoryExtractionStates[key] = { loading: true, error: "", window: null }
+      try {
+        const response = await request(`/api/memory/captures/group/${encodeURIComponent(link.groupId)}/windows/${encodeURIComponent(link.windowId)}?includeMessages=false`)
+        const detail = asRecord(asRecord(response).detail)
+        memoryExtractionStates[key] = { loading: false, error: "", window: asRecord(detail.window) }
+      } catch (error) {
+        memoryExtractionStates[key] = { loading: false, error: errorMessage(error), window: null }
+      }
+    }
+
+    async function loadExtractionResults(items: LogModelCall[] = []): Promise<void> {
+      await Promise.all(items.map(item => loadExtractionResult(item)))
+    }
+
     async function openRun(row: LogRun) {
       try {
         const result = await request(`/api/logs/runs/${encodeURIComponent(row.id)}`)
         state.detail = asRecord<LogDetail>(result)
+        void loadExtractionResults(state.detail.modelCalls || [])
         timelineFilter.value = "all"
         drawerOpen.value = true
       } catch (error) { toast(errorMessage(error)) }
@@ -538,6 +615,7 @@ export const LogsTab = {
         const result = await request(`/api/logs/model-calls/${encodeURIComponent(modelId)}/detail`)
         if (requestId !== modelDetailRequest) return
         modelDetail.value = asRecord<ModelCallDetail>(result)
+        void loadExtractionResult(modelDetail.value.modelCall)
       } catch (error) {
         if (requestId === modelDetailRequest) modelDetailError.value = errorMessage(error)
       } finally {
@@ -560,6 +638,7 @@ export const LogsTab = {
       const cached = conversationTurnCache.get(runId)
       if (cached) {
         conversationTurnDetail.value = cached
+        void loadExtractionResults(cached.modelCalls || [])
         conversationTurnLoading.value = false
         return
       }
@@ -569,6 +648,7 @@ export const LogsTab = {
         const detail = asRecord<LogDetail>(result)
         conversationTurnCache.set(runId, detail)
         conversationTurnDetail.value = detail
+        void loadExtractionResults(detail.modelCalls || [])
       } catch (error) {
         if (requestId === conversationTurnRequest) conversationTurnError.value = errorMessage(error)
       } finally {
@@ -747,6 +827,7 @@ export const LogsTab = {
       number, time, duration, categoryLabel, deliveryLabel, statusLabel, modelStopLabel, scopeLabel, sourceLabel, purposeLabel, lineageLabel, modelRouteDetail, availableTools, refresh, resetAndRefresh, resetFilters, applyFilters,
       conversationScope, conversationTitle, promptPreview, toolGroupsForModel, unlinkedConversationTools, contextSourceLabel, contextItemFor, contextSectionsFor,
       openRun, openModelDetail, openModelDetailById, openConversation, loadConversationTurn, saveSettings, cleanupLogs, cleanupAllLogs,
+      extractionState, extractionItems, extractionScopeLabel, extractionActionLabel, extractionEvidenceLabel,
       modelContextCount: (item: LogModelCall) => Number(item.context_message_count ?? modelMetadata(item).messageCount) || 0,
       modelMessageImageCount,
       modelMessagesImageCount,
@@ -828,7 +909,7 @@ export const LogsTab = {
             <div class="logs-model-index-head"><b>模型请求详情</b><span class="muted tiny">每一轮的上下文和工具包单独加载</span></div>
             <div class="logs-model-index-list"><button v-for="item in state.detail.modelCalls" :key="'model-index-' + item.id" class="logs-model-index-item" type="button" @click="openModelDetail(item)"><span>第 {{ item.sequence || '-' }} 次</span><b>{{ modelStopLabel(item.stop_reason) }}</b><b>工具 {{ number(availableTools(item)) }}</b><b>上下文 {{ number(modelContextCount(item)) }} 条</b><Icon name="chevron-right" :size="13" /></button></div>
           </section>
-          <div v-if="modelResponses.length" class="logs-model-responses"><details v-for="item in modelResponses" :key="'response-' + item.id" class="logs-model-response"><summary>第 {{ item.sequence || "-" }} 次模型回复（{{ number(item.response_text.length) }} 字符）</summary><pre>{{ item.response_text }}</pre></details></div><div class="timeline"><div v-for="(item, index) in timeline" :key="item.id || index" class="timeline-item" :class="{ 'timeline-tool-item': item.kindKey === 'tool' }"><span class="timeline-dot" :class="item.status === 'ok' ? 'on' : 'warn'"></span><div class="timeline-content"><div class="timeline-title"><b>{{ item.kind }} · {{ item.label }}</b><span class="badge" :class="item.status === 'ok' ? 'on' : 'risk-medium'">{{ statusLabel(item.status) }}</span><span v-if="item.kindKey === 'tool'" class="badge">{{ categoryLabel(item.category || item.source) }}</span><span v-if="item.kindKey === 'tool'" class="badge">{{ deliveryLabel(item.delivery) }}</span><span v-if="item.kindKey === 'tool'" class="badge" :class="item.requires_final_reply ? 'risk-medium' : 'on'">{{ item.requires_final_reply ? '需要最终回复' : '允许静默结束' }}</span><span v-if="item.kindKey === 'tool' && item.dispatched" class="badge risk-medium">已派发</span><span v-if="item.kindKey === 'tool' && item.retryAllowed === false" class="badge risk-medium">禁止重试</span><span v-if="item.kindKey === 'tool' && item.decision" class="badge">{{ item.decision }}</span><span v-if="item.kindKey === 'tool' && item.remainingCount > 0" class="badge risk-medium">剩余 {{ number(item.remainingCount) }}</span><span v-if="item.kindKey === 'tool' && item.deduplicated" class="badge risk-medium">重复调用已跳过</span><span v-if="item.usage_source && item.usage_source !== 'reported'" class="badge risk-medium">{{ item.usage_source === 'estimated' ? '估算' : '未知' }}</span></div><p class="muted tiny"><span v-if="item.kindKey === 'tool'">第 {{ item.round || '-' }} 轮 · 调用 {{ item.call_index || '-' }} · 执行 {{ number(item.executedCount || 0) }} · 完成 {{ number(item.completedCount || 0) }} · 返回 {{ number(item.result_chars || 0) }} 字符 · {{ duration(item.duration_ms) }}</span><span v-else>第 {{ item.sequence || '-' }} 次模型请求 · {{ item.detail }} · {{ number(item.total_tokens || 0) }} Token · {{ duration(item.duration_ms) }}</span></p><p v-if="item.kindKey === 'tool' && (item.operationId || item.guardCode)" class="muted tiny">操作 {{ item.operationId || '-' }}<span v-if="item.guardCode"> · {{ item.guardCode }}</span><span v-if="item.attempt"> · 第 {{ item.attempt }} 次尝试</span></p><JsonBlock v-if="item.kindKey === 'tool' && item.arguments" title="查看工具参数" :value="item.arguments" /><details v-if="item.kindKey === 'tool' && item.result_text" class="logs-tool-result"><summary>查看返回结果（{{ number(item.result_chars || 0) }} 字符）</summary><pre>{{ item.result_text }}</pre></details><p v-if="item.kindKey === 'tool' && item.error_message" class="logs-tool-error">{{ item.error_message }}</p><details v-if="item.input_text" class="logs-model-input"><summary>查看本次提炼输入（已脱敏）</summary><pre>{{ item.input_text }}</pre></details><JsonBlock v-if="item.kindKey === 'model' && item.metadata_json" title="查看模型调用详情" :value="{ metadata: item.metadata_json, error: item.error_message }" /></div></div></div>
+          <div v-if="modelResponses.length" class="logs-model-responses"><details v-for="item in modelResponses" :key="'response-' + item.id" class="logs-model-response"><summary>第 {{ item.sequence || "-" }} 次模型回复（{{ number(item.response_text.length) }} 字符）</summary><pre>{{ item.response_text }}</pre></details></div><div class="timeline"><div v-for="(item, index) in timeline" :key="item.id || index" class="timeline-item" :class="{ 'timeline-tool-item': item.kindKey === 'tool' }"><span class="timeline-dot" :class="item.status === 'ok' ? 'on' : 'warn'"></span><div class="timeline-content"><div class="timeline-title"><b>{{ item.kind }} · {{ item.label }}</b><span class="badge" :class="item.status === 'ok' ? 'on' : 'risk-medium'">{{ statusLabel(item.status) }}</span><span v-if="item.kindKey === 'tool'" class="badge">{{ categoryLabel(item.category || item.source) }}</span><span v-if="item.kindKey === 'tool'" class="badge">{{ deliveryLabel(item.delivery) }}</span><span v-if="item.kindKey === 'tool'" class="badge" :class="item.requires_final_reply ? 'risk-medium' : 'on'">{{ item.requires_final_reply ? '需要最终回复' : '允许静默结束' }}</span><span v-if="item.kindKey === 'tool' && item.dispatched" class="badge risk-medium">已派发</span><span v-if="item.kindKey === 'tool' && item.retryAllowed === false" class="badge risk-medium">禁止重试</span><span v-if="item.kindKey === 'tool' && item.decision" class="badge">{{ item.decision }}</span><span v-if="item.kindKey === 'tool' && item.remainingCount > 0" class="badge risk-medium">剩余 {{ number(item.remainingCount) }}</span><span v-if="item.kindKey === 'tool' && item.deduplicated" class="badge risk-medium">重复调用已跳过</span><span v-if="item.usage_source && item.usage_source !== 'reported'" class="badge risk-medium">{{ item.usage_source === 'estimated' ? '估算' : '未知' }}</span></div><p class="muted tiny"><span v-if="item.kindKey === 'tool'">第 {{ item.round || '-' }} 轮 · 调用 {{ item.call_index || '-' }} · 执行 {{ number(item.executedCount || 0) }} · 完成 {{ number(item.completedCount || 0) }} · 返回 {{ number(item.result_chars || 0) }} 字符 · {{ duration(item.duration_ms) }}</span><span v-else>第 {{ item.sequence || '-' }} 次模型请求 · {{ item.detail }} · {{ number(item.total_tokens || 0) }} Token · {{ duration(item.duration_ms) }}</span></p><p v-if="item.kindKey === 'tool' && (item.operationId || item.guardCode)" class="muted tiny">操作 {{ item.operationId || '-' }}<span v-if="item.guardCode"> · {{ item.guardCode }}</span><span v-if="item.attempt"> · 第 {{ item.attempt }} 次尝试</span></p><JsonBlock v-if="item.kindKey === 'tool' && item.arguments" title="查看工具参数" :value="item.arguments" /><details v-if="item.kindKey === 'tool' && item.result_text" class="logs-tool-result"><summary>查看返回结果（{{ number(item.result_chars || 0) }} 字符）</summary><pre>{{ item.result_text }}</pre></details><p v-if="item.kindKey === 'tool' && item.error_message" class="logs-tool-error">{{ item.error_message }}</p><details v-if="item.input_text" class="logs-model-input"><summary>查看本次提炼输入（已脱敏）</summary><pre>{{ item.input_text }}</pre></details><div v-if="item.kindKey === 'model' && extractionState(item)" class="logs-extraction-result"><div class="logs-extraction-result-head"><b>提炼结果</b><span v-if="extractionState(item)?.loading" class="muted tiny">正在读取…</span><span v-else-if="extractionState(item)?.error" class="text-danger tiny">读取失败</span><span v-else-if="extractionState(item)?.window" class="muted tiny">已关联提炼窗口</span></div><p v-if="extractionState(item)?.loading" class="muted tiny">正在加载已保存的提炼结果…</p><p v-else-if="extractionState(item)?.error" class="logs-tool-error">{{ extractionState(item)?.error }}</p><p v-else-if="extractionState(item)?.window?.status !== 'completed'" class="muted tiny">提炼窗口当前状态：{{ statusLabel(extractionState(item)?.window?.status) }}。</p><details v-else class="logs-extraction-result-body" open><summary>查看已保存结果（形成 {{ number(extractionState(item)?.window?.memoryResultCount) }} 条，忽略 {{ number(extractionState(item)?.window?.ignoredResultCount) }} 条）</summary><div class="logs-extraction-result-list"><article v-for="(result, resultIndex) in extractionItems(extractionState(item)?.window)" :key="'extraction-result-' + item.id + '-' + resultIndex" class="logs-extraction-result-item"><div class="logs-extraction-result-item-head"><span class="badge" :class="result.action === 'ignored' ? 'risk-medium' : 'on'">{{ extractionActionLabel(result.action) }}</span><span class="badge">{{ extractionScopeLabel(result) }}</span></div><p>{{ result.text || result.factValue || '未保存文本' }}</p><small class="muted">{{ extractionEvidenceLabel(result) }}<span v-if="result.reason"> · {{ result.reason }}</span></small></article><p v-if="!extractionItems(extractionState(item)?.window).length" class="muted tiny">本次提炼未形成可复用记忆。</p></div></details></div><JsonBlock v-if="item.kindKey === 'model' && item.metadata_json" title="查看模型调用详情" :value="{ metadata: item.metadata_json, error: item.error_message }" /></div></div></div>
         </div>
       </SideDrawer>
 
@@ -839,6 +920,7 @@ export const LogsTab = {
           <template v-else-if="modelDetail?.modelCall">
             <div class="logs-detail-window-meta"><div><span class="badge" :class="modelDetail.modelCall.status === 'ok' ? 'on' : 'risk-medium'">{{ statusLabel(modelDetail.modelCall.status) }}</span><span class="muted">第 {{ modelDetail.modelCall.sequence || '-' }} 次 · {{ modelDetail.modelCall.model_name || '-' }} · {{ purposeLabel(modelDetail.modelCall.purpose) }}</span></div><span class="muted tiny">{{ time(modelDetail.modelCall.started_at) }} · {{ duration(modelDetail.modelCall.duration_ms) }}</span></div>
             <div v-if="modelDetail.snapshot" class="logs-detail-stats"><span>上下文 <b>{{ number(modelDetail.snapshot.message_count) }}</b> 条</span><span>图片 <b>{{ number(modelMessagesImageCount(modelDetail.snapshot.messages)) }}</b> 张</span><span>工具包 <b>{{ number(modelDetail.snapshot.tool_count) }}</b> 个</span><span>上下文数据 <b>{{ number(modelDetail.snapshot.context_chars) }}</b> 字符</span><span>工具定义 <b>{{ number(modelDetail.snapshot.tool_chars) }}</b> 字符</span><span v-if="modelDetail.snapshot.truncated" class="badge risk-medium">快照已截断</span></div>
+            <div v-if="extractionState(modelDetail.modelCall)" class="logs-extraction-result"><div class="logs-extraction-result-head"><b>提炼结果</b><span v-if="extractionState(modelDetail.modelCall)?.loading" class="muted tiny">正在读取…</span><span v-else-if="extractionState(modelDetail.modelCall)?.error" class="text-danger tiny">读取失败</span></div><p v-if="extractionState(modelDetail.modelCall)?.loading" class="muted tiny">正在加载已保存的提炼结果…</p><p v-else-if="extractionState(modelDetail.modelCall)?.error" class="logs-tool-error">{{ extractionState(modelDetail.modelCall)?.error }}</p><p v-else-if="extractionState(modelDetail.modelCall)?.window?.status !== 'completed'" class="muted tiny">提炼窗口当前状态：{{ statusLabel(extractionState(modelDetail.modelCall)?.window?.status) }}。</p><details v-else class="logs-extraction-result-body" open><summary>查看已保存结果（形成 {{ number(extractionState(modelDetail.modelCall)?.window?.memoryResultCount) }} 条，忽略 {{ number(extractionState(modelDetail.modelCall)?.window?.ignoredResultCount) }} 条）</summary><div class="logs-extraction-result-list"><article v-for="(result, resultIndex) in extractionItems(extractionState(modelDetail.modelCall)?.window)" :key="'model-extraction-result-' + resultIndex" class="logs-extraction-result-item"><div class="logs-extraction-result-item-head"><span class="badge" :class="result.action === 'ignored' ? 'risk-medium' : 'on'">{{ extractionActionLabel(result.action) }}</span><span class="badge">{{ extractionScopeLabel(result) }}</span></div><p>{{ result.text || result.factValue || '未保存文本' }}</p><small class="muted">{{ extractionEvidenceLabel(result) }}<span v-if="result.reason"> · {{ result.reason }}</span></small></article><p v-if="!extractionItems(extractionState(modelDetail.modelCall)?.window).length" class="muted tiny">本次提炼未形成可复用记忆。</p></div></details></div>
             <p v-if="!modelDetail.snapshot" class="logs-silent-note warning">这条记录创建于详细快照功能启用前，当前只有精简的模型调用信息。</p>
             <nav class="logs-window-tabs" aria-label="模型请求详情分区"><button type="button" :class="{ active: modelDetailTab === 'context' }" @click="modelDetailTab = 'context'">实际上下文 {{ number(modelDetail.snapshot?.message_count || 0) }} · 图片 {{ number(modelMessagesImageCount(modelDetail.snapshot?.messages)) }}</button><button type="button" :class="{ active: modelDetailTab === 'tools' }" @click="modelDetailTab = 'tools'">注入工具 {{ number(modelDetail.snapshot?.tool_count || 0) }}</button><button type="button" :class="{ active: modelDetailTab === 'request' }" @click="modelDetailTab = 'request'">请求与回复</button></nav>
             <section v-if="modelDetailTab === 'context'" class="logs-window-section">

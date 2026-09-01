@@ -37,15 +37,25 @@ function memoryPrefix(item: UnknownRecord): string {
   return MEMORY_PREFIXES[text(item.ownerType)]?.[kind] || (kind === "episode" ? "相关经历" : "记忆")
 }
 
+function memoryLabel(item: UnknownRecord): string {
+  const prefix = memoryPrefix(item)
+  const ownerType = text(item.ownerType)
+  const ownerId = text(item.ownerId || item.owner_id).trim()
+  if (!ownerId) return prefix
+  if (ownerType === "group") return `${prefix}（群 ${ownerId}）`
+  if (ownerType === "user" || ownerType === "user_group") return `${prefix}（QQ ${ownerId}）`
+  return prefix
+}
+
 /** 将画像和召回记忆限制在预算内，并标注每条记忆的授权作用域。 */
 export function buildMemoryPrompt(options: unknown = {}): string {
   const value = record(options)
   const profile = record(value.profile)
   const memories = list(value.memories).map(record)
-  const tokenBudget = Math.max(30, Number(value.tokenBudget) || 350)
+  const tokenBudget = Math.max(30, Number(value.tokenBudget) || 2000)
   const lines: string[] = []
   if (Object.keys(profile).length) lines.push(`用户画像：\n${profileLines(profile).map(item => `- ${item}`).join("\n")}`)
-  for (const item of memories) lines.push(`${memoryPrefix(item)}：${text(item.text)}`)
+  for (const item of memories) lines.push(`${memoryLabel(item)}：${text(item.text)}`)
   const accepted: string[] = []
   let used = 0
   for (const line of lines) {

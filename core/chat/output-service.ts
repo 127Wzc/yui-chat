@@ -4,6 +4,7 @@ import { stripForSpeech, synthesizeSpeech } from "../media/tts-service.js"
 import { hostRuntime } from "../runtime/host-runtime.js"
 import { convertCQCodes } from "../message/cq-code.js"
 import type { UnknownRecord } from "../message/types.js"
+import { armConversationContinuation } from "../persona/conversation-continuation.js"
 import { buildReplyPayload, isEmptyResponse } from "./response-pipeline.js"
 
 type ReplyMethod = (payload: unknown, quote?: unknown, options?: UnknownRecord) => unknown | Promise<unknown>
@@ -180,6 +181,12 @@ function isLlmResult(result: UnknownRecord, source: string): boolean {
   return true
 }
 
+function rememberDeliveredConversation(event: unknown, result: UnknownRecord, source: string, botText: unknown, options: UnknownRecord): void {
+  if (options.armContinuation === false || !isLlmResult(result, source)) return
+  const e = record(event)
+  armConversationContinuation(event, e.msg || e.raw_message, botText)
+}
+
 async function sendRecordDelivery(event: unknown, data: unknown, quote: unknown, replyOptions: UnknownRecord): Promise<void> {
   const recordFactory = segmentFactory()?.record
   if (typeof recordFactory === "function") await sendReply(event, recordFactory(data), quote, replyOptions)
@@ -203,6 +210,7 @@ export async function sendChatOutput(event: unknown, result: unknown, config: un
   for (const delivery of processed.deliveries) await sendRecordDelivery(event, delivery.data, response.quoteReply, replyOptions)
   if (!processed.text) {
     markReplied(event)
+    if (processed.deliveries.length) rememberDeliveredConversation(event, resultValue, source, resultValue.text, options)
     return true
   }
 
@@ -226,22 +234,32 @@ export async function sendChatOutput(event: unknown, result: unknown, config: un
     })
     if (audio) {
       await sendRecordDelivery(event, audio, response.quoteReply, replyOptions)
-      if (record(response.tts).alsoSendText !== true) return true
+      if (record(response.tts).alsoSendText !== true) {
+        rememberDeliveredConversation(event, resultValue, source, processed.text, options)
+        return true
+      }
     }
   }
 
   if (payload.asImage) {
     const imageFactory = segmentFactory()?.image
-    return sendReply(event, typeof imageFactory === "function" ? imageFactory(payload.image) : payload.image, response.quoteReply, replyOptions)
+    const delivered = await sendReply(event, typeof imageFactory === "function" ? imageFactory(payload.image) : payload.image, response.quoteReply, replyOptions)
+    rememberDeliveredConversation(event, resultValue, source, processed.text, options)
+    return delivered
   }
   if (payload.chunks) {
     for (const chunk of payload.chunks) await sendReply(event, convertCQCodes(chunk, { removeUnsupported: response.removeCQCode !== false }), response.quoteReply, replyOptions)
+    rememberDeliveredConversation(event, resultValue, source, processed.text, options)
     return true
   }
 
   const segmentation = record(response.segmentation) as SegmentationOptions
   if (segmentation.enabled === true && settings.mode === "text" && isLlmResult(resultValue, source)) {
-    return sendConfiguredSplitText(event, payload.text, rootConfig, replyOptions)
+    const delivered = await sendConfiguredSplitText(event, payload.text, rootConfig, replyOptions)
+    rememberDeliveredConversation(event, resultValue, source, processed.text, options)
+    return delivered
   }
-  return sendReply(event, convertCQCodes(payload.text, { removeUnsupported: response.removeCQCode !== false }), response.quoteReply, replyOptions)
+  const delivered = await sendReply(event, convertCQCodes(payload.text, { removeUnsupported: response.removeCQCode !== false }), response.quoteReply, replyOptions)
+  rememberDeliveredConversation(event, resultValue, source, processed.text, options)
+  return delivered
 }

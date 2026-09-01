@@ -18,6 +18,8 @@ interface IsolatedTaskOptions {
   purpose?: string
   source?: string
   trace?: unknown
+  metadata?: Record<string, unknown>
+  snapshotMetadata?: Record<string, unknown>
 }
 
 interface Attempt {
@@ -84,6 +86,8 @@ export async function runIsolatedModelTask(options: IsolatedTaskOptions = {}): P
           source: text(options.source) || "isolated-task",
           taskName,
           trace: options.trace || null,
+          metadata: options.metadata || {},
+          snapshotMetadata: options.snapshotMetadata || options.metadata || {},
         })
         return {
           id: response.id || "",

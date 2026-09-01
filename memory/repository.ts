@@ -278,7 +278,8 @@ export class MemoryRepository {
        )
        WHERE member_id<>''${filter}
        GROUP BY member_id
-       ORDER BY last_seen_at DESC, member_id ASC
+       HAVING COUNT(DISTINCT NULLIF(memory_id, '')) > 0
+       ORDER BY memory_count DESC, last_seen_at DESC, member_id ASC
        LIMIT ?`,
       params,
     )
@@ -288,6 +289,49 @@ export class MemoryRepository {
       lastSeenAt: Number(row.last_seen_at || 0),
       memoryCount: Number(row.memory_count || 0),
     }))
+  }
+
+  /** 当前群成员可用于文本指代的最新群名片、QQ 昵称和自述别名。 */
+  async listGroupIdentityNames(groupId: unknown, limit: unknown = 500): Promise<UnknownRecord[]> {
+    const key = String(groupId || "").trim()
+    if (!key) return []
+    const rows = await sqliteClient.all<UnknownRecord>(
+      `WITH latest_group_names AS (
+         SELECT sender_id AS owner_id, sender_name AS alias, sent_at AS seen_at
+         FROM (
+           SELECT sender_id, sender_name, sent_at,
+             ROW_NUMBER() OVER (PARTITION BY sender_id ORDER BY sent_at DESC, message_id DESC) AS owner_rank
+           FROM group_memory_messages
+           WHERE group_id=? AND sender_id<>'' AND sender_name<>''
+         )
+         WHERE owner_rank=1
+       ), group_members AS (
+         SELECT owner_id FROM latest_group_names
+         UNION
+         SELECT owner_id FROM memory_items
+         WHERE scope_type='user_group' AND group_id=? AND status IN ('active','warm','cold')
+       ), identity_names AS (
+         SELECT m.owner_id, m.fact_value AS alias, m.updated_at AS seen_at
+         FROM memory_items m
+         JOIN group_members g ON g.owner_id=m.owner_id
+         WHERE m.fact_key IN ('identity.qq_nickname','identity.group_card','identity.nickname')
+           AND m.status IN ('active','warm','cold') AND TRIM(m.fact_value)<>''
+           AND (m.expires_at=0 OR m.expires_at>?)
+           AND ((m.scope_type='user' AND m.group_id='') OR (m.scope_type='user_group' AND m.group_id=?))
+       )
+       SELECT owner_id, alias, MAX(seen_at) AS seen_at
+       FROM (
+         SELECT owner_id, alias, seen_at FROM latest_group_names
+         UNION ALL
+         SELECT owner_id, alias, seen_at FROM identity_names
+       )
+       WHERE owner_id<>'' AND TRIM(alias)<>''
+       GROUP BY owner_id, alias
+       ORDER BY seen_at DESC
+       LIMIT ?`,
+      [key, key, Date.now(), key, Math.max(1, Math.min(1000, Number(limit) || 500))],
+    )
+    return rows.map(row => ({ ownerId: String(row.owner_id || ""), alias: String(row.alias || "").trim() })).filter(row => row.ownerId && row.alias)
   }
 
   async search(scopes: MemoryScope[] = [], query: unknown = "", options: RepositoryOptions = {}): Promise<MemoryItem[]> {

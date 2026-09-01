@@ -2,6 +2,7 @@ import { hostRuntime } from "../runtime/host-runtime.js"
 import { firstPersonMatch, type FirstPersonMatch } from "./persona-chain.js"
 import type { UnknownRecord } from "../message/types.js"
 import { groupIdFromEvent, isGroupEvent } from "../message/event-scope.js"
+import { clearConversationContinuationState, consumeConversationContinuation, conversationContinuationStats } from "./conversation-continuation.js"
 
 interface TriggerResult extends UnknownRecord {
   ok: boolean
@@ -130,12 +131,17 @@ export function evaluateFirstPersonTrigger(event: unknown = {}, config: unknown 
   const match = firstPersonMatch(event, config, { msg: message })
   const passiveMatch = firstPersonMatch(event, config, { msg: message, ignoreTriggerSwitches: true })
   const ambient = !passiveMatch.matched && persona.enabled !== false ? ambientAllowed(event, trigger, message) : false
-  if (!match.matched && !ambient) return { ok: false, reason: "not-matched", match }
+  const continuation = !passiveMatch.matched && persona.enabled !== false
+    ? consumeConversationContinuation(event, message)
+    : { matched: false }
+  if (!match.matched && !ambient && continuation.matched !== true) return { ok: false, reason: "not-matched", match }
   if (groupDisabled(event, trigger)) return { ok: false, reason: "disabled-group", match }
 
   const directName = match.byName && trigger.alwaysRespondToName !== false
   const directAt = match.byAt && trigger.alwaysRespondToAt !== false
-  if (ambient) {
+  if (continuation.matched === true) {
+    // 刚发送成功的一次性续聊属于明确上下文，不再受随机旁路概率影响。
+  } else if (ambient) {
     if (cooldownHit(event, trigger) || !probabilityHit(record(trigger.ambient).probabilityPercent ?? 10)) {
       return { ok: false, reason: cooldownHit(event, trigger) ? "cooldown" : "probability", match }
     }
@@ -149,8 +155,9 @@ export function evaluateFirstPersonTrigger(event: unknown = {}, config: unknown 
   const keyword = keywordInstruction(message, trigger)
   return {
     ok: true,
-    reason: directName ? "direct-name" : directAt ? "direct-at" : ambient ? "ambient" : "probability",
+    reason: directName ? "direct-name" : directAt ? "direct-at" : continuation.matched === true ? "continuation" : ambient ? "ambient" : "probability",
     match,
+    continuationReason: continuation.reason,
     extraSystemPrompt: keyword.prompt,
     outputOptions: keyword.recallMs ? { recallMsg: Math.ceil(keyword.recallMs / 1000) } : {},
     matchedEnhanceKeywords: keyword.matched,
@@ -173,12 +180,13 @@ export function evaluateFirstPersonPokeTrigger(event: unknown = {}, config: unkn
   return { ok: true, reason: "poke", match, prompt, extraSystemPrompt: prompt }
 }
 
-export function clearPersonaTriggerState(): { cooldowns: number } {
+export function clearPersonaTriggerState(): { cooldowns: number; continuationWindows: number } {
   const count = cooldowns.size
   cooldowns.clear()
-  return { cooldowns: count }
+  return { cooldowns: count, continuationWindows: clearConversationContinuationState() }
 }
 
-export function personaTriggerStats(): { cooldowns: number } {
-  return { cooldowns: cooldowns.size }
+export function personaTriggerStats(): { cooldowns: number; continuationWindows: number; continuationWindowMs: number } {
+  const continuation = conversationContinuationStats()
+  return { cooldowns: cooldowns.size, continuationWindows: continuation.windows, continuationWindowMs: continuation.windowMs }
 }

@@ -4,6 +4,7 @@ import crypto from "node:crypto"
 import { configStore, dataDir } from "../config/store.js"
 import { writeFileAtomic } from "../core/storage/atomic-file.js"
 import { hostRuntime } from "../core/runtime/host-runtime.js"
+import { hasMemoryRecallIntent, hasSpeakerComparisonIntent, mentionedUserIds } from "./scopes.js"
 import { validateMemoryWrite } from "./write-policy.js"
 
 const memoryDir = path.join(dataDir, "memory")
@@ -182,6 +183,35 @@ function memoryOwner(e: MemoryEvent = {}, owner: "user" | "group" | "scope" = "u
   if (owner === "group" && groupId) return { type: "group", id: groupId, key: `group:${groupId}`, dir: "groups", file: safePart(groupId) }
   if (owner === "scope") return { type: "scope", id: scopeId(e), key: `scope:${scopeId(e)}`, dir: "scopes", file: scopeId(e) }
   return { type: "user", id: userId, key: `user:${userId}`, dir: "users", file: safePart(userId) }
+}
+
+function recallOwners(e: MemoryEvent = {}, query: unknown = ""): MemoryOwner[] {
+  const targetIds = hasMemoryRecallIntent(query) ? mentionedUserIds(e) : []
+  const targetOnly = targetIds.length > 0 && !hasSpeakerComparisonIntent(query)
+  const owners = targetOnly ? [] : [memoryOwner(e, "user"), memoryOwner(e, "scope")]
+  if (e.isGroup) owners.push(memoryOwner(e, "group"))
+  const seen = new Set(owners.map(owner => owner.key))
+  for (const userId of targetIds) {
+    const targetOwners = [
+      memoryOwner({ user_id: userId }, "user"),
+      memoryOwner({ ...e, user_id: userId }, "scope"),
+    ]
+    for (const owner of targetOwners) {
+      if (seen.has(owner.key)) continue
+      seen.add(owner.key)
+      owners.push(owner)
+    }
+  }
+  return owners
+}
+
+function recallMemoryLabel(item: UnknownRecord): string {
+  const ownerType = text(item.ownerType)
+  const ownerId = text(item.ownerId).trim()
+  if (ownerType === "group") return `本群公共记忆（群 ${ownerId}）`
+  if (ownerType === "scope") return `该用户在本群的记忆（QQ ${ownerId}）`
+  if (ownerType === "user") return `该用户的长期记忆（QQ ${ownerId}）`
+  return "相关经历"
 }
 
 function managedScopeType(value: unknown): ManagedScopeType | "" {
@@ -856,8 +886,7 @@ class MemoryStore {
 
   async search(e: MemoryEvent, query: unknown, limit = 5): Promise<UnknownRecord[]> {
     const tokens = tokenize(query)
-    const owners = [memoryOwner(e, "user"), memoryOwner(e, "scope")]
-    if (e.isGroup) owners.push(memoryOwner(e, "group"))
+    const owners = recallOwners(e, query)
     const rows: UnknownRecord[] = []
     for (const owner of owners) {
       for (const memory of await this.loadMemories(owner)) {
@@ -910,7 +939,7 @@ class MemoryStore {
           }
         }
         if (this.dirtyMemories.size) this.scheduleFlush()
-        parts.push(`与本轮相关的记忆：\n${relevant.map(item => `- ${item.text}`).join("\n")}`)
+        parts.push(`与本轮相关的记忆：\n${relevant.map(item => `- ${recallMemoryLabel(item)}：${item.text}`).join("\n")}`)
       }
     }
     const budget = Math.max(300, Number(config.promptBudgetChars) || 2200)

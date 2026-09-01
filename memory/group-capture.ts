@@ -497,6 +497,18 @@ function extractionResultSummary(value: unknown = "[]"): {
   return { result, items, memoryResultCount, ignoredResultCount }
 }
 
+function resultWithTargetName(item: UnknownRecord = {}, targetNames: Map<string, string> = new Map()): UnknownRecord {
+  const scopeType = String(item.scopeType || "")
+  if (!["user", "user_group"].includes(scopeType) || String(item.targetName || "").trim()) return item
+  const ownerId = String(item.ownerId || item.subjectId || "").trim()
+  const targetName = cleanText(targetNames.get(ownerId) || "", 120)
+  return targetName ? { ...item, targetName } : item
+}
+
+function resultItemsWithTargetNames(items: UnknownRecord[] = [], targetNames: Map<string, string> = new Map()): UnknownRecord[] {
+  return items.map(item => resultWithTargetName(item, targetNames))
+}
+
 function tokenLimit(value: unknown = policyDefaults().tokenLimit): number {
   return integer(value, policyDefaults().tokenLimit, 256, 60000)
 }
@@ -718,14 +730,14 @@ function sourceMessageView(row: UnknownRecord = {}): UnknownRecord {
   }
 }
 
-function windowView(row: UnknownRecord = {}): UnknownRecord {
+function windowView(row: UnknownRecord = {}, targetNames: Map<string, string> = new Map()): UnknownRecord {
   const { result: resultInfo, items, memoryResultCount, ignoredResultCount } = extractionResultSummary(row.result_json)
   return {
     id: row.id, scopeType: "group", scopeId: row.group_id, windowStart: Number(row.window_start), windowEnd: Number(row.window_end),
     kind: "daily", tokenLimit: Number(row.token_limit || 0), estimatedInputTokens: Number(row.estimated_input_tokens || 0),
     skippedMessageCount: Number(row.skipped_message_count || 0), needsReextract: Boolean(row.needs_reextract),
     contentHash: row.content_hash, extractorVersion: row.extractor_version, status: row.status, attemptCount: Number(row.attempt_count || 0),
-    nextAttemptAt: Number(row.next_attempt_at || 0), errorMessage: row.error_message, result: items,
+    nextAttemptAt: Number(row.next_attempt_at || 0), errorMessage: row.error_message, result: resultItemsWithTargetNames(items, targetNames),
     processingChunk: Number(row.processing_chunk || 0), processingChunkTotal: Number(row.processing_chunk_total || 0),
     modelCallCount: Number(resultInfo.modelCallCount || 0), processedMessageCount: Number(resultInfo.messageCount || 0),
     memoryResultCount, ignoredResultCount, truncated: Boolean(resultInfo.truncated), omittedItemCount: Number(resultInfo.omittedItemCount || 0),
@@ -746,6 +758,7 @@ export class GroupCaptureStore {
   scanTimer: ReturnType<typeof setInterval> | null = null
   initialized = false
   processing = false
+  manualWindowRuns = new Set<string>()
   lastError = ""
   appliedRetentions = new Map<string, number>()
   clearingScopes = new Set<string>()
@@ -1766,18 +1779,38 @@ export class GroupCaptureStore {
     }
     const totalMessages = Number(row.source_message_count || 0)
     const limit = number(options.limit, 1000, 1, 1000)
-    const rows = await sqliteClient.all(
-      `SELECT * FROM group_memory_messages
-       WHERE group_id=? AND sent_at>=? AND sent_at<? AND is_command=0 AND text_content<>''
-       ORDER BY sent_at ASC, message_id ASC LIMIT ?`,
-      [idValue, Number(row.window_start), Number(row.window_end), limit],
-    )
+    const includeMessages = options.includeMessages !== false
+    const [rows, senderRows] = await Promise.all([
+      includeMessages
+        ? sqliteClient.all(
+          `SELECT * FROM group_memory_messages
+           WHERE group_id=? AND sent_at>=? AND sent_at<? AND is_command=0 AND text_content<>''
+           ORDER BY sent_at ASC, message_id ASC LIMIT ?`,
+          [idValue, Number(row.window_start), Number(row.window_end), limit],
+        )
+        : Promise.resolve([]),
+      // 结果详情最多只展示一部分原文，但目标成员可能出现在窗口后段；单独取每位发言人的
+      // 最近非空名片，兼容旧 result_json 中尚未保存 targetName 的提炼结果。
+      sqliteClient.all(
+        `SELECT sender_id, sender_name
+         FROM group_memory_messages
+         WHERE group_id=? AND sent_at>=? AND sent_at<? AND is_command=0 AND sender_id<>'' AND sender_name<>''
+         ORDER BY sent_at DESC, message_id DESC`,
+        [idValue, Number(row.window_start), Number(row.window_end)],
+      ),
+    ])
+    const targetNames = new Map<string, string>()
+    for (const sender of senderRows) {
+      const senderId = String(sender.sender_id || "").trim()
+      const senderName = cleanText(sender.sender_name || "", 120)
+      if (senderId && senderName && !targetNames.has(senderId)) targetNames.set(senderId, senderName)
+    }
     const sourceTextChars = Number(row.source_text_chars || 0)
     const sourceMemberCount = Number(row.source_member_count || 0)
-    const view = windowView(row)
+    const view = windowView(row, targetNames)
     const policy = this.policies.get(this.key(type, idValue))
     const chunkCount = Number(view.modelCallCount || partitionRowsByTokens(rows, Number(view.tokenLimit || tokenLimit(policy?.tokenLimit))).chunks.length)
-    return { window: { ...view, sourceTextChars, sourceMemberCount, chunkCount }, messages: rows.map(sourceMessageView), totalMessages, truncated: totalMessages > rows.length }
+    return { window: { ...view, sourceTextChars, sourceMemberCount, chunkCount }, messages: includeMessages ? rows.map(sourceMessageView) : [], totalMessages, truncated: includeMessages && totalMessages > rows.length }
   }
 
   async listDerivedMemories(scopeType: unknown, scopeId: unknown, options: UnknownRecord = {}): Promise<UnknownRecord[]> {
@@ -2055,6 +2088,108 @@ export class GroupCaptureStore {
     return { historicalDays, latest }
   }
 
+  async runWindow(scopeType: unknown, scopeId: unknown, windowId: unknown, options: UnknownRecord = {}): Promise<UnknownRecord> {
+    const type = normalizeScopeType(scopeType)
+    const idValue = String(scopeId || "").trim()
+    const idValueWindow = String(windowId || "").trim()
+    if (type !== "group" || !idValue || !idValueWindow) throw new Error("缺少提炼任务标识。")
+    const policy = this.policies.get(this.key(type, idValue))
+    if (!policy?.enabled) throw new Error("请先开启这个群的消息采集。")
+    if (record(groupConfig().consolidation).enabled === false) throw new Error("记忆提炼功能当前已关闭，请先在全局设置中开启。")
+    await this.drain()
+    const row = await sqliteClient.get(
+      `SELECT * FROM group_memory_extraction_jobs
+       WHERE id=? AND group_id=? AND extractor_version=?`,
+      [idValueWindow, idValue, EXTRACTOR_VERSION],
+    )
+    if (!row) {
+      const error = new Error("未找到这个提炼任务。")
+      Object.assign(error, { statusCode: 404 })
+      throw error
+    }
+    const status = String(row.status || "")
+    const retry = status === "failed" || (status === "completed" && Boolean(row.needs_reextract))
+    if (status === "running") {
+      const error = new Error("这个提炼任务正在运行中，请等待当前任务完成。")
+      Object.assign(error, { statusCode: 409 })
+      throw error
+    }
+    if ((options.retry === true && !retry) || (!retry && status !== "pending")) {
+      const error = new Error("只有等待处理的任务可以立即执行；已完成任务无需重复执行。")
+      Object.assign(error, { statusCode: 409 })
+      throw error
+    }
+    const source = await sqliteClient.get(
+      `SELECT COUNT(*) AS count
+       FROM group_memory_messages
+       WHERE group_id=? AND sent_at>=? AND sent_at<? AND is_command=0 AND text_content<>''`,
+      [idValue, Number(row.window_start), Number(row.window_end)],
+    )
+    if (!Number(source?.count || 0)) throw new Error("这个提炼任务的原始消息已过期或不存在，无法执行。")
+    const runKey = `${type}:${idValue}:${idValueWindow}`
+    if (this.manualWindowRuns.has(runKey)) {
+      const error = new Error("这个提炼任务已经提交手动执行，请等待状态刷新。")
+      Object.assign(error, { statusCode: 409 })
+      throw error
+    }
+    const timestamp = now()
+    await sqliteClient.run(
+      `UPDATE group_memory_extraction_jobs
+       SET status='pending', next_attempt_at=0, processing_chunk=0, processing_chunk_total=?,
+           attempt_count=?, needs_reextract=0, error_message=?, result_json=?, completed_at=0, updated_at=?
+       WHERE id=?`,
+      [retry ? 0 : Number(row.processing_chunk_total || 0), retry ? 0 : Number(row.attempt_count || 0), retry ? "" : String(row.error_message || ""), retry ? "[]" : String(row.result_json || "[]"), timestamp, idValueWindow],
+    )
+    const queuedRow = {
+      ...row,
+      status: "pending",
+      next_attempt_at: 0,
+      processing_chunk: 0,
+      processing_chunk_total: retry ? 0 : Number(row.processing_chunk_total || 0),
+      attempt_count: retry ? 0 : Number(row.attempt_count || 0),
+      needs_reextract: 0,
+      error_message: retry ? "" : String(row.error_message || ""),
+      result_json: retry ? "[]" : String(row.result_json || "[]"),
+      completed_at: 0,
+      updated_at: timestamp,
+    }
+    this.manualWindowRuns.add(runKey)
+    const launch = (delayMs = 0) => {
+      const timer = setTimeout(() => {
+        void (async () => {
+          const current = await sqliteClient.get(
+            "SELECT * FROM group_memory_extraction_jobs WHERE id=? AND group_id=? AND extractor_version=?",
+            [idValueWindow, idValue, EXTRACTOR_VERSION],
+          )
+          if (!current || String(current.status || "") !== "pending") {
+            this.manualWindowRuns.delete(runKey)
+            return
+          }
+          if (this.processing) {
+            // 模型调用可能持续数十秒，避免 0ms 定时器反复查询 SQLite。
+            launch(250)
+            return
+          }
+          this.processing = true
+          try {
+            await this.processWindow({ ...current, next_attempt_at: 0 })
+          } catch (error) {
+            this.noteError(error)
+          } finally {
+            this.processing = false
+            this.manualWindowRuns.delete(runKey)
+          }
+        })().catch(error => {
+          this.manualWindowRuns.delete(runKey)
+          this.noteError(error)
+        })
+      }, delayMs)
+      timer.unref?.()
+    }
+    launch()
+    return { queued: true, retried: retry, window: windowView(queuedRow) }
+  }
+
   async scan(): Promise<void> {
     if (!sqliteClient.status.available || groupConfig().enabled === false) return
     await this.drain()
@@ -2145,6 +2280,8 @@ export class GroupCaptureStore {
           source: "group-memory-consolidation",
           purpose: "memory-consolidation",
           event: { group_id: first.group_id, isGroup: true, user_id: "memory-consolidator" },
+          metadata: { memoryExtraction: { groupId: first.group_id, windowId: first.id } },
+          snapshotMetadata: { memoryExtraction: { groupId: first.group_id, windowId: first.id } },
         })
         if (clearEpoch !== this.clearEpoch(scopeKey)) return
         const payload = modelJson(result.text)
@@ -2256,6 +2393,12 @@ export class GroupCaptureStore {
       return cachedRows.get(cacheKey) || []
     }
     const applied: UnknownRecord[] = []
+    const targetNames = new Map<string, string>()
+    for (const source of sourceRows) {
+      const senderId = String(source.sender_id || "").trim()
+      const senderName = cleanText(source.sender_name || "", 120)
+      if (senderId && senderName && !targetNames.has(senderId)) targetNames.set(senderId, senderName)
+    }
     for (const candidate of merged.values()) {
       if (typeof options.isCurrent === "function" && !options.isCurrent()) return applied
       const candidateText = String(candidate.text || "")
@@ -2396,7 +2539,7 @@ export class GroupCaptureStore {
       applied.push({ id: memory.id, scopeType: scope.scopeType, ownerId: scope.ownerId, type, text: memory.text, factKey: candidateFactKey, factValue: candidateFactValue, action, duplicateCount, evidenceCount: candidateEvidence.length, evidenceMessageIds: candidateEvidence.map(row => row.message_id) })
     }
     if (applied.length) await sqliteMemoryStore.refreshStats()
-    return applied
+    return resultItemsWithTargetNames(applied, targetNames)
   }
 
   async summary(options: UnknownRecord = {}): Promise<UnknownRecord> {

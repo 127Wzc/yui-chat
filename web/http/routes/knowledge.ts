@@ -145,8 +145,12 @@ export function registerKnowledgeRoutes(app: RouteApp): void {
     res.json({ ok: true, windows })
   }, { errorStatus: 400 }))
   app.get("/api/memory/captures/:scopeType/:scopeId/windows/:windowId", auth, handleRoute(async (req, res) => {
-    const detail = await groupCaptureStore.getWindowDetail(req.params.scopeType, req.params.scopeId, req.params.windowId, { limit: Number(req.query.limit || 1000) })
+    const detail = await groupCaptureStore.getWindowDetail(req.params.scopeType, req.params.scopeId, req.params.windowId, { limit: Number(req.query.limit || 1000), includeMessages: req.query.includeMessages !== "false" })
     res.json({ ok: true, detail })
+  }, { errorStatus: 400 }))
+  app.post("/api/memory/captures/:scopeType/:scopeId/windows/:windowId/run", auth, handleRoute(async (req, res) => {
+    const result = await groupCaptureStore.runWindow(req.params.scopeType, req.params.scopeId, req.params.windowId, { retry: req.body?.retry === true })
+    res.json({ ok: true, result, capture: await groupCaptureStore.summary() })
   }, { errorStatus: 400 }))
   app.get("/api/memory/captures/:scopeType/:scopeId/memories", auth, handleRoute(async (req, res) => {
     const memories = await groupCaptureStore.listDerivedMemories(req.params.scopeType, req.params.scopeId, { limit: Number(req.query.limit || 100) })

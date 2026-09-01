@@ -16,6 +16,7 @@ const FAIL_STREAK_LIMIT = 3
 const QUERY_CACHE_LIMIT = 128
 const QUERY_CACHE_TTL_MS = 5 * 60 * 1000
 const MIN_QUERY_CHARS = 4
+const MIN_VECTOR_SCORE = 0.35
 
 type UnknownRecord = Record<string, unknown>
 
@@ -224,7 +225,10 @@ export class MemoryVectorRecall {
       const vector = await this.embedQuery({ modelName, dimensions, normalized, query, event })
       if (!vector) return []
       const limit = Math.max(1, Number(this.retrievalConfig().vectorCandidateLimit) || 20)
-      const owners: VectorMatch[] = (await vectorIndex.search(space, vector, limit)).filter(item => item.ownerType === OWNER_TYPE)
+      // 向量空间由所有记忆共用：适度多取后再按本轮作用域过滤，降低目标成员被全局近邻挤出的概率。
+      const searchLimit = Math.min(1000, Math.max(limit, limit * Math.min(5, Math.max(1, scopes.length))))
+      const owners: VectorMatch[] = (await vectorIndex.search(space, vector, searchLimit))
+        .filter(item => item.ownerType === OWNER_TYPE && Math.max(0, 1 - Number(item.distance)) >= MIN_VECTOR_SCORE)
       if (!owners.length) return []
       const ids = [...new Set(owners.map(item => String(item.ownerId)))]
       const rows = await sqliteClient.all<UnknownRecord>(`SELECT * FROM memory_items WHERE id IN (${ids.map(() => "?").join(",")})`, ids)
@@ -241,6 +245,7 @@ export class MemoryVectorRecall {
         if (row.type === "profile" || row.type === "short") continue
         if (row.type === "episode" && row.source === "interaction") continue
         results.push({ ...row, tags: parseTags(row.tags_json), score: Math.max(0, 1 - Number(owner.distance)) })
+        if (results.length >= limit) break
       }
       return results
     } catch (error: unknown) {

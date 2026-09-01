@@ -220,7 +220,7 @@ try {
   await sqliteClient.transaction([
     {
       sql: "UPDATE group_memory_extraction_jobs SET status='completed', result_json=? WHERE id='perf-window-000'",
-      params: [serializeExtractionResult({ items: [{ id: "calendar-memory", action: "added", text: "形成一条记忆" }], modelCallCount: 1, messageCount: 100 })],
+      params: [serializeExtractionResult({ items: [{ id: "calendar-memory", action: "added", scopeType: "user", ownerId: "perf-user", text: "形成一条记忆" }], modelCallCount: 1, messageCount: 100 })],
     },
     {
       sql: "UPDATE group_memory_extraction_jobs SET status='completed', result_json=? WHERE id='perf-window-001'",
@@ -257,6 +257,11 @@ try {
   assert.equal(calendar.items[2].windowStatus, "failed")
   assert.equal(calendar.items[3].windowId, "")
   assert.equal(calendar.items[3].canReextract, true)
+  const legacyResultDetail = await groupCaptureStore.getWindowDetail("group", "perf-group", "perf-window-000")
+  assert.equal(legacyResultDetail.window.result[0]?.targetName, "性能用户", "old extraction results should resolve the target's group card from source messages")
+  const compactResultDetail = await groupCaptureStore.getWindowDetail("group", "perf-group", "perf-window-000", { includeMessages: false })
+  assert.equal(compactResultDetail.messages.length, 0, "extraction result lookup should support omitting duplicate raw messages")
+  assert.equal(compactResultDetail.window.result[0]?.targetName, "性能用户")
   const legacyCalendar = await groupCaptureStore.getDailyCalendar("group", "perf-group", {
     fromDay: localDayKey(localDayAt(perfStart, 4)),
     toDay: localDayKey(localDayAt(perfStart, 5)),
@@ -386,6 +391,76 @@ try {
   assert.deepEqual(second, first, "retrying the same window evidence must not reinforce the memory twice")
   assert.equal(Number((await sqliteClient.get("SELECT COUNT(*) AS count FROM memory_items WHERE owner_id='retry-user' AND fact_key='preference.coffee'"))?.count), 1)
   assert.equal(Number((await sqliteClient.get("SELECT COUNT(*) AS count FROM memory_evidence WHERE memory_id=?", [first.id]))?.count), 1)
+
+  const memberRows = [
+    { id: "member-list-message-a", messageId: "member-list-message-a", userId: "member-list-a", name: "记忆较多成员" },
+    { id: "member-list-message-b", messageId: "member-list-message-b", userId: "member-list-b", name: "记忆较少成员" },
+    { id: "member-list-message-c", messageId: "member-list-message-c", userId: "member-list-c", name: "没有记忆成员" },
+  ]
+  await sqliteClient.transaction(memberRows.map(row => ({
+    sql: `INSERT INTO group_memory_messages(
+      id, group_id, message_id, sender_id, sender_name, sender_role, sent_at,
+      text_content, segments_json, content_hash, is_command, expires_at
+    ) VALUES(?, 'member-list-group', ?, ?, ?, 'member', ?, ?, '[]', ?, 0, 0)`,
+    params: [row.id, row.messageId, row.userId, row.name, Date.now(), `${row.name} 的群聊消息`, row.id],
+  })))
+  await groupCaptureStore.applyCandidates(
+    { id: "member-list-window", group_id: "member-list-group" },
+    memberRows.map(row => ({ id: row.id, message_id: row.messageId, sender_id: row.userId, sender_name: row.name, sender_role: "member" })),
+    [
+      { scope: "user_group", subjectId: "member-list-a", speakerId: "member-list-a", factKey: "preference.coffee", factValue: "hand_brew", text: "用户喜欢手冲咖啡", confidence: 0.9, evidenceMessageIds: ["member-list-message-a"] },
+      { scope: "user_group", subjectId: "member-list-a", speakerId: "member-list-a", factKey: "preference.tea", factValue: "oolong", text: "用户喜欢乌龙茶", confidence: 0.9, evidenceMessageIds: ["member-list-message-a"] },
+      { scope: "user_group", subjectId: "member-list-b", speakerId: "member-list-b", factKey: "preference.reading", factValue: "fiction", text: "用户喜欢读小说", confidence: 0.9, evidenceMessageIds: ["member-list-message-b"] },
+    ],
+  )
+  const memberWorkspace = await sqliteMemoryStore.getGroupWorkspace("member-list-group")
+  assert.deepEqual(
+    memberWorkspace.members.map(member => ({ userId: member.userId, memoryCount: member.memoryCount })),
+    [{ userId: "member-list-a", memoryCount: 2 }, { userId: "member-list-b", memoryCount: 1 }],
+    "group member workspace should hide members without memory blocks and order by memory count descending",
+  )
+
+  await configStore.update(config => { config.memory.groupCapture.consolidation.enabled = true })
+  await groupCaptureStore.setPolicy("group", "manual-run-group", { enabled: true })
+  const manualWindowStart = Date.now() - 60000
+  const manualWindowEnd = Date.now() + 60000
+  await sqliteClient.transaction([
+    {
+      sql: `INSERT INTO group_memory_messages(
+        id, group_id, message_id, sender_id, sender_name, sender_role, sent_at,
+        text_content, segments_json, content_hash, is_command, expires_at
+      ) VALUES('manual-run-message', 'manual-run-group', 'manual-run-message', 'manual-run-user', '手动执行用户', 'member', ?, '可用于手动提炼的消息', '[]', 'manual-run-hash', 0, 0)`,
+      params: [manualWindowStart + 1],
+    },
+    {
+      sql: `INSERT INTO group_memory_extraction_jobs(
+        id, group_id, window_start, window_end, content_hash, extractor_version,
+        status, attempt_count, next_attempt_at, error_message, result_json, created_at, updated_at
+      ) VALUES('manual-run-window', 'manual-run-group', ?, ?, 'manual-run-hash', 'group-memory-v4-daily', 'failed', 3, ?, '上次失败', '[{"text":"旧结果"}]', ?, ?)`,
+      params: [manualWindowStart, manualWindowEnd, Date.now() + 600000, manualWindowStart, manualWindowStart],
+    },
+  ])
+  const originalProcessWindow = groupCaptureStore.processWindow
+  groupCaptureStore.processWindow = async () => {}
+  try {
+    const manuallyQueued = await groupCaptureStore.runWindow("group", "manual-run-group", "manual-run-window", { retry: true })
+    assert.equal(manuallyQueued.queued, true)
+    assert.equal(manuallyQueued.retried, true)
+    const manuallyQueuedRow = await sqliteClient.get(
+      "SELECT status, attempt_count, next_attempt_at, error_message, result_json FROM group_memory_extraction_jobs WHERE id='manual-run-window'",
+    )
+    assert.deepEqual(manuallyQueuedRow, { status: "pending", attempt_count: 0, next_attempt_at: 0, error_message: "", result_json: "[]" }, "manual retry must reset the failed job before background execution")
+    await new Promise(resolve => setTimeout(resolve, 10))
+    await sqliteClient.run("UPDATE group_memory_extraction_jobs SET status='completed', needs_reextract=0 WHERE id='manual-run-window'")
+    await assert.rejects(
+      groupCaptureStore.runWindow("group", "manual-run-group", "manual-run-window", { retry: true }),
+      /只有等待处理的任务可以立即执行/,
+      "retry=true must not force a paid rerun of an already healthy completed window",
+    )
+  } finally {
+    groupCaptureStore.processWindow = originalProcessWindow
+    await configStore.update(config => { config.memory.groupCapture.consolidation.enabled = false })
+  }
 
   await assert.rejects(
     sqliteMemoryStore.addFact({ user_id: "explicit-sensitive", isGroup: false }, "请记住手机号 13812345678", { source: "explicit-user" }),

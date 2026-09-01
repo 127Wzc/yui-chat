@@ -46,13 +46,14 @@ export async function handleFirstPersonMessage(event: unknown, options: UnknownR
   if (isCommandMessage(message.trim(), config)) return false
   const trigger = record(evaluateFirstPersonTrigger(e, config))
   if (trigger.ok !== true) return false
+  const continuation = trigger.reason === "continuation"
   const gate = await preflight(e, message, config)
   if (!gate.ok) return false
   try {
     await sendConfirm(e, config)
-    const result = await chatService.send(e, message, { source: "firstPerson", extraSystemPrompt: trigger.extraSystemPrompt })
+    const result = await chatService.send(e, message, { source: continuation ? "firstPersonContinuation" : "firstPerson", extraSystemPrompt: trigger.extraSystemPrompt })
     e.__yuiChatReplied = true
-    await sendChatOutput(e, result, config, { source: "firstPerson", replyOptions: trigger.outputOptions })
+    await sendChatOutput(e, result, config, { source: "firstPerson", replyOptions: trigger.outputOptions, armContinuation: !continuation })
     return true
   } catch (error) {
     hostRuntime.logger?.error?.(text(options.logPrefix || "[yui-chat] 第一人称回应失败"), error)

@@ -51,7 +51,7 @@ export const MemoryManageWorkspace = {
 
         <div class="group-member-area">
           <aside class="group-member-list">
-            <div class="memory-section-head"><div><h2>群成员</h2><p>选择成员后维护其群内与全局记忆。</p></div></div>
+            <div class="memory-section-head"><div><h2>群成员</h2><p>仅显示有记忆块的成员，默认按块数从多到少排列。</p></div></div>
             <label class="memory-search"><Icon name="search" :size="14" /><input v-model="view.memberQuery" type="search" placeholder="搜索成员 QQ 或昵称" /></label>
             <div class="group-member-rows">
               <button v-for="member in view.members" :key="member.userId" class="group-member-row" :class="{ active: view.selectedMember?.userId === member.userId }" type="button" @click="view.selectMember(member)"><span class="memory-target-icon"><Icon name="bot" :size="15" /></span><span class="group-member-copy"><strong>{{ member.name || '用户 ' + member.userId }}</strong><small>QQ {{ member.userId }}</small></span><span v-if="member.memoryCount" class="badge">{{ member.memoryCount }}</span></button>

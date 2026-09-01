@@ -28,7 +28,7 @@ interface SchemaManifest extends UnknownRecord {
   summary?: { tabs?: number; sections?: number; fields?: number; sensitiveFields?: number; advancedFields?: number }
 }
 interface ManifestTab { sections?: string[] }
-interface ModelConfig { name?: string; modelIdentifier?: string; capabilities?: { chat?: boolean } }
+interface ModelConfig { name?: string; modelIdentifier?: string; capabilities?: { chat?: boolean; embedding?: boolean } }
 interface ConsolidationConfig { modelName?: string; maxTokens?: number; minConfidence?: number; maxWindowsPerScan?: number }
 interface GroupCaptureConfig {
   defaultRetentionDays?: number
@@ -41,7 +41,7 @@ interface AdvancedConfig extends UnknownRecord {
   logging?: { level?: string; history?: UnknownRecord }
   system?: { backups?: { maxFiles?: number; maxAgeDays?: number } }
   security?: { linkSafety?: { allowPrivateHosts?: boolean; trustedPrivateDnsBypass?: boolean; screenshotAllowedHosts?: string[] } }
-  memory?: { retrieval?: { embeddingTokensPerDay?: number; resultLimit?: number }; groupCapture?: GroupCaptureConfig }
+  memory?: { retrieval?: { embeddingTokensPerDay?: number; resultLimit?: number; promptTokenBudget?: number; embeddingModel?: string; adaptiveVector?: boolean }; groupCapture?: GroupCaptureConfig }
   knowledge?: { indexing?: { globalEmbeddingTokensPerDay?: number } }
   modelTasks?: { replyer?: { modelList?: string[] } }
   models?: ModelConfig[]
@@ -84,6 +84,9 @@ export const AdvancedTab = {
       captureMinConfidence: config.value.memory?.groupCapture?.consolidation?.minConfidence ?? 0.7,
       captureMaxWindowsPerScan: config.value.memory?.groupCapture?.consolidation?.maxWindowsPerScan ?? 2,
       captureRetrievalResultLimit: config.value.memory?.retrieval?.resultLimit ?? 3,
+      capturePromptTokenBudget: config.value.memory?.retrieval?.promptTokenBudget ?? 2000,
+      captureEmbeddingModel: config.value.memory?.retrieval?.embeddingModel || "",
+      captureAdaptiveVector: config.value.memory?.retrieval?.adaptiveVector !== false,
     })
     const activeSection = ref(store.systemSettingsSection || "status")
     const showJsonDrawer = ref(false)
@@ -176,6 +179,12 @@ export const AdvancedTab = {
         .filter(model => model.name && model.capabilities?.chat !== false)
         .map(model => ({ value: model.name, label: model.modelIdentifier && model.modelIdentifier !== model.name ? `${model.name} · ${model.modelIdentifier}` : model.name })),
     ])
+    const memoryEmbeddingModelOptions = computed(() => [
+      { value: "", label: "关闭向量召回 · 仅全文检索" },
+      ...(config.value.models || [])
+        .filter(model => model.name && model.capabilities?.embedding === true)
+        .map(model => ({ value: model.name, label: model.modelIdentifier && model.modelIdentifier !== model.name ? `${model.name} · ${model.modelIdentifier}` : model.name })),
+    ])
 
     const manifestMetrics = computed(() => {
       const s = manifest.value.summary || {}
@@ -212,6 +221,9 @@ export const AdvancedTab = {
       draft.captureMinConfidence = Number.isFinite(confidence) ? confidence : 0.7
       draft.captureMaxWindowsPerScan = Number(consolidation.maxWindowsPerScan) || 2
       draft.captureRetrievalResultLimit = Number(config.value.memory?.retrieval?.resultLimit) || 3
+      draft.capturePromptTokenBudget = Number(config.value.memory?.retrieval?.promptTokenBudget) || 2000
+      draft.captureEmbeddingModel = String(config.value.memory?.retrieval?.embeddingModel || "")
+      draft.captureAdaptiveVector = config.value.memory?.retrieval?.adaptiveVector !== false
     }
     async function saveLoggingLevel() {
       try {
@@ -365,6 +377,7 @@ export const AdvancedTab = {
         const minConfidence = Number.isFinite(confidence) ? Math.min(1, Math.max(0, confidence)) : 0.7
         const maxWindowsPerScan = Math.round(Math.min(64, Math.max(1, Number(draft.captureMaxWindowsPerScan) || 2)))
         const retrievalResultLimit = Math.round(Math.min(20, Math.max(1, Number(draft.captureRetrievalResultLimit) || 3)))
+        const promptTokenBudget = Math.round(Math.min(10000, Math.max(30, Number(draft.capturePromptTokenBudget) || 2000)))
         const promptTemplate = draft.captureUseBuiltInPrompt ? "" : String(draft.capturePromptTemplate || "").trim()
         if (!draft.captureUseBuiltInPrompt && !promptTemplate) throw new Error("请填写自定义提示词，或切换为内置默认提示词")
         await saveConfigPatch({
@@ -376,6 +389,9 @@ export const AdvancedTab = {
           "memory.groupCapture.consolidation.minConfidence": minConfidence,
           "memory.groupCapture.consolidation.maxWindowsPerScan": maxWindowsPerScan,
           "memory.retrieval.resultLimit": retrievalResultLimit,
+          "memory.retrieval.promptTokenBudget": promptTokenBudget,
+          "memory.retrieval.embeddingModel": draft.captureEmbeddingModel || "",
+          "memory.retrieval.adaptiveVector": draft.captureAdaptiveVector,
         })
         await syncDraft()
         toast("群记忆系统默认已保存；继承默认的群会自动同步", "success")
@@ -507,7 +523,7 @@ export const AdvancedTab = {
     return {
       draft, showJsonDrawer, webTokenVisible, webTokenLoaded, webTokenBusy, webAddressPreview, configMeta, backups, manifest, activeSection, systemSectionItems,
       systemState, systemTitle, systemDescription, systemMetrics, diagnosticRows, manifestMetrics,
-      captureDefaults, captureModelOptions, defaultReplyModelName,
+      captureDefaults, captureModelOptions, memoryEmbeddingModelOptions, defaultReplyModelName,
       sectionPills, saveJson, saveLoggingLevel, loadWebAuthToken, saveWebAddress, saveWebAuthToken, copyWebAuthToken, saveLinkSafety, saveBackupPolicy, createBackup, loadBackupDetails, saveEmbeddingBudgets, saveCaptureDefaults, requestRestore, requestDeleteBackup,
       toggleDeveloperMode, applyDiagnosticAction, shortTime, formatBytes, backupContents, store,
     }
@@ -636,7 +652,12 @@ export const AdvancedTab = {
 
           <div class="form-section">
             <div class="developer-section-head"><div><b>对话记忆召回</b><span>全文命中少于此数量时，才会补一次向量召回；单群可单独覆盖。</span></div></div>
-            <Field label="记忆召回条数（向量触发阈值）" type="number" v-model="draft.captureRetrievalResultLimit" hint="1–20；默认 3，同时决定自动注入的记忆条数" />
+            <div class="form-grid capture-token-limits">
+              <Field label="记忆召回条数（向量触发阈值）" type="number" v-model="draft.captureRetrievalResultLimit" hint="1–20；默认 3，同时决定自动注入的记忆条数" />
+              <Field label="记忆提示 Token 预算" type="number" v-model="draft.capturePromptTokenBudget" hint="30–10,000；默认 2,000，限制每轮注入模型的记忆长度" />
+            </div>
+            <Field label="记忆向量模型" type="select" :options="memoryEmbeddingModelOptions" v-model="draft.captureEmbeddingModel" tip="不选模型时只使用本地全文检索，不产生记忆召回 embedding 调用。" />
+            <label class="settings-toggle-item"><div><strong>自适应向量补召回</strong><small>开启后仅在问题可能需要个人记忆且全文命中不足时调用向量模型。</small></div><Switch v-model="draft.captureAdaptiveVector" /></label>
           </div>
         </div>
       </Panel>

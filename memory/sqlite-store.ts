@@ -3,7 +3,7 @@ import { sqliteClient } from "../core/storage/sqlite/client.js"
 import { memoryRepository } from "./repository.js"
 import { statusFor } from "./decay.js"
 import { buildMemoryPrompt } from "./prompt.js"
-import { retrieveMemory } from "./retrieval.js"
+import { resolveMemoryRecallPlan, retrieveMemory } from "./retrieval.js"
 import { groupKey, scopeKey, scopesFor, userKey } from "./scopes.js"
 import type { MemoryScope } from "./scopes.js"
 import { vectorRecall } from "./vector-recall.js"
@@ -384,9 +384,15 @@ export class SqliteMemoryStore {
     const memory = record(record(configStore.get()).memory)
     const retrieval = record(memory.retrieval)
     if (memory.enabled === false) return ""
-    const profile = memory.injectProfile === false ? {} : (await this.getProfile(e)).profile
-    const memories = memory.injectRelevantFacts === false ? [] : await this.search(e, query)
-    return buildMemoryPrompt({ profile, memories, tokenBudget: Number(retrieval.promptTokenBudget) || 350 })
+    const plan = await resolveMemoryRecallPlan(e, query)
+    // 明确询问其他成员时不混入提问者画像；比较双方时仍保留提问者画像。
+    const profile = memory.injectProfile === false || plan.mode === "target" ? {} : (await this.getProfile(e)).profile
+    const memories = memory.injectRelevantFacts === false
+      ? []
+      : (await retrieveMemory(e, query, { scopes: plan.scopes, allowVector: plan.allowVector, candidateLimit: retrieval.ftsCandidateLimit || 20 }))
+        .filter(isManagedMemory)
+        .map(toLegacy)
+    return buildMemoryPrompt({ profile, memories, tokenBudget: Number(retrieval.promptTokenBudget) || 2000 })
   }
 
   stats(): UnknownRecord { return { ...this.statsCache, storage: { format: "sqlite", worker: true, fts: true, vectors: Boolean(sqliteClient.status.vector?.available), vectorRecall: vectorRecall.stats() }, cache: {} } }

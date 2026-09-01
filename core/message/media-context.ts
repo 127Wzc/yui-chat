@@ -46,6 +46,7 @@ const messageManagementIntentPattern = /(?:撤回|删除).{0,8}(?:消息|这条|
 const explicitVisionIntentPattern = /(?:看图|看看|看一下|看下|识图|识别|分析|描述|解读|读图|提取文字|ocr|图片|图中|图里|图内|图上|照片|截图|画面|表情包|二维码|这是什么|这是啥|这个是谁|这是谁|什么意思)/i
 const recentImageReferencePattern = /(?:(?:刚才|刚刚|刚发|之前|前面|上一张|上张|上一个|最近).{0,16}(?:图|图片|照片|截图|画面|表情包)|(?:图|图片|照片|截图|画面|表情包).{0,16}(?:刚才|刚刚|刚发|之前|前面|上一张|上张|上一个|最近)|(?:再)?(?:看|看看|识别|分析|描述|解读).{0,12}(?:刚才|刚刚|刚发|之前|前面|上一张|上一个|那个))/i
 const adjacentImageReferencePattern = /(?:(?:看|看看|看下|看一下|瞅|识别|分析|描述|解读).{0,8}(?:这|那)(?:个|张)?(?:图|图片|照片|截图|画面|表情包)?|(?:这|那)(?:个|张)?(?:图|图片|照片|截图|画面|表情包)|(?:那)?这(?:个|张)?呢|那(?:个|张)呢|(?:这|那)(?:是什么|是啥))/i
+const quotedImageReferencePattern = /(?:(?:看|看看|看下|看一下|瞅|识别|分析|描述|解读|读图|提取文字).{0,10}(?:这|那)(?:个|张|幅)?(?:图|图片|照片|截图|画面|表情包)?|(?:这|那)(?:个|张|幅)?(?:图|图片|照片|截图|画面|表情包)?(?:怎么|如何|是什么|是啥|什么意思|什么内容|怎么样|咋样|呢))/i
 
 /** 引用媒体默认只提供元数据；只有明确视觉意图才读取，消息管理意图完全禁用视觉输入。 */
 export function visionInputModeForPrompt(prompt: unknown): VisionInputMode {
@@ -100,7 +101,20 @@ function pushContextAttachment(context: MessageContext, item: MediaAttachment): 
 function normalizeMessageSegments(message: unknown): unknown[] {
   if (Array.isArray(message)) return message
   if (!message) return []
+  if (typeof message === "object") return [message]
   return [{ type: "text", text: text(message) }]
+}
+
+function mediaUrl(value: unknown): string {
+  if (typeof value === "string") return value.trim()
+  const source = record(value)
+  return text(source.url || source.file || source.path || source.src || source.image).trim()
+}
+
+function mediaValues(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value.flatMap(mediaValues)
+  if (value === undefined || value === null || value === "") return []
+  return [value]
 }
 
 function extractTextFromSegments(segments: readonly unknown[] = []): string {
@@ -114,14 +128,17 @@ function extractTextFromSegments(segments: readonly unknown[] = []): string {
 
 async function getQuotedMessage(event: unknown = {}): Promise<unknown> {
   const e = record(event)
+  const eventContext = extractMessageContext(e)
+  const source = record(e.source)
+  const sequence = e.reply_id || source.seq || source.id || source.message_id || eventContext.replies[0]?.id
+  const inlineReply = e.reply
+  if (inlineReply && typeof inlineReply === "object" && !Array.isArray(inlineReply)) return inlineReply
   try {
     const getReply = e.getReply
-    if (typeof getReply === "function" && (e.reply_id || e.source)) return await (getReply as () => Promise<unknown>).call(event)
+    if (typeof getReply === "function" && sequence) return await (getReply as () => Promise<unknown>).call(event)
   } catch (error) {
     return { diagnostics: [`读取引用消息失败：${error instanceof Error ? error.message : String(error)}`] }
   }
-  const source = record(e.source)
-  const sequence = source.seq || source.id || source.message_id
   if (!sequence) return null
   try {
     const owner = e.isGroup ? record(e.group) : record(e.friend)
@@ -136,18 +153,30 @@ async function getQuotedMessage(event: unknown = {}): Promise<unknown> {
 
 function buildQuoteContext(quoteValue: unknown): QuoteContext {
   const quote = record(quoteValue)
-  const segments = normalizeMessageSegments(quote.message || quote.raw_message || quote.msg)
-  const raw = typeof quote.raw_message === "string" ? quote.raw_message : ""
-  const context = extractMessageContext({ message: segments, raw_message: raw, msg: quote.msg || "" }, quote.msg || "")
+  const messageValue = quote.message || quote.content || quote.segments || quote.raw_message || quote.msg
+  const segments = normalizeMessageSegments(messageValue)
+  const raw = typeof quote.raw_message === "string"
+    ? quote.raw_message
+    : typeof messageValue === "string" && /\[CQ:/i.test(messageValue)
+      ? messageValue
+      : ""
+  const message = raw && typeof messageValue === "string" && /\[CQ:/i.test(messageValue) ? [] : segments
+  const prompt = typeof quote.msg === "string" && quote.msg ? quote.msg : raw
+  const context = extractMessageContext({ message, raw_message: raw, msg: prompt }, prompt)
   const sender = record(quote.sender)
   const senderId = sender.user_id || quote.user_id
   const senderName = text(sender.card || sender.nickname || quote.senderNickname || quote.user_id)
   const messageId = quote.message_id || quote.messageId || quote.id || quote.seq
+  const attachments = attachmentsFromContext(context, "quote", { messageId, sender: { userId: senderId, name: senderName } })
+  for (const value of [...mediaValues(quote.img), ...mediaValues(quote.image), ...mediaValues(quote.images)]) {
+    const url = mediaUrl(value)
+    if (url) pushAttachment(attachments, { kind: "image", url, source: "quote", messageId, sender: { userId: senderId, name: senderName } })
+  }
   return {
-    text: extractTextFromSegments(segments) || context.text,
+    text: raw && /\[CQ:/i.test(raw) ? context.text : extractTextFromSegments(segments) || context.text,
     sender: { userId: senderId, name: senderName },
     messageId,
-    attachments: attachmentsFromContext(context, "quote", { messageId, sender: { userId: senderId, name: senderName } }),
+    attachments,
   }
 }
 
@@ -171,10 +200,14 @@ export async function resolveMediaContext(event: unknown = {}, prompt: unknown =
     if (mention?.qq) pushAttachment(attachments, { kind: "image", url: avatarUrl(mention.qq), source: "at-avatar", userId: mention.qq })
   }
   let visionMode = visionInputModeForPrompt(prompt)
+  const promptValue = compact(prompt)
+  const hasQuotedImage = attachments.some(item => item.kind === "image" && item.source === "quote")
+  const quotedImageIsReferenced = hasQuotedImage
+    && visionMode !== "none"
+    && (visionMode === "all" || quotedImageReferencePattern.test(promptValue))
   if (
     visionMode === "current"
-    && attachments.some(item => item.kind === "image" && item.source === "quote")
-    && adjacentImageReferencePattern.test(compact(prompt))
+    && quotedImageIsReferenced
   ) visionMode = "all"
   for (const attachment of attachments) {
     attachment.visionEligible = attachment.kind === "image"

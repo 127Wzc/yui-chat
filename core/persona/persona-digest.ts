@@ -98,6 +98,8 @@ export async function buildPersonaDigest(config: unknown = {}): Promise<UnknownR
       pokeGroupCooldownMs: number(poke.groupCooldownMs),
       pokeFallbackMessages: fallbackMessages.length,
       runtimeCooldowns: number(triggerStats.cooldowns),
+      continuationWindows: number(triggerStats.continuationWindows),
+      continuationWindowMs: number(triggerStats.continuationWindowMs, 5000),
     },
     context: {
       recentMessageCount: number(context.recentMessageCount),

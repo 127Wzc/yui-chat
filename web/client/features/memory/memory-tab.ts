@@ -77,6 +77,16 @@ function extractionScopeLabel(scopeType = ""): string {
   return "个人群记忆"
 }
 
+function extractionResultLabel(result: MemoryRecord = {}): string {
+  const scopeType = String(result.scopeType || "")
+  const generic = extractionScopeLabel(scopeType)
+  if (scopeType === "group") return generic
+  const targetName = String(result.targetName || "").trim()
+  const ownerId = String(result.ownerId || result.subjectId || "").trim()
+  const target = targetName || (ownerId ? `QQ ${ownerId}` : "该用户")
+  return `${target}${generic}`
+}
+
 function dayKeyFromDate(value: unknown): string {
   const date = value instanceof Date ? value : new Date(typeof value === "number" ? value : String(value))
   if (Number.isNaN(date.getTime())) return ""
@@ -814,6 +824,37 @@ export const MemoryTab = {
       if (windowSelectionMode.value) return toggleWindowSelection(item)
       extractionPane.value = "timeline"
       return selectTimelineWindow(item)
+    }
+
+    function extractionWindowAction(item: MemoryRecord = {}): string {
+      if (item.status === "failed") return "失败重试"
+      if (item.status === "pending") return "立即执行"
+      if (item.status === "completed" && item.needsReextract) return "重提炼"
+      return ""
+    }
+
+    async function runExtractionWindow(item: MemoryRecord = {}): Promise<void> {
+      const policy = selectedPolicy.value
+      const action = extractionWindowAction(item)
+      if (!policy?.enabled) return toast("请先开启这个群的消息采集")
+      if (!action || !item.id) return
+      const retry = item.status === "failed" || (item.status === "completed" && Boolean(item.needsReextract))
+      captureAction.value = retry ? "retry-window" : "run-window"
+      try {
+        const response = await request(`/api/memory/captures/group/${encodeURIComponent(policy.scopeId)}/windows/${encodeURIComponent(item.id)}/run`, {
+          method: "POST",
+          body: JSON.stringify({ retry }),
+        })
+        applyCaptureSummary(response.capture)
+        await changeCaptureWindowPage(captureWindowPage.value.page)
+        await loadCalendar({ silent: true, force: true })
+        startCapturePolling()
+        toast(retry ? "已提交重试，正在后台处理" : "已开始执行，正在后台处理", "success")
+      } catch (err) {
+        toast(errorMessage(err))
+      } finally {
+        captureAction.value = ""
+      }
     }
 
     function selectVisibleWindows(mode = "all"): void {
@@ -1569,8 +1610,8 @@ export const MemoryTab = {
       selectedTimelineWindow, timelineWindowDetail, selectedWindowMessages, timelineWindows, reextractStart, reextractEnd, reextractPlan, reextractBusy, extractionCounts, runRecordWindows,
       calendarDays, calendarMeta, calendarRange, calendarMetric, calendarBusy, calendarWeeks, calendarMetricLabel, calendarSummary, calendarWeeksElement, timelineDetailLoading, timelineDetailError,
       windowSelectionMode, selectedWindowStarts, selectedWindowItems, selectedWindowSummary,
-      policyTitle, policyOverrideSummary, memberTitle, timeLabel, rangeLabel, scopeLabel, extractionScopeLabel, backfillStatusLabel, windowStatusLabel, timelineStatus, calendarStatus, calendarDayClass, calendarDayTitle, calendarDayAriaLabel, dayNumber, segmentSummary, normalizationView, compactNumber, windowWorkload, memoryLifecycle, resultAction, taskResultSummary, runningWindowProgress, taskListSummary, batchProgressLabel, captureDefaultLabel, captureFieldHint, captureFieldSource, updateCaptureField, resetCaptureField, selectGroup, selectMember, switchWorkspace, refreshWorkspace, reviewDuplicateMemories, openCaptureSettings, saveCapturePolicy, openSystemSettings, backfillHistory, backfillFromMessage, queueExtraction,
-      isWindowSelected, toggleWindowSelectionMode, toggleWindowSelection, openRunWindow, clearWindowSelection, selectVisibleWindows, confirmSelectedWindows, handleCalendarScroll,
+      policyTitle, policyOverrideSummary, memberTitle, timeLabel, rangeLabel, scopeLabel, extractionScopeLabel, extractionResultLabel, backfillStatusLabel, windowStatusLabel, timelineStatus, calendarStatus, calendarDayClass, calendarDayTitle, calendarDayAriaLabel, dayNumber, segmentSummary, normalizationView, compactNumber, windowWorkload, memoryLifecycle, resultAction, taskResultSummary, runningWindowProgress, taskListSummary, batchProgressLabel, captureDefaultLabel, captureFieldHint, captureFieldSource, updateCaptureField, resetCaptureField, selectGroup, selectMember, switchWorkspace, refreshWorkspace, reviewDuplicateMemories, openCaptureSettings, saveCapturePolicy, openSystemSettings, backfillHistory, backfillFromMessage, queueExtraction,
+      isWindowSelected, toggleWindowSelectionMode, toggleWindowSelection, openRunWindow, extractionWindowAction, runExtractionWindow, clearWindowSelection, selectVisibleWindows, confirmSelectedWindows, handleCalendarScroll,
       loadCaptureDetails, loadExtractionWorkspace, loadCalendar, previewReextraction, openReextractDialog, confirmReextraction, reextractSingleDay, selectTimelineWindow, changeCaptureMessagePage, jumpCaptureMessagePage, changeCaptureMessageOrder, changeCaptureWindowPage, targetForGroup, targetForMember, openMemoryEditor, saveMemory, deleteMemory, openProfileEditor, saveProfile, changeGroupPage, changeMemberPage,
       setCalendarWeeksElement,
     })
@@ -1583,8 +1624,8 @@ export const MemoryTab = {
       selectedTimelineWindow, timelineWindowDetail, selectedWindowMessages, timelineWindows, reextractStart, reextractEnd, reextractPlan, reextractBusy, extractionCounts, runRecordWindows,
       calendarDays, calendarMeta, calendarRange, calendarMetric, calendarBusy, calendarWeeks, calendarMetricLabel, calendarSummary, calendarWeeksElement, timelineDetailLoading, timelineDetailError,
       windowSelectionMode, selectedWindowStarts, selectedWindowItems, selectedWindowSummary,
-      policyTitle, policyOverrideSummary, memberTitle, timeLabel, rangeLabel, scopeLabel, extractionScopeLabel, backfillStatusLabel, windowStatusLabel, timelineStatus, calendarStatus, calendarDayClass, calendarDayTitle, calendarDayAriaLabel, dayNumber, segmentSummary, normalizationView, compactNumber, windowWorkload, memoryLifecycle, resultAction, taskResultSummary, runningWindowProgress, taskListSummary, batchProgressLabel, captureDefaultLabel, captureFieldHint, captureFieldSource, updateCaptureField, resetCaptureField, selectGroup, selectMember, switchWorkspace, refreshWorkspace, reviewDuplicateMemories, openCaptureSettings, saveCapturePolicy, openSystemSettings, backfillHistory, backfillFromMessage, queueExtraction,
-      isWindowSelected, toggleWindowSelectionMode, toggleWindowSelection, openRunWindow, clearWindowSelection, selectVisibleWindows, confirmSelectedWindows, handleCalendarScroll,
+      policyTitle, policyOverrideSummary, memberTitle, timeLabel, rangeLabel, scopeLabel, extractionScopeLabel, extractionResultLabel, backfillStatusLabel, windowStatusLabel, timelineStatus, calendarStatus, calendarDayClass, calendarDayTitle, calendarDayAriaLabel, dayNumber, segmentSummary, normalizationView, compactNumber, windowWorkload, memoryLifecycle, resultAction, taskResultSummary, runningWindowProgress, taskListSummary, batchProgressLabel, captureDefaultLabel, captureFieldHint, captureFieldSource, updateCaptureField, resetCaptureField, selectGroup, selectMember, switchWorkspace, refreshWorkspace, reviewDuplicateMemories, openCaptureSettings, saveCapturePolicy, openSystemSettings, backfillHistory, backfillFromMessage, queueExtraction,
+      isWindowSelected, toggleWindowSelectionMode, toggleWindowSelection, openRunWindow, extractionWindowAction, runExtractionWindow, clearWindowSelection, selectVisibleWindows, confirmSelectedWindows, handleCalendarScroll,
       loadCaptureDetails, loadExtractionWorkspace, loadCalendar, previewReextraction, openReextractDialog, confirmReextraction, reextractSingleDay, selectTimelineWindow, changeCaptureMessagePage, jumpCaptureMessagePage, changeCaptureMessageOrder, changeCaptureWindowPage, targetForGroup, targetForMember, openMemoryEditor, saveMemory, deleteMemory, openProfileEditor, saveProfile, changeGroupPage, changeMemberPage,
     }
   },

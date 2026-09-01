@@ -1914,6 +1914,23 @@ async function checkMemoryProfile() {
     await memoryStore.addFact(event, "用户喜欢把复杂任务拆成步骤。")
     const prompt = await memoryStore.buildPrompt(event, "怎么沟通")
     assert(prompt.includes("用户画像") && prompt.includes("简洁回答"), "memory prompt should inject structured profile")
+    const targetUserEvent = { ...event, user_id: "10003", sender: { user_id: "10003", nickname: "被提问成员" } }
+    await memoryStore.addFact(targetUserEvent, "用户喜欢未定事件簿角色夏彦。", { source: "group-capture" })
+    const mentionEvent = {
+      ...event,
+      user_id: "10004",
+      sender: { user_id: "10004", nickname: "提问者" },
+      msg: "[CQ:at,qq=10003] 她喜欢什么",
+      raw_message: "[CQ:at,qq=10003] 她喜欢什么",
+      message: [
+        { type: "at", data: { qq: "10003" } },
+        { type: "text", data: { text: "她喜欢什么" } },
+      ],
+    }
+    const mentionedPrompt = await memoryStore.buildPrompt(mentionEvent, "喜欢")
+    assert(mentionedPrompt.includes("QQ 10003") && mentionedPrompt.includes("用户喜欢未定事件簿角色夏彦"), "memory prompt should inject and attribute a mentioned group member's fact in file fallback mode")
+    const unrelatedMentionPrompt = await memoryStore.buildPrompt(mentionEvent, "过来看看这个")
+    assert(!unrelatedMentionPrompt.includes("用户喜欢未定事件簿角色夏彦"), "ordinary at mentions should not inject the target member's memory in file fallback mode")
     assert(memoryStore.stats().profiles === 2, "memory stats should count profiles")
     assert(memoryStore.stats().storage?.format === "owner-files-v2", "memory should expose owner-file storage format")
     assert(memoryStore.stats().storage?.boundedTailRead === true, "memory should expose bounded JSONL reads")
@@ -2023,6 +2040,34 @@ async function checkMedia() {
   assert(visualMedia.attachments.every(item => item.visionEligible === true), "explicit visual intent should continue to enable current and quoted images")
   const ellipticalQuotedMedia = await resolveMediaContext(quotedEvent, "玉玉那这个呢", { mediaRecognition: { includeQuotedMedia: true, useAtAvatar: false } })
   assert(ellipticalQuotedMedia.attachments.every(item => item.visionEligible === true), "elliptical visual follow-ups should read an explicitly quoted image without recalling unrelated history")
+  const quotedOnlyEvent = {
+    ...quotedEvent,
+    message: [],
+    getReply: async () => ({
+      message_id: "8416071",
+      sender: { user_id: "10002", nickname: "quoted-user" },
+      message: [{ type: "image", data: { url: "data:image/png;base64,AAAA" } }],
+    }),
+  }
+  for (const prompt of ["看看这个", "怎么看这个", "这个怎么看", "这个是什么", "这个呢"]) {
+    const quotedVisual = await resolveMediaContext(quotedOnlyEvent, prompt, { mediaRecognition: { includeQuotedMedia: true, useAtAvatar: false } })
+    assert(quotedVisual.attachments.some(item => item.source === "quote" && item.visionEligible === true), `quoted image should be eligible for visual prompt: ${prompt}`)
+    const preparedQuotedVisual = await prepareMediaForVision(quotedVisual, { mediaRecognition: { remoteFetch: { enabled: true } } })
+    const quotedContent = buildMediaUserContent(prompt, preparedQuotedVisual, true)
+    const quotedParts = Array.isArray(quotedContent) ? quotedContent.filter(part => part.type === "image_url") : []
+    assert(quotedParts.length === 1 && quotedParts[0].image_url.url === "data:image/png;base64,AAAA", `quoted image should enter multimodal content: ${prompt}`)
+  }
+  const replySegmentEvent = {
+    isGroup: true,
+    message: [{ type: "reply", data: { id: "8416072" } }],
+    group: {
+      getChatHistory: async () => [{ message_id: "8416072", raw_message: "[CQ:image,file=data:image/png;base64,AAAA]" }],
+    },
+  }
+  const segmentQuotedVisual = await resolveMediaContext(replySegmentEvent, "怎么看这个", { mediaRecognition: { includeQuotedMedia: true, useAtAvatar: false } })
+  const preparedSegmentQuotedVisual = await prepareMediaForVision(segmentQuotedVisual, { mediaRecognition: { remoteFetch: { enabled: true } } })
+  const segmentQuotedContent = buildMediaUserContent("怎么看这个", preparedSegmentQuotedVisual, true)
+  assert(Array.isArray(segmentQuotedContent) && segmentQuotedContent.some(part => part.type === "image_url"), "reply segments and CQ quoted media should reach multimodal content")
   const bilibiliPageVideoResult = await new MessageSendTool().execute({ parts: [{ type: "video", source: { kind: "url", value: "https://www.bilibili.com/video/BV1Smoke" } }] })
   assert(bilibiliPageVideoResult.kind === "error" && bilibiliPageVideoResult.issues?.some(issue => String(issue).includes("bilibili_media")), "message_send should reject Bilibili page URLs until bilibili_media prepares local cache resources")
   assert(trustedResourcePolicies["bilibili-cdn"].targets.includes("hdslb.com"), "trusted resource policies should keep a single owner-maintained domain/IP list")
@@ -2868,6 +2913,7 @@ async function checkCommandRules() {
 
 async function checkPersonaTrigger() {
   const { evaluateFirstPersonPokeTrigger, evaluateFirstPersonTrigger, clearPersonaTriggerState } = await import("../output/runtime/core/persona/persona-trigger.js")
+  const { armConversationContinuation, clearConversationContinuationState } = await import("../output/runtime/core/persona/conversation-continuation.js")
   const { buildPersonaDigest } = await import("../output/runtime/core/persona/persona-digest.js")
   const { handleFirstPersonMessage, handleFirstPersonPokeEvent } = await import("../output/runtime/core/persona/first-person-service.js")
   const { chatService } = await import("../output/runtime/core/chat/chat-service.js")
@@ -2923,6 +2969,20 @@ async function checkPersonaTrigger() {
   assert(direct.extraSystemPrompt.includes("特殊语气"), "keyword enhance prompt should be attached")
   assert(direct.outputOptions?.recallMsg === 10, "keyword enhance recall should be exposed as reply options")
   assert(direct.matchedEnhanceKeywords.includes("吵架"), "keyword enhance trigger should expose matched keywords")
+  clearConversationContinuationState()
+  armConversationContinuation(event, "帮我识别一张图", "我还没有看到图片，请直接发一张图片给我。")
+  const mediaContinuationEvent = {
+    ...event,
+    msg: "[CQ:image,file=continuation-smoke]",
+    raw_message: "[CQ:image,file=continuation-smoke]",
+    message: [{ type: "image", data: { url: "https://multimedia.nt.qq.com.cn/download?fileid=continuation-smoke" } }],
+  }
+  const mediaContinuation = evaluateFirstPersonTrigger(mediaContinuationEvent, config)
+  assert(mediaContinuation.ok && mediaContinuation.reason === "continuation" && mediaContinuation.continuationReason === "media", "a requested image sent within the reply window should trigger one contextual continuation without a name or keyword")
+  assert(!evaluateFirstPersonTrigger(mediaContinuationEvent, config).ok, "a contextual continuation window should be consumed after one automatic trigger")
+  armConversationContinuation(event, "帮我整理方案", "方案已经整理好了。")
+  assert(!evaluateFirstPersonTrigger({ ...event, msg: "今晚吃火锅" }, config).ok, "an unrelated message inside the short window should not be taken over")
+  clearConversationContinuationState()
   config.persona.trigger.disabledGroupIds = ["20001"]
   assert(!evaluateFirstPersonTrigger(event, config).ok, "disabled group should block first-person trigger")
   config.persona.trigger.disabledGroupIds = []
@@ -3080,6 +3140,32 @@ async function checkPersonaTrigger() {
       })
       assert(failureHandled === true, "direct first-person model failure should still produce a user-facing response")
       assert(directFailureReplies.some(message => message.includes("网关超时")), "direct first-person model failure should explain the temporary gateway timeout")
+
+      clearConversationContinuationState()
+      const continuationSources = []
+      chatService.send = async (_event, _message, options = {}) => {
+        continuationSources.push(String(options.source || ""))
+        return { text: continuationSources.length === 1 ? "我还没看到图片，请直接发图给我。" : "这次看到图片了。", channel: "mock" }
+      }
+      const continuationReplies = []
+      const continuationBase = {
+        isGroup: true,
+        isMaster: true,
+        group_id: "20003",
+        user_id: "10003",
+        sender: { user_id: "10003", nickname: "User" },
+        reply: async message => { continuationReplies.push(message); return true },
+      }
+      assert(await handleFirstPersonMessage({ ...continuationBase, msg: "埋埋帮我识图" }) === true, "a direct model reply should arm the short continuation window after delivery")
+      const continuationImage = {
+        ...continuationBase,
+        msg: "[CQ:image,file=continuation-service-smoke]",
+        raw_message: "[CQ:image,file=continuation-service-smoke]",
+        message: [{ type: "image", data: { url: "https://multimedia.nt.qq.com.cn/download?fileid=continuation-service-smoke" } }],
+      }
+      assert(await handleFirstPersonMessage(continuationImage) === true && continuationSources.at(-1) === "firstPersonContinuation", "a requested media-only follow-up should enter the multimodal conversation through the continuation source")
+      assert(await handleFirstPersonMessage({ ...continuationImage, __yuiChatReplied: false }) === false, "an automatic continuation response must not re-arm another short continuation")
+      assert(continuationReplies.length === 2, "the one-shot continuation should send exactly one additional reply")
     } finally {
       chatService.send = originalSend
       await configStore.save(next)
@@ -4779,6 +4865,7 @@ async function checkWebAndBoot() {
   assert(webAppSource.includes("progress: parsePayload") && webAppSource.includes("/api/knowledge/index-jobs"), "web app should expose persisted index progress metadata")
   assert(webAppSource.includes("/api/knowledge/manual-command") && webAppSource.includes("app.get(\"/api/knowledge/commands/:id\"") && webAppSource.includes("app.delete(\"/api/knowledge/commands/:id\""), "web app should expose manual command curation APIs")
   assert(webAppSource.includes("/api/memory/scopes/:scopeType/:ownerId") && webAppSource.includes("/api/memory/groups/:groupId/workspace") && webAppSource.includes("/api/memory/groups/:groupId/members/:userId") && webAppSource.includes("deleteScopedMemory"), "web app should expose authenticated global, group-public, and group-member memory maintenance APIs")
+  assert(webAppSource.includes("/api/memory/captures/:scopeType/:scopeId/windows/:windowId/run"), "web app should expose authenticated manual extraction-window execution and retry API")
   assert(webAppSource.includes("/api/setup-guide"), "web app should expose setup guide API")
   assert(webAppSource.includes("/api/chat/test") && webAppSource.includes("/api/chat/test/sessions") && webAppSource.includes("/api/chat/test/clear"), "web app should expose safe Web chat-test creation, history, and deletion APIs")
   assert(webAppSource.includes("/api/logs/summary") && webAppSource.includes("/api/logs/runs/:id") && webAppSource.includes("/api/logs/model-calls/:id/detail") && webAppSource.includes("/api/logs/runs/:id/conversation") && webAppSource.includes("/api/logs/cleanup"), "web app should expose unified log summary, timeline, lazy model detail, conversation history, and cleanup APIs")
@@ -4810,7 +4897,7 @@ async function checkWebAndBoot() {
   assert(webOverviewSource.includes("home-hero") && webOverviewSource.includes("home-dashboard-grid") && webOverviewSource.includes("模型排行") && webOverviewSource.includes("用途分布"), "overview should act as the primary health and usage dashboard")
   assert(webOverviewSource.includes("home-setup-strip") && webOverviewSource.indexOf("home-setup-strip") < webOverviewSource.indexOf("<MetricGrid") && webOverviewSource.includes("继续配置") && !webOverviewSource.includes('v-if="homeStatus !== \'good\'"') && !webOverviewSource.includes("能力架构") && !webOverviewSource.includes("快速操作"), "overview should keep one setup action inside the top status area and remove architecture and quick-operation panels")
   assert(webLogsSource.includes("logs-summary-row") && webLogsSource.includes("logs-filter-row") && webLogsSource.includes("settingsDrawerOpen") && webLogsSource.includes("群聊记忆提炼") && webLogsSource.includes("查看本次提炼输入") && !webLogsSource.includes("filterDrawerOpen") && !webLogsSource.includes('<h1>日志与用量</h1>') && !webLogsSource.includes('<Panel title="模型排行"') && !webLogsSource.includes('<Panel title="Token 趋势"'), "logs page should keep only compact summary metrics with settings, use one-line filters above the run list, and avoid duplicating the shell heading")
-  assert(webLogsSource.includes("logs-session-workbench") && webLogsSource.includes("loadConversationTurn") && webLogsSource.includes("toolGroupsForModel") && webLogsSource.includes("contextSourceLabel") && webLogsSource.includes("modelDetail.snapshot"), "logs page should provide a session workbench with lazy turn details, grouped tool rounds, and context source labels")
+  assert(webLogsSource.includes("logs-session-workbench") && webLogsSource.includes("loadConversationTurn") && webLogsSource.includes("toolGroupsForModel") && webLogsSource.includes("contextSourceLabel") && webLogsSource.includes("modelDetail.snapshot") && webLogsSource.includes("loadExtractionResult") && webLogsSource.includes("logs-extraction-result") && webLogsSource.includes("提炼结果"), "logs page should provide a session workbench with lazy turn details, grouped tool rounds, context source labels, and linked extraction results")
   assert(webOverviewSource.includes("wizard-inline-config") && webOverviewSource.includes("saveProviderAndTest") && webOverviewSource.includes("saveRouting") && webOverviewSource.includes("savePersona") && webOverviewSource.includes("saveTools") && webOverviewSource.includes("saveKnowledge") && webOverviewSource.includes("saveOutput") && webOverviewSource.includes("sendWizardTest"), "overview setup guide should configure the common path and run the final chat test without leaving the drawer")
   assert(!webPersonaSource.includes("/api/persona/expression") && !webPersonaSource.includes("deleteExpression") && !webPersonaSource.includes("learnAssistant") && !webPersonaSource.includes("expressionExamples"), "persona page should remove expression learning controls")
   assert(webPersonaSource.includes("previewGreeting") && webPersonaSource.includes("initiativeGreetingScheduled"), "persona page should expose initiative greeting controls")
@@ -4845,7 +4932,7 @@ async function checkWebAndBoot() {
   assert(webKnowledgeSource.includes("documentOrigin") && webKnowledgeSource.includes("knowledge-command-origin-inline") && webKnowledgeSource.includes("knowledge-command-preview") && webKnowledgeSource.includes("openBuiltinCommandEditor") && webKnowledgeSource.includes("manualSourceCommandId") && webKnowledgeSource.includes("插件") && webKnowledgeSource.includes("文件") && webKnowledgeSource.includes("方法"), "built-in command documents should compactly show their source and open an editable persistent override")
   assert(webKnowledgeSource.includes("maintenancePaneItems") && webKnowledgeSource.includes("采集概览") && webKnowledgeSource.includes("收录示例") && webKnowledgeSource.includes("收录质量"), "built-in command maintenance should group command, capture, example, and quality workflows")
   assert(webShellSource.includes('{ id: "memory", label: "记忆管理"') && webStoreSource.includes('memory: ["config", "memory", "diagnostics"]'), "memory management should be a dedicated sidebar page with its own data slice")
-  assert(webMemorySource.includes("group-picker") && webMemorySource.includes("群公共记忆") && webMemorySource.includes("本群记忆") && webMemorySource.includes("全局记忆") && webMemorySource.includes("原始消息（") && webMemorySource.includes("补录历史") && webMemorySource.includes("提炼运行记录") && webMemorySource.includes("扫描昨日及历史") && webMemorySource.includes("等待处理") && webMemorySource.includes("实际模型调用") && webMemorySource.includes("Token 子窗口") && webMemorySource.includes("按日提炼") && webMemorySource.includes("reextractSingleDay") && webMemorySource.includes("runRecordWindows") && webMemorySource.includes("提炼结果（") && webMemorySource.includes("/windows/") && webMemorySource.includes("/api/memory/groups/") && webMemorySource.includes("captureMessageOrder") && webMemorySource.includes("changeCaptureMessageOrder") && webMemorySource.includes("jumpCaptureMessagePage") && webMemorySource.includes("最早在前") && webMemorySource.includes("最新在前"), "memory page should separate source-message backfill from daily extraction runs while exposing token workload, failed-day retry, input coverage, message ordering, and page jumps")
+  assert(webMemorySource.includes("group-picker") && webMemorySource.includes("群公共记忆") && webMemorySource.includes("本群记忆") && webMemorySource.includes("全局记忆") && webMemorySource.includes("原始消息（") && webMemorySource.includes("补录历史") && webMemorySource.includes("提炼运行记录") && webMemorySource.includes("扫描昨日及历史") && webMemorySource.includes("等待处理") && webMemorySource.includes("实际模型调用") && webMemorySource.includes("Token 子窗口") && webMemorySource.includes("按日提炼") && webMemorySource.includes("reextractSingleDay") && webMemorySource.includes("runRecordWindows") && webMemorySource.includes("提炼结果（") && webMemorySource.includes("/windows/") && webMemorySource.includes("runExtractionWindow") && webMemorySource.includes("extractionWindowAction") && webMemorySource.includes("立即执行") && webMemorySource.includes("失败重试") && webMemorySource.includes("/api/memory/groups/") && webMemorySource.includes("captureMessageOrder") && webMemorySource.includes("changeCaptureMessageOrder") && webMemorySource.includes("jumpCaptureMessagePage") && webMemorySource.includes("最早在前") && webMemorySource.includes("最新在前"), "memory page should separate source-message backfill from daily extraction runs while exposing token workload, manual execution, failed-day retry, input coverage, message ordering, and page jumps")
   assert(
     webMemorySource.includes("windowSelectionMode")
       && webMemorySource.includes("selectedWindowStarts")
@@ -4861,11 +4948,12 @@ async function checkWebAndBoot() {
     "memory page should render the five-state daily extraction calendar from its lightweight summary API",
   )
   assert(!webMemorySource.includes("补录并保存原始记录") && !webMemorySource.includes("goToExtractionMessages") && webMemorySource.indexOf("补录历史") > webMemorySource.indexOf("extractionPane === 'messages'") && webMemorySource.indexOf("扫描昨日及历史") > webMemorySource.indexOf("提炼运行记录") && webMemorySource.includes("captureDraft.useDefault") && webMemorySource.includes("captureDefaultLabel") && webMemorySource.includes("updateCaptureField") && webMemorySource.includes("恢复系统默认") && webMemorySource.includes("设置全局默认值") && webMemorySource.includes("capture-enable-control") && !webMemorySource.includes(':disabled="captureDraft.useDefault'), "capture settings should show per-field inheritance, allow direct edits to create an override, link deliberately to global defaults, combine the capture description with its switch, and provide a one-click default reset while operational actions live in their respective extraction panes")
-  assert(webMemorySource.includes("memory-summary-row") && webMemorySource.includes("memoryLifecycle") && webMemorySource.includes("resultAction") && webMemorySource.includes("taskResultSummary") && webMemorySource.includes("reviewDuplicateMemories") && webMemorySource.includes("openMemoryEditor") && webMemorySource.includes("confirmAction") && webMemorySource.includes("编辑用户画像") && webMemorySource.includes("删除这条记忆"), "memory page should truncate long list entries, show lifecycle and extraction actions, review duplicates, open them for editing, retain profile editing, and confirm deletion")
+  assert(webMemorySource.includes("memory-summary-row") && webMemorySource.includes("memoryLifecycle") && webMemorySource.includes("resultAction") && webMemorySource.includes("taskResultSummary") && webMemorySource.includes("extractionResultLabel") && webMemorySource.includes("reviewDuplicateMemories") && webMemorySource.includes("openMemoryEditor") && webMemorySource.includes("confirmAction") && webMemorySource.includes("编辑用户画像") && webMemorySource.includes("删除这条记忆"), "memory page should truncate long list entries, show lifecycle and extraction actions, identify the target member for personal extraction results, review duplicates, open them for editing, retain profile editing, and confirm deletion")
   assert(webChatSource.includes("/api/chat/test/sessions") && webChatSource.includes("历史对话") && webChatSource.includes("删除这段测试对话") && !webChatSource.includes("persistMessages"), "chat page should use SQLite-backed test history without browser-local transcripts")
   assert(webAdvancedSource.includes("开发者模式") && webAdvancedSource.includes("developer-gate") && webAdvancedSource.includes("confirmAction") && webAdvancedSource.includes("确认回滚") && !webAdvancedSource.includes("window.confirm"), "system page should gate advanced configuration and use modal backup restore confirmation")
   assert(webAdvancedSource.includes("backupMaxFiles") && webAdvancedSource.includes("backupMaxAgeDays") && webAdvancedSource.includes("saveBackupPolicy") && webAdvancedSource.includes("同时超过保留天数") && webAdvancedSource.includes("SQLite 中的能力权限") && webAdvancedSource.includes("运行日志、用量流水") && webAdvancedSource.includes("configBackupDir") && webAdvancedSource.includes("backupContents"), "system backup page should explain the package directory, contents, SQLite whitelist, and excluded detail data")
   assert(webAdvancedSource.includes("saveEmbeddingBudgets") && webAdvancedSource.includes("memoryEmbeddingTokensPerDay") && webAdvancedSource.includes("knowledgeEmbeddingTokensPerDay"), "system page should let administrators configure embedding budgets")
+  assert(webAdvancedSource.includes("capturePromptTokenBudget") && webAdvancedSource.includes("captureEmbeddingModel") && webAdvancedSource.includes("captureAdaptiveVector") && webAdvancedSource.includes("记忆提示 Token 预算") && webAdvancedSource.includes("记忆向量模型"), "group-memory defaults should expose prompt budget, vector model, and adaptive vector recall")
   assert(webLogsSource.includes("统一使用 CNY") && !webLogsSource.includes("USD") && webProvidersSource.includes("输入价格 / 1M（CNY）"), "usage and model pricing UI should expose CNY as the only currency")
   assert(webProvidersSource.includes("setDefault") && webProvidersSource.includes("removeModel") && webProvidersSource.includes("ModelEditor"), "providers page should expose model management actions")
   assert(webProvidersSource.includes("ProviderEditor") && webProvidersSource.includes("removeSelectedProvider") && webProvidersSource.includes("provider-source-actions"), "providers page should expose compact provider actions inside provider cards")
