@@ -1,0 +1,47 @@
+{
+  "id": "framework-block-example",
+  "name": "System Status Function Example",
+  "displayNameZh": "系统状态函数示例",
+  "enabled": false,
+  "description": "Example Custom package that invokes the existing status.otherHelp method from the Yunzai framework.",
+  "descriptionZh": "演示如何声明并复用 Yunzai 框架的状态指令函数；默认停用，可在管理页直接测试。",
+  "category": "custom",
+  "risk": "low",
+  "tags": [
+    "example",
+    "framework-resource",
+    "system-status"
+  ],
+  "policy": {
+    "requiresMaster": false,
+    "requiresGroup": false,
+    "requiresGroupAdmin": false,
+    "highRisk": false,
+    "externalNetwork": false
+  },
+  "frameworkResources": {
+    "system-status": "yunzai:plugins/system/status.js"
+  },
+  "tools": [
+    {
+      "name": "status_command_help",
+      "description": "Return the reusable help text associated with the Yunzai #status command.",
+      "risk": "low",
+      "tags": [
+        "status",
+        "command",
+        "example"
+      ],
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "configSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    }
+  ],
+  "nameZh": "系统状态函数示例"
+}

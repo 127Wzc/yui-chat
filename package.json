@@ -1,0 +1,34 @@
+{
+  "name": "yui-chat",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Yui Chat AI plugin for TRSS-Yunzai",
+  "scripts": {
+    "check": "npm run check:types && npm run check:types-client && npm run check:types-runtime && npm run check:runtime-build && npm run check:structure && npm run check:sqlite-baseline && npm run check:sqlite-integration && npm run check:memory-p1 && npm run check:knowledge-p1 && npm run check:runtime-p1 && npm run smoke",
+    "check:types": "tsc -p tsconfig.json --noEmit",
+    "check:types-client": "tsc -p tsconfig.client.json --noEmit",
+    "build:types": "tsc -p tsconfig.build.json",
+    "build:client": "tsc -p tsconfig.client.json",
+    "build:runtime": "node scripts/build-runtime.mjs",
+    "check:types-runtime": "npm run build:runtime && node scripts/check-types-runtime.mjs",
+    "check:runtime-build": "npm run build:runtime && node scripts/check-runtime-build.mjs",
+    "check:structure": "node scripts/check-structure.mjs",
+    "check:sqlite-baseline": "node scripts/check-sqlite-baseline.mjs",
+    "check:sqlite-integration": "node scripts/check-sqlite-integration.mjs",
+    "check:memory-p1": "node scripts/check-memory-p1.mjs",
+    "check:knowledge-p1": "node scripts/check-knowledge-p1.mjs",
+    "check:runtime-p1": "node scripts/check-runtime-p1.mjs",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.24.0",
+    "better-sqlite3": "12.10.0",
+    "sharp": "^0.33.5",
+    "sqlite-vec": "0.1.9",
+    "vue": "^3.5.35",
+    "yaml": "^2.9.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.2"
+  }
+}

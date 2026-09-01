@@ -1,0 +1,60 @@
+* { box-sizing: border-box; }
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+button, input, select, textarea { font: inherit; color: inherit; }
+
+/* 全局交互过渡与统一焦点环 */
+button, input, select, textarea, .section-nav-item, .pill {
+  transition: background-color .14s ease, border-color .14s ease, color .14s ease, box-shadow .14s ease;
+}
+:is(button, input, select, textarea, a, [tabindex]):focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: var(--muted-foreground); background-clip: padding-box; }
+::-webkit-scrollbar-track { background: transparent; }
+
+h1, h2, h3, h4, p { margin: 0; }
+h1, h2, h3 { letter-spacing: -0.01em; }
+h1 { font-size: 15px; font-weight: 600; line-height: 1.2; }
+h2 { font-size: 13px; font-weight: 600; }
+h3 { font-size: 12px; font-weight: 700; color: var(--foreground); }
+a { color: var(--primary); text-decoration: none; }
+code, kbd { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-size: 12px; }
+kbd { padding: 1px 5px; border: 1px solid var(--border); border-radius: 5px; background: var(--muted); }
+
+.muted { color: var(--muted-foreground); }
+.soft { color: var(--foreground); }
+.small { font-size: 12px; }
+.tiny { font-size: 11px; }
+.mono { font-family: "SFMono-Regular", Consolas, monospace; }
+.nowrap { white-space: nowrap; }
+.grow { flex: 1 1 auto; min-width: 0; }
+.spacer { flex: 1 1 auto; }
+.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- 图标 ---------- */
+.icon {
+  display: inline-block;
+  vertical-align: middle;
+  flex: 0 0 auto;
+  stroke: currentColor;
+  fill: none;
+}
+.icon-spin { animation: cn-spin .9s linear infinite; }
+

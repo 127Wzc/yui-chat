@@ -1,0 +1,8 @@
+node_modules/
+cache/
+config/config.json
+config/config.*.json
+config/backups/
+output/
+.codebuddy/
+.superpowers/

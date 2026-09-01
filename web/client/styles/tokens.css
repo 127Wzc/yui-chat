@@ -1,0 +1,128 @@
+/* ============================================================
+   Yui Chat 管理台 — shadcn 风格 token（浅色默认）
+   :root 承载浅色主题；[data-theme="dark"] 承载暗色主题。
+   脚本会在 CSS 加载前写入 data-theme 属性防闪烁；
+   data-theme="light" 无专属选择器，回落 :root 浅色值。
+   所有颜色走 CSS 变量，主题切换只替换变量。
+   ============================================================ */
+
+:root {
+  color-scheme: light;
+
+  /* ---- 基础语义 ---- */
+  --background: #ffffff;
+  --foreground: #09090b;
+  --card: #ffffff;
+  --card-foreground: #09090b;
+  --popover: #ffffff;
+  --popover-foreground: #09090b;
+  --primary: #18181b;
+  --primary-foreground: #fafafa;
+  --primary-weak: rgba(24, 24, 27, .08);
+  --secondary: #f4f4f5;
+  --secondary-foreground: #18181b;
+  --muted: #f4f4f5;
+  --muted-foreground: #71717a;
+  --accent: #f4f4f5;
+  --accent-foreground: #18181b;
+  --border: #e4e4e7;
+  --input: #e4e4e7;
+  --ring: #a1a1aa;
+  --destructive: #dc2626;
+  --destructive-foreground: #fafafa;
+
+  /* ---- 状态色 ---- */
+  --good: #059669;
+  --good-weak: rgba(5, 150, 105, .1);
+  --warn: #d97706;
+  --warn-weak: rgba(217, 119, 6, .1);
+  --bad: #dc2626;
+  --bad-weak: rgba(220, 38, 38, .1);
+
+  /* ---- metric 徽章（蓝/绿/紫/橙随主题切换弱底透明度） ---- */
+  --c-blue: #2563eb;
+  --c-blue-bg: rgba(37, 99, 235, .1);
+  --c-green: #059669;
+  --c-green-bg: rgba(5, 150, 105, .1);
+  --c-purple: #7c3aed;
+  --c-purple-bg: rgba(124, 58, 237, .1);
+  --c-orange: #d97706;
+  --c-orange-bg: rgba(217, 119, 6, .1);
+  /* 青/粉/红保留原值，双主题共用 */
+  --c-cyan: #06b6d4;
+  --c-cyan-bg: rgba(6, 182, 212, .16);
+  --c-pink: #ec4899;
+  --c-pink-bg: rgba(236, 72, 153, .16);
+  --c-red: #ef4444;
+  --c-red-bg: rgba(239, 68, 68, .15);
+
+  /* ---- 气泡提示 ---- */
+  --tip-bg: #18181b;
+  --tip-text: #fafafa;
+
+  /* ---- 阴影 ---- */
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / .05);
+  --shadow: 0 1px 3px rgb(0 0 0 / .1), 0 1px 2px rgb(0 0 0 / .06);
+  --shadow-pop: 0 10px 15px -3px rgb(0 0 0 / .1), 0 4px 6px -4px rgb(0 0 0 / .1);
+
+  /* ---- 圆角与布局（双主题不变） ---- */
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-lg: 10px;
+  --content-max: 1360px;
+  --row-h: 34px;
+  --sidebar-w: 220px;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* ---- 基础语义 ---- */
+  --background: #09090b;
+  --foreground: #fafafa;
+  --card: #101012;
+  --card-foreground: #fafafa;
+  --popover: #101012;
+  --popover-foreground: #fafafa;
+  --primary: #fafafa;
+  --primary-foreground: #18181b;
+  --primary-weak: rgba(250, 250, 250, .14);
+  --secondary: #27272a;
+  --secondary-foreground: #fafafa;
+  --muted: #27272a;
+  --muted-foreground: #a1a1aa;
+  --accent: #27272a;
+  --accent-foreground: #fafafa;
+  --border: #27272a;
+  --input: #27272a;
+  --ring: #52525b;
+  --destructive: #ef4444;
+  --destructive-foreground: #09090b;
+
+  /* ---- 状态色 ---- */
+  --good: #10b981;
+  --good-weak: rgba(16, 185, 129, .15);
+  --warn: #f59e0b;
+  --warn-weak: rgba(245, 158, 11, .15);
+  --bad: #ef4444;
+  --bad-weak: rgba(239, 68, 68, .15);
+
+  /* ---- metric 徽章（同浅色色相，弱底 15%） ---- */
+  --c-blue: #2563eb;
+  --c-blue-bg: rgba(37, 99, 235, .15);
+  --c-green: #059669;
+  --c-green-bg: rgba(5, 150, 105, .15);
+  --c-purple: #7c3aed;
+  --c-purple-bg: rgba(124, 58, 237, .15);
+  --c-orange: #d97706;
+  --c-orange-bg: rgba(217, 119, 6, .15);
+
+  /* ---- 气泡提示 ---- */
+  --tip-bg: #fafafa;
+  --tip-text: #18181b;
+
+  /* ---- 阴影 ---- */
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / .3);
+  --shadow: 0 4px 12px rgb(0 0 0 / .35);
+  --shadow-pop: 0 10px 30px rgb(0 0 0 / .5);
+}

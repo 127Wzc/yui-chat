@@ -1,0 +1,7 @@
+/* Yui Chat 管理台样式入口：按职责聚合模块。 */
+@import "./tokens.css";
+@import "./base.css";
+@import "./layout.css";
+@import "./components.css";
+@import "./features.css";
+@import "./responsive.css";

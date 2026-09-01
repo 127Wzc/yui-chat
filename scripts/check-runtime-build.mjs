@@ -1,0 +1,172 @@
+import fs from "node:fs/promises"
+import path from "node:path"
+import { fileURLToPath, pathToFileURL } from "node:url"
+
+const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
+const runtimeRoot = path.join(pluginRoot, "output", "runtime")
+const manifestPath = path.join(runtimeRoot, "runtime-build-manifest.json")
+
+async function assertFile(relative) {
+  const target = path.join(runtimeRoot, relative)
+  try {
+    await fs.access(target)
+  } catch {
+    throw new Error(`运行产物缺少 ${relative}`)
+  }
+}
+
+const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"))
+if (manifest.format !== "yui-chat-runtime-build-v1") throw new Error("运行产物清单版本不正确")
+if (manifest.sourceRoot !== pluginRoot) throw new Error("运行产物清单未指向当前插件根目录")
+
+for (const relative of [
+  "runtime-entry.js",
+  "apps/chat.js",
+  "apps/help-menu.js",
+  "extensions/testing/execution-runtime.js",
+  "apps/commands/tool-test.js",
+  "apps/commands/filter-test.js",
+  "apps/commands/render.js",
+  "apps/poke.js",
+  "web/http/app.js",
+  "web/http/websocket.js",
+  "config/defaults.js",
+  "config/schema.js",
+  "config/store.js",
+  "config/validator.js",
+  "knowledge/command-observer.js",
+  "core/message-chain/builder.js",
+  "core/message-chain/delivery.js",
+  "core/message-chain/inbound.js",
+  "core/message/command-prefixes.js",
+  "core/message/cq-code.js",
+  "core/message/message-context.js",
+  "core/message/media-context.js",
+  "core/shared/safe-regex.js",
+  "core/chat/chat-service.js",
+  "core/chat/conversation-state.js",
+  "core/chat/model-step-executor.js",
+  "core/chat/tool-round-executor.js",
+  "core/chat/model-routing-executor.js",
+  "core/chat/subagent-executor.js",
+  "core/chat/conversation-request-executor.js",
+  "memory/store.js",
+  "memory/prompt.js",
+  "memory/file-store.js",
+  "memory/write-policy.js",
+  "memory/decay.js",
+  "memory/retrieval.js",
+  "memory/repository.js",
+  "memory/vector-recall.js",
+  "memory/sqlite-store.js",
+  "memory/group-capture.js",
+  "knowledge/vector-index.js",
+  "knowledge/access.js",
+  "knowledge/chunking.js",
+  "knowledge/ingestion.js",
+  "knowledge/repository.js",
+  "knowledge/retrieval.js",
+  "knowledge/command-document-builder.js",
+  "knowledge/command-source-locator.js",
+  "knowledge/command-storage.js",
+  "knowledge/command-query-service.js",
+  "knowledge/command-hybrid-retrieval.js",
+  "knowledge/store.js",
+  "knowledge/index-jobs.js",
+  "core/rendering/render-cache.js",
+  "core/rendering/image-renderer-registry.js",
+  "core/rendering/render-delivery.js",
+  "core/rendering/render-api-service.js",
+  "core/rendering/render-html-service.js",
+  "core/rendering/render-service.js",
+  "web/http/request-context.js",
+  "web/http/serializers.js",
+  "web/http/runtime-config.js",
+  "web/http/shell.js",
+  "web/http/route-handler.js",
+  "web/http/auth.js",
+  "web/http/routes/observability.js",
+  "web/http/routes/runtime.js",
+  "web/http/routes/configuration.js",
+  "web/http/routes/knowledge.js",
+  "web/http/routes/knowledge/bases.js",
+  "web/http/routes/knowledge/indexing.js",
+  "web/http/routes/knowledge/access.js",
+  "web/http/routes/filters/filters.js",
+  "web/http/routes/filters/message-processing.js",
+  "web/http/routes/capabilities/authoring.js",
+  "web/http/routes/capabilities/extensions.js",
+  "filters/message/message-filter-templates.js",
+  "filters/authoring/generator.js",
+  "filters/core/contract.js",
+  "filters/core/registry.js",
+  "filters/builtins/index.js",
+  "filters/builtins/output.js",
+  "core/runtime/lifecycle.js",
+  "core/runtime/capability-registry.js",
+  "core/runtime/diagnostics.js",
+  "core/runtime/setup-guide.js",
+  "core/scheduling/schedule-task-service.js",
+  "memory/scopes.js",
+  "models/protocol/normalize.js",
+  "models/adapters/base.js",
+  "models/adapters/mock.js",
+  "models/adapters/openai-compatible.js",
+  "models/adapters/gemini.js",
+  "models/adapters/claude.js",
+  "models/adapters/registry.js",
+  "models/configuration/reasoning.js",
+  "models/configuration/editor.js",
+  "models/configuration/provider-templates.js",
+  "models/embeddings/dimensions.js",
+  "models/embeddings/runner.js",
+  "models/routing/provider-resolver.js",
+  "models/isolated-task.js",
+  "tools/support/contract.js",
+  "tools/access/roles.js",
+  "tools/access/capability-store.js",
+  "tools/access/policy.js",
+  "tools/access/matrix.js",
+  "extensions/runtime-config.js",
+  "core/scheduling/background-task-service.js",
+  "core/storage/config-backup-service.js",
+  "mcp/index.js",
+  "tools/support/registry.js",
+  "tools/support/execution-runtime.js",
+  "tools/builtins/shared.js",
+  "tools/builtins/index.js",
+  "tools/builtins/discovery.js",
+  "tools/builtins/entertainment.js",
+  "tools/builtins/schedule.js",
+  "tools/builtins/subagent.js",
+  "tools/builtins/social.js",
+  "tools/builtins/memory.js",
+  "tools/builtins/media.js",
+  "tools/builtins/bilibili.js",
+  "tools/builtins/command.js",
+  "tools/builtins/network.js",
+  "tools/builtins/group-admin.js",
+  "tools/builtins/render.js",
+  "tools/custom/manager.js",
+  "resources/render/markmap/d3.js",
+  "resources/render/math/js/katex.min.js",
+  "resources/render/math/css/fonts/KaTeX_Main-Regular.woff2",
+  "core/storage/sqlite/migrations/001-baseline.sql",
+  "core/storage/sqlite/migrations/002-tool-call-events.sql",
+  "core/storage/sqlite/migrations/003-model-call-snapshots.sql",
+  "core/storage/sqlite/vector-migrations/001-baseline.sql",
+  "web/client/app.css",
+  "web/client/vendor/vue.esm-browser.prod.js",
+  "examples/extensions/tools/framework-block-example/index.js",
+]) {
+  await assertFile(relative)
+}
+
+const actualCollisions = new Set(manifest.javascriptCollisions || [])
+if (actualCollisions.size) throw new Error(`运行产物仍有未解决的 JS/TS 同名模块：${[...actualCollisions].join(", ")}`)
+
+const { MessageChainBuilder } = await import(pathToFileURL(path.join(runtimeRoot, "core/message-chain/builder.js")))
+const chain = new MessageChainBuilder().text("runtime").image("https://example.com/image.png").build()
+if (chain.length !== 2 || !chain.some(part => part.type === "image")) throw new Error("TS 消息链运行产物烟测失败")
+
+console.log(`ok runtime-build (${manifest.typescriptModules.length} TS modules, ${actualCollisions.size} runtime collisions)`)
