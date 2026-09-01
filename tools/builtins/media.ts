@@ -539,12 +539,12 @@ export class MessageSendTool {
   execution = { effect: "non_idempotent", repeatPolicy: "dedupe", operationFields: ["parts", "target"], retryPolicy: "no_ambiguous_retry", maxAttempts: 1, dispatchMarking: "deferred" }
   tags = ["message", "media", "delivery"]
   description = [
-    "The only tool that delivers a message, always to the current chat. Send one ordered internal message chain.",
+    "The only tool that delivers a message, always to the current chat. Send one ordered internal message chain. Text and images may share one OneBot message; every video is delivered as a separate message while preserving order.",
     "Part shapes:",
     "  {type:'text',text}",
     "  {type:'mention'} — omit userId to @ whoever triggered the current message; that is the normal case",
     "  {type:'reply',messageId}",
-    "  {type:'image'|'audio'|'video'|'file',source:{kind:'url'|'cache',value}} — copy the address exactly from a tool result, never invent one",
+    "  {type:'image'|'audio'|'video'|'file',source:{kind:'url'|'cache',value}} — copy the address exactly from a tool result, never invent one; when a video result has coverSource, add it first as a separate image part",
     "  {type:'music',platform:'qq'|'163'|'kugou'|'migu'|'kuwo',id}",
     "  {type:'music',platform:'custom',url,audio,title,singer,image}",
     "  {type:'forward',nodes:[{nickname?,userId?,parts:[...message parts]}]} — batch multiple nodes into one merged-forward message; forward nodes cannot contain another forward",

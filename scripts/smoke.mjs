@@ -1149,6 +1149,31 @@ async function checkExtensions() {
     execution: { operationId: "smoke-media-action" },
   })
   assert(newMediaActionResult.kind === "delivery" && newMediaActionResult.receipt?.status === "sent" && mediaActionPayloads.length === 1, "message_send should deliver an ordered chain containing a direct media source")
+  const videoSplitPayloads = []
+  const videoSplitResult = await messageSendContract.execute({
+    parts: [
+      { type: "text", text: "视频简介" },
+      { type: "image", source: { kind: "url", value: "https://example.test/video-cover.jpg" } },
+      { type: "video", source: { kind: "url", value: "https://example.test/video.mp4" } },
+    ],
+  }, {
+    e: { isGroup: true, group_id: "smoke", reply: async payload => { videoSplitPayloads.push(payload); return { message_id: `video-split-${videoSplitPayloads.length}` } } },
+    config: { response: { render: { delivery: { quoteReply: false } } } },
+    execution: { operationId: "smoke-video-split" },
+  })
+  assert(videoSplitResult.kind === "delivery" && videoSplitResult.receipt?.status === "sent" && videoSplitPayloads.length === 2, "message_send should split a video from the preceding OneBot text-and-image payload")
+  assert(Array.isArray(videoSplitPayloads[0]) && videoSplitPayloads[0][0] === "视频简介" && JSON.stringify(videoSplitPayloads[0][1]).includes("video-cover.jpg"), "an available video cover should remain in the preceding text-and-image message")
+  assert(!Array.isArray(videoSplitPayloads[1]) && JSON.stringify(videoSplitPayloads[1]).includes("video.mp4"), "the video body should be sent as its own OneBot message")
+  assert(videoSplitResult.receipt?.parts?.[0]?.messageId === "video-split-1" && videoSplitResult.receipt?.parts?.[2]?.messageId === "video-split-2", "split video delivery should preserve per-part message receipts")
+  const bareVideoPayloads = []
+  const bareVideoResult = await messageSendContract.execute({
+    parts: [{ type: "video", source: { kind: "url", value: "https://example.test/bare-video.mp4" } }],
+  }, {
+    e: { isGroup: true, group_id: "smoke", reply: async payload => bareVideoPayloads.push(payload) },
+    config: { response: { render: { delivery: { quoteReply: false } } } },
+    execution: { operationId: "smoke-bare-video" },
+  })
+  assert(bareVideoResult.kind === "delivery" && bareVideoPayloads.length === 1 && !Array.isArray(bareVideoPayloads[0]), "a video without a cover should be sent directly as one standalone message")
   const mcpAbortController = new AbortController()
   let mcpCallArguments
   const mcpAdapter = new McpToolAdapter("smoke", {

@@ -203,7 +203,7 @@ export async function deliverMessageChain(chain: MessageChain, context: MessageC
   const config = context.config || configStore.get() as unknown as UnknownRecord
   const receiptId = context.operationId || `delivery_${crypto.randomUUID()}`
   const parts: PartDeliveryReceipt[] = []
-  const prepared: Array<{ index: number; payload: unknown; forward: boolean }> = []
+  const prepared: Array<{ index: number; payload: unknown; standalone: boolean; forward: boolean }> = []
   for (let index = 0; index < chain.length; index++) {
     const part = chain[index]
     try {
@@ -214,11 +214,12 @@ export async function deliverMessageChain(chain: MessageChain, context: MessageC
       // 文字连在一起渲染，甚至影响艾特本身的解析。文本 CQ 路径一直有这个
       // 规范化，消息链路径必须保持一致。
       if (outbound.type === "forward") {
-        prepared.push({ index, payload: await forwardSegment(outbound, context, config), forward: true })
+        prepared.push({ index, payload: await forwardSegment(outbound, context, config), standalone: true, forward: true })
       } else if (outbound.type === "text" && chain[index - 1]?.type === "mention" && !/^\s/.test(outbound.text)) {
-        prepared.push({ index, payload: ` ${outbound.text}`, forward: false })
+        prepared.push({ index, payload: ` ${outbound.text}`, standalone: false, forward: false })
       } else {
-        prepared.push({ index, payload: segmentFor(outbound, value), forward: false })
+        // OneBot 普通复合消息只可靠支持图文链；视频必须单独作为一条消息发送。
+        prepared.push({ index, payload: segmentFor(outbound, value), standalone: outbound.type === "video", forward: false })
       }
       parts.push({ index, type: partType(part), status: "sent" })
     } catch (error) {
@@ -228,12 +229,12 @@ export async function deliverMessageChain(chain: MessageChain, context: MessageC
   if (!prepared.length) {
     return { id: receiptId, status: "failed", partCount: chain.length, sentCount: 0, failedCount: parts.length || chain.length, parts, error: parts.map(item => item.error).filter(Boolean).join("；") || "没有可发送的消息链片段。" }
   }
-  const batches: Array<{ forward: boolean; items: typeof prepared }> = []
+  const batches: Array<{ forward: boolean; standalone: boolean; items: typeof prepared }> = []
   for (const item of prepared) {
     const current = batches[batches.length - 1]
-    // OneBot 会把同一个 payload 中的 node 抽出并优先发送。这里主动分批，
-    // 才能严格保持 message_send 中“正文在前、来源转发在后”的顺序。
-    if (item.forward || !current || current.forward) batches.push({ forward: item.forward, items: [item] })
+    // OneBot 会把同一个 payload 中的 node 抽出并优先发送，视频也不能稳定地
+    // 与图文共存。两者都主动分批，严格保持 message_send 的原始顺序。
+    if (item.standalone || !current || current.standalone) batches.push({ forward: item.forward, standalone: item.standalone, items: [item] })
     else current.items.push(item)
   }
   const messageIds: string[] = []
