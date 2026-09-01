@@ -4,6 +4,7 @@
   "type": "module",
   "description": "Yui Chat AI plugin for TRSS-Yunzai",
   "scripts": {
+    "postinstall": "node scripts/postinstall.mjs",
     "check": "npm run check:types && npm run check:types-client && npm run check:types-runtime && npm run check:runtime-build && npm run check:structure && npm run check:sqlite-baseline && npm run check:sqlite-integration && npm run check:memory-p1 && npm run check:knowledge-p1 && npm run check:runtime-p1 && npm run smoke",
     "check:types": "tsc -p tsconfig.json --noEmit",
     "check:types-client": "tsc -p tsconfig.client.json --noEmit",

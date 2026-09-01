@@ -8,6 +8,7 @@ const { SqliteRuntimeConfigRepository } = await import("../output/runtime/core/s
 const { SqliteClient } = await import("../output/runtime/core/storage/sqlite/client.js")
 const { defaults } = await import("../output/runtime/config/defaults.js")
 const { schemaManifest } = await import("../output/runtime/config/schema.js")
+const { replaceWithSafeRegex } = await import("../output/runtime/core/shared/safe-regex.js")
 const { contentToText, normalizeListedModels, tokenUsage } = await import("../output/runtime/models/adapters/base.js")
 const { MockAdapter } = await import("../output/runtime/models/adapters/mock.js")
 const { OpenAICompatibleAdapter } = await import("../output/runtime/models/adapters/openai-compatible.js")
@@ -27,6 +28,7 @@ assert.equal(new GeminiAdapter().supportsEmbeddings, true)
 assert.equal(new ClaudeAdapter().supportsTools, true)
 assert.equal(adapterRegistry.listAdapters().length, 6)
 assert.equal(buildReasoningPayload({ type: "openai-compatible", model: "gpt-5", reasoning: { effort: "medium" } })?.reasoning?.effort, "medium")
+assert.equal(await replaceWithSafeRegex("a1", "\\d", "x"), "ax")
 
 const chain = new MessageChainBuilder()
   .text("结果：")
@@ -205,19 +207,22 @@ class FakeSqliteWorker {
 }
 
 let workerData
+let workerExecArgv
 const sqliteClient = new SqliteClient({
   dataDir: "/tmp/yui-chat",
   workerUrl: "worker.js",
   createWorker: (_url, options) => {
     workerData = options.workerData
+    workerExecArgv = options.execArgv
     return new FakeSqliteWorker()
   },
   joinPath: (...parts) => parts.join("/"),
-  execArgv: ["--input-type=module"],
+  execArgv: ["--input-type=module", "--max-old-space-size=3072"],
 })
 const sqliteStatus = await sqliteClient.init({ storage: { sqlite: { enabled: true } } })
 assert.equal(sqliteStatus.available, true)
 assert.equal(workerData.stateFile, "/tmp/yui-chat/storage/state.sqlite3")
+assert.deepEqual(workerExecArgv, [])
 assert.equal((await sqliteClient.get("SELECT 1")).value, 1)
 await sqliteClient.close()
 

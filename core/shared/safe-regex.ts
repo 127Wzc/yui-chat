@@ -46,6 +46,8 @@ export async function replaceWithSafeRegex(
   return new Promise<string>((resolve, reject) => {
     const worker = new Worker(workerSource, {
       eval: true,
+      // Worker 不需要宿主启动参数；显式传空数组，避免继承不支持的 V8/进程级参数。
+      execArgv: [],
       workerData: { text: input, pattern: source, replacement: String(replacement || ""), flags: normalizeFlags(flags) },
     } as unknown as ConstructorParameters<typeof Worker>[1])
     let settled = false

@@ -7,7 +7,11 @@ const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".
 const outputRoot = path.join(pluginRoot, "output")
 const runtimeRoot = path.join(outputRoot, "runtime")
 const typesRoot = path.join(outputRoot, "typescript")
-const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm"
+// 跟随调用方的包管理器：Yunzai 用 pnpm workspace 安装插件，写死 npm 会绕开
+// pnpm 的 node_modules 布局；直接执行 node scripts/build-runtime.mjs 时退回 npm。
+const runnerAgent = process.env.npm_config_user_agent ?? ""
+const runnerName = runnerAgent.startsWith("pnpm") ? "pnpm" : runnerAgent.startsWith("yarn") ? "yarn" : "npm"
+const npmCommand = process.platform === "win32" ? `${runnerName}.cmd` : runnerName
 const clientAssetVersion = "20260901-image-log"
 
 function run(command, args) {

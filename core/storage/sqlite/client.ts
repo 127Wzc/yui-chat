@@ -29,6 +29,7 @@ export interface SqliteClientOptions {
   workerUrl: unknown
   createWorker: SqliteWorkerFactory
   joinPath: (...parts: string[]) => string
+  /** 兼容旧注入方；SQLite Worker 不接收宿主进程的 execArgv。 */
   execArgv?: string[]
   logger?: {
     error?: (message: string, error?: unknown) => void
@@ -117,7 +118,8 @@ export class SqliteClient implements SqliteClientContract {
     const storageDir = this.options.joinPath(this.options.dataDir, "storage")
     const worker = this.options.createWorker(this.options.workerUrl, {
       type: "module",
-      execArgv: [...(this.options.execArgv || [])].filter(arg => !arg.startsWith("--input-type")),
+      // Worker 不需要宿主启动参数；显式传空数组，避免 Node 默认继承不支持的 V8/进程级参数。
+      execArgv: [],
       workerData: {
         stateFile: this.options.joinPath(storageDir, "state.sqlite3"),
         vectorFile: this.options.joinPath(storageDir, "vectors.sqlite3"),
@@ -269,7 +271,6 @@ export const sqliteClient = new SqliteClient({
   workerUrl: new URL("./worker.js", import.meta.url),
   createWorker: createProductionWorker,
   joinPath: path.join,
-  execArgv: process.execArgv,
   logger: {
     error: (message, error) => hostRuntime.logger?.error?.(message, error),
     warn: (message, error) => hostRuntime.logger?.warn?.(message, error),

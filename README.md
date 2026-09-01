@@ -4,15 +4,34 @@ Yui Chat 是面向 TRSS-Yunzai 的独立 AI 插件，源码目录为 `plugins/yu
 
 模型配置采用 **供应商 → 模型 → 任务** 三层结构：`apiProviders → models → modelTasks`。插件支持 OpenAI-compatible、Gemini、Qwen、Claude、ChatGLM 和 mock，包含工具调用、图片上下文、人格互动、记忆与知识库、文本/图片/语音输出、定时提醒和管理台。
 
-## 快速开始
+## 安装教程 💡
 
-安装依赖并生成运行产物：
+请将 Yui Chat 放置在 Yunzai-Bot 的 `plugins` 目录下，且目录名必须为 `yui-chat`。
 
-```bash
-cd plugins/yui-chat
-npm install
-npm run build:runtime
+1. 推荐使用 git 进行安装，以方便后续升级。在 Yunzai 目录打开终端，运行
+
+```sh
+git clone -b main --depth=1 https://github.com/127Wzc/yui-chat.git ./plugins/yui-chat
 ```
+
+2. 在 Yunzai 根目录安装依赖。`plugins/**` 是 pnpm workspace 包，根目录一次安装即可覆盖本插件
+
+```sh
+pnpm i
+```
+
+安装会通过 `postinstall` 自动执行 `build:runtime` 生成 `output/runtime/`。若安装时跳过了脚本（如 `--ignore-scripts`）或构建告警失败，进入插件目录手动补一次：
+
+```sh
+cd plugins/yui-chat
+pnpm run build:runtime
+```
+
+3. 重启 Yunzai-Bot 后即可使用
+
+后续升级在 `plugins/yui-chat` 目录执行 `git pull`，然后回到 Yunzai 根目录重新运行 `pnpm i`（依赖未变时也可只跑 `pnpm run build:runtime`）。
+
+## 快速开始
 
 启动 Yunzai 后，主人发送 `#yui面板` 获取 3 分钟内有效、只能使用一次的管理台快捷链接。在「模型与回复」中添加供应商和模型，再将模型设置为默认回复任务即可开始使用。
 
@@ -66,14 +85,14 @@ Web 静态 Token 留空时静态登录关闭，主人仍可通过 `#yui面板` �
 
 ## 开发与文档
 
-源码以 TypeScript 为唯一业务实现，根目录只保留 `index.js` 作为 Yunzai 宿主加载器；Custom 扩展和第三方静态资源属于受控动态边界。`npm run build:runtime` 会生成被忽略的 `output/runtime/`，构建会拒绝同名 JS/TS 业务实现。
+源码以 TypeScript 为唯一业务实现，根目录只保留 `index.js` 作为 Yunzai 宿主加载器；Custom 扩展和第三方静态资源属于受控动态边界。`pnpm run build:runtime` 会生成被忽略的 `output/runtime/`，构建会拒绝同名 JS/TS 业务实现。
 
 ```bash
 cd plugins/yui-chat
-npm run check
+pnpm run check
 ```
 
-`npm run check` 覆盖 TypeScript、浏览器端类型、运行产物、结构边界、SQLite、记忆、知识库和完整 smoke。测试默认使用隔离临时目录；需要保留现场时使用 `YUI_CHAT_SMOKE_RUNTIME_ROOT`，需要指定隔离运行根时使用 `YUI_CHAT_RUNTIME_ROOT`。
+`pnpm run check` 覆盖 TypeScript、浏览器端类型、运行产物、结构边界、SQLite、记忆、知识库和完整 smoke。测试默认使用隔离临时目录；需要保留现场时使用 `YUI_CHAT_SMOKE_RUNTIME_ROOT`，需要指定隔离运行根时使用 `YUI_CHAT_RUNTIME_ROOT`。
 
 当前文档按职责保留：
 

@@ -10,7 +10,7 @@ const compiledEntry = path.join(pluginRoot, "output", "runtime", "runtime-entry.
 try {
   await fs.access(compiledEntry)
 } catch {
-  throw new Error("Yui Chat 尚未生成运行产物，请先执行 npm run build:runtime")
+  throw new Error("Yui Chat 尚未生成运行产物，请在 plugins/yui-chat 执行 pnpm run build:runtime")
 }
 
 const runtime = await import(pathToFileURL(compiledEntry).href)
