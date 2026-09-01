@@ -190,6 +190,8 @@ export const MemoryTab = {
     const windowDetailRequests: Record<string, Promise<MemoryRecord | null> | undefined> = {}
     const captureMessageQuery = ref("")
     const captureMessagePage = ref(1)
+    const captureMessagePageJump = ref(1)
+    const captureMessageOrder = ref("desc")
     const selectedTimelineWindow = ref<MemoryRecord | null>(null)
     const timelineWindowDetail = ref<MemoryRecord | null>(null)
     const timelineDetailLoading = ref(false)
@@ -331,6 +333,7 @@ export const MemoryTab = {
       tokens: summary.tokens + Number(item.estimatedInputTokens || 0),
       calls: summary.calls + Number(item.modelCallCount || item.chunkCount || 0),
     }), { messages: 0, tokens: 0, calls: 0 }))
+    const captureMessagePageCount = computed(() => Math.max(1, Math.ceil(Number(captureMessages.value.total || 0) / Number(captureMessages.value.pageSize || RAW_PAGE_SIZE))))
     const selectedWindowMessages = computed(() => timelineWindowDetail.value?.messages || [])
     const extractionCounts = computed(() => ({
       messages: Number(selectedPolicy.value?.messageCount || 0),
@@ -424,6 +427,20 @@ export const MemoryTab = {
         page: Number(page.page || 1),
         pageSize: Number(page.pageSize || WINDOW_PAGE_SIZE),
       }
+    }
+
+    function applyMessagePage(value: MemoryRecord | undefined): void {
+      const page = value || { items: [], total: 0, page: 1, pageSize: RAW_PAGE_SIZE, order: captureMessageOrder.value }
+      captureMessages.value = {
+        items: Array.isArray(page.items) ? page.items : [],
+        total: Number(page.total || 0),
+        page: Number(page.page || 1),
+        pageSize: Number(page.pageSize || RAW_PAGE_SIZE),
+        order: page.order === "asc" ? "asc" : "desc",
+      }
+      captureMessagePage.value = captureMessages.value.page
+      captureMessagePageJump.value = captureMessages.value.page
+      captureMessageOrder.value = captureMessages.value.order
     }
 
     function applyCaptureSummary(next: MemoryRecord, { light = false }: { light?: boolean } = {}): void {
@@ -962,6 +979,8 @@ export const MemoryTab = {
       groupMemoryQuery.value = ""
       groupMemoryPage.value = 1
       captureWindowPage.value = { total: 0, page: 1, pageSize: WINDOW_PAGE_SIZE }
+      captureMessagePage.value = 1
+      captureMessagePageJump.value = 1
       memberQuery.value = ""
       selectedMember.value = null
       memberWorkspace.value = null
@@ -1123,6 +1142,7 @@ export const MemoryTab = {
             q: captureMessageQuery.value,
             page: captureMessagePage.value,
             pageSize: RAW_PAGE_SIZE,
+            order: captureMessageOrder.value,
           })),
           messagesOnly ? Promise.resolve(null) : request(pageUrl(`/api/memory/captures/${scope}/windows`, {
             page: captureWindowPage.value.page,
@@ -1130,7 +1150,7 @@ export const MemoryTab = {
           })),
         ])
         if (seq !== loadSeq.captureMessages) return
-        captureMessages.value = messages.messages || { items: [], total: 0, page: 1, pageSize: RAW_PAGE_SIZE }
+        applyMessagePage(messages.messages)
         if (windows) applyWindowPage(windows.windows)
       } catch (err) {
         toast(errorMessage(err))
@@ -1155,14 +1175,14 @@ export const MemoryTab = {
       try {
         const scope = `group/${encodeURIComponent(policy.scopeId)}`
         const [messages, windows] = await Promise.all([
-          request(pageUrl(`/api/memory/captures/${scope}/messages`, { q: captureMessageQuery.value, page: captureMessagePage.value, pageSize: RAW_PAGE_SIZE })),
+          request(pageUrl(`/api/memory/captures/${scope}/messages`, { q: captureMessageQuery.value, page: captureMessagePage.value, pageSize: RAW_PAGE_SIZE, order: captureMessageOrder.value })),
           request(pageUrl(`/api/memory/captures/${scope}/windows`, {
             page: captureWindowPage.value.page,
             pageSize: captureWindowPage.value.pageSize,
           })),
         ])
         if (seq !== loadSeq.captureMessages) return
-        captureMessages.value = messages.messages || { items: [], total: 0, page: 1, pageSize: RAW_PAGE_SIZE }
+        applyMessagePage(messages.messages)
         applyWindowPage(windows.windows)
         const progress = policy.windowProgress || {}
         if (Number(progress.pending || 0) || Number(progress.running || 0)) startCapturePolling()
@@ -1273,7 +1293,22 @@ export const MemoryTab = {
     }
 
     function changeCaptureMessagePage(page: number): void {
-      captureMessagePage.value = page
+      const nextPage = Math.max(1, Math.min(captureMessagePageCount.value, Math.trunc(Number(page) || 1)))
+      captureMessagePage.value = nextPage
+      captureMessagePageJump.value = nextPage
+      loadCaptureDetails({ messagesOnly: true })
+    }
+
+    function jumpCaptureMessagePage(): void {
+      changeCaptureMessagePage(Number(captureMessagePageJump.value) || 1)
+    }
+
+    function changeCaptureMessageOrder(order: string): void {
+      const nextOrder = order === "asc" ? "asc" : "desc"
+      if (captureMessageOrder.value === nextOrder) return
+      captureMessageOrder.value = nextOrder
+      captureMessagePage.value = 1
+      captureMessagePageJump.value = 1
       loadCaptureDetails({ messagesOnly: true })
     }
 
@@ -1485,6 +1520,7 @@ export const MemoryTab = {
     })
     watch(captureMessageQuery, () => {
       captureMessagePage.value = 1
+      captureMessagePageJump.value = 1
       // 只刷新消息列表；全量重建 extraction 工作区会重置时间线选择并放大请求。
       debouncedCaptureMessageSearch()
     })
@@ -1529,13 +1565,13 @@ export const MemoryTab = {
     const memoryView = reactive({
       activeWorkspace, extractionPane, busy, captureBusy, captureAction, showGroupPicker, groupPickerQuery, selectedGroupId, selectedPolicy, capturePolicies, filteredPolicies, captureDefaults, captureDraftPolicy, captureDraftDirty, captureDraftEditing, historyBackfillLimit, historyBackfillFrom, backfillLimitMax, extractionModelOptions, groupWorkspace, groupMemory, groupMemoryQuery, groupMemoryPage, duplicatePlan, duplicatePlanBusy,
       members, memberQuery, selectedMember, selectedMemberName, memberWorkspace, memberScope, memberMemoryQuery, memberMemoryPage, currentMemberMemory,
-      showMemoryDrawer, showProfileDrawer, showCaptureSettings, showReextractDialog, selectedCapture, captureMessages, captureWindows, captureWindowPage, captureMessageQuery, captureMessagePage, captureDraft, draft, windowDetails, windowDetailLoading,
+      showMemoryDrawer, showProfileDrawer, showCaptureSettings, showReextractDialog, selectedCapture, captureMessages, captureWindows, captureWindowPage, captureMessageQuery, captureMessagePage, captureMessagePageJump, captureMessageOrder, captureMessagePageCount, captureDraft, draft, windowDetails, windowDetailLoading,
       selectedTimelineWindow, timelineWindowDetail, selectedWindowMessages, timelineWindows, reextractStart, reextractEnd, reextractPlan, reextractBusy, extractionCounts, runRecordWindows,
       calendarDays, calendarMeta, calendarRange, calendarMetric, calendarBusy, calendarWeeks, calendarMetricLabel, calendarSummary, calendarWeeksElement, timelineDetailLoading, timelineDetailError,
       windowSelectionMode, selectedWindowStarts, selectedWindowItems, selectedWindowSummary,
-      policyTitle, policyOverrideSummary, memberTitle, timeLabel, rangeLabel, scopeLabel, extractionScopeLabel, backfillStatusLabel, windowStatusLabel, timelineStatus, calendarStatus, calendarDayClass, calendarDayTitle, calendarDayAriaLabel, dayNumber, segmentSummary, normalizationView, compactNumber, windowWorkload, memoryLifecycle, resultAction, taskResultSummary, runningWindowProgress, batchProgressLabel, captureDefaultLabel, captureFieldHint, captureFieldSource, updateCaptureField, resetCaptureField, selectGroup, selectMember, switchWorkspace, refreshWorkspace, reviewDuplicateMemories, openCaptureSettings, saveCapturePolicy, openSystemSettings, backfillHistory, backfillFromMessage, queueExtraction,
+      policyTitle, policyOverrideSummary, memberTitle, timeLabel, rangeLabel, scopeLabel, extractionScopeLabel, backfillStatusLabel, windowStatusLabel, timelineStatus, calendarStatus, calendarDayClass, calendarDayTitle, calendarDayAriaLabel, dayNumber, segmentSummary, normalizationView, compactNumber, windowWorkload, memoryLifecycle, resultAction, taskResultSummary, runningWindowProgress, taskListSummary, batchProgressLabel, captureDefaultLabel, captureFieldHint, captureFieldSource, updateCaptureField, resetCaptureField, selectGroup, selectMember, switchWorkspace, refreshWorkspace, reviewDuplicateMemories, openCaptureSettings, saveCapturePolicy, openSystemSettings, backfillHistory, backfillFromMessage, queueExtraction,
       isWindowSelected, toggleWindowSelectionMode, toggleWindowSelection, openRunWindow, clearWindowSelection, selectVisibleWindows, confirmSelectedWindows, handleCalendarScroll,
-      loadCaptureDetails, loadExtractionWorkspace, loadCalendar, previewReextraction, openReextractDialog, confirmReextraction, reextractSingleDay, selectTimelineWindow, changeCaptureMessagePage, changeCaptureWindowPage, targetForGroup, targetForMember, openMemoryEditor, saveMemory, deleteMemory, openProfileEditor, saveProfile, changeGroupPage, changeMemberPage,
+      loadCaptureDetails, loadExtractionWorkspace, loadCalendar, previewReextraction, openReextractDialog, confirmReextraction, reextractSingleDay, selectTimelineWindow, changeCaptureMessagePage, jumpCaptureMessagePage, changeCaptureMessageOrder, changeCaptureWindowPage, targetForGroup, targetForMember, openMemoryEditor, saveMemory, deleteMemory, openProfileEditor, saveProfile, changeGroupPage, changeMemberPage,
       setCalendarWeeksElement,
     })
 
@@ -1543,13 +1579,13 @@ export const MemoryTab = {
       memoryView,
       activeWorkspace, extractionPane, busy, captureBusy, captureAction, showGroupPicker, groupPickerQuery, selectedGroupId, selectedPolicy, capturePolicies, filteredPolicies, captureDefaults, captureDraftPolicy, captureDraftDirty, captureDraftEditing, historyBackfillLimit, historyBackfillFrom, backfillLimitMax, defaultReplyModelName, extractionModelOptions, groupWorkspace, groupMemory, groupMemoryQuery, groupMemoryPage, duplicatePlan, duplicatePlanBusy,
       members, memberQuery, selectedMember, selectedMemberName, memberWorkspace, memberScope, memberMemoryQuery, memberMemoryPage, currentMemberMemory,
-      showMemoryDrawer, showProfileDrawer, showCaptureSettings, showReextractDialog, selectedCapture, captureMessages, captureWindows, captureWindowPage, captureMessageQuery, captureMessagePage, captureDraft, draft, windowDetails, windowDetailLoading,
+      showMemoryDrawer, showProfileDrawer, showCaptureSettings, showReextractDialog, selectedCapture, captureMessages, captureWindows, captureWindowPage, captureMessageQuery, captureMessagePage, captureMessagePageJump, captureMessageOrder, captureMessagePageCount, captureDraft, draft, windowDetails, windowDetailLoading,
       selectedTimelineWindow, timelineWindowDetail, selectedWindowMessages, timelineWindows, reextractStart, reextractEnd, reextractPlan, reextractBusy, extractionCounts, runRecordWindows,
       calendarDays, calendarMeta, calendarRange, calendarMetric, calendarBusy, calendarWeeks, calendarMetricLabel, calendarSummary, calendarWeeksElement, timelineDetailLoading, timelineDetailError,
       windowSelectionMode, selectedWindowStarts, selectedWindowItems, selectedWindowSummary,
       policyTitle, policyOverrideSummary, memberTitle, timeLabel, rangeLabel, scopeLabel, extractionScopeLabel, backfillStatusLabel, windowStatusLabel, timelineStatus, calendarStatus, calendarDayClass, calendarDayTitle, calendarDayAriaLabel, dayNumber, segmentSummary, normalizationView, compactNumber, windowWorkload, memoryLifecycle, resultAction, taskResultSummary, runningWindowProgress, taskListSummary, batchProgressLabel, captureDefaultLabel, captureFieldHint, captureFieldSource, updateCaptureField, resetCaptureField, selectGroup, selectMember, switchWorkspace, refreshWorkspace, reviewDuplicateMemories, openCaptureSettings, saveCapturePolicy, openSystemSettings, backfillHistory, backfillFromMessage, queueExtraction,
       isWindowSelected, toggleWindowSelectionMode, toggleWindowSelection, openRunWindow, clearWindowSelection, selectVisibleWindows, confirmSelectedWindows, handleCalendarScroll,
-      loadCaptureDetails, loadExtractionWorkspace, loadCalendar, previewReextraction, openReextractDialog, confirmReextraction, reextractSingleDay, selectTimelineWindow, changeCaptureMessagePage, changeCaptureWindowPage, targetForGroup, targetForMember, openMemoryEditor, saveMemory, deleteMemory, openProfileEditor, saveProfile, changeGroupPage, changeMemberPage,
+      loadCaptureDetails, loadExtractionWorkspace, loadCalendar, previewReextraction, openReextractDialog, confirmReextraction, reextractSingleDay, selectTimelineWindow, changeCaptureMessagePage, jumpCaptureMessagePage, changeCaptureMessageOrder, changeCaptureWindowPage, targetForGroup, targetForMember, openMemoryEditor, saveMemory, deleteMemory, openProfileEditor, saveProfile, changeGroupPage, changeMemberPage,
     }
   },
   components: { MemoryCaptureDrawers, MemoryExtractionWorkspace, MemoryManageWorkspace },

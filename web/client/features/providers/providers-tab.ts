@@ -63,7 +63,7 @@ interface ProvidersSlice extends UnknownRecord {
 }
 
 interface ApiResult extends UnknownRecord {
-  result?: { channel?: string }
+  result?: { channel?: string; operation?: string; dimensions?: number; vectorCount?: number }
   config?: UnknownRecord
   diagnostics?: UnknownRecord
   removedModels?: unknown[]
@@ -211,7 +211,10 @@ export const ProvidersTab = {
           method: "POST",
           body: JSON.stringify({ channelId: id }),
         }))
-        toast(`测试通过：${result.result?.channel || "-"}`)
+        const tested = result.result || {}
+        toast(tested.operation === "embedding"
+          ? `向量测试通过：${tested.channel || "-"}（${tested.dimensions || "-"} 维）`
+          : `测试通过：${tested.channel || "-"}`)
         return result
       })
     }

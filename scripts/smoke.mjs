@@ -1747,6 +1747,22 @@ async function checkAdapterToolProtocol() {
     assert(streamed.stopReason === "tool_calls", "OpenAI-compatible SSE parser should preserve the structured finish reason")
     assert(streamed.usage.total === 6, "OpenAI-compatible SSE parser should keep final token usage")
 
+    let embeddingRequest
+    global.fetch = async (_url, options = {}) => {
+      embeddingRequest = JSON.parse(String(options.body || "{}"))
+      return new Response(JSON.stringify({ data: [{ embedding: [0.1, 0.2], index: 0 }], model: "embedding-smoke", usage: { prompt_tokens: 2, total_tokens: 2 } }), { status: 200, headers: { "content-type": "application/json" } })
+    }
+    const embeddingTest = await adapterRegistry.testChannel({
+      id: "embedding-test",
+      type: "openai-compatible",
+      model: "embedding-smoke",
+      baseURL: "https://embedding.example/v1",
+      authType: "none",
+      modelConfig: { capabilities: { chat: false, embedding: true }, embedding: { defaultDimensions: 2, supportsDimensionOverride: false } },
+    })
+    assert(embeddingTest.operation === "embedding" && embeddingTest.dimensions === 2 && embeddingTest.vectorCount === 1, "embedding model tests should use embedding requests and report vector dimensions")
+    assert(embeddingRequest.input?.[0] === "embedding health check" && embeddingRequest.dimensions === undefined, "embedding model tests should omit unsupported dimension overrides")
+
     let claudeRequest
     global.fetch = async (_url, options = {}) => {
       claudeRequest = JSON.parse(String(options.body || "{}"))
@@ -4721,6 +4737,8 @@ async function checkWebAndBoot() {
     await readSource("web/client/features/memory/memory-capture-drawers.ts"),
     await readSource("web/client/features/memory/memory-manage-workspace.ts"),
   ].join("\n")
+  const memoryViewMatch = webMemorySource.match(/const memoryView = reactive\(\{([\s\S]*?)\n    \}\)/u)
+  assert(memoryViewMatch?.[1].includes("taskListSummary"), "memory extraction workspace view should expose taskListSummary")
   const webToolsSource = await readWebToolsSource()
   const webMcpSource = await readSource("web/client/features/tools/mcp-panel.js")
   const webExtensionPanelSource = [
@@ -4827,7 +4845,7 @@ async function checkWebAndBoot() {
   assert(webKnowledgeSource.includes("documentOrigin") && webKnowledgeSource.includes("knowledge-command-origin-inline") && webKnowledgeSource.includes("knowledge-command-preview") && webKnowledgeSource.includes("openBuiltinCommandEditor") && webKnowledgeSource.includes("manualSourceCommandId") && webKnowledgeSource.includes("插件") && webKnowledgeSource.includes("文件") && webKnowledgeSource.includes("方法"), "built-in command documents should compactly show their source and open an editable persistent override")
   assert(webKnowledgeSource.includes("maintenancePaneItems") && webKnowledgeSource.includes("采集概览") && webKnowledgeSource.includes("收录示例") && webKnowledgeSource.includes("收录质量"), "built-in command maintenance should group command, capture, example, and quality workflows")
   assert(webShellSource.includes('{ id: "memory", label: "记忆管理"') && webStoreSource.includes('memory: ["config", "memory", "diagnostics"]'), "memory management should be a dedicated sidebar page with its own data slice")
-  assert(webMemorySource.includes("group-picker") && webMemorySource.includes("群公共记忆") && webMemorySource.includes("本群记忆") && webMemorySource.includes("全局记忆") && webMemorySource.includes("原始消息（") && webMemorySource.includes("补录历史") && webMemorySource.includes("提炼运行记录") && webMemorySource.includes("扫描昨日及历史") && webMemorySource.includes("等待处理") && webMemorySource.includes("实际模型调用") && webMemorySource.includes("Token 子窗口") && webMemorySource.includes("按日提炼") && webMemorySource.includes("reextractSingleDay") && webMemorySource.includes("runRecordWindows") && webMemorySource.includes("提炼结果（") && webMemorySource.includes("/windows/") && webMemorySource.includes("/api/memory/groups/"), "memory page should separate source-message backfill from daily extraction runs while exposing token workload, failed-day retry, and input coverage")
+  assert(webMemorySource.includes("group-picker") && webMemorySource.includes("群公共记忆") && webMemorySource.includes("本群记忆") && webMemorySource.includes("全局记忆") && webMemorySource.includes("原始消息（") && webMemorySource.includes("补录历史") && webMemorySource.includes("提炼运行记录") && webMemorySource.includes("扫描昨日及历史") && webMemorySource.includes("等待处理") && webMemorySource.includes("实际模型调用") && webMemorySource.includes("Token 子窗口") && webMemorySource.includes("按日提炼") && webMemorySource.includes("reextractSingleDay") && webMemorySource.includes("runRecordWindows") && webMemorySource.includes("提炼结果（") && webMemorySource.includes("/windows/") && webMemorySource.includes("/api/memory/groups/") && webMemorySource.includes("captureMessageOrder") && webMemorySource.includes("changeCaptureMessageOrder") && webMemorySource.includes("jumpCaptureMessagePage") && webMemorySource.includes("最早在前") && webMemorySource.includes("最新在前"), "memory page should separate source-message backfill from daily extraction runs while exposing token workload, failed-day retry, input coverage, message ordering, and page jumps")
   assert(
     webMemorySource.includes("windowSelectionMode")
       && webMemorySource.includes("selectedWindowStarts")
@@ -5057,6 +5075,9 @@ async function checkWebAndBoot() {
     const rawMessagesPayload = await rawMessagesResponse.json()
     assert(rawMessagesResponse.ok && rawMessagesPayload.messages?.total === 1 && rawMessagesPayload.messages?.items?.[0]?.text.includes("原始聊天记录"), "memory capture API should expose searchable paginated raw records separately from memories")
     assert(rawMessagesPayload.messages?.items?.[0]?.normalization?.label && rawMessagesPayload.messages?.items?.[0]?.segmentCounts?.text === 1, "raw message API should expose normalized segment observability")
+    const rawMessagesAscendingResponse = await fetch(`http://127.0.0.1:${port}/api/memory/captures/group/${memoryGroupId}/messages?q=${encodeURIComponent("补录")}&page=1&pageSize=20&order=asc`, { headers: { cookie } })
+    const rawMessagesAscendingPayload = await rawMessagesAscendingResponse.json()
+    assert(rawMessagesAscendingResponse.ok && rawMessagesAscendingPayload.messages?.order === "asc" && rawMessagesAscendingPayload.messages?.items?.[0]?.messageId === rawMessagesPayload.messages?.items?.[0]?.messageId, "memory capture API should expose explicit oldest-first ordering")
     const localCalendarDay = (value = Date.now()) => {
       const date = new Date(value)
       const pad = number => String(number).padStart(2, "0")

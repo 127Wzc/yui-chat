@@ -66,6 +66,23 @@ interface EmbeddingSendOptions {
   metadata?: Record<string, unknown>
 }
 
+interface ChannelTestResult {
+  channel?: string
+  adapter: string
+  operation: "chat" | "embedding"
+  text: string
+  dimensions?: number
+  vectorCount?: number
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
+function isEmbeddingChannel(channel: ModelChannel): boolean {
+  return record(record(channel.modelConfig).capabilities).embedding === true
+}
+
 /**
  * 供应商适配器注册表，负责实例生命周期、统一观测和协议边界。
  *
@@ -129,9 +146,22 @@ export class AdapterRegistry {
     }
   }
 
-  async testChannel(channel: ModelChannel): Promise<{ channel?: string; adapter: string; text: string }> {
+  async testChannel(channel: ModelChannel): Promise<ChannelTestResult> {
+    if (isEmbeddingChannel(channel)) {
+      const result = await this.embedTexts({ channel, texts: ["embedding health check"], purpose: "model-test", source: "management", taskName: "channel-test" })
+      const firstVector = result.vectors[0]
+      if (!Array.isArray(firstVector) || !firstVector.length) throw new Error("embedding 未返回有效向量")
+      return {
+        channel: channel.id,
+        adapter: this.get(channel.type).id,
+        operation: "embedding",
+        text: `embedding 测试通过：${firstVector.length} 维`,
+        dimensions: result.dimensions || firstVector.length,
+        vectorCount: result.vectors.length,
+      }
+    }
     const result = await this.sendMessage({ channel, messages: [{ role: "user", content: "health check" }], tools: [], purpose: "model-test", source: "management", taskName: "channel-test" })
-    return { channel: channel.id, adapter: this.get(channel.type).id, text: result.text }
+    return { channel: channel.id, adapter: this.get(channel.type).id, operation: "chat", text: result.text }
   }
 
   async listModels(channel: ModelChannel): Promise<{ channel?: string; adapter: string; models: ListedModel[] }> {

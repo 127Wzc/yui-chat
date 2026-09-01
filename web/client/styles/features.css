@@ -398,6 +398,11 @@
 .group-memory-section-head p, .group-member-list .memory-section-head p, .member-memory-head p { font-size: 11.5px; }
 .memory-list-tools { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 10px 0 7px; }
 .memory-list-tools .memory-search { width: min(420px, 100%); }
+.raw-message-list-controls, .memory-page-controls, .memory-page-jump { display: inline-flex; align-items: center; gap: 5px; }
+.raw-message-list-controls { flex-wrap: wrap; justify-content: flex-end; }
+.raw-message-order button { min-height: 24px; padding: 3px 8px; font-size: 10.5px; }
+.memory-page-jump input { width: 54px; height: 26px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--foreground); font: inherit; text-align: center; }
+.memory-page-jump input:focus { border-color: var(--ring); outline: 0; box-shadow: 0 0 0 2px color-mix(in srgb, var(--ring) 25%, transparent); }
 .memory-row-list { border-top: 1px solid var(--border); }
 .memory-summary-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto auto; align-items: center; gap: 10px; width: 100%; min-height: 48px; padding: 8px 4px 8px 10px; border-bottom: 1px solid var(--border); color: var(--foreground); cursor: pointer; outline: 0; }
 .memory-summary-row:hover { background: var(--muted); }

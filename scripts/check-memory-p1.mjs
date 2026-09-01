@@ -140,12 +140,14 @@ try {
   assert.equal(fromCursor.nextCursor, "bf-300", "next cursor must be the oldest fetched message")
   assert.equal(fromCursor.hasMore, true, "full pages below the start cursor must report more history")
   assert.equal(Number((await sqliteClient.get("SELECT COUNT(*) AS count FROM group_memory_messages WHERE group_id='backfill-group'"))?.count), 950)
+  pageCalls.length = 0
   const continued = await groupCaptureStore.backfillHistory("group", "backfill-group", { limit: 500, continueFromOldest: true })
+  assert.equal(pageCalls[0]?.cursor, "bf-300", "continueFromOldest must seed the host cursor with the oldest stored message")
   assert.equal(continued.startedFrom, "bf-300", "continueFromOldest must resume from the oldest stored message")
   assert.equal(continued.hasMore, false, "exhausted history must clear hasMore")
   assert.equal(Number((await sqliteClient.get("SELECT COUNT(*) AS count FROM group_memory_messages WHERE group_id='backfill-group'"))?.count), 1250)
 
-  // 大历史量：轮询只读取策略/进度，不扫描原始消息正文；原始消息和运行记录都稳定倒序分页。
+  // 大历史量：轮询只读取策略/进度，不扫描原始消息正文；原始消息默认倒序且支持正序，运行记录稳定倒序分页。
   await groupCaptureStore.setPolicy("group", "perf-group", { enabled: true })
   const perfStartDate = new Date()
   perfStartDate.setHours(0, 0, 0, 0)
@@ -189,9 +191,13 @@ try {
   )
   const perfPolicy = (await groupCaptureStore.listPolicies()).find(policy => policy.scopeId === "perf-group")
   assert.equal(perfPolicy?.messageCount, 20000)
-  const rawPage = await groupCaptureStore.listMessagePage("group", "perf-group", { page: 2, pageSize: 50 })
+  const rawPage = await groupCaptureStore.listMessagePage("group", "perf-group", { page: 2, pageSize: 50, order: "desc" })
   assert.equal(rawPage.total, 20000)
+  assert.equal(rawPage.order, "desc")
   assert.equal(rawPage.items[0]?.messageId, "perf-19949", "raw message pages must be newest-first and stable")
+  const rawAscendingPage = await groupCaptureStore.listMessagePage("group", "perf-group", { page: 2, pageSize: 50, order: "asc" })
+  assert.equal(rawAscendingPage.order, "asc")
+  assert.equal(rawAscendingPage.items[0]?.messageId, "perf-00050", "raw message pages must support oldest-first ordering")
 
   const perfWindowOperations = Array.from({ length: 120 }, (_, index) => {
     const windowStart = localDayAt(perfStart, index)

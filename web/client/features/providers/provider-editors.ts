@@ -52,7 +52,7 @@ interface ModelConfig extends UnknownRecord {
 }
 interface RequestResult extends UnknownRecord {
   models?: RemoteModel[]
-  result?: { channel?: string }
+  result?: { channel?: string; operation?: string; dimensions?: number; vectorCount?: number }
   config?: UnknownRecord
   diagnostics?: UnknownRecord
 }
@@ -213,7 +213,10 @@ export const AddChannelForm = {
       return runLocked(testingChannel, async () => {
         try {
         const result = asRecord<RequestResult>(await request("/api/channels/test", { method: "POST", body: "{}" }))
-        toast(`渠道测试完成：${result.result?.channel || "-"}`)
+        const tested = result.result || {}
+        toast(tested.operation === "embedding"
+          ? `向量测试完成：${tested.channel || "-"}（${tested.dimensions || "-"} 维）`
+          : `渠道测试完成：${tested.channel || "-"}`)
       } catch (err) {
         toast(errorMessage(err))
       }})

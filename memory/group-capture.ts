@@ -1110,6 +1110,8 @@ export class GroupCaptureStore {
     if (!type || !idValue) throw new Error("采集范围和对象 ID 不能为空。")
     const pageSize = number(options.pageSize, 50, 1, 200)
     const page = number(options.page, 1, 1, 1000000)
+    const order = String(options.order || "").toLowerCase() === "asc" ? "asc" : "desc"
+    const orderBy = order === "asc" ? "sent_at ASC, message_id ASC" : "sent_at DESC, message_id DESC"
     const query = cleanText(options.query || "", 200)
     const where = ["group_id=?"]
     const params: unknown[] = [idValue]
@@ -1131,11 +1133,11 @@ export class GroupCaptureStore {
     const clause = where.join(" AND ")
     const total = Number((await sqliteClient.get(`SELECT COUNT(*) AS total FROM group_memory_messages WHERE ${clause}`, params))?.total || 0)
     const rows = await sqliteClient.all(
-      `SELECT * FROM group_memory_messages WHERE ${clause} ORDER BY sent_at DESC, message_id DESC LIMIT ? OFFSET ?`,
+      `SELECT * FROM group_memory_messages WHERE ${clause} ORDER BY ${orderBy} LIMIT ? OFFSET ?`,
       [...params, pageSize, (page - 1) * pageSize],
     )
     const items = rows.map(sourceMessageView)
-    return { items, total, page, pageSize }
+    return { items, total, page, pageSize, order }
   }
 
   async getDailyCalendar(scopeType: unknown, scopeId: unknown, options: UnknownRecord = {}): Promise<UnknownRecord> {
@@ -1522,7 +1524,7 @@ export class GroupCaptureStore {
     // 大批量历史靠多次请求递进补录，每次都有界，去重由 (group_id, message_id) 保证。
     let startCursor = cleanText(options.beforeMessageId || "", 200)
     if (!startCursor && options.continueFromOldest) {
-      const oldestStored = await sqliteClient.get("SELECT message_id FROM group_memory_messages WHERE group_id=? ORDER BY sent_at ASC LIMIT 1", [idValue])
+      const oldestStored = await sqliteClient.get("SELECT message_id FROM group_memory_messages WHERE group_id=? ORDER BY sent_at ASC, message_id ASC LIMIT 1", [idValue])
       startCursor = String(oldestStored?.message_id || "")
     }
     const started = now()
