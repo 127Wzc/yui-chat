@@ -363,6 +363,9 @@ async function checkConfigSafety() {
       && !config.persona.characterPrompt.includes("knowledge_manage")
       && config.persona.runtimePrompt === defaultPersonaRuntimePrompt
       && config.persona.runtimePrompt.includes("knowledge_manage")
+      && config.persona.runtimePrompt.includes("必须调用 schedule_task")
+      && config.persona.runtimePrompt.includes("本轮有相应工具时必须调用")
+      && config.persona.runtimePrompt.includes("不得只口头答应")
       && config.persona.runtimePrompt.includes("网络搜索来源由运行时合并转发")
       && config.persona.runtimePrompt.includes("本轮实际提供给模型的图片")
       && config.persona.runtimePrompt.includes("主动投递必须使用 message_send")
@@ -1022,7 +1025,7 @@ async function checkToolPolicy() {
 async function checkScheduleTaskTool() {
   const { configStore } = await import("../output/runtime/config/store.js")
   const { AtomicJsonRepository } = await import("../output/runtime/core/storage/atomic-json-repository.js")
-  const { ScheduleTaskService, scheduleTaskService, sendTaskMessage } = await import("../output/runtime/core/scheduling/schedule-task-service.js")
+  const { ScheduleTaskService, formatScheduleTaskList, scheduleTaskService, sendTaskMessage } = await import("../output/runtime/core/scheduling/schedule-task-service.js")
   const { toolRegistry } = await import("../output/runtime/tools/support/registry.js")
   const config = JSON.parse(JSON.stringify(await configStore.load()))
   config.tools.builtin.scheduleTask.maxPerUser = 1
@@ -1030,15 +1033,16 @@ async function checkScheduleTaskTool() {
   config.tools.builtin.scheduleTask.cronMinIntervalMinutes = 60
   config.tools.enabledTools = [...new Set([...(config.tools.enabledTools || []), "schedule_task"])]
   await toolRegistry.init()
-  const e = { isGroup: true, group_id: "20001", user_id: `schedule-smoke-${Date.now()}`, sender: { role: "member", user_id: "" } }
+  const e = { isGroup: true, group_id: "20001", user_id: `schedule-smoke-${Date.now()}`, sender: { role: "member", user_id: "", card: "群里第一温柔" } }
   e.sender.user_id = e.user_id
-  const created = await toolRegistry.execute("schedule_task", { action: "schedule", content: "smoke reminder", delayMinutes: 43200 }, { e, config })
-  assert(/已创建定时提醒/.test(created), "schedule_task should create one-time reminders for normal users")
+  const created = await toolRegistry.execute("schedule_task", { action: "schedule", content: `提醒群里第一温柔(${e.user_id}) smoke reminder`, delayMinutes: 43200 }, { e, config })
+  assert(/已经记下了/.test(created) && /提醒你：smoke reminder/.test(created), "schedule_task should create natural one-time reminder confirmations without recipient metadata")
   const limited = await toolRegistry.execute("schedule_task", { action: "schedule", content: "second reminder", delayMinutes: 43200 }, { e, config })
   assert(/最多保留 1 个一次性定时任务/.test(limited), "schedule_task should enforce per-user limit")
   const list = await toolRegistry.execute("schedule_task", { action: "list" }, { e, config })
-  const id = list.match(/一次性 (once_[^：]+)/)?.[1]
+  const id = list.match(/编号：(once_[^\s]+)/)?.[1]
   assert(id, "schedule_task list should expose created task id")
+  assert(list.includes("你的定时任务") && list.includes("smoke reminder") && !list.includes("群里第一温柔") && !list.includes(e.user_id), "schedule_task list should be human-readable and omit the current recipient identity")
   const cancelled = await toolRegistry.execute("schedule_task", { action: "cancel", taskId: id }, { e, config })
   assert(/已取消定时任务/.test(cancelled), "schedule_task should cancel owned task")
   const cronFast = await toolRegistry.execute("schedule_task", { action: "cron_add", content: "fast", cron: "*/5 * * * *" }, { e, config })
@@ -1061,10 +1065,13 @@ async function checkScheduleTaskTool() {
       scopeType: "group",
       groupId: "20001",
       userId: "900001",
-      content: "[CQ:at,qq=123456]禁言 2 分钟了哦～",
+      content: "提醒群里第一温柔(900001) [CQ:at,qq=123456]禁言 2 分钟了哦～",
     }, config)
+    assert(sentTasks[0]?.some(item => item?.type === "at" && item.data?.qq === "900001"), "scheduled group reminders should identify the recipient with a native at segment")
     assert(sentTasks[0]?.some(item => item?.type === "at" && item.data?.qq === "123456"), "scheduled reminders should convert CQ at codes into native segments")
     assert(!sentTasks[0]?.some(item => typeof item === "string" && item.includes("[CQ:")), "scheduled reminders should never deliver literal CQ code")
+    const deliveredText = sentTasks[0]?.filter(item => typeof item === "string").join("") || ""
+    assert(deliveredText.includes("到时间啦") && !deliveredText.includes("群里第一温柔") && !deliveredText.includes("900001"), "scheduled reminders should sound natural and not repeat the native-at recipient")
   } finally {
     global.Bot = originalBot
     global.segment.at = originalAt
@@ -1118,6 +1125,13 @@ async function checkScheduleTaskTool() {
     ])
     assert((await isolatedService.list(isolatedEvent)).oneTime.length === 1, "serialized schedule updates should preserve the per-user limit")
     assert(concurrent.filter(result => /最多保留/.test(result)).length === 1, "one concurrent schedule create should be rejected by the limit")
+
+    const otherEvent = { isGroup: true, group_id: "another-group", user_id: "schedule-other", sender: { user_id: "schedule-other" } }
+    await isolatedService.addOneTime(otherEvent, { content: "another reminder", delayMinutes: 5 }, { ...config, tools: { ...config.tools, builtin: { ...config.tools.builtin, scheduleTask: { ...config.tools.builtin.scheduleTask, maxPerUser: 2 } } } })
+    const allRows = await isolatedService.listAll()
+    assert(allRows.oneTime.some(row => row.userId === "schedule-isolated") && allRows.oneTime.some(row => row.userId === "schedule-other"), "master schedule listing should include tasks from every user")
+    const ownerList = formatScheduleTaskList(allRows, { title: "全部定时任务", showOwner: true })
+    assert(ownerList.includes("群 another-group · 用户 schedule-other") && ownerList.includes("编号：once_"), "master schedule listing should show task ownership and cancellation ids")
   } finally {
     await fs.rm(isolatedDir, { recursive: true, force: true })
   }
@@ -2042,14 +2056,17 @@ async function checkMedia() {
   assert(
     visionInputModeForPrompt("撤回这条消息") === "none"
       && visionInputModeForPrompt("看看这张图") === "all"
-      && visionInputModeForPrompt("玉玉你能看到这个图里的内容吗") === "all",
-    "vision input should distinguish message management from explicit image understanding",
+      && visionInputModeForPrompt("玉玉你能看到这个图里的内容吗") === "all"
+      && visionInputModeForPrompt("评价一下") === "all",
+    "vision input should distinguish message management from explicit and contextual image understanding",
   )
   assert(
     recentImageRecallModeForPrompt("再看看我刚发的那个图片内容") === "explicit"
       && recentImageRecallModeForPrompt("上一张表情包是什么意思") === "explicit"
+      && recentImageRecallModeForPrompt("小呆毛刚才发的是什么") === "explicit"
       && recentImageRecallModeForPrompt("看看这个图") === "adjacent"
       && recentImageRecallModeForPrompt("玉玉这个呢") === "adjacent"
+      && recentImageRecallModeForPrompt("评价一下") === "adjacent"
       && recentImageRecallModeForPrompt("今天心情怎么样") === "none"
       && recentImageRecallModeForPrompt("撤回刚才那张图片") === "none",
     "recent image recall should distinguish explicit lookback, adjacent contextual reference, ordinary chat, and management messages",
@@ -2062,9 +2079,36 @@ async function checkMedia() {
   const managementContent = buildMediaUserContent("撤回这条消息", preparedManagementMedia, true)
   assert(!Array.isArray(managementContent) && !String(managementContent).includes(quotedImageUrl), "message management should not send quoted image URLs to the model")
   const visualMedia = await resolveMediaContext(quotedEvent, "看看这张图", { mediaRecognition: { includeQuotedMedia: true, useAtAvatar: false } })
-  assert(visualMedia.attachments.every(item => item.visionEligible === true), "explicit visual intent should continue to enable current and quoted images")
+  assert(visualMedia.attachments.filter(item => item.visionEligible === true).length === 1 && visualMedia.attachments.find(item => item.visionEligible)?.source === "quote", "an explicitly referenced quote should select the quoted image once instead of duplicating a host-flattened current image")
   const ellipticalQuotedMedia = await resolveMediaContext(quotedEvent, "玉玉那这个呢", { mediaRecognition: { includeQuotedMedia: true, useAtAvatar: false } })
-  assert(ellipticalQuotedMedia.attachments.every(item => item.visionEligible === true), "elliptical visual follow-ups should read an explicitly quoted image without recalling unrelated history")
+  assert(ellipticalQuotedMedia.attachments.filter(item => item.visionEligible === true).length === 1 && ellipticalQuotedMedia.attachments.find(item => item.visionEligible)?.source === "quote", "elliptical visual follow-ups should read only the explicitly quoted image without recalling unrelated history")
+  const inlineSourceQuotedMedia = await resolveMediaContext({
+    isGroup: true,
+    source: {
+      seq: "841607-inline",
+      user_id: "10003",
+      sender: { user_id: "10003", nickname: "inline-user" },
+      message: [{ type: "image", data: { url: "data:image/png;base64,AAAA" } }],
+    },
+    message: [{ type: "reply", data: { id: "841607-inline" } }],
+  }, "评价一下", { mediaRecognition: { includeQuotedMedia: true, useAtAvatar: false } })
+  assert(inlineSourceQuotedMedia.quote?.messageId === "841607-inline" && inlineSourceQuotedMedia.attachments.some(item => item.source === "quote" && item.visionEligible === true), "Yunzai inline source media should be used directly for intent-based quoted-image evaluation")
+  const directAndQuotedMedia = await resolveMediaContext({
+    ...quotedEvent,
+    message: [
+      { type: "reply", data: { id: "8416071" } },
+      { type: "image", data: { url: "data:image/png;base64,BBBB" } },
+    ],
+  }, "评价一下", { mediaRecognition: { includeQuotedMedia: true, useAtAvatar: false } })
+  assert(directAndQuotedMedia.attachments.filter(item => item.visionEligible).length === 1 && directAndQuotedMedia.attachments.find(item => item.visionEligible)?.source !== "quote", "a newly attached image should outrank an older quoted image for an unqualified evaluation")
+  const comparedMedia = await resolveMediaContext({
+    ...quotedEvent,
+    message: [
+      { type: "reply", data: { id: "8416071" } },
+      { type: "image", data: { url: "data:image/png;base64,BBBB" } },
+    ],
+  }, "对比这两张", { mediaRecognition: { includeQuotedMedia: true, useAtAvatar: false } })
+  assert(comparedMedia.attachments.filter(item => item.visionEligible).length === 2, "comparison intent should include the unique current image and quoted image without duplicating host-flattened URLs")
   const quotedOnlyEvent = {
     ...quotedEvent,
     message: [],
@@ -2074,7 +2118,7 @@ async function checkMedia() {
       message: [{ type: "image", data: { url: "data:image/png;base64,AAAA" } }],
     }),
   }
-  for (const prompt of ["看看这个", "怎么看这个", "这个怎么看", "这个是什么", "这个呢"]) {
+  for (const prompt of ["看看这个", "怎么看这个", "这个怎么看", "这个是什么", "这个呢", "说说你的看法"]) {
     const quotedVisual = await resolveMediaContext(quotedOnlyEvent, prompt, { mediaRecognition: { includeQuotedMedia: true, useAtAvatar: false } })
     assert(quotedVisual.attachments.some(item => item.source === "quote" && item.visionEligible === true), `quoted image should be eligible for visual prompt: ${prompt}`)
     const preparedQuotedVisual = await prepareMediaForVision(quotedVisual, { mediaRecognition: { remoteFetch: { enabled: true } } })
@@ -2839,6 +2883,11 @@ async function checkCommandRules() {
   assert(!explicitMatch("#yui学习表达 用户：你好\n回复：你好呀"), "retired #yui学习表达 command must not be registered")
   assert(!explicitMatch("#yui表达样例"), "retired #yui表达样例 command must not be registered")
   assert(match("#yui对话列表"), "#yui对话列表 should be registered")
+  assert(match("#yui定时任务") && match("#yui我的定时任务列表"), "self schedule list commands should be registered")
+  assert(match("#yui全部定时任务") && match("#yui所有定时任务列表"), "master schedule list commands should be registered")
+  const allScheduleRule = rules.find(rule => rule.fnc === "allScheduleTaskList")
+  const selfScheduleRule = rules.find(rule => rule.fnc === "scheduleTaskList")
+  assert(allScheduleRule?.permission === "master" && !selfScheduleRule?.permission, "only the all-user schedule list command should require master permission")
   assert(match("#yui渲染帮助"), "#yui渲染帮助 should be registered")
   assert(match("#yui渲染帮助菜单"), "#yui渲染帮助菜单 should be registered")
   assert(match("#yui渲染菜单"), "#yui渲染菜单 should be registered")
@@ -2870,6 +2919,7 @@ async function checkCommandRules() {
   assert(methodNames.has("setFirstPerson"), "setFirstPerson handler should exist")
   assert(!methodNames.has("learnExpression") && !methodNames.has("expressionExamples"), "retired persona expression handlers must be removed")
   assert(methodNames.has("conversationList"), "conversationList handler should exist")
+  assert(methodNames.has("scheduleTaskList") && methodNames.has("allScheduleTaskList"), "schedule list handlers should exist")
   assert(methodNames.has("renderImageCommand"), "renderImageCommand handler should exist")
   assert(methodNames.has("screenshotHtml"), "screenshotHtml handler should exist")
   assert(methodNames.has("testToolCommand"), "testToolCommand handler should exist")
@@ -3104,9 +3154,15 @@ async function checkPersonaTrigger() {
     const selfImageUrl = "https://multimedia.nt.qq.com.cn/download?fileid=recent-self"
     const otherImageUrl = "https://multimedia.nt.qq.com.cn/download?fileid=recent-other"
     assert(recentContextStore.record({ ...contextEvent, message_id: "self-image", msg: "", message: [{ type: "image", data: { url: selfImageUrl } }] }), "recent context should retain image-only messages as volatile references for intentional lookback")
-    assert(recentContextStore.record({ ...contextEvent, message_id: "other-image", user_id: "other-user", sender: { nickname: "Other User" }, msg: "他人后发图", message: [{ type: "image", data: { url: otherImageUrl } }] }), "recent context should retain other group members' image references")
-    const preferredSelfImage = recentContextStore.findRecentImage(contextEvent)
-    assert(preferredSelfImage?.url === selfImageUrl && preferredSelfImage.source === "recent-self", "recent image lookup should prefer the current speaker even when another member posted later")
+    assert(recentContextStore.record({ ...contextEvent, message_id: "other-image", user_id: "other-user", sender: { card: "玉玉小呆毛", nickname: "Other User" }, msg: "他人后发图", message: [{ type: "image", data: { url: otherImageUrl } }] }), "recent context should retain other group members' image references and aliases")
+    const preferredSelfImage = recentContextStore.findRecentImage(contextEvent, { prompt: "再看看我刚发的那个" })
+    assert(preferredSelfImage?.url === selfImageUrl && preferredSelfImage.source === "recent-self", "first-person image references should select the current speaker's latest image")
+    const namedOtherImage = recentContextStore.findRecentImage(contextEvent, { prompt: "玉玉小呆毛刚才发的是什么" })
+    assert(namedOtherImage?.url === otherImageUrl && namedOtherImage.userId === "other-user", "named-member image references should override the current speaker's older image")
+    const latestUnqualifiedImage = recentContextStore.findRecentImage(contextEvent, { prompt: "上一张是什么" })
+    assert(latestUnqualifiedImage?.url === otherImageUrl, "unqualified recent-image references should follow chronology instead of always preferring the current speaker")
+    assert(recentContextStore.record({ ...contextEvent, message_id: "named-no-image", user_id: "text-only-user", sender: { card: "纯文字成员" }, msg: "我只发文字" }), "recent context should retain named text-only participants")
+    assert(recentContextStore.findRecentImage(contextEvent, { prompt: "纯文字成员刚才发的是什么" }) === null, "a named participant without an image must not fall back to an unrelated speaker's image")
     recentContextStore.clear()
     assert(recentContextStore.record({ ...contextEvent, message_id: "fallback-image", user_id: "other-user", sender: { nickname: "Other User" }, msg: "他人发图", message: [{ type: "image", data: { url: otherImageUrl } }] }), "recent context should record a fallback group image")
     const fallbackGroupImage = recentContextStore.findRecentImage(contextEvent)
@@ -3289,6 +3345,21 @@ async function checkConversations() {
       sender: { user_id: "10001", nickname: "Smoke User" },
     }, "再看看我刚发的那个图片内容")
     assert(recentImageResult.media?.images === 1, "explicit recent-image intent should attach the current speaker's latest image to the model request")
+    assert(recentContextStore.record({
+      ...recentImageEvent,
+      message_id: "conversation-named-other-image",
+      user_id: "10002",
+      sender: { user_id: "10002", card: "玉玉小呆毛", nickname: "Other Smoke User" },
+    }), "conversation smoke should seed a named group member's image")
+    const namedRecentImageResult = await chatService.send({
+      isGroup: true,
+      group_id: "20001",
+      user_id: "10001",
+      msg: "玉玉小呆毛刚才发的是什么",
+      raw_message: "玉玉小呆毛刚才发的是什么",
+      sender: { user_id: "10001", nickname: "Smoke User" },
+    }, "玉玉小呆毛刚才发的是什么")
+    assert(namedRecentImageResult.media?.images === 1 && namedRecentImageResult.media?.thumbnails?.[0]?.source === "recent-group", "named-member visual intent should attach that member's image instead of the current speaker's older image")
     const ordinaryResult = await chatService.send({
       isGroup: true,
       group_id: "20001",

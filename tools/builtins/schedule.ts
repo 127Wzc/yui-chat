@@ -1,27 +1,9 @@
-import { scheduleTaskService } from "../../core/scheduling/schedule-task-service.js"
+import { formatScheduleTaskList, scheduleTaskService } from "../../core/scheduling/schedule-task-service.js"
 import type { UnknownRecord } from "../../core/message/types.js"
 
 interface ScheduleContext {
   e?: UnknownRecord
   config?: unknown
-}
-
-function records(value: unknown): UnknownRecord[] {
-  return Array.isArray(value) ? value.filter(item => item && typeof item === "object" && !Array.isArray(item)) as UnknownRecord[] : []
-}
-
-function formatList(rows: UnknownRecord = {}): string {
-  const lines: string[] = []
-  for (const row of records(rows.oneTime)) {
-    let delivery = ""
-    if (row.status === "retrying") delivery = ` [重试 ${row.attempts}/${row.maxAttempts}，下次 ${row.nextAttemptAt}]`
-    if (row.status === "failed") delivery = ` [发送失败 ${row.attempts}/${row.maxAttempts}，请取消后重建]`
-    lines.push(`一次性 ${row.id}${delivery}：${row.runAt}，${row.content}`)
-  }
-  for (const row of records(rows.cron)) {
-    lines.push(`循环 ${row.id}：${row.cron}，${row.content}`)
-  }
-  return lines.length ? lines.join("\n") : "你当前没有定时任务。"
 }
 
 export class ScheduleTaskTool {
@@ -34,12 +16,12 @@ export class ScheduleTaskTool {
     cancel: { effect: "non_idempotent", repeatPolicy: "dedupe", targetFields: ["taskId", "id"], operationFields: ["taskId", "id"], retryPolicy: "no_ambiguous_retry", maxAttempts: 1 },
     cron_remove: { effect: "non_idempotent", repeatPolicy: "dedupe", targetFields: ["taskId", "id"], operationFields: ["taskId", "id"], retryPolicy: "no_ambiguous_retry", maxAttempts: 1 },
   }
-  description = "Create, list, or cancel lightweight reminder tasks. Everyone may use it; per-user limits are enforced by config."
+  description = "Create, list, or cancel lightweight reminder tasks for the current user. Store only what to remind them about; delivery identifies the recipient automatically. Everyone may use it; per-user limits are enforced by config."
   parameters = {
     type: "object",
     properties: {
       action: { type: "string", enum: ["schedule", "list", "cancel", "cron_add", "cron_list", "cron_remove"], description: "Task operation." },
-      content: { type: "string", description: "Reminder content, max 300 chars." },
+      content: { type: "string", description: "Only the reminder body, max 300 chars. Do not include the recipient name, QQ number, phrases like '提醒某人', or a '定时提醒' prefix." },
       delayMinutes: { type: "number", description: "Delay for one-time reminders, in minutes." },
       cron: { type: "string", description: "5-field cron expression: minute hour day month weekday." },
       taskId: { type: "string", description: "Task id to cancel/remove." },
@@ -52,8 +34,8 @@ export class ScheduleTaskTool {
     const config = context.config || {}
     if (action === "schedule") return scheduleTaskService.addOneTime(context.e || {}, args, config)
     if (action === "cron_add") return scheduleTaskService.addCron(context.e || {}, args, config)
-    if (action === "list") return formatList(await scheduleTaskService.list(context.e || {}, "all"))
-    if (action === "cron_list") return formatList(await scheduleTaskService.list(context.e || {}, "cron"))
+    if (action === "list") return formatScheduleTaskList(await scheduleTaskService.list(context.e || {}, "all"))
+    if (action === "cron_list") return formatScheduleTaskList(await scheduleTaskService.list(context.e || {}, "cron"))
     if (action === "cancel" || action === "cron_remove") {
       const id = String(args.taskId || args.id || "").trim()
       if (!id) return "缺少 taskId。"

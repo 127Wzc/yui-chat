@@ -46,13 +46,27 @@ const messageManagementIntentPattern = /(?:撤回|删除).{0,8}(?:消息|这条|
 const explicitVisionIntentPattern = /(?:看图|看看|看一下|看下|识图|识别|分析|描述|解读|读图|提取文字|ocr|图片|图中|图里|图内|图上|照片|截图|画面|表情包|二维码|这是什么|这是啥|这个是谁|这是谁|什么意思)/i
 const recentImageReferencePattern = /(?:(?:刚才|刚刚|刚发|之前|前面|上一张|上张|上一个|最近).{0,16}(?:图|图片|照片|截图|画面|表情包)|(?:图|图片|照片|截图|画面|表情包).{0,16}(?:刚才|刚刚|刚发|之前|前面|上一张|上张|上一个|最近)|(?:再)?(?:看|看看|识别|分析|描述|解读).{0,12}(?:刚才|刚刚|刚发|之前|前面|上一张|上一个|那个))/i
 const adjacentImageReferencePattern = /(?:(?:看|看看|看下|看一下|瞅|识别|分析|描述|解读).{0,8}(?:这|那)(?:个|张)?(?:图|图片|照片|截图|画面|表情包)?|(?:这|那)(?:个|张)?(?:图|图片|照片|截图|画面|表情包)|(?:那)?这(?:个|张)?呢|那(?:个|张)呢|(?:这|那)(?:是什么|是啥))/i
-const quotedImageReferencePattern = /(?:(?:看|看看|看下|看一下|瞅|识别|分析|描述|解读|读图|提取文字).{0,10}(?:这|那)(?:个|张|幅)?(?:图|图片|照片|截图|画面|表情包)?|(?:这|那)(?:个|张|幅)?(?:图|图片|照片|截图|画面|表情包)?(?:怎么|如何|是什么|是啥|什么意思|什么内容|怎么样|咋样|呢))/i
+const recentSharedContentPattern = /(?:(?:刚才|刚刚|之前|前面|上一条|上一个|最近).{0,18}(?:发|贴|传|晒|丢|分享).{0,10}(?:什么|啥|内容|东西|怎么样|如何|咋样)|(?:发|贴|传|晒|丢|分享).{0,8}(?:的|那个|这个).{0,10}(?:是什么|是啥|什么内容|怎么样|如何|咋样))/i
+const contextualVisualIntentPattern = /(?:评价|点评|锐评|鉴赏|鉴定|打分|吐槽|说说.{0,4}(?:看法|感觉|印象)|讲讲|解释|翻译|辨认|认(?:一下|得出|得|出)|看懂|读懂|好看|怎么样|咋样|如何|是什么|是啥|谁|在干嘛|做什么|什么意思|什么内容)/i
+const contextualSubjectPattern = /(?:这|那|它|这个|那个|这张|那张|这幅|那幅|这个东西|那个东西|上面|里面|其中|刚才|刚刚|前面|上一条|上一个)/i
+const quotedImageReferencePattern = /(?:(?:看|看看|看下|看一下|瞅|识别|分析|描述|解读|读图|提取文字|评价|点评|锐评|鉴赏|鉴定|打分|吐槽|解释|翻译|辨认).{0,12}(?:这|那|它|这个|那个|这张|那张|这幅|那幅|图|图片|照片|截图|画面|表情包|内容|东西)|(?:这|那|它)(?:个|张|幅)?(?:图|图片|照片|截图|画面|表情包|内容|东西)?.{0,12}(?:怎么|如何|是什么|是啥|什么意思|什么内容|怎么样|咋样|呢|好看))/i
+const comparisonVisionIntentPattern = /(?:对比|比较|区别|差别|不同|哪一?张|哪个好|哪个更|两张|几张|一起看)/i
+const explicitQuoteTargetPattern = /(?:引用|回复|上面那条|被回复).{0,8}(?:图|图片|照片|截图|画面|内容|这个|那个)?/i
+
+function contextualVisualIntent(value: string): boolean {
+  return contextualVisualIntentPattern.test(value)
+    && (contextualSubjectPattern.test(value) || /^(?:请)?(?:帮我)?(?:评价|点评|锐评|鉴赏|鉴定|打分|吐槽|解释|翻译|辨认|说说|讲讲)/i.test(value))
+}
+
+function quotedVisualIntent(value: string): boolean {
+  return quotedImageReferencePattern.test(value) || contextualVisualIntent(value) || comparisonVisionIntentPattern.test(value)
+}
 
 /** 引用媒体默认只提供元数据；只有明确视觉意图才读取，消息管理意图完全禁用视觉输入。 */
 export function visionInputModeForPrompt(prompt: unknown): VisionInputMode {
   const value = compact(prompt)
   if (messageManagementIntentPattern.test(value)) return "none"
-  if (explicitVisionIntentPattern.test(value)) return "all"
+  if (explicitVisionIntentPattern.test(value) || contextualVisualIntent(value) || comparisonVisionIntentPattern.test(value)) return "all"
   return "current"
 }
 
@@ -60,8 +74,8 @@ export function visionInputModeForPrompt(prompt: unknown): VisionInputMode {
 export function recentImageRecallModeForPrompt(prompt: unknown): RecentImageRecallMode {
   const value = compact(prompt)
   if (messageManagementIntentPattern.test(value)) return "none"
-  if (recentImageReferencePattern.test(value)) return "explicit"
-  if (adjacentImageReferencePattern.test(value)) return "adjacent"
+  if (recentImageReferencePattern.test(value) || recentSharedContentPattern.test(value)) return "explicit"
+  if (adjacentImageReferencePattern.test(value) || contextualVisualIntent(value)) return "adjacent"
   return "none"
 }
 
@@ -126,29 +140,89 @@ function extractTextFromSegments(segments: readonly unknown[] = []): string {
   }).join(" "))
 }
 
+function normalizedQuotedValue(value: unknown): unknown {
+  const source = record(value)
+  const data = record(source.data)
+  if (
+    Object.keys(data).length
+    && !source.message && !source.content && !source.segments && !source.raw_message && !source.img && !source.image && !source.images
+    && (data.message || data.content || data.segments || data.raw_message || data.msg || data.img || data.image || data.images)
+  ) return { ...source, ...data }
+  return value
+}
+
+function quotedPayload(value: unknown): boolean {
+  const source = record(normalizedQuotedValue(value))
+  return Boolean(source.message || source.content || source.segments || source.raw_message || source.msg || source.img || source.image || source.images)
+}
+
+function quotedMediaPayload(value: unknown): boolean {
+  const source = record(normalizedQuotedValue(value))
+  if (source.img || source.image || source.images) return true
+  if (/\[CQ:(?:image|video|record|audio|file),/i.test(text(source.raw_message || source.msg))) return true
+  const segments = normalizeMessageSegments(source.message || source.content || source.segments)
+  return segments.some(segment => {
+    const item = record(segment)
+    const data = segmentData(segment)
+    return ["image", "video", "record", "voice", "audio", "file"].includes(text(item.type || data.type).toLowerCase())
+      || Boolean(data.image || data.images || data.img)
+  })
+}
+
+function inlineQuotedMessage(event: UnknownRecord): unknown {
+  const segments = Array.isArray(event.message) ? event.message : []
+  const replySegments = segments
+    .map(segment => ({ source: record(segment), data: segmentData(segment) }))
+    .filter(item => ["reply", "source"].includes(text(item.source.type || item.data.type).toLowerCase()))
+    .map(item => normalizedQuotedValue(item.data))
+  const candidates = [event.source, event.quote, event.quotedMessage, event.quoted_message, ...replySegments]
+    .map(normalizedQuotedValue)
+    .filter(quotedPayload)
+  return candidates.find(quotedMediaPayload) || candidates[0] || null
+}
+
+function firstQuotedHistory(value: unknown): unknown {
+  if (Array.isArray(value)) return normalizedQuotedValue(value[0])
+  const source = record(value)
+  for (const candidate of [source.messages, source.history, source.records, record(source.data).messages, record(source.data).history]) {
+    if (Array.isArray(candidate) && candidate.length) return normalizedQuotedValue(candidate[0])
+  }
+  return normalizedQuotedValue(value)
+}
+
 async function getQuotedMessage(event: unknown = {}): Promise<unknown> {
   const e = record(event)
   const eventContext = extractMessageContext(e)
   const source = record(e.source)
   const sequence = e.reply_id || source.seq || source.id || source.message_id || eventContext.replies[0]?.id
+  const inline = inlineQuotedMessage(e)
+  if (inline && quotedMediaPayload(inline)) return inline
   const inlineReply = e.reply
-  if (inlineReply && typeof inlineReply === "object" && !Array.isArray(inlineReply)) return inlineReply
+  if (inlineReply && typeof inlineReply === "object" && !Array.isArray(inlineReply) && quotedPayload(inlineReply)) return normalizedQuotedValue(inlineReply)
+  const diagnostics: string[] = []
   try {
     const getReply = e.getReply
-    if (typeof getReply === "function" && sequence) return await (getReply as () => Promise<unknown>).call(event)
+    if (typeof getReply === "function" && sequence) {
+      const value = firstQuotedHistory(await (getReply as () => Promise<unknown>).call(event))
+      if (quotedPayload(value)) return value
+    }
   } catch (error) {
-    return { diagnostics: [`读取引用消息失败：${error instanceof Error ? error.message : String(error)}`] }
+    diagnostics.push(`读取引用消息失败：${error instanceof Error ? error.message : String(error)}`)
   }
-  if (!sequence) return null
-  try {
-    const owner = e.isGroup ? record(e.group) : record(e.friend)
-    const getHistory = owner.getChatHistory
-    if (typeof getHistory !== "function") return null
-    const history = await (getHistory as (seq: unknown, count: number) => Promise<unknown>).call(owner, sequence, 1)
-    return Array.isArray(history) ? history[0] : history
-  } catch (error) {
-    return { diagnostics: [`读取历史消息失败：${error instanceof Error ? error.message : String(error)}`] }
+  if (sequence) {
+    try {
+      const owner = e.isGroup ? record(e.group) : record(e.friend)
+      const getHistory = owner.getChatHistory
+      if (typeof getHistory === "function") {
+        const value = firstQuotedHistory(await (getHistory as (seq: unknown, count: number) => Promise<unknown>).call(owner, sequence, 1))
+        if (quotedPayload(value)) return value
+      }
+    } catch (error) {
+      diagnostics.push(`读取历史消息失败：${error instanceof Error ? error.message : String(error)}`)
+    }
   }
+  if (inline) return inline
+  return diagnostics.length ? { diagnostics } : null
 }
 
 function buildQuoteContext(quoteValue: unknown): QuoteContext {
@@ -199,20 +273,31 @@ export async function resolveMediaContext(event: unknown = {}, prompt: unknown =
     const mention = base.mentions.find(item => item.qq && item.qq !== "all" && !botIds.has(item.qq))
     if (mention?.qq) pushAttachment(attachments, { kind: "image", url: avatarUrl(mention.qq), source: "at-avatar", userId: mention.qq })
   }
-  let visionMode = visionInputModeForPrompt(prompt)
+  const visionMode = visionInputModeForPrompt(prompt)
   const promptValue = compact(prompt)
-  const hasQuotedImage = attachments.some(item => item.kind === "image" && item.source === "quote")
-  const quotedImageIsReferenced = hasQuotedImage
+  const quotedImageUrls = new Set(attachments
+    .filter(item => item.kind === "image" && item.source === "quote")
+    .map(item => text(item.url))
+    .filter(Boolean))
+  const hasQuotedImage = quotedImageUrls.size > 0
+  const hasUniqueCurrentImage = attachments.some(item => item.kind === "image" && item.source !== "quote" && !quotedImageUrls.has(text(item.url)))
+  const quoteTargeted = hasQuotedImage
     && visionMode !== "none"
-    && (visionMode === "all" || quotedImageReferencePattern.test(promptValue))
-  if (
-    visionMode === "current"
-    && quotedImageIsReferenced
-  ) visionMode = "all"
+    && quotedVisualIntent(promptValue)
+    && (!hasUniqueCurrentImage || explicitQuoteTargetPattern.test(promptValue))
+  const compareImages = comparisonVisionIntentPattern.test(promptValue)
   for (const attachment of attachments) {
-    attachment.visionEligible = attachment.kind === "image"
-      && visionMode !== "none"
-      && (visionMode === "all" || attachment.source !== "quote")
+    if (attachment.kind !== "image" || visionMode === "none") {
+      attachment.visionEligible = false
+      continue
+    }
+    const isQuote = attachment.source === "quote"
+    const duplicatesQuote = !isQuote && quotedImageUrls.has(text(attachment.url))
+    attachment.visionEligible = compareImages
+      ? visionMode === "all" && (isQuote || !duplicatesQuote)
+      : quoteTargeted
+        ? isQuote
+        : !isQuote && !duplicatesQuote
   }
   const quoteDiagnostics = record(quotedValue).diagnostics
   const diagnostics = [

@@ -8,6 +8,7 @@ interface ContextRow {
   messageId: string
   userId: string
   name: string
+  aliases: string[]
   text: string
   attachments: { images: number; records: number; videos: number }
   imageUrls: string[]
@@ -21,6 +22,11 @@ export interface RecentImageReference {
   name: string
   source: "recent-self" | "recent-group"
   time: number
+}
+
+interface RecentImageLookupOptions {
+  maxRowsBack?: number
+  prompt?: unknown
 }
 
 const buffers = new Map<string, ContextRow[]>()
@@ -44,6 +50,15 @@ function userName(event: unknown): string {
   return text(sender.card || sender.nickname || e.user_id || "User")
 }
 
+function userAliases(event: unknown): string[] {
+  const e = record(event)
+  const sender = record(e.sender)
+  return [...new Set([
+    sender.card, sender.nickname, sender.name,
+    e.card, e.nickname, e.user_name, e.user_id,
+  ].map(item => compact(item)).filter(Boolean))]
+}
+
 function messageId(event: unknown): string {
   const e = record(event)
   return text(e.message_id || e.messageId || e.id || e.seq)
@@ -52,6 +67,19 @@ function messageId(event: unknown): string {
 function compact(value: unknown = ""): string {
   return text(value).replace(/\s+/g, " ").trim()
 }
+
+function referenceText(value: unknown = ""): string {
+  return compact(value).toLocaleLowerCase().replace(/[\s@＠,，。.!！?？:：;；、~～_\-]/g, "")
+}
+
+function aliasMentioned(prompt: string, alias: string): boolean {
+  const normalized = referenceText(alias)
+  if (!normalized || normalized.length < 2) return false
+  return prompt.includes(normalized)
+}
+
+const selfImageReferencePattern = /(?:(?:我|俺|本人).{0,12}(?:发|贴|传|晒|丢|分享)|(?:我|俺)(?:的|那|这).{0,8}(?:张|个|幅|东西|内容)?)/i
+const otherImageReferencePattern = /(?:(?:他|她|他们|她们|别人|对方|那个人|那位).{0,12}(?:发|贴|传|晒|丢|分享)|(?:他|她|别人|对方)(?:的|那|这).{0,8}(?:张|个|幅|东西|内容)?)/i
 
 function contextConfig(config: unknown): UnknownRecord {
   return record(record(config).context)
@@ -128,7 +156,7 @@ export class RecentContextStore {
     const rows = buffers.get(key) || []
     const row: ContextRow = {
       messageId: messageId(e),
-      userId: text(e.user_id), name: userName(e), text: value,
+      userId: text(e.user_id), name: userName(e), aliases: userAliases(e), text: value,
       attachments: { images: imageUrls.length, records: context.records.length, videos: context.videos.length },
       imageUrls,
       time: Date.now(),
@@ -158,8 +186,8 @@ export class RecentContextStore {
     return `最近聊天上下文（只作理解语境，不要逐字复述）：\n${lines.join("\n")}`
   }
 
-  /** 先找当前说话人最近的图片；群聊中找不到时才回退到其他成员。 */
-  findRecentImage(event: unknown = {}, options: { maxRowsBack?: number } = {}): RecentImageReference | null {
+  /** 按回复语境、点名对象和人称指代选择最近图片；无明确对象时使用时间上最近的一张。 */
+  findRecentImage(event: unknown = {}, options: RecentImageLookupOptions = {}): RecentImageReference | null {
     const config = configStore.get()
     this.prune(config)
     const e = record(event)
@@ -177,17 +205,49 @@ export class RecentContextStore {
       const count = Math.floor(maxRowsBack)
       rows = count ? rows.slice(-count) : []
     }
-    const find = (sameUser: boolean): RecentImageReference | null => {
-      for (let index = rows.length - 1; index >= 0; index -= 1) {
-        const row = rows[index]
-        if (!row || Boolean(row.userId === currentUserId) !== sameUser || !row.imageUrls.length) continue
+
+    const imageRows = rows.filter(row => row.imageUrls.length)
+    const find = (predicate: (row: ContextRow) => boolean): RecentImageReference | null => {
+      for (let index = imageRows.length - 1; index >= 0; index -= 1) {
+        const row = imageRows[index]
+        if (!row || !predicate(row)) continue
         const url = row.imageUrls.at(-1)
-        if (!url) continue
-        return { url, messageId: row.messageId, userId: row.userId, name: row.name, source: sameUser ? "recent-self" : "recent-group", time: row.time }
+        if (url) return {
+          url, messageId: row.messageId, userId: row.userId, name: row.name,
+          source: row.userId === currentUserId ? "recent-self" : "recent-group",
+          time: row.time,
+        }
       }
       return null
     }
-    return find(true) || (isGroupEvent(e) ? find(false) : null)
+
+    const prompt = referenceText(options.prompt ?? e.msg ?? e.raw_message ?? "")
+    const context = extractMessageContext(e, e.msg || e.raw_message || "")
+    const bot = record(e.bot)
+    const botIds = new Set([text(e.self_id), text(bot.uin)].filter(Boolean))
+    const mentionedUserIds = new Set(context.mentions.map(item => item.qq).filter(id => id && id !== "all" && !botIds.has(id)))
+    const targetUserIds = new Set(mentionedUserIds)
+    let longestAlias = 0
+    if (!mentionedUserIds.size) {
+      for (const row of rows) {
+        for (const alias of Array.isArray(row.aliases) ? row.aliases : [row.name]) {
+          const aliasLength = referenceText(alias).length
+          if (!aliasMentioned(prompt, alias) || aliasLength < longestAlias) continue
+          if (aliasLength > longestAlias) {
+            targetUserIds.clear()
+            longestAlias = aliasLength
+          }
+          targetUserIds.add(row.userId)
+        }
+      }
+    }
+    // 一旦用户明确点名，即使该对象在短期窗口里没有图片，也不能错误回退到提问者自己的旧图。
+    if (targetUserIds.size) return find(row => targetUserIds.has(row.userId))
+
+    const rawPrompt = compact(options.prompt ?? e.msg ?? e.raw_message ?? "")
+    if (selfImageReferencePattern.test(rawPrompt)) return find(row => row.userId === currentUserId)
+    if (isGroupEvent(e) && otherImageReferencePattern.test(rawPrompt)) return find(row => row.userId !== currentUserId)
+    return find(() => true)
   }
 
   stats(): { scopes: number; messages: number } {

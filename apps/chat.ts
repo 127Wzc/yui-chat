@@ -20,6 +20,7 @@ import { buildNextHelpMenu } from "./help-menu.js"
 import { deliverRenderedImage } from "../core/rendering/render-delivery.js"
 import { listMutedScopes, muteScope, parseDuration, unmuteScope } from "../core/chat/access-control.js"
 import { sendInitiativeGreeting } from "../core/persona/initiative-greeting.js"
+import { formatScheduleTaskList, scheduleTaskService } from "../core/scheduling/schedule-task-service.js"
 import { hostRuntime } from "../core/runtime/host-runtime.js"
 import type { HostEvent } from "../core/runtime/host-runtime.js"
 import type { UnknownRecord } from "../core/message/types.js"
@@ -121,6 +122,8 @@ export class YuiChat extends hostRuntime.Plugin {
       rule: [
         { reg: pluginCommandRule("chat([\\s\\S]*)"), fnc: "chat" },
         { reg: pluginCommandRule("help([\\s\\S]*)"), fnc: "help" },
+        { reg: pluginCommandRule("(?:全部|所有)定时任务(?:列表)?"), fnc: "allScheduleTaskList", permission: "master" },
+        { reg: pluginCommandRule("(?:我的)?定时任务(?:列表)?"), fnc: "scheduleTaskList" },
         { reg: pluginCommandRule("对话列表"), fnc: "conversationList", permission: "master" },
         { reg: pluginCommandRule("(结束|新开|摧毁|毁灭|完结)对话([\\s\\S]*)"), fnc: "clear" },
         { reg: pluginCommandRule("(结束|新开|摧毁|毁灭|完结)全部(模式|模型)?对话"), fnc: "endAllConversations", permission: "master" },
@@ -202,7 +205,7 @@ export class YuiChat extends hostRuntime.Plugin {
         }
       }
       return this.reply(
-        `Yui Chat 可用命令：\n${pluginCommand("chat")} + 内容\n${pluginCommand("help")} + 你想做的事\n${pluginCommand("结束对话")}\n${pluginCommand("面板")}\n\n指令知识库：${stats.commands} 条指令，${stats.events} 条触发记录`,
+        `Yui Chat 可用命令：\n${pluginCommand("chat")} + 内容\n${pluginCommand("help")} + 你想做的事\n${pluginCommand("定时任务")}\n${pluginCommand("结束对话")}\n${pluginCommand("面板")}\n\n指令知识库：${stats.commands} 条指令，${stats.events} 条触发记录`,
         true,
       )
     }
@@ -254,6 +257,21 @@ export class YuiChat extends hostRuntime.Plugin {
       "",
       `可用 ${pluginCommand("结束对话")} 结束当前对话，群聊中可用 ${pluginCommand("结束对话")} @用户。`,
     ].join("\n"), true)
+  }
+
+  async scheduleTaskList() {
+    const rows = await scheduleTaskService.list(this.e, "all")
+    return this.reply(formatScheduleTaskList(rows), true)
+  }
+
+  async allScheduleTaskList() {
+    const rows = await scheduleTaskService.listAll("all")
+    return this.reply(formatScheduleTaskList(rows, {
+      title: "全部定时任务",
+      emptyText: "当前没有任何定时任务。",
+      showOwner: true,
+      footer: "任务编号可用于核对；任务仍由创建者取消。",
+    }), true)
   }
 
   async endAllConversations() {

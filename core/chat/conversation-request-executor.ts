@@ -180,7 +180,10 @@ export async function sendConversation(
       const hasEligibleImage = resolved.attachments.some(item => item.kind === "image" && item.visionEligible !== false)
       const recallMode = hasEligibleImage ? "none" : recentImageRecallModeForPrompt(prompt)
       if (recallMode !== "none") {
-        const recentImage = recentContextStore.findRecentImage(event, recallMode === "adjacent" ? { maxRowsBack: 1 } : {})
+        const recentImage = recentContextStore.findRecentImage(event, {
+          ...(recallMode === "adjacent" ? { maxRowsBack: 1 } : {}),
+          prompt,
+        })
         if (recentImage) {
           resolved.attachments.push({
             kind: "image",

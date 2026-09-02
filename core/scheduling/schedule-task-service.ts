@@ -79,6 +79,13 @@ interface CronParts {
   hourField: string
 }
 
+interface FormatScheduleTaskListOptions {
+  title?: string
+  emptyText?: string
+  showOwner?: boolean
+  footer?: string
+}
+
 const taskFile = path.join(dataDir, "scheduled-tasks.json")
 const deliveryMaxAttempts = 3
 const deliveryRetryDelaysMs = [60_000, 5 * 60_000]
@@ -102,6 +109,46 @@ function nowMs(): number {
 
 function userId(e: ScheduleEvent = {}): string {
   return text(e.user_id || e.sender?.user_id)
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+function eventUserAliases(e: ScheduleEvent = {}): string[] {
+  const sender = record(e.sender)
+  return [...new Set([
+    sender.card,
+    sender.nickname,
+    sender.name,
+    e.card,
+    e.nickname,
+  ].map(value => text(value).trim()).filter(Boolean))]
+    .sort((left, right) => right.length - left.length)
+}
+
+/**
+ * 模型只需保存“要提醒什么”。收件人由任务作用域保证，不应再次出现在正文中。
+ * 此处同时兼容清理既有任务中的“提醒昵称(QQ) 正文”格式。
+ */
+function normalizeReminderContent(value: unknown, options: { userId?: unknown; aliases?: string[] } = {}): string {
+  const original = text(value).trim().slice(0, 300)
+  let content = original.replace(/^定时提醒\s*[:：]?\s*/u, "")
+  content = content.replace(/^提醒(?:一下)?\s*(?:我|自己|本人)\s*[:：,，]?\s*/u, "")
+
+  const uid = text(options.userId).trim()
+  if (uid) {
+    const escapedUid = escapeRegExp(uid)
+    content = content.replace(new RegExp(`^提醒(?:一下)?\\s*.{0,40}?[（(]\\s*${escapedUid}\\s*[)）]\\s*[:：,，]?\\s*`, "u"), "")
+    content = content.replace(new RegExp(`^提醒(?:一下)?\\s*@?${escapedUid}\\s*[:：,，]?\\s*`, "u"), "")
+  }
+
+  for (const alias of options.aliases || []) {
+    const escapedAlias = escapeRegExp(alias)
+    const uidSuffix = uid ? `(?:\\s*[（(]\\s*${escapeRegExp(uid)}\\s*[)）])?` : ""
+    content = content.replace(new RegExp(`^提醒(?:一下)?\\s*@?${escapedAlias}${uidSuffix}\\s*[:：,，]?\\s*`, "u"), "")
+  }
+  return content.trim() || original
 }
 
 function scopeFromEvent(e: ScheduleEvent = {}): { type: "group" | "private"; groupId: string; userId: string } {
@@ -248,7 +295,7 @@ function visibleTask(row: TaskRow): UnknownRecord {
     scopeType: row.scopeType,
     groupId: row.groupId,
     userId: row.userId,
-    content: row.content,
+    content: normalizeReminderContent(row.content, { userId: row.userId }),
     runAt: row.runAt,
     cron: row.cron,
     createdAt: row.createdAt,
@@ -258,6 +305,69 @@ function visibleTask(row: TaskRow): UnknownRecord {
     nextAttemptAt: row.nextAttemptAt || "",
     failedAt: row.failedAt || "",
   }
+}
+
+function twoDigits(value: number): string {
+  return String(value).padStart(2, "0")
+}
+
+function formatLocalDate(value: unknown): string {
+  const date = new Date(text(value))
+  if (!Number.isFinite(date.getTime())) return text(value) || "时间未知"
+  const now = new Date()
+  const year = date.getFullYear() === now.getFullYear() ? "" : `${date.getFullYear()}年`
+  return `${year}${date.getMonth() + 1}月${date.getDate()}日 ${twoDigits(date.getHours())}:${twoDigits(date.getMinutes())}`
+}
+
+function formatCron(expression: unknown): string {
+  const raw = text(expression).trim()
+  const fields = raw.split(/\s+/)
+  if (fields.length !== 5) return `循环计划（${raw || "时间未知"}）`
+  const [minute, hour, day, month, weekday] = fields
+  if (!/^\d+$/.test(minute) || !/^\d+$/.test(hour) || month !== "*") return `循环计划（${raw}）`
+  const time = `${twoDigits(Number(hour))}:${twoDigits(Number(minute))}`
+  if (day === "*" && weekday === "*") return `每天 ${time}`
+  if (day === "*" && weekday === "1-5") return `工作日 ${time}`
+  if (day === "*" && /^[0-7]$/.test(weekday)) {
+    const names = ["日", "一", "二", "三", "四", "五", "六", "日"]
+    return `每周${names[Number(weekday)]} ${time}`
+  }
+  if (/^\d+$/.test(day) && weekday === "*") return `每月${Number(day)}日 ${time}`
+  return `循环计划（${raw}）`
+}
+
+function taskRows(value: unknown): UnknownRecord[] {
+  return Array.isArray(value)
+    ? value.filter(item => item && typeof item === "object" && !Array.isArray(item)) as UnknownRecord[]
+    : []
+}
+
+export function formatScheduleTaskList(
+  rows: UnknownRecord = {},
+  options: FormatScheduleTaskListOptions = {},
+): string {
+  const onceRows = taskRows(rows.oneTime).sort((left, right) => Date.parse(text(left.runAt)) - Date.parse(text(right.runAt)))
+  const cronRows = taskRows(rows.cron)
+  const tasks = [
+    ...onceRows.map(row => ({ row, schedule: `⏰ ${formatLocalDate(row.runAt)}` })),
+    ...cronRows.map(row => ({ row, schedule: `🔁 ${formatCron(row.cron)}` })),
+  ]
+  if (!tasks.length) return options.emptyText || "你目前没有待执行的定时任务。"
+
+  const lines = [`${options.title || "你的定时任务"}（${tasks.length} 个）：`]
+  tasks.forEach(({ row, schedule }, index) => {
+    let delivery = ""
+    if (row.status === "retrying") delivery = ` · 正在重试 ${Number(row.attempts) || 0}/${Number(row.maxAttempts) || deliveryMaxAttempts}`
+    if (row.status === "failed") delivery = " · 发送失败，请取消后重新创建"
+    const owner = options.showOwner
+      ? ` · ${text(row.scopeType) === "group" ? `群 ${text(row.groupId)} · 用户 ${text(row.userId)}` : `私聊用户 ${text(row.userId)}`}`
+      : ""
+    lines.push(`${index + 1}. ${schedule}${delivery}${owner}`)
+    lines.push(`   ${text(row.content) || "（无提醒内容）"}`)
+    lines.push(`   编号：${text(row.id)}`)
+  })
+  lines.push("", options.footer || "取消时告诉我任务编号即可。")
+  return lines.join("\n")
 }
 
 function oneTimeDueAt(row: TaskRow): number {
@@ -285,17 +395,18 @@ function markOneTimeFailure(row: TaskRow, currentTime: number): void {
 export async function sendTaskMessage(row: TaskRow, config: unknown = {}): Promise<void> {
   const bot = hostRuntime.bot as unknown as ScheduleBot | undefined
   const response = record(record(config).response)
-  const content = convertCQCodes(text(row.content), { removeUnsupported: response.removeCQCode !== false })
+  const reminder = normalizeReminderContent(row.content, { userId: row.userId })
+  const content = convertCQCodes(reminder, { removeUnsupported: response.removeCQCode !== false })
   if (row.scopeType === "group") {
     const group = await bot?.pickGroup?.(Number(row.groupId), true)
     if (!group?.sendMsg) throw new Error(`无法获取群 ${text(row.groupId)}`)
     const at = typeof hostRuntime.segment?.at === "function" ? hostRuntime.segment.at(Number(row.userId)) : `@${text(row.userId)}`
-    await group.sendMsg([at, "\n定时提醒：", ...(Array.isArray(content) ? content : [content])])
+    await group.sendMsg([at, " 到时间啦～\n", ...(Array.isArray(content) ? content : [content])])
     return
   }
   const user = await bot?.pickUser?.(Number(row.userId), true) || await bot?.pickFriend?.(Number(row.userId), true)
   if (!user?.sendMsg) throw new Error(`无法获取用户 ${text(row.userId)}`)
-  await user.sendMsg(["定时提醒：", ...(Array.isArray(content) ? content : [content])])
+  await user.sendMsg(["到时间啦～\n", ...(Array.isArray(content) ? content : [content])])
 }
 
 export class ScheduleTaskService {
@@ -407,12 +518,12 @@ export class ScheduleTaskService {
     await this.load()
     const cfg = scheduleConfig(config)
     if (!cfg.enabled) return "定时任务未启用。"
-    const content = text(args.content).trim().slice(0, 300)
+    const scope = scopeFromEvent(e)
+    const content = normalizeReminderContent(args.content, { userId: scope.userId, aliases: eventUserAliases(e) })
     if (!content) return "缺少提醒内容。"
     const requestedDelay = Number(args.delayMinutes)
     if (!Number.isFinite(requestedDelay) || requestedDelay <= 0) return "delayMinutes 必须是正数。"
     const delayMinutes = Math.min(requestedDelay, cfg.maxDelayMinutes)
-    const scope = scopeFromEvent(e)
     const createdAtMs = this.clock()
     const runAtMs = createdAtMs + delayMinutes * 60 * 1000
     const row: TaskRow = {
@@ -433,7 +544,7 @@ export class ScheduleTaskService {
         return
       }
       store.oneTime.push(row)
-      result = `已创建定时提醒 ${text(row.id)}，将在 ${text(row.runAt)} 触发。`
+      result = `好～已经记下了。\n${formatLocalDate(row.runAt)}提醒你：${content}\n任务编号：${text(row.id)}`
     })
     return result
   }
@@ -442,7 +553,8 @@ export class ScheduleTaskService {
     await this.load()
     const cfg = scheduleConfig(config)
     if (!cfg.enabled) return "定时任务未启用。"
-    const content = text(args.content).trim().slice(0, 300)
+    const scope = scopeFromEvent(e)
+    const content = normalizeReminderContent(args.content, { userId: scope.userId, aliases: eventUserAliases(e) })
     const cron = text(args.cron).trim()
     if (!content) return "缺少提醒内容。"
     let interval: number
@@ -454,7 +566,6 @@ export class ScheduleTaskService {
     if (interval < cfg.cronMinIntervalMinutes) {
       return `cron 间隔过短：当前估算 ${interval} 分钟，最小允许 ${cfg.cronMinIntervalMinutes} 分钟。`
     }
-    const scope = scopeFromEvent(e)
     const createdAtMs = this.clock()
     const row: TaskRow = {
       id: shortId("cron"),
@@ -474,7 +585,7 @@ export class ScheduleTaskService {
         return
       }
       store.cron.push(row)
-      result = `已创建循环提醒 ${text(row.id)}：${cron}`
+      result = `好～已经记下了。\n${formatCron(cron)}提醒你：${content}\n任务编号：${text(row.id)}`
     })
     return result
   }
@@ -488,6 +599,17 @@ export class ScheduleTaskService {
     return {
       oneTime: includeOnce ? this.store.oneTime.filter(row => text(row.userId) === uid).map(visibleTask) : [],
       cron: includeCron ? this.store.cron.filter(row => text(row.userId) === uid).map(visibleTask) : [],
+    }
+  }
+
+  async listAll(type: unknown = "all"): Promise<{ oneTime: UnknownRecord[]; cron: UnknownRecord[] }> {
+    await this.load()
+    const typeText = text(type)
+    const includeOnce = typeText === "all" || typeText === "once"
+    const includeCron = typeText === "all" || typeText === "cron"
+    return {
+      oneTime: includeOnce ? this.store.oneTime.map(visibleTask) : [],
+      cron: includeCron ? this.store.cron.map(visibleTask) : [],
     }
   }
 

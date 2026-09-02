@@ -201,7 +201,7 @@ export function addUsage(total: UsageTotals, usage: unknown = {}): UsageTotals {
 export function mediaThumbnailsForResult(attachments: unknown[] = []): UnknownRecord[] {
   return attachments
     .map(item => record(item))
-    .filter(item => item.kind === "image")
+    .filter(item => item.kind === "image" && item.visionEligible !== false)
     .map((item): UnknownRecord | null => {
       const dataUrl = text(item.thumbnailDataUrl || item.preparedUrl || item.url)
       if (!/^data:image\//i.test(dataUrl)) return null
@@ -226,7 +226,9 @@ export function summarizeMediaForResult(media: unknown = null): UnknownRecord | 
   const quote = record(value.quote)
   const diagnostics = Array.isArray(value.diagnostics) ? value.diagnostics.map(item => record(item)) : []
   return {
-    images: attachments.filter(item => item.kind === "image").length,
+    // 只统计实际选入视觉上下文的图片；引用预览被宿主重复展开、消息管理跳过等
+    // 候选仍保留诊断信息，但不能让结果摘要误报为模型已经看过。
+    images: attachments.filter(item => item.kind === "image" && item.visionEligible !== false).length,
     records: attachments.filter(item => item.kind === "record" || item.kind === "audio").length,
     videos: attachments.filter(item => item.kind === "video").length,
     mentions: mentions.map(item => item.qq || item.userId).filter(Boolean).slice(0, 8),
