@@ -1,5 +1,6 @@
 import type { UnknownRecord } from "../message/types.js"
 import { groupIdFromEvent, isGroupEvent } from "../message/event-scope.js"
+import { errorDetails } from "../shared/error-details.js"
 
 export interface ModelRouteEntry {
   id: string
@@ -63,6 +64,7 @@ export function errorPayload(error: unknown): UnknownRecord {
   return {
     name: text(value.name || "Error"),
     message: text(value.message || error || "unknown error"),
+    details: errorDetails(error),
   }
 }
 

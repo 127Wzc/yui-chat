@@ -5,6 +5,7 @@ import { sqliteClient } from "../storage/sqlite/client.js"
 import { hostRuntime } from "../runtime/host-runtime.js"
 import { getToolCommon, modelToolDefinition } from "../../tools/support/contract.js"
 import { groupIdFromEvent, isGroupEvent } from "../message/event-scope.js"
+import { errorDetails, errorSummary } from "../shared/error-details.js"
 
 const DETAIL_QUEUE_LIMIT = 5000
 const DETAIL_QUEUE_BYTE_LIMIT = 16 * 1024 * 1024
@@ -246,8 +247,7 @@ function record(value: unknown): UnknownRecord {
 }
 
 function errorMessage(error: unknown): string {
-  const source = record(error)
-  return String(source.message || error || "")
+  return errorSummary(error)
 }
 
 function isTraceRecord(value: unknown): value is TraceRecord {
@@ -1029,6 +1029,7 @@ class ModelLogStore {
         ...(Object.keys(record(response.responsesStateRecovery)).length
           ? { responsesStateRecovery: record(response.responsesStateRecovery) }
           : {}),
+        ...(error ? { errorDetails: errorDetails(error) } : {}),
       }),
     }
     const budgetEstimate = call.requestMeta.operation === "embedding"

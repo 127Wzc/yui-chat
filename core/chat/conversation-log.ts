@@ -73,7 +73,12 @@ export const conversationLog = Object.freeze({
     output.info(config, `完成 scope=${text(options.scope)} channel=${text(options.channel)} duration=${number(options.durationMs)}ms tools=${number(options.tools)} requiresFinalReply=${flag(options.requiresFinalReply !== false)} toolLimit=${flag(options.toolLimitReached)} deduplicated=${flag(options.toolDeduplicated)} finalization=${finalization}${executionSummary}${mediaSummary}${chainSummary} tokens=${number(usage.total)} input=${number(usage.input)} output=${number(usage.output)}`)
   },
   failed(config: LogConfig, options: UnknownRecord): void {
-    output.error(config, `失败 scope=${text(options.scope)} step=${text(options.step)} error=${text(options.error)}`)
+    const route = [
+      options.channel ? `channel=${text(options.channel)}` : "",
+      options.adapter ? `adapter=${text(options.adapter)}` : "",
+      options.attempts ? `attempts=${number(options.attempts)}` : "",
+    ].filter(Boolean).join(" ")
+    output.error(config, `失败 scope=${text(options.scope)} step=${text(options.step)}${route ? ` ${route}` : ""} error=${text(options.error)}`)
   },
 })
 

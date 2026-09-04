@@ -1616,11 +1616,23 @@ async function checkExtensionCreateFlow() {
 
 async function checkNetworkTools() {
   const { fetchSafeHttp } = await import("../output/runtime/core/network/safe-http-client.js")
+  const { errorDetails, errorSummary } = await import("../output/runtime/core/shared/error-details.js")
   const { assertSafeHttpUrl, isPrivateIp } = await import("../output/runtime/core/network/link-safety-policy.js")
   const { WebsiteFetchTool } = await import("../output/runtime/tools/builtins/network.js")
   const { fetchJson } = await import("../output/runtime/tools/builtins/shared.js")
   const { configStore } = await import("../output/runtime/config/store.js")
   const config = await configStore.load()
+  const transportError = Object.assign(new TypeError("fetch failed"), {
+    cause: new AggregateError([
+      Object.assign(new Error("connect ECONNRESET"), { code: "ECONNRESET", address: "203.0.113.10", port: 443 }),
+      Object.assign(new Error("connect ETIMEDOUT"), { code: "ETIMEDOUT", address: "2001:db8::10", port: 443 }),
+    ], "all connection attempts failed"),
+    yuiNetwork: { target: "https://example.com/responses?api_key=smoke-secret", method: "POST", timeoutMs: 90000, responseReceived: false },
+  })
+  const transportDetails = errorDetails(transportError)
+  const transportSummary = errorSummary(transportError)
+  assert(transportDetails.cause?.causes?.length === 2 && transportSummary.includes("ECONNRESET") && transportSummary.includes("ETIMEDOUT"), "network error diagnostics should preserve AggregateError connection causes")
+  assert(!transportSummary.includes("smoke-secret") && !String(transportDetails.target).includes("smoke-secret"), "network error diagnostics must redact credentials")
   let blocked = false
   try {
     await assertSafeHttpUrl("http://127.0.0.1:2536/yui-chat", config.tools.builtin.websiteFetch)

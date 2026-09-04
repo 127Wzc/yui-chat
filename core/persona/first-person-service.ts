@@ -7,6 +7,7 @@ import { sendChatOutput } from "../chat/output-service.js"
 import { normalizeEventScope } from "../message/event-scope.js"
 import type { UnknownRecord } from "../message/types.js"
 import { evaluateFirstPersonPokeTrigger, evaluateFirstPersonTrigger } from "./persona-trigger.js"
+import { errorDetails, errorSummary } from "../shared/error-details.js"
 
 function record(value: unknown): UnknownRecord {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value) ? value as UnknownRecord : {}
@@ -56,7 +57,8 @@ export async function handleFirstPersonMessage(event: unknown, options: UnknownR
     await sendChatOutput(e, result, config, { source: "firstPerson", replyOptions: trigger.outputOptions, armContinuation: !continuation })
     return true
   } catch (error) {
-    hostRuntime.logger?.error?.(text(options.logPrefix || "[yui-chat] 第一人称回应失败"), error)
+    const prefix = text(options.logPrefix || "[yui-chat] 第一人称回应失败")
+    hostRuntime.logger?.error?.(`${prefix}：${errorSummary(error)}`, errorDetails(error))
     return replyDirectTriggerFailure(e, config, trigger, error)
   } finally {
     releasePreflight(gate)
@@ -111,10 +113,12 @@ export async function handleFirstPersonPokeEvent(event: unknown, options: Unknow
     return true
   } catch (error) {
     if (responseMode === "ai-with-fallback") {
-      hostRuntime.logger?.warn?.(text(options.logPrefix || "[yui-chat] 第一人称戳一戳回应失败，使用 fallback"), error)
+      const prefix = text(options.logPrefix || "[yui-chat] 第一人称戳一戳回应失败，使用 fallback")
+      hostRuntime.logger?.warn?.(`${prefix}：${errorSummary(error)}`, errorDetails(error))
       return sendPokeFallback(e, config)
     }
-    hostRuntime.logger?.error?.(text(options.logPrefix || "[yui-chat] 第一人称戳一戳回应失败"), error)
+    const prefix = text(options.logPrefix || "[yui-chat] 第一人称戳一戳回应失败")
+    hostRuntime.logger?.error?.(`${prefix}：${errorSummary(error)}`, errorDetails(error))
     return false
   } finally {
     releasePreflight(gate)

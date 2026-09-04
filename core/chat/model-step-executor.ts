@@ -31,6 +31,7 @@ import {
   priorStepMessage,
   scopeFor,
 } from "./chat-support.js"
+import { errorSummary } from "../shared/error-details.js"
 
 interface ModelStepOptions {
   e?: unknown
@@ -1183,7 +1184,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
       }
     } catch (error) {
       mediaCorrectionStatus = "failed"
-      hostRuntime.logger?.warn?.(`[yui-chat] 媒体发送纠正失败：${text(record(error).message || error || "unknown error")}`)
+      hostRuntime.logger?.warn?.(`[yui-chat] 媒体发送纠正失败：${errorSummary(error)}`)
       toolFinalizationRequired = false
       beginFinalization(directMediaCodes.length ? "MEDIA_DELIVERY_CORRECTION" : "MEDIA_SELECTION_CORRECTION")
       response = { ...response, text: "媒体未能发送成功，请稍后重试。", toolCalls: [] }
@@ -1255,7 +1256,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
       })
       recordModelCall(response)
     } catch (error) {
-      toolFinalizationError = text(record(error).message || error || "unknown error").slice(0, 500)
+      toolFinalizationError = errorSummary(error, 500)
       hostRuntime.logger?.warn?.(`[yui-chat] 工具结果收束失败：${toolFinalizationError}`)
       response = { ...response, text: "", toolCalls: [] }
     }

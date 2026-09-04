@@ -18,6 +18,7 @@ import {
   scopeFor,
   summarizeMediaForResult,
 } from "./chat-support.js"
+import { errorSummary } from "../shared/error-details.js"
 
 export interface ConversationRequestRuntime {
   conversations: Map<string, unknown>
@@ -51,7 +52,7 @@ function list(value: unknown): unknown[] {
 }
 
 function errorMessage(error: unknown): string {
-  return text(record(error).message || error || "unknown error")
+  return errorSummary(error)
 }
 
 function withoutCause(value: UnknownRecord): UnknownRecord {
@@ -268,9 +269,17 @@ export async function sendConversation(
     if (result.status === "error") {
       const resultError = record(result.error)
       const message = text(resultError.message || "unknown error")
-      modelLogStore.finishTrace(trace, { status: "error", error: message, metadata: { step: result.stepId } })
-      conversationLog.failed(config, { scope: scopeFor(event), step: result.stepId, error: message })
-      hostRuntime.logger?.warn?.(`[yui-chat] task ${text(result.stepId)} failed: ${message}`)
+      const diagnostic = errorSummary(result.cause || result.error || message)
+      modelLogStore.finishTrace(trace, { status: "error", error: diagnostic, metadata: { step: result.stepId, errorDetails: record(resultError.details) } })
+      conversationLog.failed(config, {
+        scope: scopeFor(event),
+        step: result.stepId,
+        channel: result.channel,
+        adapter: result.adapter,
+        attempts: list(result.attempts).length,
+        error: diagnostic,
+      })
+      hostRuntime.logger?.error?.(`[yui-chat] task ${text(result.stepId)} failed: ${diagnostic}`)
       throw new ConversationTaskError(`Task ${text(result.stepId)} failed: ${message}`, result.cause, {
         name: text(step.task),
         failedStep: text(result.stepId),

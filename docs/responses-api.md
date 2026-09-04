@@ -123,6 +123,8 @@ Responses 会话状态由独立的协议状态机管理，与 `AgentTurnState`/`
 
 正常链接请求不会发送本地恢复检查点，因此不增加常态请求 Token；自动模式会额外请求可重放的加密 reasoning 数据。发生恢复时，模型日志记录恢复原因、重放消息数和丢弃的无效工具项数，并在运行链路中标记“上下文已恢复”。
 
+模型渠道或托管搜索在收到 HTTP 响应前失败时，网络边界会同时写入控制台和宿主日志：记录协议/主机/路径、方法、超时、是否收到响应，以及 Node/undici 提供的 `code`、地址和 `AggregateError` 子原因；查询参数、凭证和请求体不会写入。相同的脱敏 `errorDetails` 会进入模型调用详情的 `metadata`，因此可以区分 DNS、IPv4/IPv6 路由、连接拒绝、连接重置、超时与上游 HTTP 错误。`Task ... failed` 和第一人称失败提示只是外层包装，排查时应优先查看这份网络根因摘要和同一时间的中转服务日志。
+
 `web_search_call`、`file_search_call`、`tool_search_call` 和 `tool_search_output` 由 OpenAI 执行，不进入本地 Function Executor。运行时会把真实调用转换成名称为 `openai:web_search`、`openai:file_search`、`openai:tool_search`，来源为 `openai-hosted` 的只读远程工具记录，写入统一工具调用链、模型日志和本地会话轮次。工具事件会保存上游实际返回的对应 output item，沿用日志凭证脱敏并最多保留 16000 字符；模型调用元数据仍只保存类型、状态、查询、结果数量、来源 URL 和加载工具名，避免重复保存正文。加密 reasoning 不进入工具日志。
 
 日志中的计数表示“工具事件”，不是互不相关的搜索次数。聚合模式下会同时显示本地 `web_search` 门面和带 `parent_tool_id` 的 `openai:web_search` 派生事件；后者是前者内部唯一一次托管搜索。管理台会把派生事件标记为“派生调用”，不会为了简化数字而丢失真实的计费与排障记录。

@@ -2,6 +2,7 @@ import { providerResolver } from "../../models/routing/provider-resolver.js"
 import type { UnknownRecord } from "../message/types.js"
 import { channelAttemptError, errorPayload, nowIso, stepId } from "./chat-support.js"
 import { hostRuntime } from "../runtime/host-runtime.js"
+import { errorSummary } from "../shared/error-details.js"
 
 export interface ModelRoutingRuntime {
   runModelStepWithChannel(options: UnknownRecord): Promise<UnknownRecord>
@@ -93,13 +94,19 @@ export async function runModelStep(
     } catch (error) {
       lastError = error
       attempts.push({ ...channelAttemptError(channel, error), status: "error" })
+      const channelName = text(channel.id || channel.name)
+      const adapterName = text(channel.type)
+      const detail = errorSummary(error)
+      try {
+        hostRuntime.logger?.error?.(`[yui-chat] 任务 ${taskName} 渠道失败 channel=${channelName} adapter=${adapterName} attempt=${channelIndex + 1}/${channels.length}${text(taskConfig.selectionStrategy) === "fallback" ? " fallback=next" : ""} error=${detail}`)
+      } catch { /* 诊断输出失败不能改变 fallback 行为。 */ }
       if (text(taskConfig.selectionStrategy) !== "fallback") break
-      hostRuntime.logger?.warn?.(`[yui-chat] 任务 ${taskName} 渠道 ${channel.id} 失败，尝试 fallback`, error)
     }
   }
 
   const detail = errorMessage(lastError)
-  const summary = /timeout|超时/i.test(detail)
+  const diagnostic = errorSummary(lastError)
+  const summary = /timeout|超时/i.test(diagnostic)
     ? `任务 ${taskName} 模型请求超时`
     : `任务 ${taskName} 的模型渠道调用失败`
   throw new ModelRoutingError(`${summary}：${detail}`, lastError, attempts)

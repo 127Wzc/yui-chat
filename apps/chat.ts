@@ -24,6 +24,7 @@ import { formatScheduleTaskList, scheduleTaskService } from "../core/scheduling/
 import { hostRuntime } from "../core/runtime/host-runtime.js"
 import type { HostEvent } from "../core/runtime/host-runtime.js"
 import type { UnknownRecord } from "../core/message/types.js"
+import { errorDetails, errorSummary } from "../core/shared/error-details.js"
 import { runHtmlScreenshotCommand, runRenderImageCommand, runUrlScreenshotCommand } from "./commands/render.js"
 import { runToolParameterCommand, runToolTestCommand } from "./commands/tool-test.js"
 import { runFilterParameterCommand, runFilterTestCommand } from "./commands/filter-test.js"
@@ -128,7 +129,7 @@ export class YuiChatCommandHandlers extends hostRuntime.Plugin {
       this.e.__yuiChatReplied = true
       return this.sendResult(result, config)
     } catch (err) {
-      hostRuntime.logger?.error?.("[yui-chat] 对话失败", err)
+      hostRuntime.logger?.error?.(`[yui-chat] 对话失败：${errorSummary(err)}`, errorDetails(err))
       return this.reply(`Yui Chat 对话失败：${errorMessage(err)}`, true)
     } finally {
       releasePreflight(gate)
