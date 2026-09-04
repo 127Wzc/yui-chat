@@ -75,7 +75,7 @@ export const ToolListPanel = {
       }
       try {
         await request("/api/tools/enabled", { method: "POST", body: JSON.stringify({ tool, enabled }) })
-        toast(`${enabled ? "已启用" : "已停用"} ${tool}`)
+        toast(`${enabled ? "已启用" : "已停用"} ${tool}，已立即生效（无需重启）`)
         await refreshTab("tools")
       } catch (err) { toast(errorMessage(err)) }
     }
@@ -91,7 +91,7 @@ export const ToolListPanel = {
       } catch (err) { toast(errorMessage(err)) }
     }
     function hasRuntimeConfig(tool: unknown) {
-      return ["image_media", "web_search"].includes(String(asRecord(tool).name || "")) || Object.keys(toolCommon(tool).configSchema?.properties || {}).length > 0
+      return ["image_media", "web_search", "tool_search"].includes(String(asRecord(tool).name || "")) || Object.keys(toolCommon(tool).configSchema?.properties || {}).length > 0
     }
     function openToolDetail(tool: ToolRecord, action = "view") {
       emit("open-tool-detail", { name: tool.name, action })

@@ -1,6 +1,11 @@
 import fs from "node:fs/promises"
 import path from "node:path"
 import { adapterRegistry } from "../../models/adapters/registry.js"
+import {
+  hostedToolIds,
+  modelToolAllowed,
+  modelToolRoute,
+} from "../../models/configuration/tool-policy.js"
 import { providerResolver } from "../../models/routing/provider-resolver.js"
 import { commandObserver } from "../../knowledge/command-observer.js"
 import { memoryStore } from "../../memory/store.js"
@@ -51,6 +56,30 @@ function numberValue(value: unknown, fallback = 0): number {
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
+function replyTaskUsesOnlyHostedWebSearch(config: UnknownRecord): boolean {
+  const tools = record(config.tools)
+  const hostedOpenAI = record(record(tools.hosted).openai)
+  if (
+    tools.enabled !== true
+    || record(tools.policy).allowExternalNetwork === false
+    || hostedOpenAI.enabled === false
+    || record(hostedOpenAI.webSearch).enabled === false
+  ) return false
+  const chat = record(config.chat)
+  const taskName = text(chat.defaultTask || "replyer")
+  const task = record(record(config.modelTasks)[taskName])
+  const modelNames = Array.isArray(task.modelList) ? task.modelList.map(text).filter(Boolean) : []
+  if (!modelNames.length) return false
+  const models = array(config.models)
+  return modelNames.every(modelName => {
+    const model = models.find(item => text(item.name) === modelName)
+    if (!model || text(model.adapter) !== "openai-responses") return false
+    const source = modelToolRoute(model, "web_search").source
+    return (source === "auto" || source === "hosted")
+      && modelToolAllowed(model, hostedToolIds.webSearch)
+  })
+}
+
 async function exists(target: string): Promise<boolean> {
   try {
     await fs.stat(target)
@@ -91,12 +120,14 @@ export async function buildDiagnostics(): Promise<UnknownRecord> {
   const response = record(configValue.response)
   const linkSafety = linkSafetyConfig(configValue)
   const builtinTools = record(record(configValue.tools).builtin)
+  const hostedOpenAITools = record(record(record(configValue.tools).hosted).openai)
   const imageSearchConfig = record(builtinTools.imageSearch)
   const webSearchConfig = record(builtinTools.webSearch)
   const webSearchRuntime = record(record(record(configValue.tools).runtimeVariables).web_search)
   const messageFiltering = record(response.messageFilters)
   const messageFilters = Array.isArray(messageFiltering.filters) ? messageFiltering.filters as UnknownRecord[] : []
   const rootTempDir = path.join(yunzaiRoot, "temp/yui-chat")
+  const hostedWebSearchCoversReplyTask = replyTaskUsesOnlyHostedWebSearch(configValue)
 
   const paths = {
     pluginRoot,
@@ -134,11 +165,16 @@ export async function buildDiagnostics(): Promise<UnknownRecord> {
     whitelistCount: array(record(record(configValue.chat).access).whitelist).length,
     blacklistCount: array(record(record(configValue.chat).access).blacklist).length,
     externalNetworkToolsAllowed: record(record(configValue.tools).policy).allowExternalNetwork !== false,
+    openaiHostedToolsAllowed: record(configValue.tools).enabled === true && hostedOpenAITools.enabled !== false,
+    hostedWebSearchAllowed: hostedOpenAITools.enabled !== false && record(hostedOpenAITools.webSearch).enabled !== false,
+    hostedFileSearchAllowed: hostedOpenAITools.enabled !== false && record(hostedOpenAITools.fileSearch).enabled !== false,
+    hostedToolSearchAllowed: hostedOpenAITools.enabled !== false && record(hostedOpenAITools.toolSearch).enabled !== false,
     imageSearchSources: Array.isArray(imageSearchConfig.enabledSources) ? imageSearchConfig.enabledSources.map(text) : [],
     imageSearchPixivR18: imageSearchConfig.pixivR18 === true,
     webSearchSources: Array.isArray(webSearchConfig.enabledSources) ? webSearchConfig.enabledSources.map(text) : [],
     webSearchBaiduConfigured: Boolean(webSearchRuntime.baiduApiKey),
     webSearchTavilyConfigured: Boolean(webSearchRuntime.tavilyApiKey),
+    hostedWebSearchCoversReplyTask,
     customToolsAllowed: record(record(configValue.tools).policy).allowCustomTools !== false,
     mcpToolsAllowed: record(record(configValue.tools).policy).allowMcpTools !== false,
     subAgentEnabled: record(configValue.subAgent).enabled === true,
@@ -166,7 +202,7 @@ export async function buildDiagnostics(): Promise<UnknownRecord> {
   addIssue(issues, safety.trustedPrivateDnsBypass, "warn", "link-safety", "可信资源允许私网 DNS 结果，请确认 QQ/Bilibili 实际解析环境")
   addIssue(issues, safety.renderHtmlEnabled && !safety.screenshotAllowedHostCount, "warn", "render", "HTML 后端已启用，但 URL 截图没有配置允许域名")
   addIssue(issues, safety.initiativeGreetingScheduled && !safety.initiativeGreetingGroups, "warn", "persona", "主动打招呼定时已开启但没有配置群号")
-  addIssue(issues, enabledTools.some(tool => tool.name === "web_search") && !safety.webSearchBaiduConfigured && !safety.webSearchTavilyConfigured, "warn", "web-search", "web_search 已启用，但百度 AI 与 Tavily 均未配置 API Key")
+  addIssue(issues, enabledTools.some(tool => tool.name === "web_search") && !hostedWebSearchCoversReplyTask && !safety.webSearchBaiduConfigured && !safety.webSearchTavilyConfigured, "warn", "web-search", "web_search 已启用，但百度 AI 与 Tavily 均未配置 API Key")
   addIssue(issues, safety.imageSearchPixivR18, "warn", "image-search", "Pixiv R18 图片搜索已开启，请确认当前会话与平台规则允许投递")
   addIssue(issues, paths.rootTempExists, "warn", "paths", "根目录 temp/yui-chat 仍存在，应清理到插件内缓存目录")
   addIssue(issues, !paths.tempInsidePluginCache, "error", "paths", "插件临时目录不在 plugins/yui-chat/cache 内")
@@ -229,6 +265,7 @@ export async function buildDiagnostics(): Promise<UnknownRecord> {
       enabled: enabledTools.map(tool => tool.name),
       registryErrors: toolRegistry.registryErrors || [],
       boundaryAccess: config.tools?.boundaryAccess || {},
+      hosted: config.tools?.hosted || {},
       custom,
       skills,
       mcp,

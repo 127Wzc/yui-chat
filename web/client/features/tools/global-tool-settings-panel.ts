@@ -14,6 +14,8 @@ export const GlobalToolSettingsPanel = {
       allowExternalNetwork: "true",
       allowCustomTools: "true",
       allowMcpTools: "true",
+      openaiHostedTools: "true",
+      openaiFileSearch: "true",
       maxToolRounds: 3,
       maxToolCalls: 20,
       maxSideEffectCalls: 20,
@@ -29,12 +31,15 @@ export const GlobalToolSettingsPanel = {
       const config = asRecord<ToolConfigRoot>(store.config)
       const policy = config.tools?.policy || {}
       const promptSelection = config.tools?.promptSelection || {}
+      const openaiHosted = config.tools?.hosted?.openai || {}
       const execution = asRecord(config.chat?.execution)
       Object.assign(draft, {
         toolsEnabled: String(config.tools?.enabled !== false),
         allowExternalNetwork: String(policy.allowExternalNetwork !== false),
         allowCustomTools: String(policy.allowCustomTools !== false),
         allowMcpTools: String(policy.allowMcpTools !== false),
+        openaiHostedTools: String(openaiHosted.enabled !== false),
+        openaiFileSearch: String(openaiHosted.fileSearch?.enabled !== false),
         maxToolRounds: config.chat?.maxToolRounds ?? 3,
         maxToolCalls: Number(execution.maxToolCalls ?? 20),
         maxSideEffectCalls: Number(execution.maxSideEffectCalls ?? 20),
@@ -53,12 +58,13 @@ export const GlobalToolSettingsPanel = {
       { label: draft.toolsEnabled === "true" ? "工具调用开" : "工具调用关", active: draft.toolsEnabled === "true" },
       { label: draft.allowExternalNetwork === "true" ? "外网允许" : "外网拦截", active: draft.allowExternalNetwork === "true" },
       { label: draft.allowMcpTools === "true" ? "MCP 来源允许" : "MCP 来源拦截", active: draft.allowMcpTools === "true" },
+      { label: draft.openaiHostedTools === "true" ? "OpenAI 托管工具开" : "OpenAI 托管工具关", active: draft.openaiHostedTools === "true" },
       { label: `最多 ${draft.maxToolRounds} 轮`, tone: "accent" },
     ])
 
     async function save() {
       try {
-        const disabling = [draft.toolsEnabled, draft.allowExternalNetwork, draft.allowCustomTools, draft.allowMcpTools].includes("false")
+        const disabling = [draft.toolsEnabled, draft.allowExternalNetwork, draft.allowCustomTools, draft.allowMcpTools, draft.openaiHostedTools, draft.openaiFileSearch].includes("false")
         if (disabling) {
           const accepted = await confirmAction({ title: "保存全局工具限制？", message: "关闭总开关或来源开关后，相关工具会立即从模型可用工具中移除。", confirmText: "确认保存限制", tone: "warn", icon: "sliders" })
           if (!accepted) return
@@ -68,6 +74,8 @@ export const GlobalToolSettingsPanel = {
           "tools.policy.allowExternalNetwork": draft.allowExternalNetwork === "true",
           "tools.policy.allowCustomTools": draft.allowCustomTools === "true",
           "tools.policy.allowMcpTools": draft.allowMcpTools === "true",
+          "tools.hosted.openai.enabled": draft.openaiHostedTools === "true",
+          "tools.hosted.openai.fileSearch.enabled": draft.openaiFileSearch === "true",
           "chat.maxToolRounds": integerValue(draft.maxToolRounds, 3, 0, 100),
           "chat.execution.maxToolCalls": integerValue(draft.maxToolCalls, 20, 1, 1000),
           "chat.execution.maxSideEffectCalls": integerValue(draft.maxSideEffectCalls, 20, 1, 1000),
@@ -95,6 +103,14 @@ export const GlobalToolSettingsPanel = {
           <Field label="允许外部网络工具" type="select" :options="BOOL_OPTIONS" v-model="draft.allowExternalNetwork" tip="关闭后联网工具不可用；具体工具仍需通过权限检查。" />
           <Field label="允许自定义工具" type="select" :options="BOOL_OPTIONS" v-model="draft.allowCustomTools" />
           <Field label="允许 MCP 来源（安全底线）" type="select" :options="BOOL_OPTIONS" v-model="draft.allowMcpTools" tip="这是全局安全底线；MCP 分类页的总开关另负责连接和加载服务。" />
+        </div>
+      </div>
+      <div class="capability-settings-section">
+        <div class="capability-settings-section-head"><Icon name="sparkles" :size="15" /><strong>OpenAI 托管工具</strong><span>Responses API 全局上限</span></div>
+        <div class="form-grid">
+          <Field label="允许 OpenAI 托管工具" type="select" :options="BOOL_OPTIONS" v-model="draft.openaiHostedTools" tip="关闭后所有 Responses 模型都不会收到 OpenAI 内置工具。" />
+          <Field label="允许 File Search" type="select" :options="BOOL_OPTIONS" v-model="draft.openaiFileSearch" tip="模型仍需配置有效的 Vector Store IDs。" />
+          <p class="muted small">Web Search 与 Tool Search 的托管实现已合并到对应能力的“配置”抽屉中，和本地渠道一起管理。</p>
         </div>
       </div>
       <div class="capability-settings-section">

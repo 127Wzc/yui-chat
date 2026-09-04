@@ -66,12 +66,6 @@ const secretKeyParts = new Set([
   "authorization", "cookie", "cookies", "credential", "credentials",
   "password", "passwords", "secret", "secrets", "token", "tokens",
 ])
-const presetToolBackfill: Record<string, string[]> = {
-  core: ["knowledge_manage", "memory_manage", "bilibili_media", "message_send", "query_userinfo", "render_image", "schedule_task", "image_media", "web_search", "dispatch_subagent"],
-  media: ["bilibili_media", "message_send"],
-  render: ["render_image"],
-  search: ["knowledge_manage", "weather", "website_fetch", "web_search", "github_api", "bilibili_media", "message_send", "image_media"],
-}
 const noConfigOverride = Symbol("no-config-override")
 const localConfigFormat = "yui-chat-bootstrap-v1"
 const configPublishHooks = new Set<ConfigPublishHook>()
@@ -290,9 +284,33 @@ function migratePersonaPrompt(config: Config): Config {
   return config
 }
 
+function normalizeModelToolPolicies(config: Config): void {
+  const models = Array.isArray(config.models) ? config.models : []
+  for (const model of models) {
+    if (!isObject(model)) continue
+    const toolPolicy = isObject(model.toolPolicy) ? model.toolPolicy : null
+    if (toolPolicy) {
+      // 能力路由已取代旧来源/策略字段；按新版配置约定直接丢弃，不猜测旧值对应的新语义。
+      delete toolPolicy.sources
+      delete toolPolicy.strategies
+      for (const key of ["allow", "deny"] as const) {
+        if (!Array.isArray(toolPolicy[key])) continue
+        toolPolicy[key] = [...new Set(toolPolicy[key]
+          .map(value => String(value).trim())
+          .filter(value => value && !/^(?:openai|local):/.test(value)))]
+      }
+    }
+    const responses = isObject(model.responses) ? model.responses : null
+    if (!responses) continue
+    delete responses.toolSearch
+    if (isObject(responses.webSearch)) delete responses.webSearch.enabled
+  }
+}
+
 /** 归一化已经废弃的旧字段、默认值和工具权限列表，再交给 Validator 做完整校验。 */
 function normalizeConfig(config: Config): Config {
   normalizeMessageFilters(config)
+  normalizeModelToolPolicies(config)
   const mcp = isObject(config.mcp) ? config.mcp : null
   if (mcp && isObject(mcp.servers)) {
     const removedToolExecutionFields = ["repeatable", "repeatableByAction", "idempotencyKeyFields", "idempotencyKeyFieldsByAction"]
@@ -336,15 +354,14 @@ function normalizeConfig(config: Config): Config {
   delete web.allowLocalhostQuickLogin
   delete web.quickLoginTtlMs
   const tools = isObject(config.tools) ? config.tools : null
-  if (tools && Array.isArray(tools.activePresets) && Array.isArray(tools.enabledTools)) {
-    const enabled = new Set(tools.enabledTools.map(String))
-    for (const preset of tools.activePresets) for (const tool of presetToolBackfill[String(preset)] || []) enabled.add(tool)
-    tools.enabledTools = [...enabled]
-  }
   if (tools) {
     if (isObject(tools.builtin)) {
       if (isObject(tools.builtin.websiteFetch)) delete tools.builtin.websiteFetch.allowPrivateHosts
-      if (isObject(tools.builtin.imageSearch)) delete tools.builtin.imageSearch.allowPrivateHosts
+      if (isObject(tools.builtin.imageSearch)) {
+        delete tools.builtin.imageSearch.allowPrivateHosts
+        delete tools.builtin.imageSearch.fallbackEnabled
+      }
+      if (isObject(tools.builtin.webSearch)) delete tools.builtin.webSearch.fallbackEnabled
     }
     tools.enabledTools = [...new Set((Array.isArray(tools.enabledTools) ? tools.enabledTools : []).map(String).filter(Boolean))]
     const boundary = isObject(tools.boundaryAccess) ? tools.boundaryAccess : {}

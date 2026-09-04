@@ -8,6 +8,7 @@
 - 单次请求的 Agent Loop：`core/chat/agent-turn-state.ts`、`core/chat/model-step-executor.ts`
 - 次数、重试与副作用账本：`tools/support/execution-runtime.ts`
 - 模型结构化终止状态：`models/protocol/types.ts`、`models/protocol/normalize.ts`
+- Chat/Responses 工具转换：`models/adapters/openai/{chat,responses}/`
 - 结构化消息和工具结果：`core/message-chain/types.ts`
 - 内置工具目录：`tools/builtins/index.ts`
 
@@ -34,7 +35,8 @@ type Args = Record<string, unknown>
 export class ExampleLookupTool {
   name = "example_lookup"
   source = "builtin"
-  description = "Look up one example record. Use it when the user asks for current example data."
+  description = "Look up one example record. Use when the user asks for current example data. Do not use it to modify records. This operation is read-only."
+  deferLoading = true
   tags = ["lookup", "example"]
   execution = {
     effect: "read",
@@ -75,6 +77,7 @@ export class ExampleLookupTool {
 | `source` | 是 | `builtin`、`custom`、`mcp`、`skill` 或 `system`；通常由注册入口补齐。 |
 | `category` | 否 | `network`、`media`、`admin` 等；内置分组会补齐。 |
 | `tags` | 否 | 用于工具筛选和搜索意图识别，保持少量稳定词。 |
+| `deferLoading` | 否 | Responses 原生 `tool_search` 是否延期加载。Custom、MCP 和低频 Builtin 默认 `true`；每轮高频核心工具显式设为 `false`。Chat Completions 忽略此字段。 |
 | `risk` | 否 | `low`、`medium`、`high`、`external`。高风险工具必须配权限。 |
 | `policy` | 否 | 权限和边界声明，例如 `requiresMaster`、`requiresGroup`、`requiresGroupAdmin`、`externalNetwork`。 |
 | `parameters` | 是 | 发给模型的调用参数 JSON Schema。只放模型需要决定的输入。 |
@@ -86,6 +89,10 @@ export class ExampleLookupTool {
 | `executionByAction` | 否 | 复合工具按 `args.action` 覆盖执行策略。 |
 | `hiddenFromModel` | 否 | 仅内部调用且不允许模型选择时使用。 |
 | `pipeline` | 否 | 仅现有输入/输出管线工具使用，不为普通工具新增第二套机制。 |
+
+`description` 按“做什么 + 什么时候使用 + 什么时候不要使用 + 副作用”组织。公共转换层会根据 `execution` 补齐保守的只读/副作用边界，但工具自身仍应写清与相似能力的区别。新工具名优先采用 `<domain>_<action>_<object>`；既有公开名称除非有完整配置迁移与回归，不为追求形式统一而破坏兼容。
+
+同一 `ToolCommon` 会在适配器边界转换：Chat Completions 使用 `{type:"function", function:{...}}`，Responses 使用 `{type:"function", name, description, parameters, defer_loading}`。工具实现和执行器不得感知这两种上游格式。
 
 ## 4. 参数设计
 
@@ -309,7 +316,7 @@ flowchart TD
 
 同一类搜索能力优先保持一个模型工具，由运行时配置选择具体渠道，避免把每个供应商都注入成独立工具：
 
-- `image_media` 聚合 Bing、百度图片、SERP Bing、SERP Yandex 和 Pixiv；`action=send` 为默认行为，选中的远程图片先写入受管媒体缓存，再由自动投递计划交给 `message_send`。Pixiv 候选必须保留 `artworkId`、`imageIndex`、作者、作品页和原图的对应关系，R18 同时受模型参数和管理员硬开关约束。
+- `image_media` 聚合 Bing、百度图片、SERP Bing、SERP Yandex 和 Pixiv；`action=send` 为默认行为，默认把选中图片的原始 URL 直接交给 `message_send`。管理员开启 `tools.builtin.imageSearch.cacheSelectedImages` 后才先写入受管媒体缓存，适合处理防盗链或宿主无法稳定拉取远程 URL 的渠道。Pixiv 候选必须保留 `artworkId`、`imageIndex`、作者、作品页和原图的对应关系，R18 同时受模型参数和管理员硬开关约束。
 - `web_search` 聚合百度 AI 搜索和 Tavily；`source=auto` 按管理员设置的默认顺序执行，并在允许回退时换源。结果统一为标题、URL、摘要、时间和可选评分，工具只返回观察结果，不自行发送消息。
 - 渠道开关、顺序、回退、超时和结果上限放在 `tools.builtin.*`；供应商密钥放在工具 `configSchema` 并标记 `secret: true`。不要把密钥、内部端点或管理员选项放入模型参数。
 - 新渠道应实现现有渠道函数的输入输出形态，再加入允许值、默认配置、校验、Web 设置、诊断和回归；不要新增一个同义模型工具。

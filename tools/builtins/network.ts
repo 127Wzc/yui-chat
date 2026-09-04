@@ -213,6 +213,7 @@ function automaticMessageSend(content: unknown, parts: UnknownRecord[], executed
 /** B 站媒体工具：可只返回搜索候选，也可准备本地封面和视频后自动投递。 */
 export class BilibiliMediaTool {
   name = "bilibili_media"
+  deferLoading = false
   source = "builtin"
   tags = ["search", "video", "bilibili", "media"]
   autoDelivery = { via: "message_send", batching: "merge", continueConversation: true }
@@ -299,16 +300,18 @@ export class BilibiliMediaTool {
 /** 图片媒体工具：可返回候选，也可按顺序组装纯图片后自动投递。 */
 export class ImageMediaTool {
   name = "image_media"
+  deferLoading = false
   source = "builtin"
   tags = ["search", "image", "media"]
   autoDelivery = { via: "message_send", batching: "merge", continueConversation: true }
   execution = { effect: "read", repeatPolicy: "bounded", retryPolicy: "safe", maxAttempts: 2 }
-  description = "Search enabled image channels (Bing, Baidu, optional SERP and Pixiv) and optionally deliver selected results. Defaults to action=send and caches selected images before message_send. Use action=search only to list or compare candidates. Pixiv R18 requests are rejected unless the administrator explicitly enables them."
+  description = "Search enabled image channels (Bing, Baidu, optional SERP and Pixiv) and optionally deliver selected results. Defaults to action=send and passes selected source URLs directly to message_send; administrators can opt into local caching for hosts that reject remote delivery. Use action=search only to list or compare candidates. A successful send still requires one final natural-language reply. Pixiv R18 requests are rejected unless the administrator explicitly enables them."
   parameters = {
     type: "object",
     properties: {
       query: { type: "string", description: "Image search keywords." },
       source: { type: "string", enum: ["auto", ...imageSourceIds], default: "auto", description: "Search source. auto follows the configured channel order and fallback policy." },
+      searchMode: { type: "string", enum: ["auto", "fast", "balanced", "deep"], default: "auto", description: "Execution profile. deep searches all enabled image channels in parallel; auto follows administrator configuration." },
       limit: { type: "number", description: "Maximum compact results. Default 5, capped by config." },
       action: { type: "string", enum: ["search", "send"], default: "send", description: "Defaults to send. Use search only when the user wants candidates listed or compared without delivery." },
       count: { type: "number", description: "Number of images to deliver for action=send. Defaults to 1, maximum 5." },
@@ -339,25 +342,50 @@ export class ImageMediaTool {
     if (requested !== "auto" && !enabledSources.includes(requested as ImageSourceId)) return `图片渠道 ${requested} 未启用。`
     const configuredSource = enabledSources.includes(text(cfg.defaultSource) as ImageSourceId) ? text(cfg.defaultSource) as ImageSourceId : enabledSources[0]
     const firstSource = requested === "auto" ? configuredSource : requested as ImageSourceId
-    const sourcePlan = wantsR18 || cfg.fallbackEnabled === false
+    const configuredStrategy = text(cfg.strategy).toLowerCase()
+    const requestedMode = text(args.searchMode).toLowerCase()
+    const strategy = requested !== "auto" || wantsR18 || requestedMode === "fast"
+      ? "preferred"
+      : requestedMode === "deep" || configuredStrategy === "parallel"
+        ? "parallel"
+        : requestedMode === "balanced" || configuredStrategy === "fallback"
+          ? "fallback"
+          : "preferred"
+    const sourcePlan = strategy === "preferred"
       ? [firstSource]
       : [firstSource, ...enabledSources.filter(source => source !== firstSource)]
     const rows: ImageCandidate[] = []
     const failures: UnknownRecord[] = []
-    for (const source of sourcePlan) {
+    const channelResults: UnknownRecord[] = []
+    const runSource = async (source: ImageSourceId): Promise<ImageCandidate[]> => {
+      const startedAt = Date.now()
       try {
-        const found = await searchImageChannel(source, query, limit - rows.length, cfg, { r18: wantsR18 })
+        const found = await searchImageChannel(source, query, limit, cfg, { r18: wantsR18 })
+        channelResults.push({ implementation: `local:${source}`, executionOwner: "agent", status: found.length ? "ok" : "empty", durationMs: Date.now() - startedAt, resultCount: found.length })
+        if (!found.length) failures.push({ source, error: "没有返回有效结果" })
+        return found
+      } catch (error) {
+        const message = errorMessage(error)
+        failures.push({ source, error: message })
+        channelResults.push({ implementation: `local:${source}`, executionOwner: "agent", status: "failed", durationMs: Date.now() - startedAt, resultCount: 0, error: message })
+        return []
+      }
+    }
+    if (strategy === "parallel") {
+      const found = (await Promise.all(sourcePlan.map(source => runSource(source)))).flat()
+      rows.push(...found.filter((item, index, all) => all.findIndex(current => current.url === item.url) === index).slice(0, limit))
+    } else {
+      for (const source of sourcePlan) {
+        const found = await runSource(source)
         rows.push(...found.filter(item => !rows.some(current => current.url === item.url)))
         if (rows.length >= limit) break
-      } catch (error) {
-        failures.push({ source, error: errorMessage(error) })
       }
     }
     try {
       if (!rows.length) {
         const message = failures.length ? `图片搜索失败：${failures.map(item => `${item.source}: ${item.error}`).join("；")}` : `没有搜索到图片：${query}`
         return action === "send"
-          ? automaticMessageSend({ query, sourcesTried: sourcePlan, results: [], message }, [{ type: "text", text: message }])
+          ? automaticMessageSend({ query, strategy, sourcesTried: sourcePlan, channelResults, results: [], message }, [{ type: "text", text: message }])
           : message
       }
       if (action === "send") {
@@ -365,13 +393,18 @@ export class ImageMediaTool {
         const ordered = text(args.pick).toLowerCase() === "random"
           ? [...rows].sort(() => Math.random() - 0.5).slice(0, count)
           : rows.slice(0, count)
-        const prepared: Array<{ candidate: ImageCandidate; source: UnknownRecord }> = []
+        const cacheSelectedImages = cfg.cacheSelectedImages === true
+        const prepared: Array<{ candidate: ImageCandidate; source: UnknownRecord }> = cacheSelectedImages
+          ? []
+          : ordered.map(candidate => ({ candidate, source: { kind: "url", value: candidate.url } }))
         const cacheFailures: UnknownRecord[] = []
-        for (const candidate of ordered) {
-          try {
-            prepared.push({ candidate, source: await cacheImageCandidate(candidate, cfg, config, context.agent?.signal) })
-          } catch (error) {
-            cacheFailures.push({ source: candidate.source, url: candidate.url, error: errorMessage(error) })
+        if (cacheSelectedImages) {
+          for (const candidate of ordered) {
+            try {
+              prepared.push({ candidate, source: await cacheImageCandidate(candidate, cfg, config, context.agent?.signal) })
+            } catch (error) {
+              cacheFailures.push({ source: candidate.source, url: candidate.url, error: errorMessage(error) })
+            }
           }
         }
         if (!prepared.length) {
@@ -381,7 +414,10 @@ export class ImageMediaTool {
         const parts = prepared.map(item => ({ type: "image", source: item.source }))
         return automaticMessageSend({
           query,
+          strategy,
+          cacheSelectedImages,
           sourcesTried: sourcePlan,
+          channelResults,
           selected: prepared.map(({ candidate, source }, index) => ({
             index: index + 1,
             channel: candidate.source,
@@ -393,14 +429,16 @@ export class ImageMediaTool {
             ...(candidate.author ? { author: candidate.author } : {}),
           })),
           ...(cacheFailures.length ? { cacheFailures } : {}),
-          hint: "已生成纯图片自动投递计划；运行时会立即通过 message_send 发送，全部投递结束后由当前人格统一自然续答，无需再次调用发送工具。",
+          hint: `已生成纯图片自动投递计划；当前使用${cacheSelectedImages ? "本地缓存" : "原始 URL"}，运行时会立即通过 message_send 发送。投递完成后仍需由当前人格生成一次最终自然回复，无需再次调用发送工具。`,
         }, parts)
       }
       // 工具自己控制输出体积和形态：URL 是公网稳定定位符，直接给模型即可，
       // 由模型决定发哪一张并原样传回 message_send。不再另开候选注册表。
       return {
         query,
+        strategy,
         sourcesTried: sourcePlan,
+        channelResults,
         results: rows.map((row, index) => ({
           index: index + 1,
           channel: row.source,

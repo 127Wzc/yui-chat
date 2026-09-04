@@ -1,5 +1,5 @@
 import type { ContentPart, JsonValue } from "../../core/message-chain/types.js"
-import type { ModelResponse, ModelStopReason, ModelToolCall, ModelUsage } from "./types.js"
+import type { ModelHostedToolCall, ModelResponse, ModelSearchSource, ModelStopReason, ModelToolCall, ModelUsage } from "./types.js"
 
 /** 第三方模型响应在进入统一协议前都必须先按 unknown 处理。 */
 type UnknownRecord = Record<string, unknown>
@@ -54,9 +54,11 @@ export function normalizeModelUsage(value: unknown): ModelUsage {
   const output = number(outputValue)
   const total = number(usage.total_tokens ?? usage.totalTokenCount) || input + output
   const cachedDetails = isRecord(usage.prompt_tokens_details) ? usage.prompt_tokens_details.cached_tokens : undefined
-  const cached = number(cachedDetails ?? usage.cache_read_input_tokens ?? usage.cachedContentTokenCount)
+  const inputDetails = isRecord(usage.input_tokens_details) ? usage.input_tokens_details : {}
+  const cached = number(cachedDetails ?? inputDetails.cached_tokens ?? usage.cache_read_input_tokens ?? usage.cachedContentTokenCount)
   const reasoningDetails = isRecord(usage.completion_tokens_details) ? usage.completion_tokens_details.reasoning_tokens : undefined
-  const reasoning = number(reasoningDetails ?? usage.thoughtsTokenCount)
+  const outputDetails = isRecord(usage.output_tokens_details) ? usage.output_tokens_details : {}
+  const reasoning = number(reasoningDetails ?? outputDetails.reasoning_tokens ?? usage.thoughtsTokenCount)
   const known = inputValue !== undefined || outputValue !== undefined
   return {
     input, output, total, cached, reasoning,
@@ -85,6 +87,27 @@ function normalizeText(value: unknown): string {
   return ""
 }
 
+function normalizeHostedToolCall(value: unknown): ModelHostedToolCall | null {
+  if (!isRecord(value)) return null
+  const type = text(value.type).trim()
+  if (!type) return null
+  return {
+    type,
+    id: text(value.id || value.call_id).trim(),
+    status: text(value.status || "unknown"),
+    ...(value.execution ? { execution: text(value.execution) } : {}),
+    ...(value.query ? { query: text(value.query) } : {}),
+    ...(Array.isArray(value.queries) ? { queries: value.queries.map(text).filter(Boolean) } : {}),
+    ...(Array.isArray(value.loadedTools) ? { loadedTools: value.loadedTools.map(text).filter(Boolean) } : {}),
+    ...(Number.isFinite(Number(value.resultCount)) ? { resultCount: Number(value.resultCount) } : {}),
+    ...(Array.isArray(value.sources) ? { sources: value.sources.map(item => {
+      const source = isRecord(item) ? item : {}
+      return { title: text(source.title), url: text(source.url) }
+    }).filter(item => /^https?:\/\//i.test(item.url)) } : {}),
+    ...(Object.hasOwn(value, "raw") ? { raw: value.raw } : {}),
+  }
+}
+
 /** 归一化 OpenAI finish_reason、Claude stop_reason 与 Gemini finishReason。 */
 export function normalizeModelStopReason(value: unknown, toolCallCount = 0): ModelStopReason {
   const reason = text(value).trim().toLowerCase().replace(/[\s-]+/g, "_")
@@ -104,6 +127,15 @@ export function normalizeModelResponse(value: unknown): ModelResponse {
   const response = isRecord(value) ? value : {}
   const rawCalls = Array.isArray(response.toolCalls) ? response.toolCalls : Array.isArray(response.tool_calls) ? response.tool_calls : []
   const toolCalls = rawCalls.map(normalizeToolCall).filter((call): call is ModelToolCall => Boolean(call))
+  const hostedToolCalls = (Array.isArray(response.hostedToolCalls) ? response.hostedToolCalls : [])
+    .map(normalizeHostedToolCall)
+    .filter((call): call is ModelHostedToolCall => Boolean(call))
+  const hostedSearchSources = (Array.isArray(response.hostedSearchSources) ? response.hostedSearchSources : [])
+    .map(item => {
+      const source = isRecord(item) ? item : {}
+      return { title: text(source.title), url: text(source.url) }
+    })
+    .filter((item): item is ModelSearchSource => /^https?:\/\//i.test(item.url))
   const raw = isRecord(response.raw) ? response.raw : {}
   const stopReason = normalizeModelStopReason(
     response.stopReason ?? response.stop_reason ?? response.finishReason ?? response.finish_reason
@@ -114,8 +146,18 @@ export function normalizeModelResponse(value: unknown): ModelResponse {
     id: text(response.id).trim() || `model-response-${Date.now()}`,
     text: normalizeText(response.text ?? response.content),
     toolCalls,
+    ...(hostedToolCalls.length ? { hostedToolCalls } : {}),
+    ...(hostedSearchSources.length ? { hostedSearchSources } : {}),
+    ...(text(response.upstreamResponseId).trim() ? { upstreamResponseId: text(response.upstreamResponseId).trim() } : {}),
+    ...(response.upstreamStateReset === true ? { upstreamStateReset: true } : {}),
+    ...(isRecord(response.responsesStateRecovery)
+      ? { responsesStateRecovery: response.responsesStateRecovery as unknown as ModelResponse["responsesStateRecovery"] }
+      : {}),
     stopReason,
     usage: normalizeModelUsage(response.usage || response.usageMetadata || {}),
+    ...(isRecord(response.protocol) && Array.isArray(response.protocol.outputItems)
+      ? { protocol: { kind: text(response.protocol.kind), outputItems: response.protocol.outputItems } }
+      : {}),
     ...(Object.hasOwn(response, "raw") ? { raw: response.raw } : {}),
   }
 }

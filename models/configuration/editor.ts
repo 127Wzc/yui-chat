@@ -172,11 +172,19 @@ export function updateModelConfig(config: UnknownRecord, modelName = "", patch: 
     embedding: patch.embedding === undefined
       ? (current.embedding ? clone(current.embedding) : undefined)
       : (isRecord(patch.embedding) ? clone(patch.embedding) : undefined),
+    toolPolicy: patch.toolPolicy === undefined
+      ? (current.toolPolicy ? clone(current.toolPolicy) : undefined)
+      : (isRecord(patch.toolPolicy) ? clone(patch.toolPolicy) : undefined),
+    responses: patch.responses === undefined
+      ? (current.responses ? clone(current.responses) : undefined)
+      : (isRecord(patch.responses) ? clone(patch.responses) : undefined),
   }
   if (nextModel.timeoutMs === undefined) delete nextModel.timeoutMs
   if (nextModel.stream === undefined) delete nextModel.stream
   if (!nextModel.reasoning) delete nextModel.reasoning
   if (!nextModel.embedding) delete nextModel.embedding
+  if (!nextModel.responses) delete nextModel.responses
+  if (!nextModel.toolPolicy) delete nextModel.toolPolicy
   const nextModels = [...models]
   nextModels[index] = nextModel
   return { ...config, models: nextModels }

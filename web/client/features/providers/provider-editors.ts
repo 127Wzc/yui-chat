@@ -2,6 +2,17 @@ import { reactive, computed, ref, watch } from "vue"
 import { confirmAction, store, request, toast, refreshTab } from "../../app/store/store.js"
 import { splitTokens, parseJsonText, toJson } from "../../shared/format.js"
 import { asRecord, errorMessage, type UnknownRecord } from "../../shared/data.js"
+import { RESPONSES_MODEL_EDITOR_TEMPLATE, RESPONSES_STATE_MODE_OPTIONS, responsesModelDraft, responsesModelPatch, type ResponsesModelConfig } from "./provider-responses-editor.js"
+import {
+  MODEL_TOOL_POLICY_EDITOR_TEMPLATE,
+  TOOL_POLICY_MODE_OPTIONS,
+  TOOL_SOURCE_OPTIONS,
+  WEB_SEARCH_STRATEGY_OPTIONS,
+  buildModelToolPolicyOptions,
+  modelToolPolicyDraft,
+  modelToolPolicyPatch,
+  type ModelToolPolicyConfig,
+} from "./provider-tool-policy-editor.js"
 import {
   BOOL_OFF_OPTIONS,
   BOOL_OPTIONS,
@@ -12,7 +23,6 @@ import {
   runLocked,
   uniqueModelIds,
 } from "./provider-shared.js"
-
 interface ProviderTemplate extends UnknownRecord {
   id: string
   label?: string
@@ -37,6 +47,7 @@ interface ProviderConfig extends UnknownRecord {
 }
 interface ModelConfig extends UnknownRecord {
   name: string
+  adapter?: string
   modelIdentifier?: string
   apiProvider?: string
   capabilities?: { chat?: boolean; embedding?: boolean }
@@ -49,6 +60,8 @@ interface ModelConfig extends UnknownRecord {
   priceOut?: number
   reasoning?: { target?: string; effort?: string }
   params?: UnknownRecord
+  responses?: ResponsesModelConfig
+  toolPolicy?: ModelToolPolicyConfig
 }
 interface RequestResult extends UnknownRecord {
   models?: RemoteModel[]
@@ -57,8 +70,6 @@ interface RequestResult extends UnknownRecord {
   diagnostics?: UnknownRecord
 }
 type Emit = (event: string) => void
-
-// 添加模型渠道：本地草稿，保存后不清空，方便连续添加。
 export const AddChannelForm = {
   name: "AddChannelForm",
   props: { templates: Array, defaultTask: String },
@@ -354,6 +365,7 @@ export const ModelEditor = {
     const draft = reactive({
       modelIdentifier: props.model.modelIdentifier || "",
       apiProvider: props.model.apiProvider || props.providers[0] || "mock",
+      chatProtocol: props.model.adapter === "openai-responses" ? "responses" : "chat-completions",
       chatCapability: String(props.model.capabilities?.chat !== false),
       embeddingCapability: String(Boolean(props.model.capabilities?.embedding)),
       embeddingProtocol: props.model.embedding?.protocol || "openai-compatible",
@@ -373,8 +385,11 @@ export const ModelEditor = {
       reasoningTarget: props.model.reasoning?.target || "auto",
       reasoningEffort: props.model.reasoning?.effort || "",
       params: toJson(props.model.params || {}),
+      ...modelToolPolicyDraft(props.model.toolPolicy),
+      ...responsesModelDraft(props.model.responses),
     })
     const providerOptions = computed(() => (props.providers.length ? props.providers : [draft.apiProvider]))
+    const toolPolicyOptions = computed(() => buildModelToolPolicyOptions(store.tools, store.config, [...draft.toolPolicyAllow, ...draft.toolPolicyDeny]))
     const loadingModels = ref(false)
     const saving = ref(false)
     const fetchedModels = ref<RemoteModel[]>([])
@@ -434,6 +449,9 @@ export const ModelEditor = {
           body: JSON.stringify({
             modelIdentifier: draft.modelIdentifier,
             apiProvider: draft.apiProvider,
+            adapter: draft.chatProtocol === "responses"
+              ? "openai-responses"
+              : (props.model.adapter === "openai-responses" ? "openai-compatible" : props.model.adapter),
             visual: draft.visual === "true",
             toolUse: draft.toolUse !== "false",
             timeoutMs: draft.timeoutSeconds === "" ? null : Math.round(Number(draft.timeoutSeconds) * 1000),
@@ -459,6 +477,8 @@ export const ModelEditor = {
                 params: parseJsonText(draft.embeddingParams, `${name} embedding params`, {}),
               }
               : null,
+            responses: responsesModelPatch(draft, name),
+            toolPolicy: modelToolPolicyPatch(draft),
             params: parseJsonText(draft.params, `${name} params`, {}),
           }),
         }))
@@ -472,9 +492,11 @@ export const ModelEditor = {
       }})
     }
     return {
-      draft, providerOptions, loadingModels, saving, fetchedModels, modelFilter, filteredFetchedModels,
+      draft, providerOptions, toolPolicyOptions, loadingModels, saving, fetchedModels, modelFilter, filteredFetchedModels,
       fetchModels, chooseModelIdentifier, applyBgePreset, save, BOOL_OPTIONS, BOOL_OFF_OPTIONS, INHERIT_BOOL_OPTIONS,
-      REASONING_TARGET_OPTIONS, REASONING_EFFORT_OPTIONS,
+      REASONING_TARGET_OPTIONS, REASONING_EFFORT_OPTIONS, TOOL_POLICY_MODE_OPTIONS, TOOL_SOURCE_OPTIONS,
+      WEB_SEARCH_STRATEGY_OPTIONS,
+      RESPONSES_STATE_MODE_OPTIONS,
     }
   },
   template: `
@@ -482,6 +504,7 @@ export const ModelEditor = {
       <div class="form-grid dense">
         <Field label="Model ID" v-model="draft.modelIdentifier" placeholder="gpt-4o-mini" tip="真正请求时发给上游的模型名；和本地显示名称可以不同。" />
         <Field label="Provider" type="select" :options="providerOptions" v-model="draft.apiProvider" tip="切换到哪个渠道去调用这个模型。" />
+        <Field label="对话协议" type="select" :options="[{ value: 'chat-completions', label: 'Chat Completions' }, { value: 'responses', label: 'Responses API' }]" v-model="draft.chatProtocol" tip="Responses 可使用原生 web_search、file_search、tool_search 和 Function Calling；Chat Completions 保持现有兼容链路。" />
         <Field label="聊天能力" type="select" :options="BOOL_OPTIONS" v-model="draft.chatCapability" tip="关闭后不会进入聊天任务，只作为向量模型使用。" />
         <Field label="向量能力" type="select" :options="BOOL_OPTIONS" v-model="draft.embeddingCapability" tip="开启后可在知识库中选择；BGE-M3 建议使用 1024 维。" />
         <Field label="视觉能力" type="select" :options="BOOL_OFF_OPTIONS" v-model="draft.visual" tip="开启后才能参与媒体识别或图像理解链路。" />
@@ -490,6 +513,8 @@ export const ModelEditor = {
         <Field label="上下文窗口（tokens）" type="number" v-model="draft.contextWindowTokens" placeholder="留空使用全局聊天预算" tip="模型上下文窗口。会话输入预算 = 窗口 − 输出预留 − 安全边际；留空时回落聊天设置里的全局输入预算（默认 6000），工具结果和大历史会被完整保留。" />
         <Field label="流式响应" type="select" :options="INHERIT_BOOL_OPTIONS" v-model="draft.stream" tip="留空继承全局。OpenAI Compatible、Qwen、ChatGLM 支持；其他协议暂按非流式执行。" />
       </div>
+      ${MODEL_TOOL_POLICY_EDITOR_TEMPLATE}
+      ${RESPONSES_MODEL_EDITOR_TEMPLATE}
       <Collapse v-if="draft.embeddingCapability === 'true'" title="向量模型参数" hint="知识库 / 记忆可复用" nested>
         <div class="form-grid dense">
           <Field label="Embedding 协议" type="select" :options="[{ value: 'openai-compatible', label: 'OpenAI Compatible' }]" v-model="draft.embeddingProtocol" />

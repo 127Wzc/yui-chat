@@ -111,6 +111,7 @@ function toolExecutionContext(context: ToolContext): RegistryExecutionContext {
 export async function executeToolRound(options: {
   toolCalls?: unknown[]
   assistantText?: unknown
+  assistantProtocol?: unknown
   workingMessages: UnknownRecord[]
   toolContext: ToolContext
   round?: number
@@ -124,6 +125,7 @@ export async function executeToolRound(options: {
   workingMessages.push({
     role: "assistant",
     content: assistantText,
+    ...(Object.keys(record(options.assistantProtocol)).length ? { protocol: options.assistantProtocol } : {}),
     tool_calls: toolCalls.map(call => ({
       id: text(call.id),
       type: "function",

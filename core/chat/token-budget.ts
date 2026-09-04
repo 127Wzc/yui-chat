@@ -24,7 +24,7 @@ export function estimateTokens(value: unknown = ""): number {
 
 export function messageTokens(message: unknown = {}): number {
   const source = record(message)
-  return estimateTokens(source.content) + estimateTokens(source.tool_calls) + 4
+  return estimateTokens(source.content) + estimateTokens(source.tool_calls) + estimateTokens(source.protocol) + 4
 }
 
 export function truncateTextToTokens(value: unknown = "", limit = 0): string {

@@ -200,6 +200,7 @@ export class CommandKnowledgeAuditTool {
 /** 知识管理聚合工具：先校验授权知识库，再分派搜索、推荐、转交或审计。 */
 export class KnowledgeManageTool {
   name = "knowledge_manage"
+  deferLoading = false
   source = "builtin"
   execution = { effect: "read", repeatPolicy: "bounded", retryPolicy: "safe", maxAttempts: 2 }
   executionByAction = {

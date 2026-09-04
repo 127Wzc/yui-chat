@@ -1,7 +1,7 @@
 import crypto from "node:crypto"
 import { fetchWithTimeout } from "../../core/network/fetch-timeout.js"
 import { applyReasoningPayload } from "../configuration/reasoning.js"
-import { getToolCommon } from "../../tools/support/contract.js"
+import { getToolCommon, modelToolDescription } from "../../tools/support/contract.js"
 import { ModelAdapter, contentParts, contentToText, normalizeListedModels, parseDataUrl, parseResponseData, safeJson, tokenUsage } from "./base.js"
 import type { ModelChannel, ModelMessage, ModelRequest, ModelResponse } from "../protocol/types.js"
 import type { ToolDefinition } from "../../tools/support/tool-contract.js"
@@ -72,7 +72,7 @@ function toClaudeContent(content: unknown): UnknownRecord[] {
 function toolsToClaude(tools: readonly ToolDefinition[] = []): UnknownRecord[] {
   return tools.map(tool => {
     const common = getToolCommon(tool)
-    return { name: tool.name, description: common.description || "", input_schema: common.parameters || { type: "object", properties: {} } }
+    return { name: tool.name, description: modelToolDescription(tool), input_schema: common.parameters || { type: "object", properties: {} } }
   }).filter(tool => Boolean(tool.name))
 }
 
@@ -123,6 +123,7 @@ export function parseClaudeToolCalls(data: unknown = {}): ModelResponse["toolCal
  */
 export class ClaudeAdapter extends ModelAdapter {
   override readonly id: string = "claude"
+  override readonly protocol = "claude-messages"
   override readonly supportsTools = true
   override readonly supportsVision = true
 

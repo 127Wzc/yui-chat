@@ -170,6 +170,7 @@ export class UserProfileWriteTool {
 /** 记忆聚合工具：用 action 合并 CRUD 语义，避免重复注入多份工具定义。 */
 export class MemoryManageTool {
   name = "memory_manage"
+  deferLoading = false
   source = "builtin"
   execution = { effect: "read", repeatPolicy: "bounded", retryPolicy: "safe", maxAttempts: 2 }
   executionByAction = {

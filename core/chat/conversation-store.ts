@@ -14,6 +14,7 @@ interface ParsedConversationKey {
 
 interface ConversationRow extends UnknownRecord {
   history_json?: unknown
+  state_json?: unknown
   last_seen_at?: unknown
   expires_at?: unknown
 }
@@ -51,6 +52,15 @@ function historyOf(value: unknown): unknown[] {
     return Array.isArray(parsed) ? parsed : []
   } catch {
     return []
+  }
+}
+
+function stateOf(value: unknown): UnknownRecord {
+  try {
+    const parsed = typeof value === "string" ? JSON.parse(value) as unknown : value
+    return record(parsed)
+  } catch {
+    return {}
   }
 }
 
@@ -102,18 +112,26 @@ function webTestSessionFromRow(row: ConversationRow): WebTestSession | null {
 
 /** SQLite 会话存储；只负责 TTL、键匹配和原子清理，不承载聊天编排。 */
 export class ConversationStore {
-  async get(key: string): Promise<{ history: unknown[]; lastSeen: number; usage: UnknownRecord; toolCalls: number; turns: unknown[] } | null> {
+  async get(key: string): Promise<{ history: unknown[]; lastSeen: number; usage: UnknownRecord; toolCalls: number; turns: unknown[]; protocolState: UnknownRecord } | null> {
     if (!sqliteClient.status.available) return null
-    const conversation = await sqliteClient.get<ConversationRow>("SELECT history_json, last_seen_at, expires_at FROM conversations WHERE conversation_key = ?", [key])
+    const conversation = await sqliteClient.get<ConversationRow>("SELECT history_json, state_json, last_seen_at, expires_at FROM conversations WHERE conversation_key = ?", [key])
     if (!conversation) return null
     if (Number(conversation.expires_at || 0) <= Date.now()) {
       await sqliteClient.run("DELETE FROM conversations WHERE conversation_key = ?", [key])
       return null
     }
-    return { history: historyOf(conversation.history_json), lastSeen: Number(conversation.last_seen_at || 0), usage: {}, toolCalls: 0, turns: [] }
+    const state = stateOf(conversation.state_json)
+    return {
+      history: historyOf(conversation.history_json),
+      lastSeen: Number(conversation.last_seen_at || 0),
+      usage: record(state.usage),
+      toolCalls: Number(state.toolCalls || 0),
+      turns: Array.isArray(state.turns) ? state.turns : [],
+      protocolState: record(state.protocolState),
+    }
   }
 
-  async save(input: { id: string; history?: readonly unknown[] }): Promise<boolean> {
+  async save(input: { id: string; history?: readonly unknown[]; turns?: readonly unknown[]; usage?: UnknownRecord; toolCalls?: unknown; protocolState?: UnknownRecord }): Promise<boolean> {
     if (!sqliteClient.status.available) return false
     const now = Date.now()
     const expiresAt = now + conversationTtlMs()
@@ -124,14 +142,21 @@ export class ConversationStore {
       })
     }
     const normalized = Array.isArray(input.history) ? input.history : []
+    const state = {
+      turns: Array.isArray(input.turns) ? input.turns : [],
+      usage: record(input.usage),
+      toolCalls: Math.max(0, Number(input.toolCalls || 0)),
+      protocolState: record(input.protocolState),
+    }
     await sqliteClient.run(
-      `INSERT INTO conversations(conversation_key, history_json, last_seen_at, expires_at)
-       VALUES(?, ?, ?, ?)
+      `INSERT INTO conversations(conversation_key, history_json, state_json, last_seen_at, expires_at)
+       VALUES(?, ?, ?, ?, ?)
        ON CONFLICT(conversation_key) DO UPDATE SET
          history_json=excluded.history_json,
+         state_json=excluded.state_json,
          last_seen_at=excluded.last_seen_at,
          expires_at=excluded.expires_at`,
-      [input.id, JSON.stringify(normalized), now, expiresAt],
+      [input.id, JSON.stringify(normalized), JSON.stringify(state), now, expiresAt],
     )
     return true
   }

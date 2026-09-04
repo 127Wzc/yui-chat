@@ -9,6 +9,12 @@ type WebSearchSourceId = (typeof webSearchSourceIds)[number]
 interface WebSearchContext extends ToolExecutionContext {
   toolConfig?: UnknownRecord
   config?: UnknownRecord
+  searchRouting?: { webSearch?: { strategy?: string } }
+  searchCapabilities?: {
+    webSearch?: {
+      hosted?: (query: string, args: UnknownRecord, context?: WebSearchContext) => Promise<{ text?: string; sources?: SearchResult[] }>
+    }
+  }
 }
 
 interface SearchResult extends UnknownRecord {
@@ -30,7 +36,6 @@ function sourceNodeText(result: SearchResult, index: number): string {
 
 function searchResultWithForwardSources(content: UnknownRecord, results: SearchResult[]): UnknownRecord {
   return {
-    ...content,
     status: "success",
     content,
     executedCount: 0,
@@ -63,6 +68,42 @@ function text(value: unknown): string {
 
 function errorMessage(error: unknown): string {
   return text(record(error).message || error || "请求失败")
+}
+
+function searchStrategy(args: UnknownRecord, cfg: UnknownRecord, context: WebSearchContext): "preferred" | "fallback" | "parallel" {
+  const mode = text(args.searchMode).toLowerCase()
+  if (mode === "fast") return "preferred"
+  if (mode === "balanced") return "fallback"
+  if (mode === "deep") return "parallel"
+  const configured = text(context.searchRouting?.webSearch?.strategy || cfg.strategy).toLowerCase()
+  if (configured === "preferred" || configured === "parallel") return configured
+  return "fallback"
+}
+
+function resultKey(result: SearchResult): string {
+  return result.url.replace(/[?#].*$/, "").replace(/\/$/, "").toLowerCase()
+}
+
+/**
+ * 多渠道结果按层轮询，避免排在最前面的渠道先耗尽 maxResults。
+ * URL 去重仍在全渠道共享，且每个渠道内部的原始排序保持不变。
+ */
+function mergeResultChannels(groups: SearchResult[][], limit: number): SearchResult[] {
+  const merged: SearchResult[] = []
+  const seen = new Set<string>()
+  const depth = Math.max(0, ...groups.map(group => group.length))
+  for (let index = 0; index < depth && merged.length < limit; index++) {
+    for (const group of groups) {
+      const item = group[index]
+      if (!item) continue
+      const key = resultKey(item)
+      if (!key || seen.has(key)) continue
+      seen.add(key)
+      merged.push(item)
+      if (merged.length >= limit) break
+    }
+  }
+  return merged
 }
 
 async function responseJson(response: Response): Promise<UnknownRecord> {
@@ -161,6 +202,7 @@ export class WebSearchTool {
     properties: {
       query: { type: "string", description: "Complete natural-language search query." },
       source: { type: "string", enum: ["auto", ...webSearchSourceIds], default: "auto", description: "Provider. auto follows administrator configuration and fallback." },
+      searchMode: { type: "string", enum: ["auto", "fast", "balanced", "deep"], default: "auto", description: "Execution profile. deep searches all administrator-enabled channels in parallel; auto follows model and tool policy." },
       maxResults: { type: "number", description: "Maximum results to return. Defaults to configured value." },
       topic: { type: "string", enum: ["general", "news"], default: "general", description: "Tavily topic." },
       searchDepth: { type: "string", enum: ["basic", "advanced"], default: "basic", description: "Tavily search depth." },
@@ -186,28 +228,122 @@ export class WebSearchTool {
     if (requested !== "auto" && !enabled.includes(requested as WebSearchSourceId)) return `网络搜索渠道 ${requested} 未启用。`
     const configured = enabled.includes(text(cfg.defaultSource) as WebSearchSourceId) ? text(cfg.defaultSource) as WebSearchSourceId : enabled[0]
     const first = requested === "auto" ? configured : requested as WebSearchSourceId
-    const plan = cfg.fallbackEnabled === false ? [first] : [first, ...enabled.filter(source => source !== first)]
+    const strategy = requested === "auto" ? searchStrategy(args, cfg, context) : "preferred"
+    const plan = strategy === "preferred" ? [first] : [first, ...enabled.filter(source => source !== first)]
     const failures: UnknownRecord[] = []
-    for (const source of plan) {
+    const channelResults: UnknownRecord[] = []
+    let hostedDigest = ""
+    const runLocal = async (source: WebSearchSourceId): Promise<SearchResult[]> => {
+      const startedAt = Date.now()
       try {
         const results = source === "baidu-ai"
           ? await searchBaiduAi(query, args, cfg, context)
           : await searchTavily(query, args, cfg, context)
-        if (!results.length) {
-          failures.push({ source, error: "没有返回有效结果" })
-          continue
+        channelResults.push({ implementation: `local:${source}`, executionOwner: "agent", resultKind: "search-results", status: results.length ? "ok" : "empty", durationMs: Date.now() - startedAt, resultCount: results.length })
+        if (!results.length) failures.push({ source, error: "没有返回有效结果" })
+        return results
+      } catch (error) {
+        const message = errorMessage(error)
+        channelResults.push({ implementation: `local:${source}`, executionOwner: "agent", resultKind: "search-results", status: "failed", durationMs: Date.now() - startedAt, resultCount: 0, error: message })
+        failures.push({ source, error: message })
+        return []
+      }
+    }
+    const runHosted = async (): Promise<SearchResult[]> => {
+      const hosted = context.searchCapabilities?.webSearch?.hosted
+      if (!hosted) return []
+      const startedAt = Date.now()
+      try {
+        const result = await hosted(query, args, context)
+        hostedDigest = text(result.text).trim()
+        const sources = Array.isArray(result.sources) ? result.sources : []
+        channelResults.push({ implementation: "openai:web_search", executionOwner: "provider", resultKind: "assistant-message", status: sources.length || result.text ? "ok" : "empty", durationMs: Date.now() - startedAt, resultCount: sources.length })
+        if (!sources.length && !result.text) failures.push({ source: "openai:web_search", error: "没有返回有效结果" })
+        return sources.map(item => ({ ...item, content: text(item.content) }))
+      } catch (error) {
+        const message = errorMessage(error)
+        channelResults.push({ implementation: "openai:web_search", executionOwner: "provider", resultKind: "assistant-message", status: "failed", durationMs: Date.now() - startedAt, resultCount: 0, error: message })
+        failures.push({ source: "openai:web_search", error: message })
+        return []
+      }
+    }
+    if (strategy === "parallel") {
+      const tasks: Array<Promise<SearchResult[]>> = plan.map(source => runLocal(source))
+      if (context.searchCapabilities?.webSearch?.hosted) tasks.unshift(runHosted())
+      const rows = mergeResultChannels(await Promise.all(tasks), Math.max(1, Math.min(Number(args.maxResults || cfg.maxResults || 5), 20)))
+      if (rows.length) {
+        return searchResultWithForwardSources({
+          query,
+          source: "multiple",
+          strategy,
+          aggregationRequired: true,
+          channelResults,
+          failures,
+          ...(hostedDigest ? { hostedDigest } : {}),
+          results: rows,
+          hint: "综合各渠道证据做一次最终回答；hostedDigest 是 OpenAI 上游已整理的证据摘要，只需使用一次，不要逐来源重复。相同链接已合并，运行时会把来源以合并转发节点追加到随后的 message_send。",
+        }, rows)
+      }
+      if (hostedDigest) {
+        return {
+          query,
+          source: "openai:web_search",
+          strategy,
+          aggregationRequired: true,
+          channelResults,
+          failures,
+          results: [],
+          hostedDigest,
+          hint: "上游返回了搜索摘要但没有结构化来源。请基于摘要作答，并明确说明当前代理没有转发来源字段。",
         }
+      }
+      return { query, strategy, channelResults, results: [], failures, message: `网络搜索失败：${failures.map(item => `${item.source}: ${item.error}`).join("；")}` }
+    }
+    if (context.searchCapabilities?.webSearch?.hosted) {
+      const results = await runHosted()
+      if (results.length) {
+        return searchResultWithForwardSources({
+          query,
+          source: "openai:web_search",
+          strategy,
+          aggregationRequired: true,
+          channelResults,
+          ...(hostedDigest ? { hostedDigest } : {}),
+          results,
+          hint: "根据 OpenAI 托管搜索摘要和来源做一次最终回答；hostedDigest 只需使用一次，运行时会把来源以合并转发节点追加到随后的 message_send。",
+        }, results)
+      }
+      if (hostedDigest) {
+        return {
+          query,
+          source: "openai:web_search",
+          strategy,
+          aggregationRequired: true,
+          channelResults,
+          results: [],
+          hostedDigest,
+          hint: "上游返回了搜索摘要但没有结构化来源。请基于摘要作答，并明确说明当前代理没有转发来源字段。",
+        }
+      }
+      if (strategy === "preferred") {
+        return { query, strategy, channelResults, results: [], failures, message: `网络搜索失败：${failures.map(item => `${item.source}: ${item.error}`).join("；")}` }
+      }
+    }
+    for (const source of plan) {
+      const results = await runLocal(source)
+      if (results.length) {
         const content = {
           query,
           source,
+          strategy,
+          aggregationRequired: true,
+          channelResults,
           results,
           hint: "根据这些实时搜索结果整理正文；运行时会把全部来源以合并转发节点追加到随后的 message_send，正文无需重复罗列 URL。需要阅读全文可继续调用 website_fetch。",
         }
         return searchResultWithForwardSources(content, results)
-      } catch (error) {
-        failures.push({ source, error: errorMessage(error) })
       }
     }
-    return { query, results: [], failures, message: `网络搜索失败：${failures.map(item => `${item.source}: ${item.error}`).join("；")}` }
+    return { query, strategy, channelResults, results: [], failures, message: `网络搜索失败：${failures.map(item => `${item.source}: ${item.error}`).join("；")}` }
   }
 }

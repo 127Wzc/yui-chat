@@ -51,7 +51,7 @@ try {
   await sqliteClient.init(defaults)
   assert.equal(sqliteClient.status.available, true, "SQLite worker must start with a new baseline database")
   assert.equal(sqliteClient.status.integrity, "ok", "SQLite worker must report an intact baseline database")
-  assert.deepEqual((sqliteClient.status.migrations || []).map(row => row.id), ["001-baseline.sql", "002-tool-call-events.sql", "003-model-call-snapshots.sql"], "runtime state database must apply the baseline, combined tool/runtime, and model snapshot migrations")
+  assert.deepEqual((sqliteClient.status.migrations || []).map(row => row.id), ["001-baseline.sql", "002-tool-call-events.sql", "003-model-call-snapshots.sql", "004-conversation-state.sql"], "runtime state database must apply the baseline, combined tool/runtime, model snapshot, and conversation state migrations")
   await configStore.attachRuntimeConfigRepository(new SqliteRuntimeConfigRepository(sqliteClient))
   await configStore.update(config => {
     config.memory.groupCapture.enabled = true
@@ -67,8 +67,20 @@ try {
     }]
   })
 
-  await conversationStore.save({ id: "baseline:conversation", history: [{ role: "user", content: "你好" }, { role: "assistant", content: "你好，我在。" }] })
-  assert.equal((await conversationStore.get("baseline:conversation"))?.history.length, 2, "conversation history must round-trip as one JSON record")
+  await conversationStore.save({
+    id: "baseline:conversation",
+    history: [{ role: "user", content: "你好" }, { role: "assistant", content: "你好，我在。" }],
+    turns: [{ prompt: "你好", response: "你好，我在。" }],
+    usage: { input: 2, output: 3, total: 5 },
+    toolCalls: 1,
+    protocolState: { responses: { "responses:provider:model": { previousResponseId: "resp_baseline" } } },
+  })
+  const baselineConversation = await conversationStore.get("baseline:conversation")
+  assert.equal(baselineConversation?.history.length, 2, "conversation history must round-trip as one JSON record")
+  assert.equal(baselineConversation?.turns.length, 1, "conversation audit turns must round-trip independently from model history")
+  assert.equal(baselineConversation?.usage.total, 5, "conversation usage totals must survive a SQLite round trip")
+  assert.equal(baselineConversation?.toolCalls, 1, "conversation tool call totals must survive a SQLite round trip")
+  assert.equal(baselineConversation?.protocolState.responses["responses:provider:model"].previousResponseId, "resp_baseline", "Responses upstream state must remain attached to the local conversation record")
   await conversationStore.save({ id: "baseline-chat:p:web-test-baseline-history", history: [{ role: "user", content: "SQLite 历史测试" }, { role: "assistant", content: "已保存。" }] })
   const webTestSession = (await conversationStore.listWebTestSessions()).find(item => item.sessionId === "baseline-history")
   assert.equal(webTestSession?.messages.length, 2, "web test history must be read from the unified SQLite conversation record")

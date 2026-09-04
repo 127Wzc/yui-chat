@@ -1,5 +1,8 @@
 import { adapterRegistry } from "../../models/adapters/registry.js"
-import type { ModelChannel, ModelMessage } from "../../models/protocol/types.js"
+import { filterToolsForModel, hostedToolIds, modelToolAllowed, modelToolRoute } from "../../models/configuration/tool-policy.js"
+import { responsesStateKey, responsesStateMode, responsesUsesUpstreamState } from "../../models/configuration/responses-state.js"
+import type { ModelChannel, ModelHostedToolCall, ModelMessage, ModelSearchSource } from "../../models/protocol/types.js"
+import { explainToolPolicy } from "../../tools/access/policy.js"
 import type { ToolDefinition } from "../../tools/support/tool-contract.js"
 import { getToolCommon, resolveToolExecutionPolicy } from "../../tools/support/contract.js"
 import { toolRegistry, type RegistryExecutionContext } from "../../tools/support/registry.js"
@@ -8,6 +11,7 @@ import { buildPersonaMessagesWithContext, buildUserMessage, type PersonaContextS
 import { findUnsupportedMediaCQCodes } from "../message/cq-code.js"
 import type { UnknownRecord } from "../message/types.js"
 import { hostRuntime } from "../runtime/host-runtime.js"
+import { modelLogStore } from "../observability/model-log.js"
 import { conversationLog } from "./conversation-log.js"
 import { createAgentTurnState } from "./agent-turn-state.js"
 import { enforcePromptBudgetDetailed, estimateTokens, messageTokens, selectPromptTools } from "./token-budget.js"
@@ -33,6 +37,7 @@ interface ModelStepOptions {
   prompt?: unknown
   config?: unknown
   history?: unknown[]
+  protocolState?: unknown
   step?: unknown
   channel?: unknown
   prior?: unknown[]
@@ -85,8 +90,16 @@ function toolDefinitions(value: unknown[]): ToolDefinition[] {
 const searchToolNamePattern = /(?:^|[_:./-])(?:search|find|lookup|query|retrieve|recommend)(?:[_:./-]|$)/i
 const searchActionPattern = /^(?:search|find|lookup|query|recommend|搜索|检索|查找|查询|推荐)$/i
 const searchIntentPattern = /(?:搜索|搜一下|搜一搜|搜个|搜些|检索|查找|查一查|查询|帮我查|找一下|找一个|找个|找些|找几|找张|找段|找部|推荐|search|find|look\s*up|lookup|retrieve|recommend)/i
+const currentLookupIntentPattern = /(?:看看|看下|看一下).{0,16}(?:今天|今日|最新|实时|当前|现在|价格|行情|新闻|天气|汇率)/i
 const searchDescriptionPattern = /(?:搜索|检索|查找|查询|推荐|\bsearch(?:es|ing)?\b|\bfind\b|\blookup\b|\bretriev(?:e|al)\b|\brecommend(?:s|ation)?\b)/i
 const mediaSendNegationPattern = /(?:不要|别|无需|不用|暂不|先不).{0,8}(?:发|发送|send)/i
+const imageSearchActionPattern = /(?:搜索|搜(?:一下|一搜|个|些|几|张|两张)?|查找|找(?:一下|个|些|几|张|两张)?|推荐|search|find|look\s*up)/i
+const imageSearchTargetPattern = /(?:图片|图像|照片|表情包|表情图|梗图|壁纸|头像|贴纸|动图|gif|images?|pictures?|photos?|memes?|stickers?)/i
+
+function isImageMediaSearchRequest(prompt: unknown): boolean {
+  const value = text(prompt)
+  return imageSearchActionPattern.test(value) && imageSearchTargetPattern.test(value)
+}
 
 function toolAutoDelivery(name: unknown): UnknownRecord {
   const tool = toolRegistry.get(text(name).trim())
@@ -299,6 +312,116 @@ function registryContext(value: UnknownRecord): RegistryExecutionContext {
   return value as RegistryExecutionContext
 }
 
+type HostedToolCapability = "webSearch" | "fileSearch" | "toolSearch"
+
+const hostedPolicyTools: Record<HostedToolCapability, UnknownRecord> = {
+  webSearch: {
+    name: "web_search",
+    source: "builtin",
+    category: "network",
+    risk: "external",
+    policy: { externalNetwork: true },
+  },
+  fileSearch: {
+    name: "file_search",
+    source: "builtin",
+    category: "memory",
+    risk: "low",
+    policy: {},
+  },
+  toolSearch: {
+    name: "tool_search",
+    source: "builtin",
+    category: "discovery",
+    risk: "low",
+    policy: {},
+  },
+}
+
+function hostedToolAllowed(capability: HostedToolCapability, root: UnknownRecord, modelConfig: UnknownRecord, context: UnknownRecord): boolean {
+  const openai = record(record(record(root.tools).hosted).openai)
+  if (record(root.tools).enabled !== true || openai.enabled === false || record(openai[capability]).enabled === false) return false
+  if (!modelToolAllowed(modelConfig, hostedToolIds[capability])) return false
+  // The capability switch in tools.enabledTools is the hard upper bound for both
+  // local and provider-owned implementations. A model route can only narrow it.
+  return explainToolPolicy(hostedPolicyTools[capability], registryContext(context)).allowed
+}
+
+function localToolAllowed(name: string, modelConfig: UnknownRecord, context: UnknownRecord): boolean {
+  const tool = toolRegistry.get(name)
+  return Boolean(tool)
+    && modelToolAllowed(modelConfig, name)
+    && explainToolPolicy(tool, registryContext(context)).allowed
+}
+
+function hostedToolName(type: unknown): string {
+  const value = text(type).replace(/_(?:call|output)$/, "")
+  return `openai:${value || "hosted_tool"}`
+}
+
+function hostedToolCategory(type: unknown): string {
+  if (text(type).startsWith("web_search")) return "network"
+  if (text(type).startsWith("file_search")) return "memory"
+  return "discovery"
+}
+
+function hostedToolStatus(value: unknown): string {
+  const status = text(value).toLowerCase()
+  if (["completed", "success", "succeeded"].includes(status)) return "ok"
+  if (["failed", "error", "cancelled", "canceled"].includes(status)) return "failed"
+  return status || "accepted"
+}
+
+function hostedToolTrace(call: ModelHostedToolCall, round: number): { trace: UnknownRecord; logResult: string } {
+  const argumentsValue = {
+    ...(call.query ? { query: call.query } : {}),
+    ...(call.queries?.length ? { queries: call.queries } : {}),
+  }
+  const result = {
+    ...(call.loadedTools?.length ? { loadedTools: call.loadedTools } : {}),
+    ...(Number.isFinite(Number(call.resultCount)) ? { resultCount: Number(call.resultCount) } : {}),
+    ...(call.sources?.length ? { sources: call.sources } : {}),
+  }
+  let logResult = "{}"
+  try { logResult = JSON.stringify(call.raw ?? result) || "{}" } catch { logResult = JSON.stringify(result) }
+  return {
+    logResult,
+    trace: {
+      round,
+      id: call.id,
+      name: hostedToolName(call.type),
+      source: "openai-hosted",
+      category: hostedToolCategory(call.type),
+      arguments: argumentsValue,
+      status: hostedToolStatus(call.status),
+      error: hostedToolStatus(call.status) === "failed" ? `OpenAI 托管工具状态：${call.status}` : "",
+      durationMs: 0,
+      resultPreview: logResult.slice(0, 300),
+      resultChars: logResult.length,
+      delivery: "remote",
+      requiresFinalReply: true,
+      repeatPolicy: "provider_managed",
+      retryPolicy: "provider_managed",
+      dispatched: true,
+      deduplicated: false,
+      effect: "read",
+      decision: "provider_managed",
+      guardCode: "OPENAI_HOSTED_TOOL",
+      metadata: {
+        hosted: true,
+        remote: true,
+        provider: "openai",
+        protocol: "responses",
+        eventType: call.type,
+        execution: call.execution || "",
+        loadedTools: call.loadedTools || [],
+        resultCount: call.resultCount || 0,
+        sources: call.sources || [],
+      },
+    },
+  }
+}
+
 /** 执行一次模型步骤及其工具轮次；Chat Service 只负责决定何时调用它。 */
 export async function runModelStepWithChannelInternal(options: ModelStepOptions = {}): Promise<UnknownRecord> {
   const root = record(options.config)
@@ -307,6 +430,11 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
   const mediaRecognition = record(root.mediaRecognition)
   const step = record(options.step)
   const channel = record(options.channel)
+  const modelConfig = record(channel.modelConfig)
+  const configuredResponsesStateMode = responsesStateMode(modelConfig)
+  const responseStateKey = responsesStateKey(channel)
+  const previousResponseState = record(record(record(options.protocolState).responses)[responseStateKey])
+  const previousResponseId = responsesUsesUpstreamState(configuredResponsesStateMode) ? text(previousResponseState.previousResponseId).trim() : ""
   const source = text(options.source)
   const purpose = text(options.purpose || (source === "subagent" ? "subagent" : "chat"))
   const agentContext = record(options.agentContext)
@@ -338,13 +466,19 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
   markContext(priorMessages, { source: "workflow", label: contextSourceLabels.workflow })
   markContext(history, { source: "history", label: contextSourceLabels.history })
   markContext([currentMessage], { source: "current", label: contextSourceLabels.current })
-  let messages: UnknownRecord[] = [
+  const commonMessages: UnknownRecord[] = [
     ...personaBuild.messages,
     stepMessage,
     ...priorMessages,
-    ...history,
+  ]
+  let messages: UnknownRecord[] = [
+    ...commonMessages,
+    ...(previousResponseId ? [] : history),
     currentMessage,
   ]
+  let recoveryMessages: UnknownRecord[] = configuredResponsesStateMode === "auto" && previousResponseId
+    ? [...commonMessages, ...history, currentMessage]
+    : messages
 
   const isInteractiveConversation = !hasAgentContext && source !== "subagent"
   const maxToolRounds = hasAgentContext
@@ -393,14 +527,72 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
   }
   const dynamicTools = new Set<string>()
   toolContext.dynamicTools = dynamicTools
-  toolContext.toolDiscovery = {
-    search: (query: unknown, limit: unknown) => toolRegistry.searchAllowedTools(text(query), registryContext(toolContext), number(limit, 8)),
-  }
   const toolUseEnabled = options.disableTools !== true
     && toolsConfig.enabled === true
     && adapter.supportsTools
-    && record(channel.modelConfig).toolUse !== false
+    && modelConfig.toolUse !== false
   let enabledTools = [] as Awaited<ReturnType<typeof toolRegistry.getAllowedTools>>
+  const responsesConfig = record(modelConfig.responses)
+  const webSearchRoute = modelToolRoute(modelConfig, "web_search")
+  const toolSearchRoute = modelToolRoute(modelConfig, "tool_search")
+  const webSearchSource = webSearchRoute.source
+  const toolSearchSource = toolSearchRoute.source
+  const webSearchStrategy = webSearchRoute.strategy
+    || (["preferred", "parallel"].includes(text(record(record(toolsConfig.builtin).webSearch).strategy))
+      ? text(record(record(toolsConfig.builtin).webSearch).strategy) as "preferred" | "parallel"
+      : "fallback")
+  // 图片、表情包等明确媒体搜索交给 image_media：它能按数量选择并进入受管
+  // 媒体投递链。此时不把通用托管网页搜索同时交给模型，避免一次响应内为同一
+  // 媒体意图反复发起多个 web_search_call。
+  const preferLocalImageMedia = toolUseEnabled
+    && adapter.protocol === "responses"
+    && adapter.supportsNativeToolSearch
+    && isImageMediaSearchRequest(prompt)
+    && localToolAllowed("image_media", modelConfig, toolContext)
+  const hostedWebSearchAvailable = toolUseEnabled
+    && adapter.supportsNativeToolSearch
+    && !preferLocalImageMedia
+    && (webSearchSource === "auto" || webSearchSource === "hosted")
+    && hostedToolAllowed("webSearch", root, modelConfig, toolContext)
+  const configuredLocalWebSearchSources = record(record(toolsConfig.builtin).webSearch).enabledSources
+  const localWebSearchChannelsAvailable = !Array.isArray(configuredLocalWebSearchSources)
+    || configuredLocalWebSearchSources.length > 0
+  const aggregatedHostedWebSearch = webSearchStrategy !== "preferred"
+    && webSearchSource === "auto"
+    && hostedWebSearchAvailable
+    && localWebSearchChannelsAvailable
+    && localToolAllowed("web_search", modelConfig, toolContext)
+  const nativeWebSearchEnabled = hostedWebSearchAvailable && !aggregatedHostedWebSearch
+  const nativeToolSearchEnabled = toolUseEnabled
+    && adapter.supportsNativeToolSearch
+    && (toolSearchSource === "auto" || toolSearchSource === "hosted")
+    && hostedToolAllowed("toolSearch", root, modelConfig, toolContext)
+  const forceAggregatedWebSearch = aggregatedHostedWebSearch
+    && (searchIntentPattern.test(text(prompt)) || currentLookupIntentPattern.test(text(prompt)))
+    && !isImageMediaSearchRequest(prompt)
+  // 已经由运行时明确选择具体能力时，不再让托管 tool_search 重复发现同一个
+  // 函数。这样图片/网页搜索请求只保留真正执行搜索的工具链。
+  const nativeToolSearchEnabledForRequest = nativeToolSearchEnabled
+    && !preferLocalImageMedia
+    && !forceAggregatedWebSearch
+  const nativeFileSearchEnabled = toolUseEnabled
+    && adapter.supportsNativeToolSearch
+    && record(responsesConfig.fileSearch).enabled === true
+    && hostedToolAllowed("fileSearch", root, modelConfig, toolContext)
+  const localWebSearchEnabled = webSearchSource === "local" || aggregatedHostedWebSearch || (webSearchSource === "auto" && !nativeWebSearchEnabled)
+  const localToolSearchAvailable = record(record(toolsConfig.builtin).toolSearch).localEnabled !== false
+  const localToolSearchEnabled = localToolSearchAvailable && (toolSearchSource === "local" || (toolSearchSource === "auto" && !nativeToolSearchEnabled))
+  const filterModelLocalTools = <T extends { name?: unknown }>(tools: readonly T[]): T[] => filterToolsForModel(tools, modelConfig).filter(tool => {
+    if (tool.name === "web_search") return localWebSearchEnabled
+    if (tool.name === "tool_search") return localToolSearchEnabled
+    return true
+  })
+  toolContext.toolDiscovery = {
+    search: async (query: unknown, limit: unknown) => filterModelLocalTools(
+      await toolRegistry.searchAllowedTools(text(query), registryContext(toolContext), number(limit, 8)),
+    ),
+  }
+  toolContext.searchRouting = { webSearch: { strategy: webSearchStrategy } }
   if (toolUseEnabled) {
     if (hasAgentContext) {
       enabledTools = toolRegistry.getToolsByNames(list(agentContext.allowedTools).map(text), registryContext(toolContext))
@@ -411,8 +603,18 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
       })
       if (record(root.subAgent).enabled !== true) enabledTools = enabledTools.filter(tool => tool.name !== "dispatch_subagent")
     }
+    enabledTools = filterModelLocalTools(enabledTools)
   }
   const allowedToolCandidates = enabledTools
+  if (adapter.supportsNativeToolSearch) {
+    channel.responsesRuntime = {
+      webSearchAllowed: nativeWebSearchEnabled,
+      fileSearchAllowed: nativeFileSearchEnabled,
+      toolSearchAllowed: nativeToolSearchEnabledForRequest,
+      stateMode: configuredResponsesStateMode,
+      previousResponseId,
+    }
+  }
   const taskConfig = stepConfig(root, step)
   const maxTokens = Math.max(1, number(taskConfig.maxTokens, 1024))
   // 只有整个会话超出窗口才会压缩；压缩一旦发生就必须在链路里留下痕迹，
@@ -433,24 +635,44 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
     }
     return outcome.messages
   }
+  const hasSeparateRecoveryContext = recoveryMessages !== messages
   messages = budgeted(messages, "initial")
-  enabledTools = selectPromptTools(enabledTools, text(prompt), record(toolsConfig.promptSelection))
-  if (toolUseEnabled && !enabledTools.some(tool => tool.name === "tool_search")) {
+  recoveryMessages = hasSeparateRecoveryContext
+    ? budgeted(recoveryMessages, "responses-recovery-checkpoint")
+    : messages
+  if (nativeToolSearchEnabledForRequest) {
+    enabledTools = enabledTools.filter(tool => tool.name !== "tool_search" && (!nativeWebSearchEnabled || tool.name !== "web_search"))
+  } else {
+    enabledTools = selectPromptTools(enabledTools, text(prompt), record(toolsConfig.promptSelection))
+  }
+  if (toolUseEnabled && localToolSearchEnabled && modelToolAllowed(modelConfig, "tool_search") && !enabledTools.some(tool => tool.name === "tool_search")) {
     const discoveryTool = toolRegistry.get("tool_search")
     if (discoveryTool) enabledTools = [discoveryTool, ...enabledTools].slice(0, Math.max(1, number(record(toolsConfig.promptSelection).maxTools, 12)))
   }
   // message_send 每轮固定带着：任何工具都可能返回一个 url 或内联资源令牌，
   // 模型必须随时能把它发出去。工具选择器按提示词相关性打分，很容易在搜索
   // 类请求里把发送工具挤掉，导致模型拿到了资源却无工具可用。
-  const pinnedToolNames = new Set(["message_send"])
+  const pinnedToolNames = new Set([
+    "message_send",
+    ...(preferLocalImageMedia ? ["image_media"] : []),
+    ...(forceAggregatedWebSearch ? ["web_search"] : []),
+  ])
+  const allowedToolCandidateMap = new Map(allowedToolCandidates.map(tool => [tool.name, tool]))
   const currentTools = (): typeof enabledTools => {
-    const loaded = dynamicTools.size ? toolRegistry.getToolsByNames([...dynamicTools], registryContext(toolContext)) : []
+    const loaded = dynamicTools.size
+      ? [...dynamicTools].flatMap(name => allowedToolCandidateMap.get(name) || [])
+      : []
     const pinned = allowedToolCandidates.filter(tool => pinnedToolNames.has(tool.name))
     const byName = new Map([...enabledTools, ...loaded, ...pinned].map(tool => [tool.name, tool]))
-    return [...byName.values()]
+    return filterModelLocalTools([...byName.values()])
   }
   const mediaCorrectionTools = (): typeof enabledTools => currentTools()
   const initialTools = currentTools()
+  const initialToolChoice = preferLocalImageMedia && initialTools.some(tool => tool.name === "image_media")
+    ? { type: "function" as const, name: "image_media" }
+    : forceAggregatedWebSearch && initialTools.some(tool => tool.name === "web_search")
+      ? { type: "function" as const, name: "web_search" }
+    : undefined
   const routeMetadataFor = (phase: string, round: number): UnknownRecord => modelRouteMetadata({
     taskName: step.task,
     strategy: options.selectionStrategy || taskConfig.selectionStrategy,
@@ -463,8 +685,16 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
   const modelCallMetadata = (input: readonly UnknownRecord[], phase: string, round: number): UnknownRecord => {
     const route = routeMetadataFor(phase, round)
     return {
-      metadata: { route, context: contextMetadata(input, phase, contextHints, [], false, false) },
-      snapshotMetadata: { route, context: contextMetadata(input, phase, contextHints, personaBuild.sections, true) },
+      metadata: {
+        route,
+        context: contextMetadata(input, phase, contextHints, [], false, false),
+        responsesState: { mode: configuredResponsesStateMode, linked: Boolean(text(record(channel.responsesRuntime).previousResponseId)) },
+      },
+      snapshotMetadata: {
+        route,
+        context: contextMetadata(input, phase, contextHints, personaBuild.sections, true),
+        responsesState: { mode: configuredResponsesStateMode, linked: Boolean(text(record(channel.responsesRuntime).previousResponseId)) },
+      },
     }
   }
   conversationLog.modelRequest(root, {
@@ -479,7 +709,9 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
   let response = await adapterRegistry.sendMessage({
     channel: modelChannel(channel),
     messages: modelMessages(messages),
+    ...(configuredResponsesStateMode === "auto" ? { replayMessages: modelMessages(recoveryMessages) } : {}),
     tools: toolDefinitions(initialTools),
+    toolChoice: initialToolChoice,
     event: options.e,
     maxTokens,
     signal: agentContext.signal instanceof AbortSignal ? agentContext.signal : undefined,
@@ -495,6 +727,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
   const toolChain: UnknownRecord[] = []
   const usage = emptyUsage()
   const modelCalls: UnknownRecord[] = []
+  const hostedSearchSources = new Map<string, ModelSearchSource>()
   let toolLimitReached = false
   let toolFinalizationAttempted = false
   let toolFinalizationError = ""
@@ -509,13 +742,144 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
   let searchDeliveryStatus = "not-needed"
   let searchDeliveryExtraRoundsUsed = 0
   let pendingMessageAppendParts: UnknownRecord[] = []
-  const recordModelCall = (current: typeof response): void => {
-    agentTurn.observeModel(current.stopReason)
+  const recordModelCall = (current: typeof response, options: { observeTurn?: boolean; updateState?: boolean; logTrace?: UnknownRecord; modelCallId?: string; parentToolId?: string } = {}): void => {
+    if (options.observeTurn !== false) agentTurn.observeModel(current.stopReason)
     addUsage(usage, current.usage)
-    modelCalls.push({ index: modelCalls.length + 1, usage: current.usage || emptyUsage(), toolCalls: current.toolCalls?.length || 0, stopReason: current.stopReason })
+    const modelCallIndex = modelCalls.length + 1
+    modelCalls.push({
+      index: modelCallIndex,
+      usage: current.usage || emptyUsage(),
+      toolCalls: current.toolCalls?.length || 0,
+      hostedToolCalls: current.hostedToolCalls?.length || 0,
+      stopReason: current.stopReason,
+      upstreamStateReset: current.upstreamStateReset === true,
+      ...(current.responsesStateRecovery ? { responsesStateRecovery: current.responsesStateRecovery } : {}),
+    })
+    if (options.updateState !== false && responsesUsesUpstreamState(configuredResponsesStateMode)) {
+      channel.responsesRuntime = {
+        ...record(channel.responsesRuntime),
+        previousResponseId: text(current.upstreamResponseId).trim(),
+      }
+    }
+    for (const source of current.hostedSearchSources || []) {
+      if (source.url && !hostedSearchSources.has(source.url)) hostedSearchSources.set(source.url, source)
+    }
+    const hostedCalls = (current.hostedToolCalls || []).filter(call => /_call$/.test(call.type))
+    // 托管工具与本地 Function Call 出现在同一个 Responses 输出时，本地工具
+    // 执行结果仍必须回到模型生成最终说明，不能被 message_send 的静默语义截断。
+    if (hostedCalls.length && current.toolCalls?.length && !normalizeResponseText(current.text)) {
+      agentTurn.requestFinalReply(true)
+    }
+    for (const [callIndex, call] of hostedCalls.entries()) {
+      const { trace: hostedTrace, logResult } = hostedToolTrace(call, modelCallIndex)
+      const hostedParentToolId = text(options.parentToolId || record(toolContext.observability).toolCallId)
+      hostedTrace.parentToolId = hostedParentToolId
+      toolChain.push(hostedTrace)
+      toolsUsed.push(text(hostedTrace.name))
+      const now = Date.now()
+      const logTrace = options.logTrace || record(toolContext.observability).trace
+      modelLogStore.recordToolCall(logTrace, {
+        modelCallId: text(options.modelCallId || record(logTrace).currentModelCallId),
+        parentToolId: hostedParentToolId,
+        round: modelCallIndex,
+        callIndex: callIndex + 1,
+        toolCallId: call.id,
+        toolName: hostedTrace.name,
+        source: hostedTrace.source,
+        category: hostedTrace.category,
+        status: hostedTrace.status,
+        startedAt: now,
+        endedAt: now,
+        durationMs: 0,
+        delivery: hostedTrace.delivery,
+        requiresFinalReply: true,
+        arguments: hostedTrace.arguments,
+        result: logResult,
+        resultChars: hostedTrace.resultChars,
+        error: hostedTrace.error,
+        metadata: hostedTrace.metadata,
+      })
+    }
   }
   recordModelCall(response)
+  if (aggregatedHostedWebSearch) {
+    toolContext.searchCapabilities = {
+      webSearch: {
+        hosted: async (query: string, _args: UnknownRecord, searchContext: UnknownRecord = {}) => {
+          const workerMessages: UnknownRecord[] = [
+            { role: "system", content: "Use the available hosted web search once to collect current evidence for the query. Return a concise factual digest grounded in the retrieved sources." },
+            { role: "user", content: query },
+          ]
+          const runTrace = record(trace)
+          const parentModelCallId = text(runTrace.currentModelCallId)
+          const workerChannel = modelChannel({
+            ...channel,
+            modelConfig: {
+              ...modelConfig,
+              responses: { ...responsesConfig, stateMode: "local", store: false },
+            },
+            responsesRuntime: {
+              webSearchAllowed: true,
+              fileSearchAllowed: false,
+              toolSearchAllowed: false,
+              stateMode: "local",
+              previousResponseId: "",
+            },
+          })
+          let hostedResponse
+          try {
+            hostedResponse = await adapterRegistry.sendMessage({
+              channel: workerChannel,
+              messages: modelMessages(workerMessages),
+              tools: [],
+              toolChoice: "required",
+              event: options.e,
+              maxTokens,
+              signal: agentContext.signal instanceof AbortSignal ? agentContext.signal : undefined,
+              source,
+              purpose: "search-aggregate",
+              taskName: text(step.task),
+              trace,
+              parentToolId: text(record(searchContext.observability).toolCallId || record(toolContext.observability).toolCallId),
+              ...modelCallMetadata(workerMessages, "parallel-hosted-search", toolRounds),
+            })
+            recordModelCall(hostedResponse, {
+              observeTurn: false,
+              updateState: false,
+              logTrace: runTrace,
+              modelCallId: text(runTrace.currentModelCallId),
+              parentToolId: text(record(searchContext.observability).toolCallId || record(toolContext.observability).toolCallId),
+            })
+          } finally {
+            // 子请求需要共享同一 run 的单调序号与用量，但不能抢走父工具所属的
+            // 主模型调用 ID；父工具结束后仍应挂回发起它的那次模型请求。
+            if (Object.keys(runTrace).length) runTrace.currentModelCallId = parentModelCallId
+          }
+          const sources = [
+            ...(hostedResponse.hostedSearchSources || []),
+            ...(hostedResponse.hostedToolCalls || []).flatMap(call => call.sources || []),
+          ]
+          const seen = new Set<string>()
+          return {
+            text: text(hostedResponse.text).trim(),
+            sources: sources.filter(item => {
+              if (!item.url || seen.has(item.url)) return false
+              seen.add(item.url)
+              return true
+            }).map(item => ({ title: item.title || item.url, url: item.url, content: "" })),
+          }
+        },
+      },
+    }
+  }
   const workingMessages = [...messages]
+  const workingRecoveryMessages = hasSeparateRecoveryContext ? [...recoveryMessages] : workingMessages
+  const executeToolRoundWithReplay = async (input: Omit<Parameters<typeof executeToolRound>[0], "workingMessages">) => {
+    const before = workingMessages.length
+    const result = await executeToolRound({ ...input, workingMessages })
+    if (workingRecoveryMessages !== workingMessages) workingRecoveryMessages.push(...workingMessages.slice(before))
+    return result
+  }
 
   const canExecuteToolRound = (): boolean => {
     if (response.stopReason !== "tool_calls" || !response.toolCalls?.length) return false
@@ -537,17 +901,16 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
       pendingMessageAppendParts,
     )
     agentTurn.beginToolExecution()
-    const roundResult = await executeToolRound({ toolCalls, assistantText: response.text, workingMessages, toolContext, round: toolRounds })
+    const roundResult = await executeToolRoundWithReplay({ toolCalls, assistantText: response.text, assistantProtocol: response.protocol, toolContext, round: toolRounds })
     const requestedTraces = roundResult.traces
     pendingMessageAppendParts = mergePlannedParts(pendingMessageAppendParts, plannedMessageAppendParts(requestedTraces))
     const automaticParts = plannedMessageParts(requestedTraces)
     let automaticDeliveryTraces: UnknownRecord[] = []
     if (automaticParts.length && currentTools().some(tool => tool.name === "message_send")) {
       const parentToolId = text(requestedTraces.find(hasMessageSendPlan)?.id)
-      const automaticRound = await executeToolRound({
+      const automaticRound = await executeToolRoundWithReplay({
         toolCalls: [{ id: `${parentToolId || "media"}:message_send`, name: "message_send", arguments: { parts: automaticParts } }],
         assistantText: "",
-        workingMessages,
         toolContext: {
           ...toolContext,
           observability: { ...record(toolContext.observability), toolCallId: parentToolId },
@@ -601,7 +964,10 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
     }
     // 投递完成即收束，但仅限本轮只有这一个工具的情况：多工具轮次里其余
     // 工具的结果还没回到模型，提前 break 会让最终回复基于不完整信息生成。
-    if (traces.length === 1 && hasSuccessfulMediaDelivery(traces) && traces[0].requiresFinalReply === false) {
+    if (traces.length === 1
+      && hasSuccessfulMediaDelivery(traces)
+      && traces[0].requiresFinalReply === false
+      && agentTurn.state.finalReplyRequired !== true) {
       singleAsyncToolCompleted = true
       beginFinalization("MEDIA_DELIVERY_COMPLETED")
       response = { ...response, text: "", toolCalls: [] }
@@ -609,7 +975,11 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
     }
     const singleAsyncChain = traces.length === 1
       && toolChain.every(item => item.name === traces[0].name && ["ok", "accepted"].includes(text(item.status)) && item.requiresFinalReply === false)
-    if (singleAsyncChain && ["ok", "accepted"].includes(text(traces[0].status)) && traces[0].requiresFinalReply === false && !hasPendingQuota) {
+    if (singleAsyncChain
+      && ["ok", "accepted"].includes(text(traces[0].status))
+      && traces[0].requiresFinalReply === false
+      && agentTurn.state.finalReplyRequired !== true
+      && !hasPendingQuota) {
       singleAsyncToolCompleted = true
       response = { ...response, text: "", toolCalls: [] }
       break
@@ -621,6 +991,14 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
         ? buildAgentLoopContinuationMessages(workingMessages)
         : workingMessages
     const boundedMessages = budgeted(nextMessages, phase)
+    const recoveryNextMessages = searchDeliveryRequired
+      ? buildSearchDeliveryMessages(workingRecoveryMessages)
+      : agentTurn.state.finalReplyRequired
+        ? buildAgentLoopContinuationMessages(workingRecoveryMessages)
+        : workingRecoveryMessages
+    const boundedRecoveryMessages = configuredResponsesStateMode === "auto"
+      ? budgeted(recoveryNextMessages, `responses-recovery-${phase}`)
+      : boundedMessages
     await executionRuntime.waitForNextRound(agentContext.signal instanceof AbortSignal ? agentContext.signal : undefined)
     const availableAfterTools = currentTools()
     const forcedToolName = searchDeliveryRequired ? "message_send" : ""
@@ -647,6 +1025,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
     response = await adapterRegistry.sendMessage({
       channel: modelChannel(channel),
       messages: modelMessages(boundedMessages),
+      ...(configuredResponsesStateMode === "auto" ? { replayMessages: modelMessages(boundedRecoveryMessages) } : {}),
       tools: toolDefinitions(afterTools),
       toolChoice: forcedToolName ? { type: "function", name: forcedToolName } : undefined,
       event: options.e,
@@ -726,6 +1105,11 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
     const correctionMessages = budgeted(directMediaCodes.length
       ? buildMediaDeliveryCorrectionMessages(correctionBaseMessages, responseText, directMediaCodes)
       : buildMediaSelectionCorrectionMessages(correctionBaseMessages, responseText), "media-correction")
+    const correctionRecoveryMessages = configuredResponsesStateMode === "auto"
+      ? budgeted(directMediaCodes.length
+        ? buildMediaDeliveryCorrectionMessages(workingRecoveryMessages, responseText, directMediaCodes)
+        : buildMediaSelectionCorrectionMessages(workingRecoveryMessages, responseText), "responses-recovery-media-correction")
+      : correctionMessages
     conversationLog.modelRequest(root, {
       channel: channel.id,
       adapter: adapter.id,
@@ -740,6 +1124,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
       const correctionResponse = await adapterRegistry.sendMessage({
         channel: modelChannel(channel),
         messages: modelMessages(correctionMessages),
+        ...(configuredResponsesStateMode === "auto" ? { replayMessages: modelMessages(correctionRecoveryMessages) } : {}),
         tools: toolDefinitions(correctionTools),
         event: options.e,
         maxTokens,
@@ -755,10 +1140,10 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
       if (correctionResponse.stopReason === "tool_calls" && correctionResponse.toolCalls?.length) {
         toolRounds++
         executionRuntime.state.turnCount = toolRounds
-        const correctionRound = await executeToolRound({
+        const correctionRound = await executeToolRoundWithReplay({
           toolCalls: correctionResponse.toolCalls,
           assistantText: correctionResponse.text,
-          workingMessages,
+          assistantProtocol: correctionResponse.protocol,
           toolContext,
           round: toolRounds,
         })
@@ -831,6 +1216,17 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
         ),
       "finalization",
     )
+    const finalizationRecoveryMessages = configuredResponsesStateMode === "auto"
+      ? budgeted(
+        automaticDeliveryContinuation
+          ? buildAutomaticDeliveryContinuationMessages(workingRecoveryMessages)
+          : buildToolLimitFinalizationMessages(
+            workingRecoveryMessages,
+            text(executionRuntime.state.finalizationReason),
+          ),
+        "responses-recovery-finalization",
+      )
+      : finalizationMessages
     conversationLog.modelRequest(root, {
       channel: channel.id,
       adapter: adapter.id,
@@ -845,6 +1241,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
       response = await adapterRegistry.sendMessage({
         channel: modelChannel(channel),
         messages: modelMessages(finalizationMessages),
+        ...(configuredResponsesStateMode === "auto" ? { replayMessages: modelMessages(finalizationRecoveryMessages) } : {}),
         tools: [],
         event: options.e,
         maxTokens,
@@ -893,6 +1290,15 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
     toolRounds,
     toolsUsed: [...new Set(toolsUsed)],
     toolChain,
+    hostedSearchSources: [...hostedSearchSources.values()],
+    responseState: adapter.protocol === "responses" ? {
+      key: responseStateKey,
+      mode: configuredResponsesStateMode,
+      previousResponseId: responsesUsesUpstreamState(configuredResponsesStateMode) ? text(response.upstreamResponseId).trim() : "",
+      clear: !responsesUsesUpstreamState(configuredResponsesStateMode) || !text(response.upstreamResponseId).trim(),
+      provider: text(record(channel.provider).name || modelConfig.apiProvider),
+      model: text(channel.model || modelConfig.modelIdentifier),
+    } : {},
     execution: summary,
     usage,
     modelCalls,

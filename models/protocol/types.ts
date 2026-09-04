@@ -11,6 +11,26 @@ export interface ModelToolCall {
   arguments: Record<string, JsonValue>
 }
 
+/** 由供应商托管执行的工具事件；不会进入本地 Tool Executor。 */
+export interface ModelHostedToolCall {
+  type: string
+  id: string
+  status: string
+  execution?: string
+  query?: string
+  queries?: string[]
+  loadedTools?: string[]
+  resultCount?: number
+  sources?: ModelSearchSource[]
+  /** 上游返回的原始 hosted output item，仅用于有界、脱敏的审计日志。 */
+  raw?: unknown
+}
+
+export interface ModelSearchSource {
+  title: string
+  url: string
+}
+
 /** 模型请求消息；content 允许内部消息链，协议适配器再决定具体格式。 */
 export interface ModelMessage {
   role: ModelRole
@@ -19,6 +39,16 @@ export interface ModelMessage {
   toolCallId?: string
   toolCalls?: ModelToolCall[]
   metadata?: Record<string, JsonValue>
+  /** 协议适配器要求原样回放的状态；普通消息不设置。 */
+  protocol?: { kind: string; outputItems?: unknown[] }
+}
+
+export interface ResponsesStateRecovery {
+  reason: "previous_response_missing" | "tool_call_link_missing"
+  from: "linked"
+  to: "stateless_replay"
+  replayedMessages: number
+  droppedToolItems: number
 }
 
 /** 统一 token 用量结构。 */
@@ -43,6 +73,15 @@ export interface ModelResponse {
   toolCalls: ModelToolCall[]
   stopReason: ModelStopReason
   usage: ModelUsage
+  hostedToolCalls?: ModelHostedToolCall[]
+  hostedSearchSources?: ModelSearchSource[]
+  /** 供应商实际返回的 Response ID；不能用本地兜底 ID 续接上游状态。 */
+  upstreamResponseId?: string
+  upstreamStateReset?: boolean
+  /** Responses 自动模式发生断链恢复时的可观测摘要。 */
+  responsesStateRecovery?: ResponsesStateRecovery
+  /** 当前协议下一轮所需的原始输出项，例如 Responses reasoning/function_call items。 */
+  protocol?: { kind: string; outputItems: unknown[] }
   raw?: unknown
 }
 
@@ -72,6 +111,8 @@ export interface ModelChannel {
 export interface ModelRequest {
   channel: ModelChannel
   messages: ModelMessage[]
+  /** 上游链失效时使用的完整、有界本地上下文；正常链接请求不会发送。 */
+  replayMessages?: ModelMessage[]
   tools?: ToolDefinition[]
   toolChoice?: ModelToolChoice
   maxTokens?: number

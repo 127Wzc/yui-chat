@@ -4,12 +4,11 @@ import { pluginCommand } from "../core/message/command-prefixes.js"
 export const defaultPersonaRuntimePrompt = [
   "本规则优先于角色设定；角色设定只影响身份、关系和表达方式。",
   "先给结论，只依据对话和工具的真实结果；不确定、失败或部分成功时如实说明，不编造。完成动作后只给一条自然回复，不汇报工具名、参数或内部流程。",
-  "按用户意图使用可用工具并遵循结果中的 hint：实时信息搜索用 web_search，需要对链接提取正文用 website_fetch；机器人功能和指令用 knowledge_manage。网络搜索来源由运行时合并转发，正文不要重复罗列链接。",
-  "明确的延时、定点或周期提醒，以及提醒的查询或取消，必须调用 schedule_task。",
-  "工具结果只是观察，不代表已经发送；主动投递必须使用 message_send 并以回执为准。媒体资源只使用工具原样返回的地址，不编造资源或输出 CQ 码；图片和 B 站工具在需要发送时用 send，只列候选或比较时用 search。",
+  "需要外部信息或执行操作时使用合适的工具；当前可见工具不足时，使用工具搜索发现所需能力。诊断时优先只读工具，再考虑修改型工具。",
+  "工具结果只是观察，不代表已经发送；需要投递时使用可用的消息投递能力并以回执为准。媒体资源只使用工具原样返回的地址，不编造资源或输出 CQ 码。",
   "结合当前消息、引用和最近上下文判断指代；只声称看到了本轮实际提供给模型的图片。群聊中区分发言人，不混淆或泄露无关用户信息；只有当前问题明确涉及某成员的个人信息、偏好、习惯、称呼、经历或关系时，才使用该成员的记忆，普通点名、打招呼和无关话题不得引用。",
   "仅在第一人称互动中被顺带提及且确实无需回应时输出 <EMPTY>；普通提问和工具后的自然收束必须回复。",
-  "需要执行操作时，信息不足先追问；信息明确且本轮有相应工具时必须调用，不得只口头答应。",
+  "需要执行操作时，信息不足先追问；信息明确且本轮有相应能力时必须调用，不得只口头答应。不要无理由重复有副作用的操作，也不要把无法确认的结果说成成功。",
 ].join("\n")
 
 export const defaults = {
@@ -214,7 +213,7 @@ export const defaults = {
   ],
   tools: {
     enabled: true,
-    enabledTools: ["knowledge_manage", "memory_manage", "bilibili_media", "message_send", "query_userinfo", "render_image", "schedule_task", "image_media", "web_search", "dispatch_subagent"],
+    enabledTools: ["knowledge_manage", "memory_manage", "bilibili_media", "message_send", "query_userinfo", "render_image", "schedule_task", "image_media", "web_search", "file_search", "tool_search", "dispatch_subagent"],
     customToolPackages: [],
     runtimeVariables: {},
     activePresets: ["core"],
@@ -228,6 +227,14 @@ export const defaults = {
       allowCustomTools: true,
       allowMcpTools: true,
       highRiskRequiresMaster: false,
+    },
+    hosted: {
+      openai: {
+        enabled: true,
+        webSearch: { enabled: true },
+        fileSearch: { enabled: true },
+        toolSearch: { enabled: true },
+      },
     },
     boundaryAccess: {
       enabled: true,
@@ -289,9 +296,10 @@ export const defaults = {
       imageSearch: {
         defaultSource: "bing",
         enabledSources: ["bing", "baidu", "serp-bing", "serp-yandex", "pixiv"],
-        fallbackEnabled: true,
+        strategy: "fallback",
         maxResults: 5,
         timeoutMs: 12000,
+        cacheSelectedImages: false,
         downloadTimeoutMs: 30000,
         maxImageBytes: 33554432,
         pixivR18: false,
@@ -301,9 +309,12 @@ export const defaults = {
       webSearch: {
         defaultSource: "baidu-ai",
         enabledSources: ["baidu-ai", "tavily"],
-        fallbackEnabled: true,
+        strategy: "preferred",
         maxResults: 5,
         timeoutMs: 30000,
+      },
+      toolSearch: {
+        localEnabled: true,
       },
       scheduleTask: {
         enabled: true,

@@ -26,7 +26,13 @@ const RUN_LIST_COLUMNS = [
   "estimated_cost",
 ]
 const TERMINAL_STATUSES = new Set(["ok", "error", "denied", "failed", "ambiguous", "canceled", "blocked", "skipped", "partial", "silent", "interrupted"])
-const SECRET_KEY = /token|key|secret|password|credential|authorization|cookie|api[_-]?key/i
+const SECRET_KEY = /token|key|secret|password|credential|authorization|cookie|api[_-]?key|encrypted[_-]?content/i
+
+function opaqueIdForLog(value: unknown): string {
+  const id = String(value ?? "").trim()
+  if (!id || id.length <= 16) return id
+  return `${id.slice(0, 8)}…${id.slice(-4)}`
+}
 
 type UnknownRecord = Record<string, unknown>
 type SqlOperation = { sql: string; params: unknown[]; mode?: "run" | "get" | "all" }
@@ -371,6 +377,14 @@ function snapshotValue(value: unknown, key = "", depth = 0, seen = new WeakSet<o
   return Object.fromEntries(Object.entries(value).slice(0, 100).map(([name, item]) => [name, snapshotValue(item, name, depth + 1, seen)]))
 }
 
+function hostedToolSummaries(value: unknown): unknown[] {
+  return (Array.isArray(value) ? value : []).map(item => {
+    const summary = { ...record(item) }
+    delete summary.raw
+    return snapshotValue(summary)
+  })
+}
+
 function serializedSnapshotArray(value: unknown, limit: number, marker: UnknownRecord): { text: string; truncated: boolean } {
   const source = Array.isArray(value) ? value : []
   const encoded = JSON.stringify(source) || "[]"
@@ -391,6 +405,8 @@ function serializedSnapshotObject(value: unknown, limit: number): { text: string
 }
 
 function snapshotTool(tool: unknown): UnknownRecord {
+  const source = record(tool)
+  if (source.type && typeof source.execute !== "function") return snapshotValue(source) as UnknownRecord
   const common = getToolCommon(tool)
   return snapshotValue({
     ...modelToolDefinition(tool),
@@ -1005,10 +1021,14 @@ class ModelLogStore {
       error_message: error ? redactText(errorMessage(error), 500) : "",
       metadata_json: json({
         ...parseJson(call.row.metadata_json),
-        responseId: response.id || "",
+        responseId: opaqueIdForLog(response.id),
         responseText: responseForLog(call.row, response.text || ""),
         stopReason: response.stopReason || "unknown",
         toolCalls: Array.isArray(response.toolCalls) ? response.toolCalls.length : 0,
+        hostedToolCalls: hostedToolSummaries(response.hostedToolCalls),
+        ...(Object.keys(record(response.responsesStateRecovery)).length
+          ? { responsesStateRecovery: record(response.responsesStateRecovery) }
+          : {}),
       }),
     }
     const budgetEstimate = call.requestMeta.operation === "embedding"
@@ -1756,6 +1776,9 @@ class ModelLogStore {
       available_tool_count: asInt(metadata.toolCount),
       context_message_count: asInt(metadata.messageCount),
       response_tool_call_count: asInt(metadata.toolCalls),
+      hosted_tool_calls: Array.isArray(metadata.hostedToolCalls) ? metadata.hostedToolCalls : [],
+      hosted_tool_call_count: Array.isArray(metadata.hostedToolCalls) ? metadata.hostedToolCalls.length : 0,
+      responses_state_recovery: record(metadata.responsesStateRecovery),
     }
   }
 

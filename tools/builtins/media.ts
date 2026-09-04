@@ -532,6 +532,7 @@ export async function prepareBilibiliVideoResources(args: ToolArgs, context: Med
  */
 export class MessageSendTool {
   name = "message_send"
+  deferLoading = false
   source = "builtin"
   risk = "medium"
   delivery = "media"

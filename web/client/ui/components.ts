@@ -198,6 +198,116 @@ export const Field = defineComponent({
   `,
 })
 
+// 可搜索多选下拉：用于工具、模型等数量较多且需要精确查找的配置项。
+export const SearchMultiSelect = defineComponent({
+  name: "SearchMultiSelect",
+  props: {
+    label: String,
+    modelValue: { type: Array, default: () => [] },
+    options: { type: Array, default: () => [] },
+    placeholder: { type: String, default: "搜索选项" },
+    tip: String,
+    emptyText: { type: String, default: "没有匹配项" },
+    disabled: Boolean,
+  },
+  emits: ["update:modelValue"],
+  data() {
+    return { query: "" }
+  },
+  computed: {
+    normOptions() {
+      const seen = new Set<string>()
+      return this.options.flatMap((raw: unknown) => {
+        const option = raw && typeof raw === "object" && !Array.isArray(raw)
+          ? raw as Record<string, unknown>
+          : { value: raw, label: raw }
+        const value = String(option.value ?? "").trim()
+        if (!value || seen.has(value)) return []
+        seen.add(value)
+        return [{
+          value,
+          label: String(option.label || value),
+          description: String(option.description || ""),
+          meta: String(option.meta || ""),
+          disabled: option.disabled === true,
+        }]
+      })
+    },
+    selectedValues() {
+      const available = new Set(this.normOptions.map(option => option.value))
+      return new Set((this.modelValue as unknown[]).map(value => String(value || "").trim()).filter(value => value && available.has(value)))
+    },
+    selectedOptions() {
+      return this.normOptions.filter(option => this.selectedValues.has(option.value))
+    },
+    filteredOptions() {
+      const keyword = this.query.trim().toLowerCase()
+      if (!keyword) return this.normOptions
+      return this.normOptions.filter(option => [option.label, option.value, option.description, option.meta].join(" ").toLowerCase().includes(keyword))
+    },
+    summaryText() {
+      const count = this.selectedValues.size
+      if (!count) return "请选择工具"
+      if (count === 1) return this.selectedOptions[0]?.label || [...this.selectedValues][0]
+      return `已选择 ${count} 项`
+    },
+  },
+  methods: {
+    isSelected(value: string) {
+      return this.selectedValues.has(value)
+    },
+    toggle(value: string) {
+      if (this.disabled) return
+      const selected = new Set(this.selectedValues)
+      if (selected.has(value)) selected.delete(value)
+      else selected.add(value)
+      this.$emit("update:modelValue", [...selected])
+    },
+    clearSelection() {
+      if (!this.disabled) this.$emit("update:modelValue", [])
+    },
+  },
+  template: `
+    <div class="field search-multi-field">
+      <span class="field-label" v-if="label">{{ label }}
+        <HelpTip v-if="tip" :tip="tip" />
+      </span>
+      <details class="search-multi-select" :class="{ disabled }">
+        <summary :aria-label="label || '多选列表'" :aria-disabled="disabled">
+          <span :class="{ muted: !selectedValues.size }">{{ summaryText }}</span>
+          <span class="search-multi-summary-meta"><b>{{ selectedValues.size }}</b><Icon name="chevron-down" :size="14" /></span>
+        </summary>
+        <div class="search-multi-menu">
+          <div class="search-multi-toolbar">
+            <div class="filter-search">
+              <Icon name="search" :size="14" />
+              <input v-model="query" :placeholder="placeholder" autocomplete="off" @keydown.stop />
+            </div>
+            <button v-if="selectedValues.size" class="btn small outline" type="button" @click="clearSelection">清空</button>
+          </div>
+          <div class="search-multi-options" role="group" :aria-label="label || '多选列表'">
+            <label v-for="option in filteredOptions" :key="option.value" class="search-multi-option" :class="{ selected: isSelected(option.value), disabled: option.disabled }">
+              <input type="checkbox" :checked="isSelected(option.value)" :disabled="disabled || option.disabled" @change="toggle(option.value)" />
+              <span class="search-multi-check"><Icon name="check" :size="12" /></span>
+              <span class="search-multi-copy">
+                <strong>{{ option.label }}</strong>
+                <small v-if="option.description">{{ option.description }}</small>
+                <small v-if="option.meta" class="muted">{{ option.meta }}</small>
+              </span>
+            </label>
+            <p v-if="!filteredOptions.length" class="muted small search-multi-empty">{{ emptyText }}</p>
+          </div>
+        </div>
+      </details>
+      <div v-if="selectedOptions.length" class="search-multi-chips">
+        <button v-for="option in selectedOptions" :key="option.value" type="button" :disabled="disabled" :title="'移除 ' + option.label" @click="toggle(option.value)">
+          <span>{{ option.label }}</span><Icon name="x" :size="12" />
+        </button>
+      </div>
+    </div>
+  `,
+})
+
 // 单个状态药丸（可选图标）。
 export const Pill = defineComponent({
   name: "Pill",
@@ -541,6 +651,7 @@ export const components = {
   HelpTip,
   Panel,
   Field,
+  SearchMultiSelect,
   Pill,
   PillList,
   MetricGrid,

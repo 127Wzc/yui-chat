@@ -2,7 +2,7 @@
 
 Yui Chat 是面向 TRSS-Yunzai 的独立 AI 插件，源码目录为 `plugins/yui-chat/`。默认聊天命令是 `#yuichat`，第一人称触发词是“埋埋”，管理台挂载在 `/yui-chat/`。
 
-模型配置采用 **供应商 → 模型 → 任务** 三层结构：`apiProviders → models → modelTasks`。插件支持 OpenAI-compatible、Gemini、Qwen、Claude、ChatGLM 和 mock，包含工具调用、图片上下文、人格互动、记忆与知识库、文本/图片/语音输出、定时提醒和管理台。
+模型配置采用 **供应商 → 模型 → 任务** 三层结构：`apiProviders → models → modelTasks`。插件支持 OpenAI Chat Completions、OpenAI Responses、其他 OpenAI-compatible、Gemini、Qwen、Claude、ChatGLM 和 mock。Responses 模式可使用原生 Function Calling、`web_search`、`file_search` 与 `tool_search`，同时复用现有工具权限、执行器和循环保护。每个 Responses 模型可选择自动上游链（默认）、严格 `previous_response_id` 链或本地历史回放；自动模式仅在上游断链时执行一次有界本地恢复，且不会重新执行工具。本地始终保留可见历史和工具审计。模型名单只使用 `web_search` 等稳定能力 ID，`toolPolicy.routes` 再决定使用 OpenAI 托管、本地、自动或禁用，以及 Web Search 是只用首选、失败换源还是多渠道并行；实现级开关和凭据位于工具管理页。
 
 ## 安装教程 💡
 
@@ -38,6 +38,8 @@ pnpm run build:runtime
 ## 指令
 
 除第一人称自然呼叫外，插件指令统一使用 `#yui` 前缀。前缀的唯一正则定义位于 `core/message/command-prefixes.ts`；修改该定义即可统一调整命令注册和服务端解析。
+
+普通用户指令由 `apps/chat.ts` 注册；所有主人管理指令统一从 `apps/master.ts` 注册，新增 Master 指令不得放回普通聊天入口。
 
 | 命令 | 作用 |
 | --- | --- |
@@ -100,6 +102,7 @@ pnpm run check
 
 - [架构与数据流](docs/architecture.md)：模块职责、运行链路、存储、管理台和安全边界。
 - [AI Tool 创建与集成](docs/tool-authoring-guide.md)：工具契约、执行策略、自动投递和 Custom 包。
+- [Responses API 协议](docs/responses-api.md)：适配目录、配置、原生工具和无状态回放边界。
 - [Custom 框架资源](docs/custom-framework-resources.md)：受控复用宿主或其他插件资源。
 - [SQLite 基线 ER](docs/sqlite-baseline-er.md)：状态库表结构和关系。
 - [维护规则](AGENTS.md)：AI 和维护者必须遵守的代码、配置、安全与验证约束。

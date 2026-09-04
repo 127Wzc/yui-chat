@@ -11,6 +11,9 @@ export abstract class ModelAdapter {
   /** 适配器注册名，例如 openai-compatible、claude 或 gemini。 */
   abstract readonly id: string
 
+  /** 日志和诊断使用的上游对话协议名。 */
+  readonly protocol: string = "custom"
+
   /** 是否支持模型工具调用。 */
   readonly supportsTools: boolean = false
 
@@ -22,6 +25,9 @@ export abstract class ModelAdapter {
 
   /** 是否支持 embedding。 */
   readonly supportsEmbeddings: boolean = false
+
+  /** 是否支持 Responses 原生 tool_search/defer_loading。 */
+  readonly supportsNativeToolSearch: boolean = false
 
   /** 将统一请求协议转换为供应商请求并返回统一模型响应。 */
   abstract sendMessage(request: ModelRequest): Promise<ModelResponse>

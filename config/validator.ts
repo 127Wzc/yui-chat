@@ -95,7 +95,7 @@ interface ConfigRecord extends ConfigSection {
   logging?: ConfigSection
 }
 
-const adapterIds = new Set(["mock", "openai-compatible", "qwen", "gemini", "claude", "chatglm"])
+const adapterIds = new Set(["mock", "openai-compatible", "openai-responses", "qwen", "gemini", "claude", "chatglm"])
 const authTypes = new Set(["bearer", "none", "query", "x-api-key", "api-key", "custom-header"])
 const selectionStrategies = new Set(["sequential", "random", "fallback"])
 const boundaryRoles = new Set(["user", "groupAdmin", "groupOwner", "master"])
@@ -106,6 +106,9 @@ const segmentationIntervalMethods = new Set(["random", "log"])
 const segmentationModes = new Set(["regex", "natural"])
 const reasoningTargets = new Set(["auto", "openai", "deepseek", "claude"])
 const reasoningEfforts = new Set(["low", "medium", "high"])
+const modelToolPolicyModes = new Set(["inherit", "allowlist", "denylist"])
+const modelToolSources = new Set(["auto", "hosted", "local", "disabled"])
+const modelWebSearchStrategies = new Set(["preferred", "fallback", "parallel"])
 
 function isObject(value: unknown): value is ConfigSection {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value)
@@ -340,6 +343,79 @@ function validateProviders(config: ConfigRecord, issues: ValidationIssue[]): voi
       add(issues, "warn", `models.${index}.modelIdentifier`, `模型 ${modelName} 未声明 modelIdentifier`)
     }
     if (model.params !== undefined && !isObject(model.params)) add(issues, "error", `models.${index}.params`, "params 必须是对象")
+    if (model.toolPolicy !== undefined) {
+      if (!isObject(model.toolPolicy)) add(issues, "error", `models.${index}.toolPolicy`, "toolPolicy 必须是对象")
+      else {
+        const toolPolicy = section(model.toolPolicy)
+        const mode = String(toolPolicy.mode || "inherit")
+        if (!modelToolPolicyModes.has(mode)) add(issues, "error", `models.${index}.toolPolicy.mode`, `未知工具范围策略：${mode}`)
+        for (const key of ["allow", "deny"]) {
+          const value = toolPolicy[key]
+          if (value !== undefined && (!Array.isArray(value) || value.some(item => typeof item !== "string" || !item.trim()))) {
+            add(issues, "error", `models.${index}.toolPolicy.${key}`, `${key} 必须是非空字符串数组`)
+          } else if (Array.isArray(value) && value.some(item => /^(?:openai|local):/.test(String(item)))) {
+            add(issues, "error", `models.${index}.toolPolicy.${key}`, `${key} 只接受能力或工具 ID，不接受 openai: / local: 实现 ID`)
+          }
+        }
+        if (toolPolicy.sources !== undefined) {
+          add(issues, "error", `models.${index}.toolPolicy.sources`, "sources 已移除，请使用 toolPolicy.routes")
+        }
+        if (toolPolicy.strategies !== undefined) {
+          add(issues, "error", `models.${index}.toolPolicy.strategies`, "strategies 已移除，请使用 toolPolicy.routes.web_search.strategy")
+        }
+        if (toolPolicy.routes !== undefined && !isObject(toolPolicy.routes)) {
+          add(issues, "error", `models.${index}.toolPolicy.routes`, "routes 必须是对象")
+        } else {
+          const routes = section(toolPolicy.routes)
+          for (const key of Object.keys(routes)) {
+            if (!["web_search", "tool_search"].includes(key)) add(issues, "error", `models.${index}.toolPolicy.routes.${key}`, `未知能力路由：${key}`)
+          }
+          for (const key of ["web_search", "tool_search"]) {
+            const route = routes[key]
+            if (route !== undefined && !isObject(route)) {
+              add(issues, "error", `models.${index}.toolPolicy.routes.${key}`, `${key} 路由必须是对象`)
+              continue
+            }
+            const value = section(route)
+            if (value.source !== undefined && !modelToolSources.has(String(value.source))) {
+              add(issues, "error", `models.${index}.toolPolicy.routes.${key}.source`, `未知工具来源：${String(value.source)}`)
+            }
+            if (key === "web_search" && value.strategy !== undefined && !modelWebSearchStrategies.has(String(value.strategy))) {
+              add(issues, "error", `models.${index}.toolPolicy.routes.web_search.strategy`, `未知 Web Search 执行策略：${String(value.strategy)}`)
+            }
+            if (key === "tool_search" && value.strategy !== undefined) {
+              add(issues, "error", `models.${index}.toolPolicy.routes.tool_search.strategy`, "tool_search 暂不支持 strategy")
+            }
+          }
+        }
+      }
+    }
+    if (model.responses !== undefined) {
+      if (!isObject(model.responses)) add(issues, "error", `models.${index}.responses`, "responses 必须是对象")
+      else {
+        const responses = section(model.responses)
+        if (responses.stateMode !== undefined && !["auto", "local", "previous_response_id"].includes(String(responses.stateMode))) {
+          add(issues, "error", `models.${index}.responses.stateMode`, `未知 Responses 上下文模式：${String(responses.stateMode)}`)
+        }
+        if (responses.store !== undefined && typeof responses.store !== "boolean") add(issues, "error", `models.${index}.responses.store`, "store 必须是布尔值")
+        if (responses.parallelToolCalls !== undefined && typeof responses.parallelToolCalls !== "boolean") add(issues, "error", `models.${index}.responses.parallelToolCalls`, "parallelToolCalls 必须是布尔值")
+        if (responses.toolSearch !== undefined) add(issues, "error", `models.${index}.responses.toolSearch`, "toolSearch 已移至 toolPolicy.routes.tool_search")
+        for (const key of ["webSearch", "fileSearch"]) {
+          const value = responses[key]
+          if (value !== undefined && !isObject(value)) add(issues, "error", `models.${index}.responses.${key}`, `${key} 必须是对象`)
+          else if (key === "webSearch" && isObject(value) && value.enabled !== undefined) add(issues, "error", `models.${index}.responses.webSearch.enabled`, "webSearch.enabled 已移至 toolPolicy.routes.web_search.source")
+          else if (key === "fileSearch" && isObject(value) && value.enabled !== undefined && typeof value.enabled !== "boolean") add(issues, "error", `models.${index}.responses.fileSearch.enabled`, "enabled 必须是布尔值")
+        }
+        const fileSearch = section(responses.fileSearch)
+        if (fileSearch.vectorStoreIds !== undefined && (!Array.isArray(fileSearch.vectorStoreIds) || fileSearch.vectorStoreIds.some(value => typeof value !== "string" || !value.trim()))) {
+          add(issues, "error", `models.${index}.responses.fileSearch.vectorStoreIds`, "vectorStoreIds 必须是非空字符串数组")
+        }
+        if (fileSearch.enabled === true && (!Array.isArray(fileSearch.vectorStoreIds) || !fileSearch.vectorStoreIds.length)) {
+          add(issues, "error", `models.${index}.responses.fileSearch.vectorStoreIds`, "启用 file_search 时至少需要一个 Vector Store ID")
+        }
+        if (fileSearch.maxNumResults !== undefined) positiveNumber(issues, `models.${index}.responses.fileSearch.maxNumResults`, fileSearch.maxNumResults, { min: 1, max: 50 })
+      }
+    }
     if (model.capabilities !== undefined && !isObject(model.capabilities)) add(issues, "error", `models.${index}.capabilities`, "capabilities 必须是对象")
     if (model.contextWindowTokens !== undefined) positiveNumber(issues, `models.${index}.contextWindowTokens`, model.contextWindowTokens, { min: 1024, max: 10000000 })
     const embedding = model.embedding
@@ -470,9 +546,11 @@ function validateTools(config: ConfigRecord, issues: ValidationIssue[]): void {
       }
       positiveNumber(issues, "tools.builtin.imageSearch.maxResults", imageSearch.maxResults, { min: 1, max: 10 })
       positiveNumber(issues, "tools.builtin.imageSearch.timeoutMs", imageSearch.timeoutMs, { min: 1000, max: 60000 })
+      if (imageSearch.cacheSelectedImages !== undefined && typeof imageSearch.cacheSelectedImages !== "boolean") add(issues, "error", "tools.builtin.imageSearch.cacheSelectedImages", "cacheSelectedImages 必须是布尔值")
       positiveNumber(issues, "tools.builtin.imageSearch.downloadTimeoutMs", imageSearch.downloadTimeoutMs, { min: 1000, max: 120000 })
       positiveNumber(issues, "tools.builtin.imageSearch.maxImageBytes", imageSearch.maxImageBytes, { min: 1048576, max: 134217728 })
-      if (imageSearch.fallbackEnabled !== undefined && typeof imageSearch.fallbackEnabled !== "boolean") add(issues, "error", "tools.builtin.imageSearch.fallbackEnabled", "fallbackEnabled 必须是布尔值")
+      if (imageSearch.fallbackEnabled !== undefined) add(issues, "error", "tools.builtin.imageSearch.fallbackEnabled", "fallbackEnabled 已移除，请使用 strategy")
+      if (imageSearch.strategy !== undefined && !modelWebSearchStrategies.has(String(imageSearch.strategy))) add(issues, "error", "tools.builtin.imageSearch.strategy", "图片搜索 strategy 必须是 preferred / fallback / parallel")
       if (imageSearch.pixivR18 !== undefined && typeof imageSearch.pixivR18 !== "boolean") add(issues, "error", "tools.builtin.imageSearch.pixivR18", "pixivR18 必须是布尔值")
       if (imageSearch.pixivEndpoint !== undefined && !/^https:\/\//i.test(String(imageSearch.pixivEndpoint))) add(issues, "error", "tools.builtin.imageSearch.pixivEndpoint", "Pixiv API 地址必须使用 HTTPS")
     }
@@ -490,8 +568,14 @@ function validateTools(config: ConfigRecord, issues: ValidationIssue[]): void {
       }
       positiveNumber(issues, "tools.builtin.webSearch.maxResults", webSearch.maxResults, { min: 1, max: 20 })
       positiveNumber(issues, "tools.builtin.webSearch.timeoutMs", webSearch.timeoutMs, { min: 1000, max: 120000 })
-      if (webSearch.fallbackEnabled !== undefined && typeof webSearch.fallbackEnabled !== "boolean") add(issues, "error", "tools.builtin.webSearch.fallbackEnabled", "fallbackEnabled 必须是布尔值")
+      if (webSearch.fallbackEnabled !== undefined) add(issues, "error", "tools.builtin.webSearch.fallbackEnabled", "fallbackEnabled 已移除，请使用 strategy")
+      if (webSearch.strategy !== undefined && !modelWebSearchStrategies.has(String(webSearch.strategy))) add(issues, "error", "tools.builtin.webSearch.strategy", "网络搜索 strategy 必须是 preferred / fallback / parallel")
     }
+  }
+  const toolSearch = config.tools?.builtin?.toolSearch
+  if (toolSearch !== undefined) {
+    if (!isObject(toolSearch)) add(issues, "error", "tools.builtin.toolSearch", "toolSearch 必须是对象")
+    else if (toolSearch.localEnabled !== undefined && typeof toolSearch.localEnabled !== "boolean") add(issues, "error", "tools.builtin.toolSearch.localEnabled", "localEnabled 必须是布尔值")
   }
   const scheduleTask = config.tools?.builtin?.scheduleTask
   if (scheduleTask !== undefined) {
@@ -514,6 +598,16 @@ function validateTools(config: ConfigRecord, issues: ValidationIssue[]): void {
   }
   const policy = config.tools?.policy || {}
   if (policy !== undefined && !isObject(policy)) add(issues, "error", "tools.policy", "tools.policy 必须是对象")
+  const hosted = config.tools?.hosted
+  if (hosted !== undefined && !isObject(hosted)) add(issues, "error", "tools.hosted", "tools.hosted 必须是对象")
+  const hostedOpenAI = section(section(hosted).openai)
+  if (section(hosted).openai !== undefined && !isObject(section(hosted).openai)) add(issues, "error", "tools.hosted.openai", "tools.hosted.openai 必须是对象")
+  if (hostedOpenAI.enabled !== undefined && typeof hostedOpenAI.enabled !== "boolean") add(issues, "error", "tools.hosted.openai.enabled", "enabled 必须是布尔值")
+  for (const key of ["webSearch", "fileSearch", "toolSearch"]) {
+    const value = hostedOpenAI[key]
+    if (value !== undefined && !isObject(value)) add(issues, "error", `tools.hosted.openai.${key}`, `${key} 必须是对象`)
+    else if (isObject(value) && value.enabled !== undefined && typeof value.enabled !== "boolean") add(issues, "error", `tools.hosted.openai.${key}.enabled`, "enabled 必须是布尔值")
+  }
   const boundaryAccess = config.tools?.boundaryAccess || {}
   if (boundaryAccess !== undefined && !isObject(boundaryAccess)) add(issues, "error", "tools.boundaryAccess", "tools.boundaryAccess 必须是对象")
   if (config.tools?.promptSelection !== undefined) {

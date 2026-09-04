@@ -3,6 +3,8 @@ import { userSettingsStore } from "../../user/settings.js"
 import { stripForSpeech, synthesizeSpeech } from "../media/tts-service.js"
 import { hostRuntime } from "../runtime/host-runtime.js"
 import { convertCQCodes } from "../message/cq-code.js"
+import { deliverMessageChain } from "../message-chain/delivery.js"
+import type { ForwardNode, MessageChain } from "../message-chain/types.js"
 import type { UnknownRecord } from "../message/types.js"
 import { armConversationContinuation } from "../persona/conversation-continuation.js"
 import { buildReplyPayload, isEmptyResponse } from "./response-pipeline.js"
@@ -187,6 +189,100 @@ function rememberDeliveredConversation(event: unknown, result: UnknownRecord, so
   armConversationContinuation(event, e.msg || e.raw_message, botText)
 }
 
+const superscriptDigits: Readonly<Record<string, string>> = Object.freeze({
+  "0": "⁰",
+  "1": "¹",
+  "2": "²",
+  "3": "³",
+  "4": "⁴",
+  "5": "⁵",
+  "6": "⁶",
+  "7": "⁷",
+  "8": "⁸",
+  "9": "⁹",
+})
+
+function citationMarker(index: number): string {
+  return String(index).split("").map(digit => superscriptDigits[digit] || digit).join("")
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+/**
+ * 将 Responses 原生搜索插入的 Markdown URL 引用收敛成 QQ 可显示的 Unicode
+ * 小角标。来源 URL 仍由结构化来源转发和日志持有，不在聊天正文重复展开。
+ */
+export function formatHostedSearchCitations(value: unknown, sourcesValue: unknown): string {
+  let output = text(value)
+  const seen = new Set<string>()
+  const sources = (Array.isArray(sourcesValue) ? sourcesValue : []).map(record).filter(source => {
+    const url = text(source.url).trim()
+    if (!/^https?:\/\//i.test(url) || seen.has(url)) return false
+    seen.add(url)
+    return true
+  })
+  for (const [index, source] of sources.entries()) {
+    const url = text(source.url).trim()
+    const marker = citationMarker(index + 1)
+    for (const variant of [...new Set([url, url.replaceAll("&", "&amp;")])]) {
+      const escaped = escapeRegExp(variant)
+      output = output
+        .replace(new RegExp(`\\s*[（(]\\s*\\[[^\\]\\r\\n]+\\]\\(\\s*${escaped}\\s*\\)\\s*[)）]`, "gu"), marker)
+        .replace(new RegExp(`\\s*\\[[^\\]\\r\\n]+\\]\\(\\s*${escaped}\\s*\\)`, "gu"), marker)
+        .replace(new RegExp(`\\s*[（(]\\s*<?${escaped}>?\\s*[)）]`, "gu"), marker)
+        .replace(new RegExp(`\\s*<?${escaped}>?`, "gu"), marker)
+    }
+  }
+  return output
+    .replace(/[ \t]+([，。！？；：,.!?;:])/gu, "$1")
+    .replace(/\n[ \t]+/gu, "\n")
+    .trim()
+}
+
+function hostedSearchSourceNodes(result: UnknownRecord): ForwardNode[] {
+  const seen = new Set<string>()
+  const values = Array.isArray(result.hostedSearchSources) ? result.hostedSearchSources : []
+  return values.map(record).filter(source => {
+    const url = text(source.url).trim()
+    if (!/^https?:\/\//i.test(url) || seen.has(url)) return false
+    seen.add(url)
+    return true
+  }).slice(0, 50).map((source, index) => {
+    const url = text(source.url).trim()
+    const title = text(source.title).trim() || url
+    return {
+      nickname: `OpenAI 远程搜索来源 ${index + 1}`,
+      parts: [{ type: "text", text: [`${index + 1}. ${title}`, `链接：${url}`].join("\n") }],
+    }
+  })
+}
+
+async function deliverHostedSearchSources(event: unknown, result: UnknownRecord, config: unknown): Promise<boolean> {
+  const nodes = hostedSearchSourceNodes(result)
+  if (!nodes.length) return false
+  try {
+    const chain: MessageChain = [{ type: "forward", nodes }]
+    const receipt = await deliverMessageChain(chain, {
+      e: record(event),
+      config: record(config),
+      quote: false,
+    })
+    if (receipt.status === "failed") hostRuntime.logger?.warn?.(`[yui-chat] OpenAI 远程搜索来源转发失败：${text(receipt.error)}`)
+    return receipt.sentCount > 0
+  } catch (error) {
+    hostRuntime.logger?.warn?.("[yui-chat] OpenAI 远程搜索来源转发失败", error)
+    return false
+  }
+}
+
+async function finishOutputDelivery(event: unknown, result: UnknownRecord, config: unknown, source: string, botText: unknown, options: UnknownRecord, delivered: unknown): Promise<unknown> {
+  await deliverHostedSearchSources(event, result, config)
+  rememberDeliveredConversation(event, result, source, botText, options)
+  return delivered
+}
+
 async function sendRecordDelivery(event: unknown, data: unknown, quote: unknown, replyOptions: UnknownRecord): Promise<void> {
   const recordFactory = segmentFactory()?.record
   if (typeof recordFactory === "function") await sendReply(event, recordFactory(data), quote, replyOptions)
@@ -208,16 +304,18 @@ export async function sendChatOutput(event: unknown, result: unknown, config: un
   const source = text(options.source || resultValue.source)
   const processed = await applyOutputFilters(resultValue.text, { event, e: event, config: rootConfig, result: resultValue, source })
   for (const delivery of processed.deliveries) await sendRecordDelivery(event, delivery.data, response.quoteReply, replyOptions)
-  if (!processed.text) {
+  const displayText = formatHostedSearchCitations(processed.text, resultValue.hostedSearchSources)
+  if (!displayText) {
     markReplied(event)
-    if (processed.deliveries.length) rememberDeliveredConversation(event, resultValue, source, resultValue.text, options)
+    const sourcesDelivered = await deliverHostedSearchSources(event, resultValue, rootConfig)
+    if (processed.deliveries.length || sourcesDelivered) rememberDeliveredConversation(event, resultValue, source, displayText, options)
     return true
   }
 
   const persona = record(rootConfig.persona)
   const firstPersonOutput = source === "firstPerson"
   const omitPrefix = firstPersonOutput && record(record(persona).output).omitChannelPrefixInFirstPerson !== false
-  const rawText = omitPrefix ? processed.text : `[${text(resultValue.channel)}] ${processed.text}`
+  const rawText = omitPrefix ? displayText : `[${text(resultValue.channel)}] ${displayText}`
   const payload = await buildReplyPayload(rawText, rootConfig, {
     forceImage: settings.mode === "picture",
     e: event,
@@ -228,15 +326,14 @@ export async function sendChatOutput(event: unknown, result: unknown, config: un
   if (payload.empty) return true
 
   if (settings.mode === "voice" && !processed.deliveries.length) {
-    const audio = await synthesizeSpeech(stripForSpeech(processed.text), rootConfig).catch(error => {
+    const audio = await synthesizeSpeech(stripForSpeech(displayText), rootConfig).catch(error => {
       hostRuntime.logger?.error?.("[yui-chat] TTS 生成失败", error)
       return null
     })
     if (audio) {
       await sendRecordDelivery(event, audio, response.quoteReply, replyOptions)
       if (record(response.tts).alsoSendText !== true) {
-        rememberDeliveredConversation(event, resultValue, source, processed.text, options)
-        return true
+        return finishOutputDelivery(event, resultValue, rootConfig, source, displayText, options, true)
       }
     }
   }
@@ -244,22 +341,18 @@ export async function sendChatOutput(event: unknown, result: unknown, config: un
   if (payload.asImage) {
     const imageFactory = segmentFactory()?.image
     const delivered = await sendReply(event, typeof imageFactory === "function" ? imageFactory(payload.image) : payload.image, response.quoteReply, replyOptions)
-    rememberDeliveredConversation(event, resultValue, source, processed.text, options)
-    return delivered
+    return finishOutputDelivery(event, resultValue, rootConfig, source, displayText, options, delivered)
   }
   if (payload.chunks) {
     for (const chunk of payload.chunks) await sendReply(event, convertCQCodes(chunk, { removeUnsupported: response.removeCQCode !== false }), response.quoteReply, replyOptions)
-    rememberDeliveredConversation(event, resultValue, source, processed.text, options)
-    return true
+    return finishOutputDelivery(event, resultValue, rootConfig, source, displayText, options, true)
   }
 
   const segmentation = record(response.segmentation) as SegmentationOptions
   if (segmentation.enabled === true && settings.mode === "text" && isLlmResult(resultValue, source)) {
     const delivered = await sendConfiguredSplitText(event, payload.text, rootConfig, replyOptions)
-    rememberDeliveredConversation(event, resultValue, source, processed.text, options)
-    return delivered
+    return finishOutputDelivery(event, resultValue, rootConfig, source, displayText, options, delivered)
   }
   const delivered = await sendReply(event, convertCQCodes(payload.text, { removeUnsupported: response.removeCQCode !== false }), response.quoteReply, replyOptions)
-  rememberDeliveredConversation(event, resultValue, source, processed.text, options)
-  return delivered
+  return finishOutputDelivery(event, resultValue, rootConfig, source, displayText, options, delivered)
 }

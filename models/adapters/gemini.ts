@@ -1,7 +1,7 @@
 import crypto from "node:crypto"
 import { fetchWithTimeout } from "../../core/network/fetch-timeout.js"
 import { applyReasoningPayload } from "../configuration/reasoning.js"
-import { getToolCommon } from "../../tools/support/contract.js"
+import { getToolCommon, modelToolDescription } from "../../tools/support/contract.js"
 import { ModelAdapter, contentParts, contentToText, normalizeListedModels, parseDataUrl, parseResponseData, safeJson, tokenUsage } from "./base.js"
 import type { ContentPart, JsonValue } from "../../core/message-chain/types.js"
 import type { ModelChannel, ModelMessage, ModelRequest, ModelResponse } from "../protocol/types.js"
@@ -82,7 +82,7 @@ function toGeminiParts(content: unknown): UnknownRecord[] {
 function toolsToGeminiDeclarations(tools: readonly ToolDefinition[] = []): UnknownRecord[] {
   return tools.map(tool => {
     const common = getToolCommon(tool)
-    return { name: tool.name, description: common.description || "", parameters: common.parameters || { type: "object", properties: {} } }
+    return { name: tool.name, description: modelToolDescription(tool), parameters: common.parameters || { type: "object", properties: {} } }
   }).filter(tool => Boolean(tool.name))
 }
 
@@ -140,6 +140,7 @@ export function parseGeminiToolCalls(data: unknown = {}): ModelResponse["toolCal
  */
 export class GeminiAdapter extends ModelAdapter {
   override readonly id: string = "gemini"
+  override readonly protocol = "gemini-generate-content"
   override readonly supportsTools = true
   override readonly supportsVision = true
   override readonly supportsEmbeddings = true

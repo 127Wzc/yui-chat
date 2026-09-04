@@ -52,6 +52,9 @@ export abstract class ModelAdapter extends ProtocolModelAdapter {
   /** 是否支持 embedding。 */
   override readonly supportsEmbeddings: boolean = false
 
+  /** 是否支持 Responses 原生工具搜索。 */
+  override readonly supportsNativeToolSearch: boolean = false
+
   /** 将统一请求协议转换为供应商请求并返回统一响应。 */
   abstract override sendMessage(request: ModelRequest): Promise<ModelResponse>
 
@@ -97,8 +100,8 @@ export function tokenUsage(data: unknown = {}, kind = "openai"): ModelUsage {
   const input = numeric(inputValue)
   const output = numeric(outputValue)
   const total = numeric(usage.total_tokens ?? usage.totalTokenCount ?? input + output) || input + output
-  const promptDetails = isRecord(usage.prompt_tokens_details) ? usage.prompt_tokens_details : {}
-  const completionDetails = isRecord(usage.completion_tokens_details) ? usage.completion_tokens_details : {}
+  const promptDetails = isRecord(usage.prompt_tokens_details) ? usage.prompt_tokens_details : isRecord(usage.input_tokens_details) ? usage.input_tokens_details : {}
+  const completionDetails = isRecord(usage.completion_tokens_details) ? usage.completion_tokens_details : isRecord(usage.output_tokens_details) ? usage.output_tokens_details : {}
   const cached = numeric(promptDetails.cached_tokens ?? usage.cache_read_input_tokens ?? usage.cachedContentTokenCount)
   const reasoning = numeric(completionDetails.reasoning_tokens ?? usage.thoughtsTokenCount)
   return {
@@ -199,7 +202,10 @@ export function contentForOpenAI(content: unknown): unknown {
 }
 
 export function messagesForOpenAI(messages: readonly UnknownRecord[] = []): UnknownRecord[] {
-  return messages.map(message => Object.hasOwn(message, "content") ? { ...message, content: contentForOpenAI(message.content) } : { ...message })
+  return messages.map(message => {
+    const { metadata: _metadata, protocol: _protocol, ...safeMessage } = message
+    return Object.hasOwn(safeMessage, "content") ? { ...safeMessage, content: contentForOpenAI(safeMessage.content) } : safeMessage
+  })
 }
 
 /** 将供应商返回的模型列表收敛为管理台和路由层使用的稳定摘要。 */

@@ -167,7 +167,6 @@ export function isToolEnabledByConfig(config: unknown = {}, tool: unknown = {}):
   const tools = record(root.tools)
   const common = getToolCommon(tool)
   const toolRecord = record(tool)
-  if (text(toolRecord.name) === "tool_search") return tools.enabled === true
   if (text(common.source) === "mcp") {
     const provenance = record(common.provenance)
     const mcp = record(root.mcp)
@@ -183,7 +182,56 @@ export function isToolEnabledByConfig(config: unknown = {}, tool: unknown = {}):
 export function modelToolDefinition(tool: unknown = {}): UnknownRecord {
   const toolRecord = record(tool)
   const common = getToolCommon(tool)
-  return { type: "function", function: { name: text(toolRecord.name), description: text(common.description), parameters: normalizeParameters(common.parameters) } }
+  return { type: "function", function: { name: text(toolRecord.name), description: modelToolDescription(tool), parameters: normalizeParameters(common.parameters) } }
+}
+
+function declaredEffects(common: UnknownRecord): string[] {
+  const effects = [text(record(common.execution).effect)]
+  for (const value of Object.values(record(common.executionByAction))) effects.push(text(record(value).effect))
+  return [...new Set(effects.filter(Boolean))]
+}
+
+/**
+ * 把工具自身的具体说明补成适合模型选择的稳定格式。
+ * 具体能力与适用场景仍由工具声明；公共层只补齐“不该何时用”和副作用边界。
+ */
+export function modelToolDescription(tool: unknown = {}): string {
+  const common = getToolCommon(tool)
+  const base = text(common.description).trim() || text(common.descriptionZh).trim()
+  const lower = base.toLowerCase()
+  const effects = declaredEffects(common)
+  const hasWrite = effects.some(effect => effect && effect !== toolExecutionEffects.read)
+  const hasDestructive = effects.includes(toolExecutionEffects.destructive)
+  const clauses: string[] = []
+  if (!/\buse (?:this )?when\b/.test(lower)) {
+    clauses.push(hasDestructive
+      ? "Use only when the destructive change is explicitly requested."
+      : hasWrite
+        ? "Use when the requested action requires changing state."
+        : "Use when this specific read capability is needed for the answer.")
+  }
+  if (!/\bdo not\b|\bdon't\b/.test(lower)) {
+    clauses.push(hasWrite
+      ? "Do not use it only for diagnosis, and do not repeat a side-effecting action without evidence that retrying is safe."
+      : "Do not use it to make or imply changes.")
+  }
+  if (hasDestructive && !/irrevers|destruct|cannot be undone|难以恢复|不可恢复/.test(lower)) clauses.push("This operation can irreversibly modify data or state.")
+  else if (hasWrite && !/side effect|modify|changes? (?:data|state)|interrupt|副作用|修改|中断/.test(lower)) clauses.push("This tool may modify data or external state.")
+  else if (!hasWrite && !/read[ -]?only|只读/.test(lower)) clauses.push("This operation is read-only.")
+  return [base, clauses.join(" ")].filter(Boolean).join("\n")
+}
+
+/** Responses API 原生 Function Calling 定义。 */
+export function responsesToolDefinition(tool: unknown = {}): UnknownRecord {
+  const toolRecord = record(tool)
+  const common = getToolCommon(tool)
+  return {
+    type: "function",
+    name: text(toolRecord.name),
+    description: modelToolDescription(tool),
+    parameters: normalizeParameters(common.parameters),
+    ...(common.deferLoading === true ? { defer_loading: true } : {}),
+  }
 }
 
 export function modelToolLoadingGuide(tool: unknown = {}): { definition: UnknownRecord; serialized: string; characters: number; estimatedTokens: number; note: string } {
@@ -273,7 +321,7 @@ export function normalizeTool(tool: unknown, defaults: unknown = {}): Normalized
     if (inputCommon[key] !== undefined) provenance[key] = inputCommon[key]
   }
   const sourceFields: UnknownRecord = { ...defaultRecord, ...sourceTool }
-  for (const key of ["common", "displayNameZh", "nameZh", "titleZh", "labelZh", "description", "descriptionZh", "parameters", "configSchema", "source", "category", "categoryLabel", "risk", "riskLabel", "tags", "delivery", "deliveryLabel", "autoDelivery", "requiresFinalReply", "requiresFinalReplyLabel", "replyPolicy", "replyPolicyLabel", "responsePolicy", "hiddenFromModel", "pipeline", "repeatable", "repeatableByAction", "idempotencyKeyFields", "idempotencyKeyFieldsByAction", "execution", "executionByAction", "policy", "packageId", "packageName", "skillId", "serverName", "serverDescription"]) delete sourceFields[key]
+  for (const key of ["common", "displayNameZh", "nameZh", "titleZh", "labelZh", "description", "descriptionZh", "parameters", "configSchema", "source", "category", "categoryLabel", "risk", "riskLabel", "tags", "deferLoading", "delivery", "deliveryLabel", "autoDelivery", "requiresFinalReply", "requiresFinalReplyLabel", "replyPolicy", "replyPolicyLabel", "responsePolicy", "hiddenFromModel", "pipeline", "repeatable", "repeatableByAction", "idempotencyKeyFields", "idempotencyKeyFieldsByAction", "execution", "executionByAction", "policy", "packageId", "packageName", "skillId", "serverName", "serverDescription"]) delete sourceFields[key]
   const common: ToolCommon = {
     displayNameZh: inferDisplayNameZh({ ...sourceTool, ...inputCommon }, defaultCommon, source),
     description: text(inputCommon.description || defaultCommon.description),
@@ -283,6 +331,9 @@ export function normalizeTool(tool: unknown, defaults: unknown = {}): Normalized
     source, category,
     categoryLabel: text(inputCommon.categoryLabel || defaultCommon.categoryLabel || toolCategories[category as keyof typeof toolCategories] || toolCategories.unknown),
     risk, tags: [...new Set([...normalizedStringList(defaultCommon.tags), ...normalizedStringList(inputCommon.tags)])],
+    deferLoading: inputCommon.deferLoading === undefined
+      ? (defaultCommon.deferLoading === undefined ? ["custom", "mcp"].includes(source) : defaultCommon.deferLoading === true)
+      : inputCommon.deferLoading === true,
     delivery: delivery as ToolCommon["delivery"],
     autoDelivery: normalizeAutoDelivery(inputCommon.autoDelivery ?? defaultCommon.autoDelivery),
     requiresFinalReply: resolveRequiresFinalReply({ common: { ...inputCommon, delivery } }, { common: defaultCommon }),

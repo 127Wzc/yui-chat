@@ -20,11 +20,15 @@ interface LogModelCall extends UnknownRecord {
   available_tool_count?: number
   context_message_count?: number
   response_tool_call_count?: number
+  hosted_tool_calls?: UnknownRecord[]
+  hosted_tool_call_count?: number
+  responses_state_recovery?: UnknownRecord
   available_models?: ModelRef[]
   actual_model?: ModelRef
   model_name?: string
   model_identifier?: string
   provider_name?: string
+  adapter?: string
   route?: { availableModels?: ModelRef[]; actualModel?: ModelRef }
   parent_tool_id?: string
   response_text?: string
@@ -423,6 +427,40 @@ function responseToolCalls(item: LogModelCall): number {
   return Number(item.response_tool_call_count ?? modelMetadata(item).toolCalls) || 0
 }
 
+function hostedToolCalls(item: LogModelCall): UnknownRecord[] {
+  const value = item.hosted_tool_calls ?? modelMetadata(item).hostedToolCalls
+  return Array.isArray(value) ? value.map(call => asRecord(call)) : []
+}
+
+function responsesStateRecovery(item: LogModelCall): UnknownRecord {
+  return asRecord(item.responses_state_recovery ?? modelMetadata(item).responsesStateRecovery)
+}
+
+function responsesRecoveryLabel(item: LogModelCall): string {
+  const recovery = responsesStateRecovery(item)
+  if (!Object.keys(recovery).length) return ""
+  const reason = recovery.reason === "tool_call_link_missing" ? "工具关联断链" : "上游会话断链"
+  return `${reason}，已用 ${number(recovery.replayedMessages)} 条本地上下文恢复${number(recovery.droppedToolItems) ? `，丢弃 ${number(recovery.droppedToolItems)} 条无效工具项` : ""}`
+}
+
+function protocolLabel(value: unknown): string {
+  const labels: Record<string, string> = {
+    "openai-responses": "Responses API",
+    responses: "Responses API",
+    "openai-compatible": "Chat Completions",
+    qwen: "Chat Completions",
+    chatglm: "Chat Completions",
+    "chat-completions": "Chat Completions",
+    claude: "Claude Messages",
+    "claude-messages": "Claude Messages",
+    gemini: "Gemini GenerateContent",
+    "gemini-generate-content": "Gemini GenerateContent",
+    mock: "Mock",
+  }
+  const key = String(value || "")
+  return labels[key] || key || "未知协议"
+}
+
 function modelLabel(model: ModelRef = {}): string {
   const name = model.id || model.name || model.model || "-"
   const provider = model.provider ? `/${model.provider}` : ""
@@ -464,6 +502,7 @@ function purposeLabel(value: unknown = ""): string {
     embedding_memory: "记忆向量",
     embedding: "向量调用",
     chat: "对话",
+    "search-aggregate": "托管搜索子请求",
     "memory-consolidation": "记忆提炼",
   }
   const key = String(value || "")
@@ -744,11 +783,12 @@ export const LogsTab = {
     const modelResponses = computed(() => (state.detail?.modelCalls || []).filter(item => item.response_text))
     const availableToolCount = computed(() => (state.detail?.modelCalls || []).reduce((max, item) => Math.max(max, availableTools(item)), 0))
     const actualToolCount = computed(() => (state.detail?.toolCalls || []).length)
+    const hostedToolCallCount = computed(() => (state.detail?.modelCalls || []).reduce((sum, item) => sum + hostedToolCalls(item).length, 0))
     const toolInvocationHint = computed(() => {
-      if (availableToolCount.value > 0 && actualToolCount.value === 0) {
+      if (availableToolCount.value > 0 && actualToolCount.value + hostedToolCallCount.value === 0) {
         return `本次向模型提供了 ${availableToolCount.value} 个工具，但模型没有发起工具调用；这不是链路丢失。`
       }
-      if (availableToolCount.value === 0 && actualToolCount.value > 0) {
+      if (availableToolCount.value === 0 && actualToolCount.value + hostedToolCallCount.value > 0) {
         return "已记录工具调用，但关联模型请求未声明可用工具；请检查模型接口记录。"
       }
       return ""
@@ -762,7 +802,7 @@ export const LogsTab = {
         kind: "模型",
         kindKey: "model",
         label: item.model_name || "模型",
-        detail: `${purposeLabel(item.purpose)} · ${statusLabel(item.status)} · ${modelStopLabel(item.stop_reason)} · 提供工具 ${availableTools(item)} · 返回调用 ${responseToolCalls(item)} · ${modelRouteDetail(item)}${item.parent_tool_id ? ` · ${lineageLabel(item.parent_tool_id)}` : ""}`,
+        detail: `${protocolLabel(item.adapter)} · ${purposeLabel(item.purpose)} · ${statusLabel(item.status)} · ${modelStopLabel(item.stop_reason)} · 提供工具 ${availableTools(item)} · 本地调用 ${responseToolCalls(item)} · 托管调用 ${hostedToolCalls(item).length} · ${modelRouteDetail(item)}${responsesRecoveryLabel(item) ? ` · ${responsesRecoveryLabel(item)}` : ""}${item.parent_tool_id ? ` · ${lineageLabel(item.parent_tool_id)}` : ""}`,
         sortOrder: Number(item.sequence || 0),
       }))
       const tools = toolCalls.map(item => {
@@ -823,8 +863,8 @@ export const LogsTab = {
       state, drawerOpen, settingsDrawerOpen, timelineFilter,
       modelDetailOpen, modelDetailLoading, modelDetailError, modelDetail, modelDetailTab,
       conversationOpen, conversationLoading, conversationError, conversationDetail, conversationTurnId, conversationTurnLoading, conversationTurnError, conversationTurnDetail,
-      totals, metrics, timeline, modelResponses, modelOptions, availableToolCount, actualToolCount, toolInvocationHint,
-      number, time, duration, categoryLabel, deliveryLabel, statusLabel, modelStopLabel, scopeLabel, sourceLabel, purposeLabel, lineageLabel, modelRouteDetail, availableTools, refresh, resetAndRefresh, resetFilters, applyFilters,
+      totals, metrics, timeline, modelResponses, modelOptions, availableToolCount, actualToolCount, hostedToolCallCount, toolInvocationHint,
+      number, time, duration, categoryLabel, deliveryLabel, statusLabel, modelStopLabel, protocolLabel, hostedToolCalls, responsesRecoveryLabel, scopeLabel, sourceLabel, purposeLabel, lineageLabel, modelRouteDetail, availableTools, refresh, resetAndRefresh, resetFilters, applyFilters,
       conversationScope, conversationTitle, promptPreview, toolGroupsForModel, unlinkedConversationTools, contextSourceLabel, contextItemFor, contextSectionsFor,
       openRun, openModelDetail, openModelDetailById, openConversation, loadConversationTurn, saveSettings, cleanupLogs, cleanupAllLogs,
       extractionState, extractionItems, extractionScopeLabel, extractionActionLabel, extractionEvidenceLabel,
@@ -845,9 +885,24 @@ export const LogsTab = {
         return ""
       },
       toolFunction: (value: unknown) => asRecord(asRecord(value).function),
-      toolName: (value: unknown) => String(asRecord(asRecord(value).function).name || asRecord(value).name || "未命名工具"),
-      toolDescription: (value: unknown) => String(asRecord(asRecord(value).function).description || ""),
-      toolParameters: (value: unknown) => asRecord(asRecord(asRecord(value).function).parameters),
+      toolName: (value: unknown) => {
+        const source = asRecord(value)
+        const type = String(source.type || "")
+        const labels: Record<string, string> = { web_search: "OpenAI Web Search", file_search: "OpenAI File Search", tool_search: "OpenAI Tool Search" }
+        return String(asRecord(source.function).name || source.name || labels[type] || type || "未命名工具")
+      },
+      toolDescription: (value: unknown) => {
+        const source = asRecord(value)
+        return String(asRecord(source.function).description || source.description || "")
+      },
+      toolParameters: (value: unknown) => {
+        const source = asRecord(value)
+        const nested = asRecord(asRecord(source.function).parameters)
+        if (Object.keys(nested).length) return nested
+        const direct = asRecord(source.parameters)
+        if (Object.keys(direct).length) return direct
+        return Object.fromEntries(Object.entries(source).filter(([key]) => !["type", "name", "description"].includes(key)))
+      },
     }
   },
   template: `
@@ -874,7 +929,7 @@ export const LogsTab = {
             <button class="btn small primary" type="button" @click="applyFilters"><Icon name="filter" :size="13" />筛选</button>
           </div>
         </div>
-        <div class="table-wrap logs-run-table"><table class="data-table"><thead><tr><th>开始时间</th><th>来源 / 用途</th><th>状态</th><th class="num">模型调用</th><th class="num">工具调用</th><th class="num">Token</th><th>用户 / 群</th><th class="col-actions">操作</th></tr></thead><tbody><tr v-for="row in state.runs" :key="row.id"><td class="muted tiny">{{ time(row.started_at) }}</td><td><div class="cell-title">{{ sourceLabel(row.source) }}</div><span class="muted tiny">{{ purposeLabel(row.purpose) }}</span></td><td><span class="badge" :class="row.status === 'ok' ? 'on' : (row.status === 'error' ? 'risk-high' : 'risk-medium')">{{ statusLabel(row.status) }}</span></td><td class="num">{{ number(row.model_calls) }}</td><td class="num">{{ number(row.tool_calls) }}<small v-if="row.failed_tools" class="table-subvalue">失败 {{ number(row.failed_tools) }}</small></td><td class="num">{{ number(row.total_tokens) }}</td><td class="muted tiny">{{ scopeLabel(row) }}</td><td class="col-actions"><button class="btn small outline" type="button" @click="openRun(row)">查看详情</button></td></tr></tbody></table><div v-if="!state.runs.length" class="logs-empty"><Icon name="activity" :size="22" /><b>没有匹配的日志</b><span>调整筛选条件后再试一次。</span></div></div>
+        <div class="table-wrap logs-run-table"><table class="data-table"><thead><tr><th>开始时间</th><th>来源 / 用途</th><th>状态</th><th class="num">模型调用</th><th class="num">工具事件</th><th class="num">Token</th><th>用户 / 群</th><th class="col-actions">操作</th></tr></thead><tbody><tr v-for="row in state.runs" :key="row.id"><td class="muted tiny">{{ time(row.started_at) }}</td><td><div class="cell-title">{{ sourceLabel(row.source) }}</div><span class="muted tiny">{{ purposeLabel(row.purpose) }}</span></td><td><span class="badge" :class="row.status === 'ok' ? 'on' : (row.status === 'error' ? 'risk-high' : 'risk-medium')">{{ statusLabel(row.status) }}</span></td><td class="num">{{ number(row.model_calls) }}</td><td class="num">{{ number(row.tool_calls) }}<small v-if="row.failed_tools" class="table-subvalue">失败 {{ number(row.failed_tools) }}</small></td><td class="num">{{ number(row.total_tokens) }}</td><td class="muted tiny">{{ scopeLabel(row) }}</td><td class="col-actions"><button class="btn small outline" type="button" @click="openRun(row)">查看详情</button></td></tr></tbody></table><div v-if="!state.runs.length" class="logs-empty"><Icon name="activity" :size="22" /><b>没有匹配的日志</b><span>调整筛选条件后再试一次。</span></div></div>
         <div v-if="state.nextCursor" class="pager"><button class="btn small outline" type="button" @click="refresh({ append: true })">加载更多</button></div>
       </Panel>
 
@@ -897,28 +952,28 @@ export const LogsTab = {
       <SideDrawer :open="drawerOpen" title="运行链路详情" subtitle="按模型请求、工具轮次和结束状态展示完整链路" icon="activity" width="720px" @close="drawerOpen = false">
         <div v-if="state.detail" class="logs-detail">
           <div class="detail-summary"><div><span class="badge" :class="state.detail.run.status === 'ok' ? 'on' : 'risk-medium'">{{ statusLabel(state.detail.run.status) }}</span><span class="muted">{{ time(state.detail.run.started_at) }} · 总耗时 {{ duration(state.detail.run.duration_ms) }}</span></div><button v-if="state.detail.run.conversation_key" class="btn small outline" type="button" @click="openConversation"><Icon name="message" :size="13" />查看完整会话</button></div>
-          <div class="logs-detail-stats"><span>模型请求 <b>{{ number(state.detail.run.model_calls) }}</b></span><span>可用工具 <b>{{ number(availableToolCount) }}</b></span><span>实际调用 <b>{{ number(actualToolCount) }}</b></span><span v-if="state.detail.run.failed_tools">失败 <b class="text-danger">{{ number(state.detail.run.failed_tools) }}</b></span><span>Token <b>{{ number(state.detail.run.total_tokens) }}</b></span></div>
+          <div class="logs-detail-stats"><span>模型请求 <b>{{ number(state.detail.run.model_calls) }}</b></span><span>可用工具 <b>{{ number(availableToolCount) }}</b></span><span>工具事件 <b>{{ number(actualToolCount) }}</b></span><span v-if="state.detail.run.failed_tools">失败 <b class="text-danger">{{ number(state.detail.run.failed_tools) }}</b></span><span>Token <b>{{ number(state.detail.run.total_tokens) }}</b></span></div>
           <details v-if="state.detail.run.response_text" class="logs-run-response"><summary>查看最终模型回复（{{ number(state.detail.run.response_text.length) }} 字符）</summary><pre>{{ state.detail.run.response_text }}</pre></details>
           <div v-if="state.detail.childRuns?.length" class="logs-detail-stats logs-child-runs"><span>子运行 <b>{{ number(state.detail.childRuns.length) }}</b></span><span v-for="child in state.detail.childRuns" :key="child.id" class="badge">{{ sourceLabel(child.source) }} · {{ statusLabel(child.status) }} · {{ String(child.id).slice(0, 8) }}</span></div>
-          <nav class="logs-detail-filter" aria-label="链路筛选"><button type="button" :class="{ active: timelineFilter === 'all' }" @click="timelineFilter = 'all'">全部</button><button type="button" :class="{ active: timelineFilter === 'model' }" @click="timelineFilter = 'model'">模型请求 {{ number(state.detail.modelCalls?.length || 0) }}</button><button type="button" :class="{ active: timelineFilter === 'tool' }" @click="timelineFilter = 'tool'">工具调用 {{ number(state.detail.toolCalls?.length || 0) }}</button><button type="button" :class="{ active: timelineFilter === 'error' }" @click="timelineFilter = 'error'">异常</button></nav>
+          <nav class="logs-detail-filter" aria-label="链路筛选"><button type="button" :class="{ active: timelineFilter === 'all' }" @click="timelineFilter = 'all'">全部</button><button type="button" :class="{ active: timelineFilter === 'model' }" @click="timelineFilter = 'model'">模型请求 {{ number(state.detail.modelCalls?.length || 0) }}</button><button type="button" :class="{ active: timelineFilter === 'tool' }" @click="timelineFilter = 'tool'">工具事件 {{ number(state.detail.toolCalls?.length || 0) }}</button><button type="button" :class="{ active: timelineFilter === 'error' }" @click="timelineFilter = 'error'">异常</button></nav>
           <p v-if="toolInvocationHint" class="logs-silent-note warning">{{ toolInvocationHint }}</p>
           <p v-if="state.detail.run.status === 'silent' && state.detail.run.metadata?.requiresFinalReply === false" class="logs-silent-note">本次运行按工具回复策略结束，没有要求模型补充文本。</p>
           <p v-else-if="state.detail.run.status === 'silent'" class="logs-silent-note warning">本次运行没有形成最终文本；请检查工具结果、模型收束请求和失败节点。</p>
           <p v-if="!timeline.length" class="logs-empty compact"><Icon name="activity" :size="20" /><span>当前筛选下没有链路事件。</span></p>
           <section v-if="state.detail.modelCalls?.length" class="logs-model-index" aria-label="模型请求详情入口">
             <div class="logs-model-index-head"><b>模型请求详情</b><span class="muted tiny">每一轮的上下文和工具包单独加载</span></div>
-            <div class="logs-model-index-list"><button v-for="item in state.detail.modelCalls" :key="'model-index-' + item.id" class="logs-model-index-item" type="button" @click="openModelDetail(item)"><span>第 {{ item.sequence || '-' }} 次</span><b>{{ modelStopLabel(item.stop_reason) }}</b><b>工具 {{ number(availableTools(item)) }}</b><b>上下文 {{ number(modelContextCount(item)) }} 条</b><Icon name="chevron-right" :size="13" /></button></div>
+            <div class="logs-model-index-list"><button v-for="item in state.detail.modelCalls" :key="'model-index-' + item.id" class="logs-model-index-item" type="button" @click="openModelDetail(item)"><span>第 {{ item.sequence || '-' }} 次</span><b>{{ protocolLabel(item.adapter) }}</b><b>{{ modelStopLabel(item.stop_reason) }}</b><b>工具 {{ number(availableTools(item)) }}</b><b>上下文 {{ number(modelContextCount(item)) }} 条</b><Icon name="chevron-right" :size="13" /></button></div>
           </section>
-          <div v-if="modelResponses.length" class="logs-model-responses"><details v-for="item in modelResponses" :key="'response-' + item.id" class="logs-model-response"><summary>第 {{ item.sequence || "-" }} 次模型回复（{{ number(item.response_text.length) }} 字符）</summary><pre>{{ item.response_text }}</pre></details></div><div class="timeline"><div v-for="(item, index) in timeline" :key="item.id || index" class="timeline-item" :class="{ 'timeline-tool-item': item.kindKey === 'tool' }"><span class="timeline-dot" :class="item.status === 'ok' ? 'on' : 'warn'"></span><div class="timeline-content"><div class="timeline-title"><b>{{ item.kind }} · {{ item.label }}</b><span class="badge" :class="item.status === 'ok' ? 'on' : 'risk-medium'">{{ statusLabel(item.status) }}</span><span v-if="item.kindKey === 'tool'" class="badge">{{ categoryLabel(item.category || item.source) }}</span><span v-if="item.kindKey === 'tool'" class="badge">{{ deliveryLabel(item.delivery) }}</span><span v-if="item.kindKey === 'tool'" class="badge" :class="item.requires_final_reply ? 'risk-medium' : 'on'">{{ item.requires_final_reply ? '需要最终回复' : '允许静默结束' }}</span><span v-if="item.kindKey === 'tool' && item.dispatched" class="badge risk-medium">已派发</span><span v-if="item.kindKey === 'tool' && item.retryAllowed === false" class="badge risk-medium">禁止重试</span><span v-if="item.kindKey === 'tool' && item.decision" class="badge">{{ item.decision }}</span><span v-if="item.kindKey === 'tool' && item.remainingCount > 0" class="badge risk-medium">剩余 {{ number(item.remainingCount) }}</span><span v-if="item.kindKey === 'tool' && item.deduplicated" class="badge risk-medium">重复调用已跳过</span><span v-if="item.usage_source && item.usage_source !== 'reported'" class="badge risk-medium">{{ item.usage_source === 'estimated' ? '估算' : '未知' }}</span></div><p class="muted tiny"><span v-if="item.kindKey === 'tool'">第 {{ item.round || '-' }} 轮 · 调用 {{ item.call_index || '-' }} · 执行 {{ number(item.executedCount || 0) }} · 完成 {{ number(item.completedCount || 0) }} · 返回 {{ number(item.result_chars || 0) }} 字符 · {{ duration(item.duration_ms) }}</span><span v-else>第 {{ item.sequence || '-' }} 次模型请求 · {{ item.detail }} · {{ number(item.total_tokens || 0) }} Token · {{ duration(item.duration_ms) }}</span></p><p v-if="item.kindKey === 'tool' && (item.operationId || item.guardCode)" class="muted tiny">操作 {{ item.operationId || '-' }}<span v-if="item.guardCode"> · {{ item.guardCode }}</span><span v-if="item.attempt"> · 第 {{ item.attempt }} 次尝试</span></p><JsonBlock v-if="item.kindKey === 'tool' && item.arguments" title="查看工具参数" :value="item.arguments" /><details v-if="item.kindKey === 'tool' && item.result_text" class="logs-tool-result"><summary>查看返回结果（{{ number(item.result_chars || 0) }} 字符）</summary><pre>{{ item.result_text }}</pre></details><p v-if="item.kindKey === 'tool' && item.error_message" class="logs-tool-error">{{ item.error_message }}</p><details v-if="item.input_text" class="logs-model-input"><summary>查看本次提炼输入（已脱敏）</summary><pre>{{ item.input_text }}</pre></details><div v-if="item.kindKey === 'model' && extractionState(item)" class="logs-extraction-result"><div class="logs-extraction-result-head"><b>提炼结果</b><span v-if="extractionState(item)?.loading" class="muted tiny">正在读取…</span><span v-else-if="extractionState(item)?.error" class="text-danger tiny">读取失败</span><span v-else-if="extractionState(item)?.window" class="muted tiny">已关联提炼窗口</span></div><p v-if="extractionState(item)?.loading" class="muted tiny">正在加载已保存的提炼结果…</p><p v-else-if="extractionState(item)?.error" class="logs-tool-error">{{ extractionState(item)?.error }}</p><p v-else-if="extractionState(item)?.window?.status !== 'completed'" class="muted tiny">提炼窗口当前状态：{{ statusLabel(extractionState(item)?.window?.status) }}。</p><details v-else class="logs-extraction-result-body" open><summary>查看已保存结果（形成 {{ number(extractionState(item)?.window?.memoryResultCount) }} 条，忽略 {{ number(extractionState(item)?.window?.ignoredResultCount) }} 条）</summary><div class="logs-extraction-result-list"><article v-for="(result, resultIndex) in extractionItems(extractionState(item)?.window)" :key="'extraction-result-' + item.id + '-' + resultIndex" class="logs-extraction-result-item"><div class="logs-extraction-result-item-head"><span class="badge" :class="result.action === 'ignored' ? 'risk-medium' : 'on'">{{ extractionActionLabel(result.action) }}</span><span class="badge">{{ extractionScopeLabel(result) }}</span></div><p>{{ result.text || result.factValue || '未保存文本' }}</p><small class="muted">{{ extractionEvidenceLabel(result) }}<span v-if="result.reason"> · {{ result.reason }}</span></small></article><p v-if="!extractionItems(extractionState(item)?.window).length" class="muted tiny">本次提炼未形成可复用记忆。</p></div></details></div><JsonBlock v-if="item.kindKey === 'model' && item.metadata_json" title="查看模型调用详情" :value="{ metadata: item.metadata_json, error: item.error_message }" /></div></div></div>
+          <div v-if="modelResponses.length" class="logs-model-responses"><details v-for="item in modelResponses" :key="'response-' + item.id" class="logs-model-response"><summary>第 {{ item.sequence || "-" }} 次模型回复（{{ number(item.response_text.length) }} 字符）</summary><pre>{{ item.response_text }}</pre></details></div><div class="timeline"><div v-for="(item, index) in timeline" :key="item.id || index" class="timeline-item" :class="{ 'timeline-tool-item': item.kindKey === 'tool' }"><span class="timeline-dot" :class="item.status === 'ok' ? 'on' : 'warn'"></span><div class="timeline-content"><div class="timeline-title"><b>{{ item.kind }} · {{ item.label }}</b><span class="badge" :class="item.status === 'ok' ? 'on' : 'risk-medium'">{{ statusLabel(item.status) }}</span><span v-if="item.kindKey === 'tool'" class="badge">{{ categoryLabel(item.category || item.source) }}</span><span v-if="item.kindKey === 'tool'" class="badge">{{ deliveryLabel(item.delivery) }}</span><span v-if="item.kindKey === 'tool'" class="badge" :class="item.requires_final_reply ? 'risk-medium' : 'on'">{{ item.requires_final_reply ? '需要最终回复' : '允许静默结束' }}</span><span v-if="item.kindKey === 'tool' && item.dispatched" class="badge risk-medium">已派发</span><span v-if="item.kindKey === 'tool' && item.retryAllowed === false" class="badge risk-medium">禁止重试</span><span v-if="item.kindKey === 'tool' && item.decision" class="badge">{{ item.decision }}</span><span v-if="item.kindKey === 'tool' && item.remainingCount > 0" class="badge risk-medium">剩余 {{ number(item.remainingCount) }}</span><span v-if="item.kindKey === 'tool' && item.deduplicated" class="badge risk-medium">重复调用已跳过</span><span v-if="item.usage_source && item.usage_source !== 'reported'" class="badge risk-medium">{{ item.usage_source === 'estimated' ? '估算' : '未知' }}</span></div><p class="muted tiny"><span v-if="item.kindKey === 'tool'">第 {{ item.round || '-' }} 轮 · 调用 {{ item.call_index || '-' }} · 执行 {{ number(item.executedCount || 0) }} · 完成 {{ number(item.completedCount || 0) }} · 返回 {{ number(item.result_chars || 0) }} 字符 · {{ duration(item.duration_ms) }}</span><span v-else>第 {{ item.sequence || '-' }} 次模型请求 · {{ item.detail }} · {{ number(item.total_tokens || 0) }} Token · {{ duration(item.duration_ms) }}</span></p><p v-if="item.kindKey === 'tool' && (item.operationId || item.guardCode)" class="muted tiny">操作 {{ item.operationId || '-' }}<span v-if="item.guardCode"> · {{ item.guardCode }}</span><span v-if="item.attempt"> · 第 {{ item.attempt }} 次尝试</span></p><JsonBlock v-if="item.kindKey === 'tool' && item.arguments" title="查看工具参数" :value="item.arguments" /><details v-if="item.kindKey === 'tool' && item.result_text" class="logs-tool-result"><summary>{{ item.source === 'openai-hosted' ? '查看上游原始返回' : '查看返回结果' }}（{{ number(item.result_chars || 0) }} 字符）</summary><pre>{{ item.result_text }}</pre></details><p v-if="item.kindKey === 'tool' && item.error_message" class="logs-tool-error">{{ item.error_message }}</p><details v-if="item.input_text" class="logs-model-input"><summary>查看本次提炼输入（已脱敏）</summary><pre>{{ item.input_text }}</pre></details><div v-if="item.kindKey === 'model' && extractionState(item)" class="logs-extraction-result"><div class="logs-extraction-result-head"><b>提炼结果</b><span v-if="extractionState(item)?.loading" class="muted tiny">正在读取…</span><span v-else-if="extractionState(item)?.error" class="text-danger tiny">读取失败</span><span v-else-if="extractionState(item)?.window" class="muted tiny">已关联提炼窗口</span></div><p v-if="extractionState(item)?.loading" class="muted tiny">正在加载已保存的提炼结果…</p><p v-else-if="extractionState(item)?.error" class="logs-tool-error">{{ extractionState(item)?.error }}</p><p v-else-if="extractionState(item)?.window?.status !== 'completed'" class="muted tiny">提炼窗口当前状态：{{ statusLabel(extractionState(item)?.window?.status) }}。</p><details v-else class="logs-extraction-result-body" open><summary>查看已保存结果（形成 {{ number(extractionState(item)?.window?.memoryResultCount) }} 条，忽略 {{ number(extractionState(item)?.window?.ignoredResultCount) }} 条）</summary><div class="logs-extraction-result-list"><article v-for="(result, resultIndex) in extractionItems(extractionState(item)?.window)" :key="'extraction-result-' + item.id + '-' + resultIndex" class="logs-extraction-result-item"><div class="logs-extraction-result-item-head"><span class="badge" :class="result.action === 'ignored' ? 'risk-medium' : 'on'">{{ extractionActionLabel(result.action) }}</span><span class="badge">{{ extractionScopeLabel(result) }}</span></div><p>{{ result.text || result.factValue || '未保存文本' }}</p><small class="muted">{{ extractionEvidenceLabel(result) }}<span v-if="result.reason"> · {{ result.reason }}</span></small></article><p v-if="!extractionItems(extractionState(item)?.window).length" class="muted tiny">本次提炼未形成可复用记忆。</p></div></details></div><JsonBlock v-if="item.kindKey === 'model' && item.metadata_json" title="查看模型调用详情" :value="{ metadata: item.metadata_json, error: item.error_message }" /></div></div></div>
         </div>
       </SideDrawer>
 
       <SideDrawer :open="modelDetailOpen" title="模型请求详情" subtitle="本次请求的上下文与注入工具按需加载；内容已脱敏，超出上限时会标记截断" icon="cpu" width="1080px" modal @close="modelDetailOpen = false">
         <div class="logs-detail-window">
           <div v-if="modelDetailLoading" class="drawer-loading"><span class="spinner"></span>正在加载模型请求详情…</div>
-          <div v-else-if="modelDetailError" class="slice-error-banner"><Icon name="alert" :size="17" /><p>{{ modelDetailError }}</p></div>
+            <div v-else-if="modelDetailError" class="slice-error-banner"><Icon name="alert" :size="17" /><p>{{ modelDetailError }}</p></div>
           <template v-else-if="modelDetail?.modelCall">
-            <div class="logs-detail-window-meta"><div><span class="badge" :class="modelDetail.modelCall.status === 'ok' ? 'on' : 'risk-medium'">{{ statusLabel(modelDetail.modelCall.status) }}</span><span class="muted">第 {{ modelDetail.modelCall.sequence || '-' }} 次 · {{ modelDetail.modelCall.model_name || '-' }} · {{ purposeLabel(modelDetail.modelCall.purpose) }}</span></div><span class="muted tiny">{{ time(modelDetail.modelCall.started_at) }} · {{ duration(modelDetail.modelCall.duration_ms) }}</span></div>
+            <div class="logs-detail-window-meta"><div><span class="badge" :class="modelDetail.modelCall.status === 'ok' ? 'on' : 'risk-medium'">{{ statusLabel(modelDetail.modelCall.status) }}</span><span class="badge">{{ protocolLabel(modelDetail.modelCall.adapter) }}</span><span class="muted">第 {{ modelDetail.modelCall.sequence || '-' }} 次 · {{ modelDetail.modelCall.model_name || '-' }} · {{ purposeLabel(modelDetail.modelCall.purpose) }}</span></div><span class="muted tiny">{{ time(modelDetail.modelCall.started_at) }} · {{ duration(modelDetail.modelCall.duration_ms) }}</span></div>
             <div v-if="modelDetail.snapshot" class="logs-detail-stats"><span>上下文 <b>{{ number(modelDetail.snapshot.message_count) }}</b> 条</span><span>图片 <b>{{ number(modelMessagesImageCount(modelDetail.snapshot.messages)) }}</b> 张</span><span>工具包 <b>{{ number(modelDetail.snapshot.tool_count) }}</b> 个</span><span>上下文数据 <b>{{ number(modelDetail.snapshot.context_chars) }}</b> 字符</span><span>工具定义 <b>{{ number(modelDetail.snapshot.tool_chars) }}</b> 字符</span><span v-if="modelDetail.snapshot.truncated" class="badge risk-medium">快照已截断</span></div>
             <div v-if="extractionState(modelDetail.modelCall)" class="logs-extraction-result"><div class="logs-extraction-result-head"><b>提炼结果</b><span v-if="extractionState(modelDetail.modelCall)?.loading" class="muted tiny">正在读取…</span><span v-else-if="extractionState(modelDetail.modelCall)?.error" class="text-danger tiny">读取失败</span></div><p v-if="extractionState(modelDetail.modelCall)?.loading" class="muted tiny">正在加载已保存的提炼结果…</p><p v-else-if="extractionState(modelDetail.modelCall)?.error" class="logs-tool-error">{{ extractionState(modelDetail.modelCall)?.error }}</p><p v-else-if="extractionState(modelDetail.modelCall)?.window?.status !== 'completed'" class="muted tiny">提炼窗口当前状态：{{ statusLabel(extractionState(modelDetail.modelCall)?.window?.status) }}。</p><details v-else class="logs-extraction-result-body" open><summary>查看已保存结果（形成 {{ number(extractionState(modelDetail.modelCall)?.window?.memoryResultCount) }} 条，忽略 {{ number(extractionState(modelDetail.modelCall)?.window?.ignoredResultCount) }} 条）</summary><div class="logs-extraction-result-list"><article v-for="(result, resultIndex) in extractionItems(extractionState(modelDetail.modelCall)?.window)" :key="'model-extraction-result-' + resultIndex" class="logs-extraction-result-item"><div class="logs-extraction-result-item-head"><span class="badge" :class="result.action === 'ignored' ? 'risk-medium' : 'on'">{{ extractionActionLabel(result.action) }}</span><span class="badge">{{ extractionScopeLabel(result) }}</span></div><p>{{ result.text || result.factValue || '未保存文本' }}</p><small class="muted">{{ extractionEvidenceLabel(result) }}<span v-if="result.reason"> · {{ result.reason }}</span></small></article><p v-if="!extractionItems(extractionState(modelDetail.modelCall)?.window).length" class="muted tiny">本次提炼未形成可复用记忆。</p></div></details></div>
             <p v-if="!modelDetail.snapshot" class="logs-silent-note warning">这条记录创建于详细快照功能启用前，当前只有精简的模型调用信息。</p>
@@ -942,8 +997,8 @@ export const LogsTab = {
               </div>
               <p v-if="!modelDetail.snapshot?.messages?.length" class="logs-empty compact"><Icon name="message" :size="20" /><span>本次调用没有消息上下文，可能是 embedding 请求。</span></p>
             </section>
-            <section v-else-if="modelDetailTab === 'tools'" class="logs-window-section"><div v-if="modelDetail.snapshot?.tools?.length" class="logs-tool-catalog"><article v-for="(tool, index) in modelDetail.snapshot.tools" :key="'snapshot-tool-' + index" class="logs-snapshot-tool"><header><span class="logs-tool-number">#{{ index + 1 }}</span><b>{{ toolName(tool) }}</b><span v-if="tool.category" class="badge">{{ categoryLabel(tool.category) }}</span><span v-if="tool.source" class="badge">{{ tool.source }}</span><span v-if="tool.risk" class="badge risk-medium">{{ tool.risk }}</span></header><p v-if="toolDescription(tool)" class="muted">{{ toolDescription(tool) }}</p><details class="logs-inline-json"><summary>查看参数 Schema</summary><pre>{{ pretty(toolParameters(tool)) }}</pre></details></article></div><p v-else class="logs-empty compact"><Icon name="wrench" :size="20" /><span>本次调用没有向模型注入工具。</span></p></section>
-            <section v-else class="logs-window-section logs-request-section"><JsonBlock title="请求元数据" :value="modelDetail.snapshot?.request || {}" :open="true" /><details v-if="modelDetail.modelCall.response_text" class="logs-run-response" open><summary>模型回复（{{ number(modelDetail.modelCall.response_text.length) }} 字符）</summary><pre>{{ modelDetail.modelCall.response_text }}</pre></details><JsonBlock title="模型调用元数据" :value="modelDetail.modelCall.metadata || {}" /><p v-if="modelDetail.modelCall.error_message" class="logs-tool-error">{{ modelDetail.modelCall.error_message }}</p></section>
+            <section v-else-if="modelDetailTab === 'tools'" class="logs-window-section"><div v-if="modelDetail.snapshot?.tools?.length" class="logs-tool-catalog"><article v-for="(tool, index) in modelDetail.snapshot.tools" :key="'snapshot-tool-' + index" class="logs-snapshot-tool"><header><span class="logs-tool-number">#{{ index + 1 }}</span><b>{{ toolName(tool) }}</b><span v-if="tool.type" class="badge">{{ tool.type }}</span><span v-if="tool.defer_loading" class="badge on">延期加载</span><span v-if="tool.category" class="badge">{{ categoryLabel(tool.category) }}</span><span v-if="tool.source" class="badge">{{ tool.source }}</span><span v-if="tool.risk" class="badge risk-medium">{{ tool.risk }}</span></header><p v-if="toolDescription(tool)" class="muted">{{ toolDescription(tool) }}</p><details class="logs-inline-json"><summary>查看参数或配置</summary><pre>{{ pretty(toolParameters(tool)) }}</pre></details></article></div><p v-else class="logs-empty compact"><Icon name="wrench" :size="20" /><span>本次调用没有向模型注入工具。</span></p></section>
+            <section v-else class="logs-window-section logs-request-section"><JsonBlock title="请求元数据" :value="modelDetail.snapshot?.request || {}" :open="true" /><JsonBlock v-if="hostedToolCalls(modelDetail.modelCall).length" title="OpenAI 托管工具执行摘要" :value="hostedToolCalls(modelDetail.modelCall)" :open="true" /><details v-if="modelDetail.modelCall.response_text" class="logs-run-response" open><summary>模型回复（{{ number(modelDetail.modelCall.response_text.length) }} 字符）</summary><pre>{{ modelDetail.modelCall.response_text }}</pre></details><JsonBlock title="模型调用元数据" :value="modelDetail.modelCall.metadata || {}" /><p v-if="modelDetail.modelCall.error_message" class="logs-tool-error">{{ modelDetail.modelCall.error_message }}</p></section>
           </template>
           <p v-else class="logs-empty compact"><Icon name="cpu" :size="20" /><span>没有可展示的模型请求详情。</span></p>
         </div>
@@ -971,23 +1026,23 @@ export const LogsTab = {
                 <div v-if="conversationTurnLoading" class="drawer-loading"><span class="spinner"></span>正在加载这一轮的完整链路…</div>
                 <div v-else-if="conversationTurnError" class="slice-error-banner"><Icon name="alert" :size="17" /><p>{{ conversationTurnError }}</p></div>
                 <template v-else-if="conversationTurnDetail?.run">
-                  <div class="logs-turn-head"><div><b>{{ promptPreview(conversationTurnDetail.run.prompt_text) }}</b><span class="muted tiny">{{ time(conversationTurnDetail.run.started_at) }} · {{ statusLabel(conversationTurnDetail.run.status) }}</span></div><span class="muted tiny">{{ number(conversationTurnDetail.run.total_tokens) }} Token · {{ number(conversationTurnDetail.run.tool_calls) }} 次工具</span></div>
+                  <div class="logs-turn-head"><div><b>{{ promptPreview(conversationTurnDetail.run.prompt_text) }}</b><span class="muted tiny">{{ time(conversationTurnDetail.run.started_at) }} · {{ statusLabel(conversationTurnDetail.run.status) }}</span></div><span class="muted tiny">{{ number(conversationTurnDetail.run.total_tokens) }} Token · {{ number(conversationTurnDetail.run.tool_calls) }} 条工具事件</span></div>
                   <div class="logs-conversation-grid">
                     <section class="logs-message-card user"><b>用户提问</b><pre>{{ conversationTurnDetail.run.prompt_text || '这轮没有保存提问正文（可能是旧日志或非对话任务）。' }}</pre></section>
                     <section class="logs-message-card assistant"><b>模型回复</b><pre>{{ conversationTurnDetail.run.response_text || '这轮没有文本回复，可能以工具或静默结果结束。' }}</pre></section>
                   </div>
                   <div v-if="conversationTurnDetail.modelCalls?.length" class="logs-round-flow">
                     <article v-for="(model, modelIndex) in conversationTurnDetail.modelCalls" :key="model.id || modelIndex" class="logs-round-card">
-                      <header><div><span class="logs-turn-number">模型请求 #{{ model.sequence || modelIndex + 1 }}</span><b>{{ model.model_name || model.model_identifier || '模型请求' }}</b><span class="badge" :class="model.status === 'ok' ? 'on' : 'risk-medium'">{{ statusLabel(model.status) }}</span><span class="badge">{{ modelStopLabel(model.stop_reason) }}</span></div><div class="logs-round-card-meta"><span class="muted tiny">上下文 {{ number(modelContextCount(model)) }} 条 · 注入 {{ number(availableTools(model)) }} 个工具 · {{ number(model.total_tokens) }} Token</span><button class="btn small outline" type="button" @click="openModelDetail(model)">查看本次上下文</button></div></header>
+                      <header><div><span class="logs-turn-number">模型请求 #{{ model.sequence || modelIndex + 1 }}</span><b>{{ model.model_name || model.model_identifier || '模型请求' }}</b><span class="badge">{{ protocolLabel(model.adapter) }}</span><span class="badge" :class="model.status === 'ok' ? 'on' : 'risk-medium'">{{ statusLabel(model.status) }}</span><span class="badge">{{ modelStopLabel(model.stop_reason) }}</span><span v-if="hostedToolCalls(model).length" class="badge on">托管工具 {{ number(hostedToolCalls(model).length) }}</span><span v-if="responsesRecoveryLabel(model)" class="badge risk-medium" :title="responsesRecoveryLabel(model)">上下文已恢复</span></div><div class="logs-round-card-meta"><span class="muted tiny">上下文 {{ number(modelContextCount(model)) }} 条 · 注入 {{ number(availableTools(model)) }} 个工具 · {{ number(model.total_tokens) }} Token</span><button class="btn small outline" type="button" @click="openModelDetail(model)">查看本次上下文</button></div></header>
                       <div v-if="toolGroupsForModel(model.id).length" class="logs-round-tool-groups">
                         <section v-for="group in toolGroupsForModel(model.id)" :key="'tool-round-' + model.id + '-' + group.round" class="logs-round-tool-group">
-                          <header><b>工具轮次 {{ group.round || '-' }}</b><span class="muted tiny">{{ number(group.items.length) }} 次实际调用</span></header>
+                          <header><b>工具轮次 {{ group.round || '-' }}</b><span class="muted tiny">{{ number(group.items.length) }} 条工具事件</span></header>
                           <div class="logs-round-tool-list">
                             <article v-for="tool in group.items" :key="tool.id" class="logs-round-tool">
-                              <div class="logs-round-tool-head"><div><b>{{ tool.tool_name || '未命名工具' }}</b><span class="badge" :class="tool.status === 'ok' ? 'on' : 'risk-medium'">{{ statusLabel(tool.status) }}</span><span class="badge">{{ categoryLabel(tool.category || tool.source) }}</span><span v-if="tool.delivery" class="badge">{{ deliveryLabel(tool.delivery) }}</span></div><span class="muted tiny">调用 {{ tool.call_index || '-' }} · {{ duration(tool.duration_ms) }}</span></div>
+                              <div class="logs-round-tool-head"><div><b>{{ tool.tool_name || '未命名工具' }}</b><span class="badge" :class="tool.status === 'ok' ? 'on' : 'risk-medium'">{{ statusLabel(tool.status) }}</span><span class="badge">{{ categoryLabel(tool.category || tool.source) }}</span><span v-if="tool.parent_tool_id" class="badge">派生调用</span><span v-if="tool.delivery" class="badge">{{ deliveryLabel(tool.delivery) }}</span></div><span class="muted tiny">调用 {{ tool.call_index || '-' }} · {{ duration(tool.duration_ms) }}</span></div>
                               <p class="muted tiny">返回 {{ number(tool.result_chars) }} 字符<span v-if="tool.requires_final_reply"> · 需要最终回复</span><span v-if="tool.error_message"> · 执行失败</span></p>
                               <JsonBlock v-if="tool.arguments" title="查看工具参数" :value="tool.arguments" />
-                              <details v-if="tool.result_text" class="logs-tool-result"><summary>查看返回结果（{{ number(tool.result_chars || 0) }} 字符）</summary><pre>{{ tool.result_text }}</pre></details>
+                              <details v-if="tool.result_text" class="logs-tool-result"><summary>{{ tool.source === 'openai-hosted' ? '查看上游原始返回' : '查看返回结果' }}（{{ number(tool.result_chars || 0) }} 字符）</summary><pre>{{ tool.result_text }}</pre></details>
                               <p v-if="tool.error_message" class="logs-tool-error">{{ tool.error_message }}</p>
                             </article>
                           </div>

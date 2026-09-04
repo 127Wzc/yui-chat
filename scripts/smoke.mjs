@@ -87,6 +87,8 @@ const webFiltersSourceFiles = [
 const webProviderSourceFiles = [
   "web/client/features/providers/providers-tab.js",
   "web/client/features/providers/provider-editors.js",
+  "web/client/features/providers/provider-responses-editor.js",
+  "web/client/features/providers/provider-tool-policy-editor.js",
   "web/client/features/providers/provider-routing.js",
   "web/client/features/providers/provider-shared.js",
 ]
@@ -299,6 +301,7 @@ async function checkConfigSafety() {
   assert(config.tools?.enabledTools?.includes("schedule_task"), "core preset should backfill schedule_task for existing configs")
   assert(config.tools?.enabledTools?.includes("image_media"), "core preset should backfill image_media for existing configs")
   assert(config.tools?.enabledTools?.includes("web_search"), "core preset should expose the unified real-time web search tool")
+  assert(config.tools?.enabledTools?.includes("file_search") && config.tools?.enabledTools?.includes("tool_search"), "hosted and local search capabilities should share the global capability gate")
   assert(config.tools?.enabledTools?.includes("bilibili_media") && !config.tools?.enabledTools?.includes("bilibili_search"), "core preset should use only the new Bilibili media tool name")
   assert(config.tools?.enabledTools?.includes("dispatch_subagent"), "core preset should backfill dispatch_subagent for existing configs")
   assert(!builtinFilterIds.some(id => config.tools?.enabledTools?.includes(id)), "built-in code filters must not stay coupled to tools.enabledTools")
@@ -309,7 +312,9 @@ async function checkConfigSafety() {
   assert(config.tools?.builtin?.scheduleTask?.cronMaxPerUser === 1, "schedule cron max per user should default to old plugin limit")
   assert(config.tools?.builtin?.imageSearch?.maxResults <= 5, "image search should default to compact result count")
   assert(config.tools?.builtin?.imageSearch?.enabledSources?.includes("pixiv") && config.tools.builtin.imageSearch.pixivR18 === false, "image search should expose Pixiv with the R18 gate closed by default")
+  assert(config.tools?.builtin?.imageSearch?.cacheSelectedImages === false, "image_media should send original image URLs unless local caching is explicitly enabled")
   assert(config.tools?.builtin?.webSearch?.enabledSources?.join(",") === "baidu-ai,tavily", "web search should expose configurable Baidu AI and Tavily channels")
+  assert(config.tools?.builtin?.toolSearch?.localEnabled === true, "tool search should expose its local Registry implementation separately from the hosted implementation")
   assert(config.tools?.boundaryAccess?.enabled === true, "boundary access should default enabled")
   assert(config.tools?.boundaryAccess?.roles?.groupOwner, "boundary access should expose group owner role")
   assert(Array.isArray(config.tools?.boundaryAccess?.roles?.user?.deniedTools), "boundary access roles should expose explicit deny exceptions")
@@ -362,13 +367,13 @@ async function checkConfigSafety() {
       && config.persona.characterPrompt.includes("不编造")
       && !config.persona.characterPrompt.includes("knowledge_manage")
       && config.persona.runtimePrompt === defaultPersonaRuntimePrompt
-      && config.persona.runtimePrompt.includes("knowledge_manage")
-      && config.persona.runtimePrompt.includes("必须调用 schedule_task")
-      && config.persona.runtimePrompt.includes("本轮有相应工具时必须调用")
+      && config.persona.runtimePrompt.includes("使用工具搜索")
+      && config.persona.runtimePrompt.includes("诊断时优先只读工具")
+      && config.persona.runtimePrompt.includes("本轮有相应能力时必须调用")
       && config.persona.runtimePrompt.includes("不得只口头答应")
-      && config.persona.runtimePrompt.includes("网络搜索来源由运行时合并转发")
+      && config.persona.runtimePrompt.includes("不要无理由重复有副作用的操作")
       && config.persona.runtimePrompt.includes("本轮实际提供给模型的图片")
-      && config.persona.runtimePrompt.includes("主动投递必须使用 message_send")
+      && config.persona.runtimePrompt.includes("使用可用的消息投递能力")
       && config.persona.runtimePrompt.includes("<EMPTY>")
       && config.persona.runtimePrompt.length < 1000
       && composePersonaSystemPrompt(config.persona.characterPrompt, config.persona.runtimePrompt).includes("【角色设定】")
@@ -526,6 +531,37 @@ async function checkConfigHotReload() {
     const cleanedFilters = await configStore.load()
     assert(!("messageProcessing" in cleanedFilters.response), "retired message processor configuration should be removed")
     assert(!cleanedFilters.response.messageFilters.filters.some(filter => filter.id === "retired-tool-filter"), "tool-backed filter rules should be discarded rather than migrated")
+    await configStore.save(original)
+
+    const retiredToolRoutingConfig = JSON.parse(JSON.stringify(original))
+    const retiredModel = retiredToolRoutingConfig.models.find(model => model?.capabilities?.chat !== false)
+    assert(retiredModel, "smoke config should contain a chat model")
+    retiredModel.toolPolicy = {
+      ...(retiredModel.toolPolicy || {}),
+      mode: "denylist",
+      allow: ["message_send", "openai:web_search", "local:tool_search"],
+      deny: ["image_media", "local:web_search"],
+      sources: { web_search: "openai" },
+      strategies: { web_search: "fallback" },
+    }
+    retiredModel.responses = {
+      ...(retiredModel.responses || {}),
+      toolSearch: true,
+      webSearch: {
+        ...(retiredModel.responses?.webSearch || {}),
+        enabled: true,
+      },
+    }
+    retiredToolRoutingConfig.tools.builtin.imageSearch.fallbackEnabled = true
+    retiredToolRoutingConfig.tools.builtin.webSearch.fallbackEnabled = true
+    await configStore.save(retiredToolRoutingConfig)
+    const cleanedToolRouting = await configStore.load()
+    const cleanedModel = cleanedToolRouting.models.find(model => model?.name === retiredModel.name)
+    assert(cleanedModel && !Object.hasOwn(cleanedModel.toolPolicy || {}, "sources") && !Object.hasOwn(cleanedModel.toolPolicy || {}, "strategies"), "model tool-policy normalization should discard retired source and strategy fields")
+    assert(!Object.hasOwn(cleanedModel.responses || {}, "toolSearch") && !Object.hasOwn(cleanedModel.responses?.webSearch || {}, "enabled"), "Responses normalization should discard retired built-in tool switches")
+    assert(JSON.stringify(cleanedModel.toolPolicy?.allow || []) === JSON.stringify(["message_send"]), "model allowlist normalization should discard implementation-prefixed IDs without translating them")
+    assert(JSON.stringify(cleanedModel.toolPolicy?.deny || []) === JSON.stringify(["image_media"]), "model denylist normalization should preserve capability IDs and discard implementation-prefixed IDs")
+    assert(!Object.hasOwn(cleanedToolRouting.tools?.builtin?.imageSearch || {}, "fallbackEnabled") && !Object.hasOwn(cleanedToolRouting.tools?.builtin?.webSearch || {}, "fallbackEnabled"), "search tool normalization should discard retired fallback switches")
     await configStore.save(original)
 
     const retiredPersonaConfig = JSON.parse(JSON.stringify(original))
@@ -1666,7 +1702,7 @@ async function checkNetworkTools() {
     const webSearchTool = new WebSearchTool()
     assert(webSearchTool.configSchema?.properties?.baiduApiKey?.secret === true && webSearchTool.configSchema?.properties?.tavilyApiKey?.secret === true, "web_search should declare both provider keys as secret runtime variables")
     const searchConfig = JSON.parse(JSON.stringify(config))
-    searchConfig.tools.builtin.webSearch = { defaultSource: "baidu-ai", enabledSources: ["baidu-ai", "tavily"], fallbackEnabled: true, maxResults: 5, timeoutMs: 1000 }
+    searchConfig.tools.builtin.webSearch = { defaultSource: "baidu-ai", enabledSources: ["baidu-ai", "tavily"], strategy: "fallback", maxResults: 5, timeoutMs: 1000 }
     let searchCalls = []
     global.fetch = async (url, options = {}) => {
       searchCalls.push({ url: String(url), auth: String(options.headers?.Authorization || "") })
@@ -1674,9 +1710,30 @@ async function checkNetworkTools() {
       return new Response(JSON.stringify({ results: [{ title: "Tavily result", url: "https://example.com/tavily", content: "current answer", score: 0.9 }] }), { status: 200, headers: { "content-type": "application/json" } })
     }
     const webResult = await webSearchTool.execute({ query: "current smoke result", source: "auto" }, { config: searchConfig, toolConfig: { baiduApiKey: "smoke-baidu", tavilyApiKey: "smoke-tavily" } })
-    assert(webResult.source === "tavily" && webResult.results?.[0]?.url === "https://example.com/tavily", "web_search should fall back from Baidu AI to Tavily")
+    assert(webResult.content?.source === "tavily" && webResult.content?.results?.[0]?.url === "https://example.com/tavily", "web_search should fall back from Baidu AI to Tavily")
+    assert(!Object.hasOwn(webResult, "source") && webResult.content && !Object.hasOwn(webResult.content, "content"), "web_search should expose one structured content payload without duplicating the result at the top level")
     assert(webResult.metadata?.messageSendAppendPlan?.parts?.[0]?.type === "forward" && webResult.metadata.messageSendAppendPlan.parts[0].nodes?.[0]?.parts?.[0]?.text?.includes("https://example.com/tavily"), "web_search should prepare every source as merged-forward nodes for the following message_send")
     assert(searchCalls.length === 2 && searchCalls[0].auth === "Bearer smoke-baidu" && searchCalls[1].auth === "Bearer smoke-tavily", "web_search should route each provider with its own secret key")
+    global.fetch = async url => String(url).includes("qianfan.baidubce.com")
+      ? new Response(JSON.stringify({ references: [{ title: "Baidu result", url: "https://example.com/baidu", content: "baidu answer" }] }), { status: 200, headers: { "content-type": "application/json" } })
+      : new Response(JSON.stringify({ results: [{ title: "Tavily result", url: "https://example.com/tavily", content: "tavily answer" }] }), { status: 200, headers: { "content-type": "application/json" } })
+    const parallelResult = await webSearchTool.execute({ query: "parallel smoke", searchMode: "deep", maxResults: 3 }, {
+      config: searchConfig,
+      toolConfig: { baiduApiKey: "smoke-baidu", tavilyApiKey: "smoke-tavily" },
+      searchCapabilities: { webSearch: { hosted: async () => ({
+        text: "hosted answer",
+        sources: [
+          { title: "Hosted result 1", url: "https://example.com/hosted-1", content: "" },
+          { title: "Hosted result 2", url: "https://example.com/hosted-2", content: "" },
+          { title: "Hosted result 3", url: "https://example.com/hosted-3", content: "" },
+        ],
+      }) } },
+    })
+    assert(parallelResult.content?.strategy === "parallel" && parallelResult.content?.results?.length === 3, "web_search deep mode should aggregate hosted and all enabled local channels")
+    assert(parallelResult.content?.channelResults?.some(item => item.implementation === "openai:web_search" && item.resultKind === "assistant-message") && parallelResult.content?.channelResults?.filter(item => item.executionOwner === "agent" && item.resultKind === "search-results").length === 2, "parallel search should preserve implementation ownership and result kind in channel diagnostics")
+    const parallelUrls = new Set(parallelResult.content?.results?.map(item => item.url))
+    assert(parallelUrls.has("https://example.com/hosted-1") && parallelUrls.has("https://example.com/baidu") && parallelUrls.has("https://example.com/tavily"), "parallel search should preserve coverage from every successful channel before applying maxResults")
+    assert(parallelResult.content?.hostedDigest === "hosted answer" && (JSON.stringify(parallelResult.content).match(/hosted answer/g) || []).length === 1, "parallel search should keep the hosted assistant digest once instead of copying it into every source")
   } finally {
     global.fetch = originalFetch
   }
@@ -1684,14 +1741,19 @@ async function checkNetworkTools() {
 
 async function checkProviderTemplates() {
   const { applyProviderBundle, buildProviderBundle, listProviderTemplates } = await import("../output/runtime/models/configuration/provider-templates.js")
+  const { filterToolsForModel, modelToolAllowed, modelToolRoute } = await import("../output/runtime/models/configuration/tool-policy.js")
+  const { buildModelToolPolicyOptions, modelToolPolicyDraft, modelToolPolicyPatch } = await import("../output/runtime/web/client/features/providers/provider-tool-policy-editor.js")
+  const { responsesModelDraft, responsesModelPatch } = await import("../output/runtime/web/client/features/providers/provider-responses-editor.js")
   const { validateConfig } = await import("../output/runtime/config/validator.js")
   const { configStore } = await import("../output/runtime/config/store.js")
   const templates = listProviderTemplates()
   assert(templates.some(item => item.id === "qwen"), "provider templates should include qwen")
   assert(templates.some(item => item.id === "gemini"), "provider templates should include gemini")
   assert(templates.some(item => item.id === "claude"), "provider templates should include claude")
+  assert(templates.some(item => item.id === "openai_responses"), "provider templates should include OpenAI Responses")
   assert(templates.find(item => item.id === "gemini")?.toolUse === true, "gemini template should expose tool use")
   assert(templates.find(item => item.id === "claude")?.toolUse === true, "claude template should expose tool use")
+  assert(!templates.find(item => item.id === "openai_responses")?.responses?.toolSearch, "OpenAI Responses template should keep capability routing out of protocol-specific settings")
   const bundle = buildProviderBundle({ templateId: "qwen", apiKey: "test-key" })
   assert(bundle.provider.type === "qwen", "qwen template should build qwen provider")
   assert(bundle.model.visual === true && bundle.model.toolUse === true, "qwen template should expose vision and tools")
@@ -1701,6 +1763,39 @@ async function checkProviderTemplates() {
   assert(next.models.some(item => item.name === bundle.model.name), "provider bundle should add model")
   assert(next.modelTasks[bundle.taskName].modelList.includes(bundle.model.name), "provider bundle should attach model to task")
   assert(validateConfig(next).ok, "provider template config should validate")
+  const responsesBundle = buildProviderBundle({ templateId: "openai_responses", apiKey: "test-key" })
+  const responsesConfig = applyProviderBundle(config, responsesBundle)
+  assert(validateConfig(responsesConfig).ok, "OpenAI Responses template config should validate")
+  const invalidFileSearch = JSON.parse(JSON.stringify(responsesConfig))
+  const responsesModel = invalidFileSearch.models.find(item => item.name === responsesBundle.model.name)
+  responsesModel.responses.fileSearch = { enabled: true, vectorStoreIds: [] }
+  assert(!validateConfig(invalidFileSearch).ok, "Responses file search should require at least one Vector Store ID")
+  const allowlistModel = { toolPolicy: { mode: "allowlist", allow: ["message_send", "web_search"], routes: { web_search: { source: "hosted", strategy: "parallel" }, tool_search: { source: "disabled" } } } }
+  assert(filterToolsForModel([{ name: "message_send" }, { name: "web_search" }], allowlistModel).map(item => item.name).join(",") === "message_send,web_search", "model allowlists should govern a stable capability shared by local and hosted implementations")
+  assert(modelToolAllowed(allowlistModel, "openai:web_search") && !modelToolAllowed(allowlistModel, "openai:tool_search"), "model allowlists should distinguish hosted tool identities")
+  assert(!modelToolAllowed({ toolPolicy: { mode: "allowlist", allow: ["openai:web_search"] } }, "openai:web_search"), "implementation-prefixed configuration should not be accepted as a compatibility alias")
+  assert(modelToolRoute(allowlistModel, "web_search").source === "hosted" && modelToolRoute(allowlistModel, "web_search").strategy === "parallel" && modelToolRoute(allowlistModel, "tool_search").source === "disabled", "model capability routes should normalize source and strategy independently")
+  const toolPolicyDraft = modelToolPolicyDraft({ mode: "allowlist", allow: ["message_send", "web_search", "message_send"], routes: { web_search: { source: "local", strategy: "parallel" } } })
+  assert(Array.isArray(toolPolicyDraft.toolPolicyAllow) && toolPolicyDraft.toolPolicyAllow.join(",") === "message_send,web_search", "model tool policy editor should keep canonical allowlist selections as a deduplicated multi-select value")
+  const toolPolicyPatch = modelToolPolicyPatch({ ...toolPolicyDraft, toolPolicyAllow: ["web_search", "message_send", "web_search"] })
+  assert(toolPolicyPatch.allow.join(",") === "web_search,message_send" && toolPolicyPatch.routes.web_search.source === "local" && toolPolicyPatch.routes.web_search.strategy === "parallel", "model tool policy editor should persist canonical capability routes without protocol-specific duplicates")
+  const policyOptions = buildModelToolPolicyOptions({ tools: [
+    { name: "image_media", enabled: false, common: { source: "builtin", displayNameZh: "图片搜索" } },
+    { name: "message_send", enabled: true, common: { source: "builtin", displayNameZh: "消息发送" } },
+  ] }, { tools: { enabled: true, hosted: { openai: { enabled: true, webSearch: { enabled: false }, fileSearch: { enabled: true }, toolSearch: { enabled: true } } } } }, ["image_media", "unknown_saved_tool"])
+  assert(!policyOptions.some(item => item.value === "image_media" || item.value === "openai:web_search") && policyOptions.some(item => item.value === "message_send"), "model policy selectors should exclude globally disabled local and hosted tools")
+  assert(policyOptions.some(item => item.value === "unknown_saved_tool"), "model policy selectors should retain unknown saved ids so administrators can remove them")
+  const consolidatedResponses = responsesModelPatch(responsesModelDraft({}), "smoke-responses")
+  assert(!("enabled" in consolidatedResponses.webSearch) && !("toolSearch" in consolidatedResponses), "Responses settings should not duplicate capability routing or enable switches")
+  const invalidToolPolicy = JSON.parse(JSON.stringify(responsesConfig))
+  invalidToolPolicy.models.find(item => item.name === responsesBundle.model.name).toolPolicy = { mode: "both", allow: [""], sources: { webSearch: "somewhere" } }
+  assert(!validateConfig(invalidToolPolicy).ok, "invalid model tool policies should be rejected at the config boundary")
+  const invalidImplementationId = JSON.parse(JSON.stringify(responsesConfig))
+  invalidImplementationId.models.find(item => item.name === responsesBundle.model.name).toolPolicy = { mode: "allowlist", allow: ["openai:web_search"], routes: {} }
+  assert(!validateConfig(invalidImplementationId).ok, "model tool policy lists should reject implementation-prefixed legacy ids")
+  const invalidResponsesState = JSON.parse(JSON.stringify(responsesConfig))
+  invalidResponsesState.models.find(item => item.name === responsesBundle.model.name).responses.stateMode = "proxy_magic"
+  assert(!validateConfig(invalidResponsesState).ok, "unknown Responses state modes should be rejected at the config boundary")
 }
 
 async function checkAdapterToolProtocol() {
@@ -1716,6 +1811,8 @@ async function checkAdapterToolProtocol() {
   assert(adapters.find(item => item.id === "gemini")?.supportsTools === true, "gemini adapter should support tools")
   assert(adapters.find(item => item.id === "claude")?.supportsTools === true, "claude adapter should support tools")
   assert(adapters.find(item => item.id === "openai-compatible")?.supportsStreaming === true, "OpenAI-compatible adapter should declare streaming support")
+  assert(adapters.find(item => item.id === "openai-responses")?.supportsNativeToolSearch === true, "OpenAI Responses adapter should declare native tool search support")
+  assert(adapters.find(item => item.id === "openai-responses")?.protocol === "responses" && adapters.find(item => item.id === "claude")?.protocol === "claude-messages" && adapters.find(item => item.id === "gemini")?.protocol === "gemini-generate-content", "adapter diagnostics should expose the actual upstream conversation protocol")
   const mockModels = await adapterRegistry.listModels({ id: "mock", type: "mock" })
   assert(mockModels.adapter === "mock" && mockModels.models.some(item => item.id === "mock"), "adapter registry should support listing models from adapters")
   const messages = [
@@ -1785,6 +1882,230 @@ async function checkAdapterToolProtocol() {
     assert(streamed.toolCalls[0]?.name === "command_search" && streamed.toolCalls[0]?.arguments?.query === "体力", "OpenAI-compatible SSE parser should combine tool-call deltas")
     assert(streamed.stopReason === "tool_calls", "OpenAI-compatible SSE parser should preserve the structured finish reason")
     assert(streamed.usage.total === 6, "OpenAI-compatible SSE parser should keep final token usage")
+
+    let responsesUrl
+    let responsesRequest
+    global.fetch = async (url, options = {}) => {
+      responsesUrl = String(url)
+      responsesRequest = JSON.parse(String(options.body || "{}"))
+      return new Response(JSON.stringify({
+        id: "resp_smoke",
+        status: "completed",
+        output: [
+          { type: "reasoning", id: "rs_smoke", encrypted_content: "encrypted-smoke" },
+          { type: "web_search_call", id: "ws_smoke", status: "completed", action: { query: "体力 指令", sources: [{ title: "Example", url: "https://example.com" }] } },
+          { type: "file_search_call", id: "fs_smoke", status: "completed", queries: ["体力指令"], results: [{ file_id: "file-smoke" }] },
+          { type: "tool_search_call", id: "ts_smoke", status: "completed", execution: "server", arguments: { goal: "查找指令工具" } },
+          { type: "tool_search_output", id: "tso_smoke", status: "completed", tools: [{ type: "function", name: "command_search" }] },
+          { type: "function_call", id: "fc_smoke", call_id: "call_responses", name: "command_search", arguments: JSON.stringify({ query: "体力" }) },
+        ],
+        usage: { input_tokens: 7, output_tokens: 3, total_tokens: 10, input_tokens_details: { cached_tokens: 2 }, output_tokens_details: { reasoning_tokens: 1 } },
+      }), { status: 200, headers: { "content-type": "application/json" } })
+    }
+    const responses = await adapterRegistry.get("openai-responses").sendMessage({
+      channel: {
+        id: "responses-smoke",
+        type: "openai-responses",
+        model: "gpt-5.4",
+        baseURL: "https://responses.example/v1",
+        authType: "none",
+        timeoutMs: 5000,
+        responsesRuntime: { stateMode: "local", toolSearchAllowed: true, webSearchAllowed: true, fileSearchAllowed: true },
+        modelConfig: {
+          responses: {
+            store: false,
+            webSearch: { enabled: true },
+            toolSearch: { enabled: true },
+            fileSearch: { enabled: true, vectorStoreIds: ["vs_smoke"], maxNumResults: 4 },
+          },
+        },
+      },
+      messages: [{ role: "user", content: "查一下体力指令" }],
+      tools: [
+        { name: "tool_search", description: "Local fallback discovery.", parameters: { type: "object", properties: {} }, async execute() {} },
+        { name: "web_search", description: "Local fallback web search.", parameters: { type: "object", properties: {} }, async execute() {} },
+        { name: "command_search", description: "Search commands. Use for command lookup.", deferLoading: true, execution: { effect: "read" }, parameters: { type: "object", properties: { query: { type: "string" } } }, async execute() {} },
+      ],
+      maxTokens: 96,
+    })
+    assert(responsesUrl.endsWith("/v1/responses"), "Responses adapter should call the /responses endpoint")
+    assert(responsesRequest.input?.[0]?.role === "user" && responsesRequest.max_output_tokens === 96 && responsesRequest.store === false, "Responses request should map conversation input and output limits without changing local conversation ownership")
+    assert(responsesRequest.tools.some(tool => tool.type === "web_search") && responsesRequest.tools.some(tool => tool.type === "file_search" && tool.vector_store_ids?.[0] === "vs_smoke"), "Responses request should include configured hosted search tools")
+    assert(responsesRequest.tools.some(tool => tool.type === "tool_search") && responsesRequest.tools.some(tool => tool.type === "function" && tool.name === "command_search" && tool.defer_loading === true), "Responses request should expose deferred local functions through hosted tool search")
+    const deferredCommand = responsesRequest.tools.find(tool => tool.type === "function" && tool.name === "command_search")
+    assert(deferredCommand.description.includes("Do not") && deferredCommand.description.includes("read-only"), "Responses functions should receive decision-oriented descriptions with non-use guidance and side-effect semantics")
+    assert(!responsesRequest.tools.some(tool => tool.type === "function" && ["tool_search", "web_search"].includes(tool.name)), "Responses request should not duplicate hosted tools as local functions")
+    assert(responsesRequest.tool_choice === undefined && responsesRequest.include.includes("reasoning.encrypted_content"), "Responses request should request stateless reasoning replay data without forcing an unrelated function")
+    assert(responsesRequest.include.includes("web_search_call.action.sources") && responsesRequest.include.includes("file_search_call.results"), "Responses hosted searches should request source and file result details for local forwarding and audit")
+    assert(responses.stopReason === "tool_calls" && responses.toolCalls[0]?.id === "call_responses" && responses.toolCalls[0]?.arguments?.query === "体力", "Responses output should normalize native function calls for the existing executor")
+    assert(responses.protocol?.outputItems?.some(item => item.type === "reasoning") && responses.usage.cached === 2 && responses.usage.reasoning === 1, "Responses output should preserve replay items and detailed usage")
+    assert(responses.hostedToolCalls?.map(item => item.type).join(",") === "web_search_call,file_search_call,tool_search_call,tool_search_output", "Responses output should expose safe hosted-tool audit summaries")
+    assert(responses.hostedToolCalls?.[0]?.query === "体力 指令" && responses.hostedToolCalls?.[1]?.resultCount === 1 && responses.hostedToolCalls?.[3]?.loadedTools?.[0] === "command_search", "hosted-tool summaries should preserve useful audit metadata")
+    assert(responses.hostedToolCalls?.[0]?.raw?.action?.sources?.[0]?.url === "https://example.com", "Responses hosted tools should retain the upstream output item for bounded audit logging")
+    assert(responses.hostedSearchSources?.[0]?.title === "Example" && responses.hostedSearchSources?.[0]?.url === "https://example.com", "Responses hosted web search should expose normalized sources for the output layer")
+    assert(responses.upstreamResponseId === "resp_smoke", "Responses output should expose the upstream response id separately from local conversation history")
+
+    const { buildResponsesRequest, messagesForResponses } = await import("../output/runtime/models/adapters/openai/responses/request-adapter.js")
+    const forcedDirectRequest = buildResponsesRequest({
+      channel: {
+        id: "responses-forced-function",
+        type: "openai-responses",
+        model: "gpt-5.4",
+        responsesRuntime: { stateMode: "local", toolSearchAllowed: true },
+        modelConfig: { responses: { stateMode: "local" } },
+      },
+      messages: [{ role: "user", content: "必须直接搜索" }],
+      tools: [{ name: "command_search", description: "Search commands.", deferLoading: true, parameters: { type: "object", properties: {} }, async execute() {} }],
+      toolChoice: { type: "function", name: "command_search" },
+    })
+    assert(forcedDirectRequest.tool_choice?.name === "command_search" && !forcedDirectRequest.tools.some(tool => tool.type === "tool_search") && forcedDirectRequest.tools.find(tool => tool.name === "command_search")?.defer_loading === undefined, "a forced Responses function should be eagerly loaded without a redundant tool-search step")
+    const failClosedRequest = buildResponsesRequest({
+      channel: {
+        id: "responses-fail-closed",
+        type: "openai-responses",
+        model: "gpt-5.4",
+        modelConfig: { responses: { webSearch: { enabled: true }, toolSearch: { enabled: true }, fileSearch: { enabled: true, vectorStoreIds: ["vs_closed"] } } },
+      },
+      messages: [{ role: "user", content: "不得自动联网" }],
+      tools: [{ name: "command_search", description: "Search commands.", deferLoading: true, parameters: { type: "object", properties: {} }, async execute() {} }],
+    })
+    assert(!failClosedRequest.tools?.some(tool => ["web_search", "file_search", "tool_search"].includes(tool.type)), "Responses hosted tools should fail closed when runtime permission context is absent")
+    assert(!failClosedRequest.tools?.some(tool => tool.type === "function" && tool.defer_loading === true), "Responses functions should be eagerly loaded when hosted tool_search is unavailable")
+
+    const linkedRequest = buildResponsesRequest({
+      channel: {
+        id: "responses-linked",
+        type: "openai-responses",
+        model: "gpt-5.4",
+        params: { conversation: "must-not-leak", previous_response_id: "must-not-leak" },
+        responsesRuntime: { stateMode: "previous_response_id", previousResponseId: "resp_previous" },
+        modelConfig: { responses: { stateMode: "previous_response_id", store: false } },
+      },
+      messages: [
+        { role: "system", content: "system prompt" },
+        { role: "user", content: "旧问题" },
+        { role: "assistant", content: "旧回答" },
+        { role: "user", content: "新问题" },
+      ],
+      maxTokens: 64,
+    })
+    assert(linkedRequest.previous_response_id === "resp_previous" && linkedRequest.store === true, "upstream Responses state mode should force storage and link the prior response")
+    assert(linkedRequest.instructions === "system prompt", "linked Responses requests should resend current system instructions explicitly")
+    assert(linkedRequest.input?.length === 1 && linkedRequest.input[0]?.role === "user" && JSON.stringify(linkedRequest.input).includes("新问题") && !JSON.stringify(linkedRequest.input).includes("旧问题"), "linked Responses requests should send only incremental conversation input")
+    assert(linkedRequest.conversation === undefined, "model params must not inject a competing Responses conversation id")
+
+    const replay = messagesForResponses([
+      { role: "assistant", content: "", protocol: responses.protocol, toolCalls: responses.toolCalls },
+      { role: "tool", toolCallId: "call_responses", content: "建议 #体力" },
+    ])
+    assert(replay[0]?.type === "reasoning" && replay.some(item => item.type === "function_call") && replay.at(-1)?.type === "function_call_output", "Responses stateless replay should preserve original output items before local function outputs")
+    const recoveryReplayMessages = [
+      { role: "system", content: "system prompt" },
+      { role: "user", content: "旧问题" },
+      { role: "assistant", content: "旧回答" },
+      { role: "user", content: "查一下体力指令" },
+      { role: "assistant", content: "", protocol: responses.protocol, toolCalls: responses.toolCalls },
+      { role: "tool", toolCallId: "call_responses", content: "建议 #体力" },
+      { role: "tool", toolCallId: "call_orphaned", content: "不应重放的孤立工具结果" },
+    ]
+    const linkedFallbackBodies = []
+    global.fetch = async (_url, options = {}) => {
+      const requestBody = JSON.parse(String(options.body || "{}"))
+      linkedFallbackBodies.push(requestBody)
+      if (linkedFallbackBodies.length === 1) {
+        return new Response(JSON.stringify({ error: { message: "No tool call found for function call output with call_id call_responses." } }), { status: 400, headers: { "content-type": "application/json" } })
+      }
+      return new Response(JSON.stringify({ id: "resp_recovered", status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: "已根据工具结果继续回答。" }] }], usage: { input_tokens: 2, output_tokens: 1, total_tokens: 3 } }), { status: 200, headers: { "content-type": "application/json" } })
+    }
+    const recoveredLinkedResponse = await adapterRegistry.get("openai-responses").sendMessage({
+      channel: {
+        id: "responses-linked-recovery",
+        type: "openai-responses",
+        model: "gpt-5.4",
+        baseURL: "https://responses.example/v1",
+        authType: "none",
+        timeoutMs: 5000,
+        responsesRuntime: { stateMode: "auto", previousResponseId: "resp_missing_tool_state" },
+        modelConfig: { responses: { stateMode: "auto", store: false } },
+      },
+      messages: [
+        { role: "user", content: "查一下体力指令" },
+        { role: "assistant", content: "", protocol: responses.protocol, toolCalls: responses.toolCalls },
+        { role: "tool", toolCallId: "call_responses", content: "建议 #体力" },
+      ],
+      replayMessages: recoveryReplayMessages,
+      maxTokens: 64,
+    })
+    assert(linkedFallbackBodies.length === 2 && linkedFallbackBodies[0].previous_response_id === "resp_missing_tool_state" && linkedFallbackBodies[1].previous_response_id === undefined, "Responses should retry without the upstream link when a proxy loses function-call state")
+    assert(linkedFallbackBodies[1].input.some(item => item.type === "function_call") && linkedFallbackBodies[1].input.some(item => item.type === "function_call_output"), "Responses link recovery should replay the complete local function-call pair")
+    assert(JSON.stringify(linkedFallbackBodies[1].input).includes("旧问题") && !JSON.stringify(linkedFallbackBodies[1].input).includes("call_orphaned"), "Responses link recovery should use the bounded local checkpoint and discard orphaned tool items")
+    assert(recoveredLinkedResponse.upstreamStateReset === true && recoveredLinkedResponse.text.includes("继续回答") && recoveredLinkedResponse.responsesStateRecovery?.reason === "tool_call_link_missing" && recoveredLinkedResponse.responsesStateRecovery?.droppedToolItems === 1, "Responses auto recovery should establish a fresh upstream chain and expose recovery diagnostics")
+
+    const strictToolRepairBodies = []
+    global.fetch = async (_url, options = {}) => {
+      const requestBody = JSON.parse(String(options.body || "{}"))
+      strictToolRepairBodies.push(requestBody)
+      if (strictToolRepairBodies.length === 1) {
+        return new Response(JSON.stringify({ error: { message: "No tool call found for function call output with call_id call_responses." } }), { status: 400, headers: { "content-type": "application/json" } })
+      }
+      return new Response(JSON.stringify({ id: "resp_strict_tool_repaired", status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: "工具已经完成，继续给出最终说明。" }] }], usage: { input_tokens: 2, output_tokens: 1, total_tokens: 3 } }), { status: 200, headers: { "content-type": "application/json" } })
+    }
+    const strictToolRepaired = await adapterRegistry.get("openai-responses").sendMessage({
+      channel: {
+        id: "responses-linked-strict-tool-repair",
+        type: "openai-responses",
+        model: "gpt-5.4",
+        baseURL: "https://responses.example/v1",
+        authType: "none",
+        timeoutMs: 5000,
+        responsesRuntime: { stateMode: "previous_response_id", previousResponseId: "resp_strict_tool_parent" },
+        modelConfig: { responses: { stateMode: "previous_response_id" } },
+      },
+      messages: [
+        { role: "user", content: "查一下体力指令" },
+        { role: "assistant", content: "", protocol: responses.protocol, toolCalls: responses.toolCalls },
+        { role: "tool", toolCallId: "call_responses", content: "建议 #体力" },
+      ],
+      maxTokens: 64,
+    })
+    assert(strictToolRepairBodies.length === 2 && strictToolRepairBodies[0].previous_response_id === "resp_strict_tool_parent" && strictToolRepairBodies[1].previous_response_id === undefined, "strict Responses mode should repair a lost current-turn function-call link once without weakening ordinary chain failures")
+    assert(strictToolRepairBodies[1].input.some(item => item.type === "function_call") && strictToolRepairBodies[1].input.some(item => item.type === "function_call_output"), "strict current-turn repair should replay the matched call and output pair without re-executing the tool")
+    assert(strictToolRepaired.text.includes("最终说明") && strictToolRepaired.responsesStateRecovery?.reason === "tool_call_link_missing", "strict current-turn repair should let a required final reply complete and remain observable")
+
+    let strictLinkedAttempts = 0
+    global.fetch = async () => {
+      strictLinkedAttempts++
+      return new Response(JSON.stringify({ error: { message: "previous response resp_strict was not found", code: "previous_response_not_found" } }), { status: 400, headers: { "content-type": "application/json" } })
+    }
+    let strictLinkedError = ""
+    try {
+      await adapterRegistry.get("openai-responses").sendMessage({
+        channel: {
+          id: "responses-linked-strict",
+          type: "openai-responses",
+          model: "gpt-5.4",
+          baseURL: "https://responses.example/v1",
+          authType: "none",
+          timeoutMs: 5000,
+          responsesRuntime: { stateMode: "previous_response_id", previousResponseId: "resp_strict" },
+          modelConfig: { responses: { stateMode: "previous_response_id" } },
+        },
+        messages: [{ role: "user", content: "严格链路" }],
+        replayMessages: recoveryReplayMessages,
+      })
+    } catch (error) {
+      strictLinkedError = String(error?.message || error)
+    }
+    assert(strictLinkedAttempts === 1 && strictLinkedError.includes("not found"), "strict previous_response_id mode should fail once and leave channel fallback to the caller")
+    const { parseResponsesResponse } = await import("../output/runtime/models/adapters/openai/responses/response-adapter.js")
+    const cited = parseResponsesResponse({
+      id: "resp_cited",
+      status: "completed",
+      output: [{ type: "message", content: [{ type: "output_text", text: "检索结论", annotations: [{ type: "url_citation", title: "Example", url: "https://example.com/source" }] }] }],
+      usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+    })
+    assert(cited.stopReason === "end_turn" && cited.text === "检索结论", "Responses hosted web citations should not be duplicated inside the answer text")
+    assert(cited.hostedSearchSources?.[0]?.title === "Example" && cited.hostedSearchSources?.[0]?.url === "https://example.com/source", "Responses URL annotations should be forwarded as structured hosted search sources")
 
     let embeddingRequest
     global.fetch = async (_url, options = {}) => {
@@ -2009,7 +2330,7 @@ async function checkSqliteStorage() {
   try {
     assert(sqliteClient.status.available, "SQLite state database should initialize in worker")
     assert(sqliteClient.status.integrity === "ok", "SQLite state database should pass quick_check")
-    assert((sqliteClient.status.migrations || []).map(row => row.id).join(",") === "001-baseline.sql,002-tool-call-events.sql,003-model-call-snapshots.sql", "SQLite state database should apply the baseline, combined tool/runtime, and model snapshot schema")
+    assert((sqliteClient.status.migrations || []).map(row => row.id).join(",") === "001-baseline.sql,002-tool-call-events.sql,003-model-call-snapshots.sql,004-conversation-state.sql", "SQLite state database should apply the baseline, combined tool/runtime, model snapshot, and conversation state schema")
     const removed = await sqliteClient.get("SELECT name FROM sqlite_master WHERE type='table' AND name='knowledge_sources'")
     assert(!removed, "baseline state database should not recreate removed transitional tables")
   } finally {
@@ -2285,20 +2606,25 @@ async function checkMedia() {
     const imageDelivery = await imageTool.execute({ query: "猫", count: 2, limit: 2 }, { config: imageCacheConfig })
     const imageParts = imageDelivery.metadata?.messageSendPlan?.parts || []
     assert(imageParts.length === 2 && imageParts.every(part => part.type === "image"), "image_media should send only image parts without titles or source text")
-    assert(imageParts.every(part => part.source?.kind === "cache" && part.source?.value?.includes("media-cache/image_")), "image_media should cache selected remote images before message_send")
-    assert(imageDelivery.content.selected[0]?.originalUrl.endsWith("cat-1.jpg") && imageDelivery.content.selected[1]?.originalUrl.endsWith("cat-2.jpg"), "multiple cached image results should preserve their selected order and original correspondence")
+    assert(imageDelivery.content.cacheSelectedImages === false && imageParts.every(part => part.source?.kind === "url" && part.source?.value?.startsWith(imageBaseUrl)), "image_media should pass selected original URLs directly to message_send by default")
+    assert(imageDelivery.content.selected[0]?.originalUrl.endsWith("cat-1.jpg") && imageDelivery.content.selected[1]?.originalUrl.endsWith("cat-2.jpg"), "multiple image results should preserve their selected order and original correspondence")
     assert(!imageDelivery.metadata?.messageSendPlan?.finalReply, "image_media should not embed a fixed final reply in its delivery plan")
+    const cachedImageConfig = JSON.parse(JSON.stringify(imageCacheConfig))
+    cachedImageConfig.tools.builtin.imageSearch.cacheSelectedImages = true
+    const cachedImageDelivery = await imageTool.execute({ query: "猫", count: 2, limit: 2 }, { config: cachedImageConfig })
+    const cachedImageParts = cachedImageDelivery.metadata?.messageSendPlan?.parts || []
+    assert(cachedImageDelivery.content.cacheSelectedImages === true && cachedImageParts.every(part => part.source?.kind === "cache" && part.source?.value?.includes("media-cache/image_")), "image_media should download selected images only when local caching is explicitly enabled")
     const imageConfig = JSON.parse(JSON.stringify(await configStore.load()))
     imageConfig.tools.builtin.imageSearch.enabledSources = ["pixiv"]
     imageConfig.tools.builtin.imageSearch.defaultSource = "pixiv"
-    imageConfig.tools.builtin.imageSearch.fallbackEnabled = false
+    imageConfig.tools.builtin.imageSearch.strategy = "preferred"
     imageConfig.tools.builtin.imageSearch.pixivR18 = false
     imageConfig.security.linkSafety.allowPrivateHosts = true
     const blockedR18 = await imageTool.execute({ query: "白髪", source: "pixiv", r18: true }, { config: imageConfig })
     assert(String(blockedR18).includes("未由管理员启用"), "Pixiv R18 requests must be rejected by the administrator gate")
     const pixivDelivery = await imageTool.execute({ query: "白髪", source: "pixiv" }, { config: imageConfig })
     assert(pixivDelivery.content.selected[0]?.artworkId === "778899" && pixivDelivery.content.selected[0]?.imageIndex === 2, "Pixiv delivery should preserve artwork and page-index correspondence")
-    assert(pixivDelivery.metadata?.messageSendPlan?.parts?.[0]?.source?.kind === "cache", "Pixiv delivery should use a locally cached image resource")
+    assert(pixivDelivery.metadata?.messageSendPlan?.parts?.[0]?.source?.kind === "url", "Pixiv delivery should also use the original URL unless local caching is enabled")
     resetBilibiliSessionForTest()
     global.fetch = async url => {
       const value = String(url)
@@ -2350,7 +2676,7 @@ async function checkMedia() {
 
 async function checkOutputSemantics() {
   const { buildReplyPayload, normalizeResponseText } = await import("../output/runtime/core/chat/response-pipeline.js")
-  const { sendChatOutput, splitNaturalReply, splitConfiguredReply, configuredSegmentationDelayMs } = await import("../output/runtime/core/chat/output-service.js")
+  const { sendChatOutput, splitNaturalReply, splitConfiguredReply, configuredSegmentationDelayMs, formatHostedSearchCitations } = await import("../output/runtime/core/chat/output-service.js")
   const { convertCQCodes, findUnsupportedMediaCQCodes } = await import("../output/runtime/core/message/cq-code.js")
   const { configStore } = await import("../output/runtime/config/store.js")
   const config = JSON.parse(JSON.stringify(await configStore.load()))
@@ -2370,6 +2696,14 @@ async function checkOutputSemantics() {
   assert(splitNaturalReply("第一句。第二句！第三句？第四句。", { maxParts: 3 }).length === 3, "natural split should respect maxParts")
   const shortReply = "搜索被风控挡回来了。给你两个办法选一个：\n- 稍后再搜\n- 直接发 BV 号"
   assert(splitNaturalReply(shortReply, { maxParts: 3, minChars: 180 }).length === 1, "short replies should not be split by the natural strategy")
+  const citedText = formatHostedSearchCitations(
+    "结论一。([来源一](https://example.com/one?utm_source=openai))\n结论二。[来源二](https://example.com/two)\n保留 [普通链接](https://local.example/keep)。",
+    [
+      { title: "来源一", url: "https://example.com/one?utm_source=openai" },
+      { title: "来源二", url: "https://example.com/two" },
+    ],
+  )
+  assert(citedText === "结论一。¹\n结论二。²\n保留 [普通链接](https://local.example/keep)。", "hosted search citations should become compact markers without removing unrelated links")
   const indexedParts = splitNaturalReply(`这是第一段，需要有足够长度才能自然切开。${"补充内容".repeat(12)}。给你两个办法选一个：\n- 稍后再搜\n- 直接发 BV 号`, { maxParts: 3, minChars: 80, minPartChars: 40 })
   assert(indexedParts.join("\n").includes("给你两个办法选一个") && !indexedParts.at(-1).startsWith("个："), "natural split should preserve the original text boundary")
   const configuredParts = splitConfiguredReply("第一句。第二句！第三句？", {
@@ -2436,6 +2770,31 @@ async function checkOutputSemantics() {
     reply: async (msg, quote) => normalReplies.push({ msg, quote }),
   }, { channel: "mock", text: "普通回复。" }, config)
   assert(String(normalReplies[0]?.msg || "").startsWith("[mock]"), "normal chat output should keep channel prefix")
+  const hostedReplies = []
+  const hostedForwardNodes = []
+  await sendChatOutput({
+    isGroup: true,
+    self_id: "99999",
+    group_id: "20001",
+    user_id: "990002-hosted",
+    group: {
+      async makeForwardMsg(nodes) {
+        hostedForwardNodes.push(...nodes)
+        return { type: "node", data: nodes }
+      },
+    },
+    reply: async msg => hostedReplies.push(msg),
+  }, {
+    channel: "responses",
+    text: "远程检索结论。([来源一](https://example.com/one)) 第二条结论。([来源二](https://example.com/two))",
+    hostedSearchSources: [
+      { title: "来源一", url: "https://example.com/one" },
+      { title: "重复来源", url: "https://example.com/one" },
+      { title: "来源二", url: "https://example.com/two" },
+    ],
+  }, config)
+  assert(hostedReplies.length === 2 && String(hostedReplies[0]).includes("远程检索结论。¹") && String(hostedReplies[0]).includes("第二条结论。²") && !String(hostedReplies[0]).includes("https://example.com"), "hosted search URLs should leave the visible answer as compact cited text")
+  assert(hostedForwardNodes.length === 2 && hostedForwardNodes[0]?.nickname === "OpenAI 远程搜索来源 1" && String(hostedForwardNodes[0]?.message).includes("https://example.com/one"), "hosted search sources should use a deduplicated local merged-forward message")
   const cqReplies = []
   const originalAt = global.segment.at
   global.segment.at = id => ({ type: "at", data: { qq: String(id) } })
@@ -2852,12 +3211,16 @@ async function checkRenderService() {
 
 async function checkCommandRules() {
   const { YuiChat } = await import("../output/runtime/apps/chat.js")
+  const { YuiChatMaster } = await import("../output/runtime/apps/master.js")
   const { PLUGIN_COMMAND_PREFIX, PLUGIN_COMMAND_PREFIX_PATTERN, pluginCommand } = await import("../output/runtime/core/message/command-prefixes.js")
   const { defaults } = await import("../output/runtime/config/defaults.js")
   const { filterRegistry } = await import("../output/runtime/filters/core/registry.js")
   const { toolRegistry } = await import("../output/runtime/tools/support/registry.js")
   const app = new YuiChat()
-  const rules = app.rule || app.options?.rule || []
+  const masterApp = new YuiChatMaster()
+  const publicRules = app.rule || app.options?.rule || []
+  const masterRules = masterApp.rule || masterApp.options?.rule || []
+  const rules = [...publicRules, ...masterRules]
   const match = text => rules.some(rule => new RegExp(rule.reg).test(text))
   const explicitMatch = text => rules.some(rule => rule.fnc !== "firstPersonCall" && new RegExp(rule.reg).test(text))
   const methodNames = new Set(rules.map(rule => rule.fnc))
@@ -2865,6 +3228,9 @@ async function checkCommandRules() {
   const explicitRules = rules.filter(rule => rule.fnc !== "firstPersonCall")
   assert(PLUGIN_COMMAND_PREFIX === "#yui" && pluginCommand("chat") === "#yuichat", "plugin commands should derive display text from the single prefix regexp")
   assert(explicitRules.every(rule => String(rule.reg).startsWith(PLUGIN_COMMAND_PREFIX_PATTERN.source)), "every explicit command rule should derive from the single plugin prefix regexp")
+  assert(masterRules.length > 0 && masterRules.every(rule => rule.permission === "master"), "the dedicated master command entry should enforce master permission on every rule")
+  assert(publicRules.every(rule => !rule.permission), "the public chat entry should not retain master command registrations")
+  assert(Number(masterApp.priority ?? masterApp.options?.priority) < Number(app.priority ?? app.options?.priority), "the master command entry should run before the public catch-all rule")
   assert(!explicitMatch("#aichat 你好") && !explicitMatch("#ai面板"), "retired #ai commands should not stay registered")
   assert(defaults.persona.firstPerson === "埋埋", "default first-person trigger should be 埋埋")
   assert(webLoginRule?.permission === "master", "#yui面板 quick-login issuance must stay protected by the host master permission")
@@ -2943,15 +3309,15 @@ async function checkCommandRules() {
       receivedArgs = { name, args }
       return { ok: true }
     }
-    app.reply = async text => { replies.push(String(text)); return true }
-    app.e = { isMaster: true, isGroup: false, user_id: "smoke-master", msg: "#yui面板" }
-    await app.webLogin()
+    masterApp.reply = async text => { replies.push(String(text)); return true }
+    masterApp.e = { isMaster: true, isGroup: false, user_id: "smoke-master", msg: "#yui面板" }
+    await masterApp.webLogin()
     assert(/\?quick=[A-Za-z0-9_-]+/.test(replies.at(-1)) && replies.at(-1).includes("3 分钟内有效") && replies.at(-1).includes("只能使用一次"), "#yui面板 should be the owner-facing quick-code issuance path")
-    app.e = { isMaster: true, msg: "#yui测试工具 demo_echo city=上海 days=3" }
-    await app.testToolCommand()
+    masterApp.e = { isMaster: true, msg: "#yui测试工具 demo_echo city=上海 days=3" }
+    await masterApp.testToolCommand()
     assert(receivedArgs?.name === "demo_echo" && receivedArgs.args.city === "上海" && receivedArgs.args.days === 3, "tool command should parse key=value shortcuts")
-    app.e.msg = "#yui工具参数 demo_echo"
-    await app.toolParameterCommand()
+    masterApp.e.msg = "#yui工具参数 demo_echo"
+    await masterApp.toolParameterCommand()
     assert(replies.at(-1).includes("city（string，必填）") && replies.at(-1).includes("#yui测试工具 demo_echo city=示例"), "tool parameter command should explain schema and shortcut")
     const demoFilter = {
       id: "demo_filter",
@@ -2967,11 +3333,11 @@ async function checkCommandRules() {
       receivedFilterArgs = { name, payload, context }
       return { kind: "text", text: `${payload.text}${payload.params.suffix || ""}` }
     }
-    app.e.msg = "#yui测试过滤器 demo_filter text=你好 suffix=！ stage=input"
-    await app.testFilterCommand()
+    masterApp.e.msg = "#yui测试过滤器 demo_filter text=你好 suffix=！ stage=input"
+    await masterApp.testFilterCommand()
     assert(receivedFilterArgs?.name === "demo_filter" && receivedFilterArgs.payload.text === "你好" && receivedFilterArgs.payload.params.suffix === "！" && receivedFilterArgs.context.stage === "input", "filter command should pass text as automatic context and keep only extra parameters")
-    app.e.msg = "#yui过滤器参数 demo_filter"
-    await app.filterParameterCommand()
+    masterApp.e.msg = "#yui过滤器参数 demo_filter"
+    await masterApp.filterParameterCommand()
     assert(replies.at(-1).includes("正文会自动作为 text 上下文传入") && !replies.at(-1).includes("text（string"), "filter parameter command should hide automatic text input and explain the context")
   } finally {
     toolRegistry.getAllowedTools = originalAllowedTools
@@ -2981,6 +3347,7 @@ async function checkCommandRules() {
     filterRegistry.execute = originalFilterExecute
   }
   const { apps } = await import("../index.js")
+  assert(apps.YuiChatMaster, "dedicated master command app should be exported")
   assert(apps.YuiChatGroupPoke, "group poke notice app should be exported")
   assert(apps.YuiChatFriendPoke, "friend poke notice app should be exported")
   assert(apps.YuiChatNotifyPoke, "notify poke notice app should be exported")
@@ -3101,15 +3468,15 @@ async function checkPersonaTrigger() {
   assert(!Object.hasOwn(digest.context, "recentEnabled") && !Object.hasOwn(digest.context, "injectRecent") && !Object.hasOwn(digest.context, "maxMessages") && !Object.hasOwn(digest.context, "injectLimit"), "persona digest should not expose retired context controls")
   assert(digest.knowledge.commands >= 0, "persona digest should expose command knowledge state")
   assert(digest.knowledge.characterPromptEnabled === true, "persona digest should expose editable character prompt state")
-  assert(digest.prompt.runtimePrompt.includes("knowledge_manage") && digest.prompt.defaultRuntimePrompt === digest.prompt.runtimePrompt && digest.prompt.characterPrompt.includes("Smoke 角色设定") && digest.prompt.composedPreview.includes("【系统运行规则】") && digest.prompt.currentTime.includes("当前北京时间："), "persona digest should expose current and default runtime prompts, the character setting, composed preview, and current Beijing time")
+  assert(digest.prompt.runtimePrompt.includes("使用工具搜索") && digest.prompt.defaultRuntimePrompt === digest.prompt.runtimePrompt && digest.prompt.characterPrompt.includes("Smoke 角色设定") && digest.prompt.composedPreview.includes("【系统运行规则】") && digest.prompt.currentTime.includes("当前北京时间："), "persona digest should expose current and default runtime prompts, the character setting, composed preview, and current Beijing time")
   assert(digest.memory.enabled === true, "persona digest should expose memory state")
   assert(digest.media.enabled === true, "persona digest should expose media state")
   assert(digest.output.defaultMode === config.response.defaultMode && !Object.hasOwn(digest.output, "splitMaxParts"), "persona digest should expose unified output state without legacy split controls")
   const defaultConfig = await configStore.load()
   const defaultPersonaMessages = await buildPersonaMessages({ isGroup: false, user_id: "default-user", sender: { nickname: "Default" } }, "你好", defaultConfig)
   const defaultPersonaPrompt = defaultPersonaMessages[0]?.content || ""
-  assert(defaultPersonaPrompt.includes("可靠、自然、简洁") && defaultPersonaPrompt.includes("不编造") && defaultPersonaPrompt.includes("knowledge_manage") && defaultPersonaPrompt.includes("<EMPTY>"), "default composed prompt should include the character setting and default runtime rules")
-  assert(defaultPersonaPrompt.includes("运行时合并转发") && defaultPersonaPrompt.includes("只声称看到了本轮实际提供给模型的图片") && !defaultPersonaPrompt.includes("[CQ:at"), "default system prompt should match current search delivery and intent-driven image context behavior")
+  assert(defaultPersonaPrompt.includes("可靠、自然、简洁") && defaultPersonaPrompt.includes("不编造") && defaultPersonaPrompt.includes("使用工具搜索") && defaultPersonaPrompt.includes("<EMPTY>"), "default composed prompt should include the character setting and default runtime rules")
+  assert(defaultPersonaPrompt.includes("使用可用的消息投递能力") && defaultPersonaPrompt.includes("只声称看到了本轮实际提供给模型的图片") && !defaultPersonaPrompt.includes("[CQ:at"), "default system prompt should match current delivery and intent-driven image context behavior")
   const timedPersona = await buildPersonaMessagesWithContext({ isGroup: false, user_id: "time-user", sender: { nickname: "Time" } }, "现在几点", defaultConfig)
   const timeSection = timedPersona.sections.find(item => item.source === "runtime-time")
   assert(timeSection?.label === "当前时间" && /当前北京时间：\d{4}-\d{2}-\d{2} \d{2}:\d{2}（星期[一二三四五六日]）/.test(timeSection.content) && defaultPersonaMessages[0]?.content.includes("当前北京时间："), "every persona request should inject a separately auditable Beijing-time reference")
@@ -3281,6 +3648,7 @@ async function checkConversations() {
   const { configStore } = await import("../output/runtime/config/store.js")
   const { modelLogStore } = await import("../output/runtime/core/observability/model-log.js")
   const { adapterRegistry } = await import("../output/runtime/models/adapters/registry.js")
+  const { responsesStateKey } = await import("../output/runtime/models/configuration/responses-state.js")
   const { normalizeTool } = await import("../output/runtime/tools/support/contract.js")
   const { createExecutionRuntime } = await import("../output/runtime/tools/support/execution-runtime.js")
   const { toolRegistry } = await import("../output/runtime/tools/support/registry.js")
@@ -3412,6 +3780,210 @@ async function checkConversations() {
       sender: { user_id: "10001", nickname: "Smoke User" },
     }, "怎么使用帮助指令")
     assert(toolTraceResult.toolChain.some(item => item.name === "knowledge_manage" && item.status === "ok"), "chat result should record the knowledge tool chain")
+
+    let hostedRuntime
+    let hostedMessages
+    let hostedReplayMessages
+    let hostedRequestCount = 0
+    const hostedAdapter = {
+      id: "smoke-hosted-responses",
+      protocol: "responses",
+      supportsTools: true,
+      supportsVision: false,
+      supportsStreaming: false,
+      supportsEmbeddings: false,
+      supportsNativeToolSearch: true,
+      async sendMessage({ channel, messages = [], replayMessages = [] }) {
+        hostedRequestCount++
+        hostedRuntime = channel.responsesRuntime
+        hostedMessages = messages
+        hostedReplayMessages = replayMessages
+        return {
+          id: "resp_hosted_next",
+          upstreamResponseId: "resp_hosted_next",
+          text: "远程检索完成。",
+          stopReason: "end_turn",
+          usage: { input: 1, output: 1, total: 2, source: "reported" },
+          toolCalls: [],
+          hostedToolCalls: [{
+            id: "ws_hosted_smoke",
+            type: "web_search_call",
+            status: "completed",
+            query: "今日黄金价格",
+            resultCount: 1,
+            sources: [{ title: "黄金交易所", url: "https://example.com/gold" }],
+            raw: { type: "web_search_call", id: "ws_hosted_smoke", status: "completed", action: { query: "今日黄金价格", sources: [{ title: "黄金交易所", url: "https://example.com/gold" }] } },
+          }],
+          hostedSearchSources: [{ title: "黄金交易所", url: "https://example.com/gold" }],
+        }
+      },
+    }
+    const hostedChannel = {
+      id: hostedAdapter.id,
+      type: hostedAdapter.id,
+      model: "gpt-smoke",
+      provider: { name: "proxy-smoke" },
+      modelConfig: {
+        apiProvider: "proxy-smoke",
+        toolUse: true,
+        toolPolicy: { routes: { web_search: { source: "auto", strategy: "fallback" } } },
+        responses: { stateMode: "auto", webSearch: { params: {} } },
+      },
+      timeoutMs: 1000,
+    }
+    const hostedStateKey = responsesStateKey(hostedChannel)
+    adapterRegistry.register(hostedAdapter)
+    try {
+      const hostedToolsBefore = new Set(modelLogStore.memoryTools.keys())
+      const hostedOnlyConfig = JSON.parse(JSON.stringify(mockConfig))
+      hostedOnlyConfig.tools.builtin.webSearch.enabledSources = []
+      const hostedResult = await chatService.runModelStepWithChannel({
+        e: { isGroup: true, isMaster: true, group_id: "20001", user_id: "10001", sender: { role: "owner" } },
+        prompt: "查今日黄金价格",
+        config: hostedOnlyConfig,
+        history: [{ role: "user", content: "旧问题" }, { role: "assistant", content: "旧回答" }],
+        protocolState: { responses: { [hostedStateKey]: { previousResponseId: "resp_hosted_previous" } } },
+        step: { id: "reply", task: "replyer", mode: "final" },
+        channel: hostedChannel,
+      })
+      assert(hostedRuntime?.previousResponseId === "resp_hosted_previous" && hostedRuntime?.stateMode === "auto", "automatic Responses mode should pass the persisted upstream state to the protocol adapter")
+      assert(hostedRequestCount === 1 && hostedResult.text === "远程检索完成。", "OpenAI-only search should use the final assistant message from one native Responses request without an aggregate pass")
+      assert(!hostedMessages.some(item => item.role === "user" && item.content === "旧问题"), "linked Responses model steps should omit replayed local history")
+      assert(hostedReplayMessages.some(item => item.role === "user" && item.content === "旧问题"), "automatic Responses mode should retain a bounded local recovery checkpoint without sending it on the normal linked request")
+      assert(hostedResult.toolChain.some(item => item.name === "openai:web_search" && item.source === "openai-hosted" && item.metadata?.remote === true), "OpenAI hosted calls should appear in the same local tool chain and be marked as remote")
+      assert(hostedResult.toolsUsed.includes("openai:web_search") && hostedResult.hostedSearchSources?.[0]?.url === "https://example.com/gold", "hosted tools and sources should remain observable on the model result")
+      assert(hostedResult.responseState?.previousResponseId === "resp_hosted_next" && hostedResult.responseState?.key === hostedStateKey && hostedResult.responseState?.mode === "auto", "automatic Responses mode should persist the next upstream response id")
+      const loggedHostedTool = [...modelLogStore.memoryTools.values()].find(item => !hostedToolsBefore.has(item.id) && item.tool_name === "openai:web_search")
+      assert(loggedHostedTool?.source === "openai-hosted" && JSON.parse(loggedHostedTool?.metadata_json || "{}").remote === true, "hosted calls should be persisted as remote tool events in the unified audit log")
+      assert(loggedHostedTool?.result_text?.includes("ws_hosted_smoke") && loggedHostedTool.result_text.includes("今日黄金价格"), "hosted tool events should persist the actual upstream output item instead of an empty summary")
+    } finally {
+      adapterRegistry.adapters.delete(hostedAdapter.id)
+    }
+
+    const originalHostedMessageSend = toolRegistry.tools.get("message_send")
+    const hostedMessageDeliveries = []
+    const hostedMessageRequests = []
+    let hostedMessageRuntime
+    const hostedMessageSend = normalizeTool({
+      ...originalHostedMessageSend,
+      name: "message_send",
+      common: { ...originalHostedMessageSend.common, delivery: "media", requiresFinalReply: false },
+      async execute(args = {}) {
+        hostedMessageDeliveries.push(args)
+        return {
+          kind: "delivery",
+          chain: args.parts,
+          isError: false,
+          issues: [],
+          receipt: { id: "smoke-hosted-message-delivery", status: "sent", partCount: args.parts?.length || 0, sentCount: args.parts?.length || 0, failedCount: 0 },
+        }
+      },
+    })
+    const hostedMessageAdapter = {
+      id: "smoke-hosted-message-continuation",
+      protocol: "responses",
+      supportsTools: true,
+      supportsVision: false,
+      supportsStreaming: false,
+      supportsEmbeddings: false,
+      supportsNativeToolSearch: true,
+      async sendMessage({ channel, messages = [] }) {
+        hostedMessageRuntime = channel.responsesRuntime
+        hostedMessageRequests.push(messages)
+        if (hostedMessageRequests.length > 1) {
+          return { id: "resp_hosted_message_final", text: "已经把两张图片发给你，并完成了结果说明。", stopReason: "end_turn", usage: { input: 1, output: 1, total: 2, source: "reported" }, toolCalls: [] }
+        }
+        return {
+          id: "resp_hosted_message_tool",
+          text: "",
+          stopReason: "tool_calls",
+          usage: { input: 1, output: 1, total: 2, source: "reported" },
+          toolCalls: [{ id: "hosted-message-send", name: "message_send", arguments: { parts: [{ type: "text", text: "图片已发送" }] } }],
+          hostedToolCalls: [{
+            id: "hosted-message-web-search",
+            type: "web_search_call",
+            status: "completed",
+            query: "柴郡猫表情包",
+            raw: { type: "web_search_call", id: "hosted-message-web-search", status: "completed", action: { query: "柴郡猫表情包" } },
+          }],
+        }
+      },
+    }
+    const hostedMessageConfig = JSON.parse(JSON.stringify(mockConfig))
+    hostedMessageConfig.tools.enabledTools = ["message_send"]
+    hostedMessageConfig.tools.promptSelection.enabled = false
+    hostedMessageConfig.chat.maxToolRounds = 2
+    toolRegistry.tools.set("message_send", hostedMessageSend)
+    adapterRegistry.register(hostedMessageAdapter)
+    try {
+      const hostedMessageResult = await chatService.runModelStepWithChannel({
+        e: { isGroup: true, isMaster: true, group_id: "20001", user_id: "10001", sender: { role: "owner" }, reply: async () => {} },
+        prompt: "查找资料并发给我",
+        config: hostedMessageConfig,
+        history: [],
+        step: { id: "reply", task: "replyer", mode: "final" },
+        channel: {
+          id: hostedMessageAdapter.id,
+          type: hostedMessageAdapter.id,
+          model: "smoke",
+          modelConfig: { toolUse: true, toolPolicy: { routes: { web_search: { source: "hosted" }, tool_search: { source: "disabled" } } } },
+          timeoutMs: 1000,
+        },
+      })
+      assert(hostedMessageDeliveries.length === 1, "a local function call emitted beside a hosted Responses call should still execute once")
+      assert(hostedMessageRuntime?.webSearchAllowed === false, "disabling the web_search capability should override the hosted implementation switch")
+      assert(hostedMessageRequests.length === 2 && hostedMessageRequests[1].some(item => item.role === "tool"), "hosted plus local Responses calls should feed the local tool result back to the model")
+      assert(hostedMessageResult.text.includes("完成了结果说明") && hostedMessageResult.requiresFinalReply === true, "hosted plus message_send Responses output must not be mistaken for a silent single-delivery turn")
+    } finally {
+      toolRegistry.tools.set("message_send", originalHostedMessageSend)
+      adapterRegistry.adapters.delete(hostedMessageAdapter.id)
+    }
+
+    const originalDiscoveryTool = toolRegistry.tools.get("tool_search")
+    const forcedDiscoveryTool = normalizeTool({
+      name: "tool_search",
+      source: "builtin",
+      category: "discovery",
+      description: "Load a deliberately invalid smoke candidate.",
+      execution: { effect: "read" },
+      async execute() {
+        return { status: "success", content: "forced", metadata: { discovery: true, loadTools: ["image_media"] } }
+      },
+    })
+    const disabledToolSnapshots = []
+    const disabledToolAdapter = {
+      id: "smoke-disabled-tool-search-guard",
+      supportsTools: true,
+      supportsVision: false,
+      supportsStreaming: false,
+      supportsEmbeddings: false,
+      async sendMessage({ tools = [] }) {
+        disabledToolSnapshots.push(tools.map(tool => tool.name))
+        if (disabledToolSnapshots.length === 1) return { id: "disabled-search-call", text: "", usage: { input: 1, output: 1, total: 2, source: "reported" }, toolCalls: [{ id: "disabled-search-tool", name: "tool_search", arguments: { query: "图片" } }] }
+        return { id: "disabled-search-final", text: "未加载停用工具。", usage: { input: 1, output: 1, total: 2, source: "reported" }, toolCalls: [] }
+      },
+    }
+    const disabledToolConfig = JSON.parse(JSON.stringify(mockConfig))
+    disabledToolConfig.tools.enabledTools = ["tool_search"]
+    disabledToolConfig.tools.promptSelection.enabled = false
+    disabledToolConfig.chat.maxToolRounds = 2
+    toolRegistry.tools.set("tool_search", forcedDiscoveryTool)
+    adapterRegistry.register(disabledToolAdapter)
+    try {
+      await chatService.runModelStepWithChannel({
+        e: { isGroup: true, isMaster: true, group_id: "20001", user_id: "10001", sender: { role: "owner" } },
+        prompt: "尝试查找图片工具",
+        config: disabledToolConfig,
+        history: [],
+        step: { id: "reply", task: "replyer", mode: "final" },
+        channel: { id: disabledToolAdapter.id, type: disabledToolAdapter.id, model: "smoke", modelConfig: { toolUse: true, toolPolicy: { routes: { tool_search: { source: "local" } } } }, timeoutMs: 1000 },
+      })
+      assert(disabledToolSnapshots.length === 2 && disabledToolSnapshots.every(names => !names.includes("image_media")), "tool_search should never reload a tool excluded by the global enabled set")
+    } finally {
+      if (originalDiscoveryTool) toolRegistry.tools.set("tool_search", originalDiscoveryTool)
+      else toolRegistry.tools.delete("tool_search")
+      adapterRegistry.adapters.delete(disabledToolAdapter.id)
+    }
 
     const finalizerToolName = "smoke_required_tool"
     const finalizerTool = normalizeTool({
@@ -3604,6 +4176,8 @@ async function checkConversations() {
     const imageDeliveries = []
     let imageModelCalls = 0
     let imageNoToolFinalizations = 0
+    let imageInitialToolChoice
+    let imageInitialResponsesRuntime
     const imageMediaTool = normalizeTool({
       name: "image_media",
       source: "builtin",
@@ -3644,12 +4218,18 @@ async function checkConversations() {
     })
     const imageMediaAdapter = {
       id: "smoke-image-media",
+      protocol: "responses",
       supportsTools: true,
       supportsVision: false,
       supportsStreaming: false,
       supportsEmbeddings: false,
-      async sendMessage({ tools = [], messages = [] }) {
+      supportsNativeToolSearch: true,
+      async sendMessage({ channel, tools = [], messages = [], toolChoice }) {
         imageModelCalls++
+        if (imageModelCalls === 1) {
+          imageInitialToolChoice = toolChoice
+          imageInitialResponsesRuntime = { ...channel.responsesRuntime }
+        }
         if (!tools.length) {
           imageNoToolFinalizations++
           const instructed = messages.some(item => String(item.content || "").includes("媒体投递后续答"))
@@ -3673,8 +4253,15 @@ async function checkConversations() {
         config: imageMediaConfig,
         history: [],
         step: { id: "reply", task: "replyer", mode: "final" },
-        channel: { id: imageMediaAdapter.id, type: imageMediaAdapter.id, model: "smoke", modelConfig: { toolUse: true }, timeoutMs: 1000 },
+        channel: {
+          id: imageMediaAdapter.id,
+          type: imageMediaAdapter.id,
+          model: "smoke",
+          modelConfig: { toolUse: true, toolPolicy: { routes: { web_search: { source: "hosted" }, tool_search: { source: "hosted" } } } },
+          timeoutMs: 1000,
+        },
       })
+      assert(imageInitialToolChoice?.name === "image_media" && imageInitialResponsesRuntime?.webSearchAllowed === false && imageInitialResponsesRuntime?.toolSearchAllowed === false, "explicit image search should force image_media and suppress overlapping hosted web/tool search for that request")
       assert(imageMediaCalls.length === 1 && imageMediaCalls[0].action === "send", "the runtime should merge direct-send intent into image_media when action is omitted")
       assert(imageDeliveries[0]?.parts?.length === 2 && imageDeliveries[0].parts.every(part => part.type === "image"), "image_media automatic delivery should contain image resources only")
       assert(imageMediaResult.toolChain.map(item => item.name).join(",") === "image_media,message_send" && imageMediaResult.toolRounds === 1, "image_media should search and deliver in one model-led round")
@@ -4625,8 +5212,7 @@ async function checkConversations() {
   }
 }
 
-// 模型日志的数据库字段、日聚合触发器和预算账本均由独立 SQLite 集成回归覆盖；
-// Smoke 仅确认该模块可以在完整插件检查序列中启动和停止。
+// 数据库字段和日聚合由独立 SQLite 回归覆盖；这里补协议、托管工具与脱敏回显。
 async function checkUnifiedModelLogs() {
   const { defaults } = await import("../output/runtime/config/defaults.js")
   const { sqliteClient } = await import("../output/runtime/core/storage/sqlite/client.js")
@@ -4636,6 +5222,35 @@ async function checkUnifiedModelLogs() {
   try {
     modelLogStore.start(defaults)
     assert(modelLogStore.stats().persistenceAvailable, "unified model logs should see the baseline SQLite worker")
+    const call = modelLogStore.beginModelCall({
+      source: "smoke",
+      purpose: "chat",
+      channel: { id: "responses-log-smoke", type: "openai-responses", model: "gpt-5.4", modelConfig: { name: "responses-log-smoke" } },
+      messages: [{ role: "assistant", content: "", protocol: { kind: "responses", outputItems: [{ type: "reasoning", encrypted_content: "MUST_NOT_PERSIST" }] } }],
+      tools: [
+        { type: "web_search" },
+        { type: "function", name: "command_search", description: "Search commands.", parameters: { type: "object", properties: {} }, defer_loading: true },
+      ],
+      request: { protocol: "responses" },
+    })
+    assert(call?.id, "Responses model log smoke should start a model call")
+    modelLogStore.completeModelCall(call, {
+      response: {
+        id: "resp_log_smoke",
+        text: "完成",
+        stopReason: "end_turn",
+        toolCalls: [],
+        hostedToolCalls: [{ type: "web_search_call", id: "ws_log_smoke", status: "completed", query: "测试", raw: { type: "web_search_call", private_raw_marker: "RAW_ONLY_IN_TOOL_EVENT" } }],
+        responsesStateRecovery: { reason: "tool_call_link_missing", from: "linked", to: "stateless_replay", replayedMessages: 6, droppedToolItems: 1 },
+        usage: { input: 2, output: 1, total: 3, cached: 0, reasoning: 0, source: "reported", inputKnown: true, outputKnown: true },
+      },
+    })
+    const detail = await modelLogStore.getModelCallDetail(call.id)
+    assert(detail?.modelCall?.adapter === "openai-responses" && detail.modelCall.hosted_tool_call_count === 1, "model logs should expose protocol adapter and hosted-tool call summaries")
+    assert(detail?.modelCall?.responses_state_recovery?.reason === "tool_call_link_missing" && detail.modelCall.responses_state_recovery.droppedToolItems === 1, "model logs should expose bounded Responses recovery diagnostics")
+    assert(!JSON.stringify(detail?.modelCall?.hosted_tool_calls || []).includes("RAW_ONLY_IN_TOOL_EVENT"), "model metadata should omit hosted raw payloads that are stored on their dedicated tool events")
+    assert(detail?.snapshot?.tools?.[0]?.type === "web_search" && detail.snapshot.tools?.[1]?.description === "Search commands.", "model logs should preserve Responses top-level function and built-in tool definitions")
+    assert(!JSON.stringify(detail?.snapshot || {}).includes("MUST_NOT_PERSIST"), "model snapshots should redact encrypted Responses reasoning content")
   } finally {
     await modelLogStore.stop({ flush: true })
     if (ownsSqliteClient) await sqliteClient.close()
@@ -4985,8 +5600,11 @@ async function checkWebAndBoot() {
   assert(webShellSource.includes("日志与用量") && webShellSource.indexOf('{ id: "logs"') > webShellSource.indexOf('label: "管理"') && webStoreSource.includes('logs: ["config"]') && webLogsSource.includes("visibilitychange") && webLogsSource.includes("setInterval"), "logs page should live in the management navigation group with bounded five-second refresh while visible")
   assert(webStoreSource.includes("refreshTab") && webStoreSource.includes("tabSlices") && webStoreSource.includes("saveConfigPatch") && webStoreSource.includes("loadInitial") && webStoreSource.includes("Promise.allSettled") && webStoreSource.includes("setDirtyScope") && webStoreSource.includes("discardPendingNavigation"), "web store should support page-scoped loading, slice error isolation, and shared dirty-state navigation protection")
   assert(webStoreSource.includes("developerMode") && webStoreSource.includes("setDeveloperMode"), "web store should persist the local developer-mode preference")
+  assert(webStoreSource.includes('providers: ["config", "providers", "tools"'), "provider editor should load the live tool catalog for model allowlist and denylist selection")
   assert(webStoreSource.includes("authenticated") && !webStoreSource.includes('localStorage.setItem("yui-chat-token"') && webShellSource.includes("HttpOnly 会话"), "web UI must keep management tokens out of browser storage and use protected sessions")
   assert(webUiSource.includes("openDrawerStack") && webUiSource.includes("layerZIndex") && webUiSource.includes("focusableElements") && webUiSource.includes("aria-labelledby") && webUiSource.includes("ConfirmDialog") && webUiSource.includes("confirm-layer") && !webUiSource.includes("window.confirm"), "shared UI should provide accessible stacked drawers and a global confirmation modal without native dialogs")
+  assert(webUiSource.includes("SearchMultiSelect") && webUiSource.includes("search-multi-options") && webProvidersSource.includes("<SearchMultiSelect") && webProvidersSource.includes("toolPolicyOptions"), "model tool policies should use the shared searchable multi-select against the current tool catalog")
+  assert(webCssSource.includes("grid-template-columns: 19px minmax(0, 1fr)") && webCssSource.includes(".search-multi-select > summary::marker"), "searchable model tool policy options should keep the checkbox and copy in stable columns without a duplicate native details marker")
   assert(webStoreSource.includes("confirmAction") && webStoreSource.includes("settleConfirm") && webShellSource.includes("<ConfirmDialog"), "global confirmation state should be shared by every page and mounted once in the app shell")
   assert(webUiSource.includes("SectionNav") && webUiSource.includes("section-nav-item"), "shared UI should expose task-oriented second-level navigation")
   assert(webShellSource.includes("top-diagnostic-button") && webShellSource.includes("运行诊断") && webShellSource.includes("diagnosticIssues"), "app shell should expose diagnostics from a compact top-level trigger and drawer")
@@ -5083,8 +5701,12 @@ async function checkWebAndBoot() {
       && webToolsSource.includes("ToolDetailModal")
       && webToolsSource.includes("ToolConfigurationPanel")
       && webToolsSource.includes("tool-channel-list")
-      && webToolsSource.includes('draggable="true"')
-      && webToolsSource.includes("defaultSource`]: enabledSources[0]")
+      && webToolsSource.includes(':draggable="!channel.fixed"')
+      && webToolsSource.includes("defaultSource`] = enabledSources[0] ||")
+      && webToolsSource.includes("openai:web_search")
+      && webToolsSource.includes("openai:tool_search")
+      && webToolsSource.includes("local:tool_search")
+      && webToolsSource.includes('["image_media", "web_search", "tool_search"].includes(toolDetail.name)')
       && webToolsSource.includes("启用并保存即可使用")
       && webToolsSource.includes("capability-global-settings")
       && webToolsSource.includes("globalToolsEnabled")
@@ -5629,6 +6251,7 @@ async function checkWebAuthSecurity() {
 
 async function checkWebConfigAdmin() {
   const { configStore } = await import("../output/runtime/config/store.js")
+  const { toolRegistry } = await import("../output/runtime/tools/support/registry.js")
   const { createWebApp } = await import("../output/runtime/web/http/app.js")
   const { issueQuickLogin } = await import("../output/runtime/web/http/auth.js")
   const { createServer } = await import("node:http")
@@ -5707,6 +6330,25 @@ async function checkWebConfigAdmin() {
     })
     assert(disabledAgainResponse.status === 401, "cleared static token should stop authorizing the static session endpoint")
     const clearedSessionHeaders = { "content-type": "application/json", cookie: clearedCookie }
+    const hotTool = "message_send"
+    const beforeHotToggle = (await toolRegistry.list()).find(item => item.name === hotTool)
+    assert(beforeHotToggle, "hot tool toggle smoke should resolve a registered built-in tool")
+    const toggledEnabled = beforeHotToggle.enabled !== true
+    const hotToggleResponse = await fetch(`http://127.0.0.1:${port}/api/tools/enabled`, {
+      method: "POST",
+      headers: clearedSessionHeaders,
+      body: JSON.stringify({ tool: hotTool, enabled: toggledEnabled }),
+    })
+    const hotTogglePayload = await hotToggleResponse.json()
+    assert(hotToggleResponse.ok && hotTogglePayload.hotApplied === true && hotTogglePayload.runtime?.tools === false, "single-tool enable changes should apply as a live policy update without rebuilding the registry")
+    assert(hotTogglePayload.tools?.find(item => item.name === hotTool)?.enabled === toggledEnabled, "hot tool toggle response should immediately reflect the saved state")
+    assert((await toolRegistry.getEnabledTools()).some(item => item.name === hotTool) === toggledEnabled, "the next model tool resolution should read the hot-applied enabled state")
+    const hotRestoreResponse = await fetch(`http://127.0.0.1:${port}/api/tools/enabled`, {
+      method: "POST",
+      headers: clearedSessionHeaders,
+      body: JSON.stringify({ tool: hotTool, enabled: beforeHotToggle.enabled === true }),
+    })
+    assert(hotRestoreResponse.ok, "hot tool toggle smoke should restore the original tool state")
     const tempTokenResponse = await fetch(`http://127.0.0.1:${port}/api/auth/local-temp-token`, { method: "POST" })
     assert(tempTokenResponse.status === 404, "Web must not expose a local temporary-token issuance endpoint")
     const missingQuickResponse = await fetch(`http://127.0.0.1:${port}/api/auth/quick-login`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })

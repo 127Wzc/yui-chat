@@ -1,4 +1,5 @@
 import type { JsonValue } from "../../core/message-chain/types.js"
+import { cloneJsonValue } from "../../core/shared/json-values.js"
 
 type UnknownRecord = Record<string, unknown>
 
@@ -16,6 +17,7 @@ export interface ProviderTemplate {
   toolUse: boolean
   taskName: string
   params: Record<string, JsonValue>
+  responses?: Record<string, JsonValue>
 }
 
 export interface ProviderBundle {
@@ -47,6 +49,18 @@ export const providerTemplates: Record<string, ProviderTemplate> = {
     id: "openai", label: "OpenAI", adapter: "openai-compatible", providerName: "openai-main",
     baseURL: "https://api.openai.com/v1", authType: "bearer", authHeader: "Authorization",
     modelIdentifier: "gpt-4o-mini", visual: true, toolUse: true, taskName: "replyer", params: { temperature: 0.7 },
+  },
+  openai_responses: {
+    id: "openai_responses", label: "OpenAI Responses", adapter: "openai-responses", providerName: "openai-responses",
+    baseURL: "https://api.openai.com/v1", authType: "bearer", authHeader: "Authorization",
+    modelIdentifier: "gpt-5.4", visual: true, toolUse: true, taskName: "replyer", params: {},
+    responses: {
+      stateMode: "auto",
+      store: false,
+      parallelToolCalls: true,
+      webSearch: { params: {} },
+      fileSearch: { enabled: false, vectorStoreIds: [], maxNumResults: 8 },
+    },
   },
   openai_compatible: {
     id: "openai_compatible", label: "OpenAI Compatible", adapter: "openai-compatible", providerName: "openai-compatible",
@@ -85,7 +99,7 @@ export function getProviderTemplate(id: unknown = ""): ProviderTemplate {
 }
 
 export function listProviderTemplates(): ProviderTemplate[] {
-  return Object.values(providerTemplates).map(item => ({ ...item, params: { ...item.params } }))
+  return Object.values(providerTemplates).map(item => ({ ...item, params: { ...item.params }, ...(item.responses ? { responses: cloneJsonValue(item.responses) as Record<string, JsonValue> } : {}) }))
 }
 
 export function sanitizeProviderId(value: unknown = ""): string {
@@ -122,6 +136,7 @@ export function buildProviderBundle(input: UnknownRecord = {}): ProviderBundle {
     priceIn: Number(input.priceIn || 0),
     priceOut: Number(input.priceOut || 0),
     params: Object.keys(record(input.params)).length ? record(input.params) : { ...template.params },
+    ...(template.responses ? { responses: cloneJsonValue(template.responses) } : {}),
   }))
   return { template, provider, model: models[0], models, taskName: "replyer" }
 }

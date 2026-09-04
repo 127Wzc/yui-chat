@@ -112,44 +112,8 @@ function targetUserIds(e: HostEvent = {}) {
   return [...ids].filter(Boolean)
 }
 
-export class YuiChat extends hostRuntime.Plugin {
-  constructor() {
-    super({
-      name: "Yui Chat",
-      dsc: "隔离版 AI 聊天、指令检索与新 Web 面板",
-      event: "message",
-      priority: 1139,
-      rule: [
-        { reg: pluginCommandRule("chat([\\s\\S]*)"), fnc: "chat" },
-        { reg: pluginCommandRule("help([\\s\\S]*)"), fnc: "help" },
-        { reg: pluginCommandRule("(?:全部|所有)定时任务(?:列表)?"), fnc: "allScheduleTaskList", permission: "master" },
-        { reg: pluginCommandRule("(?:我的)?定时任务(?:列表)?"), fnc: "scheduleTaskList" },
-        { reg: pluginCommandRule("对话列表"), fnc: "conversationList", permission: "master" },
-        { reg: pluginCommandRule("(结束|新开|摧毁|毁灭|完结)对话([\\s\\S]*)"), fnc: "clear" },
-        { reg: pluginCommandRule("(结束|新开|摧毁|毁灭|完结)全部(模式|模型)?对话"), fnc: "endAllConversations", permission: "master" },
-        { reg: pluginCommandRule("(面板|登录|登陆)"), fnc: "webLogin", permission: "master" },
-        { reg: pluginCommandRule("诊断"), fnc: "diagnostics", permission: "master" },
-        { reg: pluginCommandRule("测试工具(?:\\s+[a-zA-Z0-9_.-]+)?(?:\\s+[\\s\\S]*)?"), fnc: "testToolCommand", permission: "master" },
-        { reg: pluginCommandRule("工具参数(?:\\s+[a-zA-Z0-9_.-]+)?"), fnc: "toolParameterCommand", permission: "master" },
-        { reg: pluginCommandRule("测试过滤器(?:\\s+[a-zA-Z0-9_.-]+)?(?:\\s+[\\s\\S]*)?"), fnc: "testFilterCommand", permission: "master" },
-        { reg: pluginCommandRule("过滤器参数(?:\\s+[a-zA-Z0-9_.-]+)?"), fnc: "filterParameterCommand", permission: "master" },
-        { reg: pluginCommandRule("渲染(帮助菜单|菜单|帮助|能力|工具|MarkdownHTML|markdownhtml|Markdown|markdown|思维导图HTML|思维导图html|MarkmapHTML|markmaphtml|思维导图|词云|动态|面板)([\\s\\S]*)"), fnc: "renderImageCommand", permission: "master" },
-        { reg: pluginCommandRule("截图URL\\s+([\\s\\S]+)"), fnc: "screenshotUrl", permission: "master" },
-        { reg: pluginCommandRule("截图HTML\\s+([\\s\\S]+)"), fnc: "screenshotHtml", permission: "master" },
-        { reg: pluginCommandRule("(本群|全局)?(群\\d+)?(闭嘴|关机|休眠|下班)([\\s\\S]*)"), fnc: "muteChat", permission: "master" },
-        { reg: pluginCommandRule("(本群|全局)?(群\\d+)?(张嘴|开口|说话|上班)"), fnc: "unmuteChat", permission: "master" },
-        { reg: pluginCommandRule("查看?(闭嘴|关机|休眠|下班)列表?"), fnc: "muteList", permission: "master" },
-        { reg: pluginCommandRule("清理(全部)?缓存"), fnc: "cleanupCache", permission: "master" },
-        { reg: pluginCommandRule("工具权限(开启|关闭)?"), fnc: "toolPermissionGroups", permission: "master" },
-        { reg: pluginCommandRule("第一人称(概率|冷却|禁用本群|启用本群|随机开启|随机关闭|旁路开启|旁路关闭|戳一戳开启|戳一戳关闭)([\\s\\S]*)"), fnc: "firstPersonTriggerSettings", permission: "master" },
-        { reg: pluginCommandRule("第一人称(开启|关闭)?"), fnc: "firstPersonSettings", permission: "master" },
-        { reg: pluginCommandRule("打招呼(\\d+)?"), fnc: "initiativeGreeting", permission: "master" },
-        { reg: pluginCommandRule("设置(AI|ai)?第一人称(称谓)?([\\s\\S]*)"), fnc: "setFirstPerson", permission: "master" },
-        { reg: pluginCommandRule("(文本|图片|语音)模式"), fnc: "switchMode" },
-        { reg: "^[\\s\\S]*$", fnc: "firstPersonCall", log: false },
-      ],
-    })
-  }
+/** 公开入口和 Master 入口共用处理器；权限只在各自入口的 rule 中声明。 */
+export class YuiChatCommandHandlers extends hostRuntime.Plugin {
 
   async chat() {
     const prompt = stripPluginCommand(this.e.msg, "chat")
@@ -548,4 +512,24 @@ export class YuiChat extends hostRuntime.Plugin {
     return handleFirstPersonMessage(this.e, { logPrefix: "[yui-chat] 第一人称回应失败" })
   }
 
+}
+
+/** 普通用户入口：只注册聊天、帮助、个人会话和个人输出设置。 */
+export class YuiChat extends YuiChatCommandHandlers {
+  constructor() {
+    super({
+      name: "Yui Chat",
+      dsc: "AI 聊天、指令检索与个人会话设置",
+      event: "message",
+      priority: 1139,
+      rule: [
+        { reg: pluginCommandRule("chat([\\s\\S]*)"), fnc: "chat" },
+        { reg: pluginCommandRule("help([\\s\\S]*)"), fnc: "help" },
+        { reg: pluginCommandRule("(?:我的)?定时任务(?:列表)?"), fnc: "scheduleTaskList" },
+        { reg: pluginCommandRule("(结束|新开|摧毁|毁灭|完结)对话([\\s\\S]*)"), fnc: "clear" },
+        { reg: pluginCommandRule("(文本|图片|语音)模式"), fnc: "switchMode" },
+        { reg: "^[\\s\\S]*$", fnc: "firstPersonCall", log: false },
+      ],
+    })
+  }
 }

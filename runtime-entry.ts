@@ -4,6 +4,7 @@ import { toolRegistry } from "./tools/support/registry.js"
 import { filterRegistry } from "./filters/core/registry.js"
 import { commandObserver } from "./knowledge/command-observer.js"
 import { YuiChat } from "./apps/chat.js"
+import { YuiChatMaster } from "./apps/master.js"
 import { YuiChatFriendPoke, YuiChatGroupPoke, YuiChatNotifyPoke } from "./apps/poke.js"
 import { registerFirstPersonListener } from "./core/persona/first-person-listener.js"
 import { initiativeGreetingScheduler } from "./core/persona/initiative-greeting.js"
@@ -92,6 +93,7 @@ await boot()
 
 export const apps = {
   YuiChat,
+  YuiChatMaster,
   YuiChatGroupPoke,
   YuiChatFriendPoke,
   YuiChatNotifyPoke,

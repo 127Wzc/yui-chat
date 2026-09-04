@@ -160,8 +160,15 @@ export function registerExtensionRoutes(app: RouteApp): void {
           enabledTools: [...enabled],
         },
       })
+    }, {}, {
+      // enabledTools 是运行时策略，不改变工具目录本身。模型每轮都会读取最新
+      // 配置，因此无需重建内置、Custom 或 MCP 注册表，也不会引起外部重连。
+      reinitTools: false,
+      reinitFilters: false,
+      restartInitiativeGreeting: false,
+      restartScheduleTasks: false,
     })
-    res.json({ ok: true, config: saved, runtime, tools: await toolRegistry.list() })
+    res.json({ ok: true, hotApplied: true, config: saved, runtime, tools: await toolRegistry.list() })
   }, { errorStatus: 400 }))
   app.get("/api/tools/:name/source-preview", auth, handleRoute(async (req, res) => {
     const name = String(req.params.name || "").trim()

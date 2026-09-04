@@ -44,6 +44,7 @@ export interface ToolsSlice extends UnknownRecord {
 export interface ToolsConfig extends UnknownRecord {
   enabled?: boolean
   policy?: { allowExternalNetwork?: boolean; allowCustomTools?: boolean; allowMcpTools?: boolean }
+  hosted?: { openai?: { enabled?: boolean; webSearch?: { enabled?: boolean }; fileSearch?: { enabled?: boolean }; toolSearch?: { enabled?: boolean } } }
   promptSelection?: { enabled?: boolean; maxTools?: number; maxDefinitionTokens?: number }
   builtin?: UnknownRecord
 }

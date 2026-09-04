@@ -204,7 +204,7 @@ export const tabSlices: Record<TabName, SliceName[]> = {
   overview: ["config", "diagnostics", "conversations", "setupGuide", "logsSummary"],
   chat: ["config", "providers", "conversations", "setupGuide"],
   logs: ["config"],
-  providers: ["config", "providers", "diagnostics", "subAgentRuns"],
+  providers: ["config", "providers", "tools", "diagnostics", "subAgentRuns"],
   persona: ["config", "output", "diagnostics"],
   tools: ["config", "tools", "skills", "mcp", "render", "diagnostics"],
   filters: ["filters", "config"],

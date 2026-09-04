@@ -9,6 +9,7 @@ export interface ConversationEntry extends UnknownRecord {
   turns?: unknown[]
   usage?: UnknownRecord
   toolCalls?: number
+  protocolState?: UnknownRecord
   lastSeen?: number
 }
 
@@ -133,21 +134,25 @@ export class ConversationState {
     }
   }
 
-  async getHistory(key: string, version: ConversationVersion | null = null): Promise<unknown[]> {
+  async getConversation(key: string, version: ConversationVersion | null = null): Promise<ConversationEntry> {
     const value = this.conversations.get(key)
-    if (Array.isArray(value)) return value
-    if (value) return list(value.history)
+    if (Array.isArray(value)) return { history: value }
+    if (value) return value
     try {
       const stored = await conversationStore.get(key)
       if (stored && (!version || this.isCurrent(version))) {
         this.conversations.set(key, stored)
-        return stored.history || []
+        return stored
       }
-      if (stored) return stored.history || []
+      if (stored) return stored
     } catch (error) {
       hostRuntime.logger?.warn?.("[yui-chat] 读取 SQLite 会话失败，使用空历史", error)
     }
-    return []
+    return { history: [] }
+  }
+
+  async getHistory(key: string, version: ConversationVersion | null = null): Promise<unknown[]> {
+    return list((await this.getConversation(key, version)).history)
   }
 
   conversationKey(event: unknown, channelId: unknown): string {

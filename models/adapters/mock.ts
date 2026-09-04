@@ -28,6 +28,7 @@ function params(request: ModelRequest): Record<string, unknown> {
  */
 export class MockAdapter extends ModelAdapter {
   override readonly id = "mock"
+  override readonly protocol = "mock"
   override readonly supportsTools = true
 
   override async sendMessage({ channel, messages, tools = [], signal }: ModelRequest): Promise<ModelResponse> {

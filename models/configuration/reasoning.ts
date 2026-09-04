@@ -54,7 +54,7 @@ export function buildReasoningPayload(channel: ReasoningChannel = {}): Record<st
   if (!reasoning?.effort) return null
   const target = inferReasoningTarget({ ...channel, reasoning })
   const adapter = cleanString(channel.type).toLowerCase()
-  const openAICompatibleFamily = new Set(["openai-compatible", "qwen", "chatglm"])
+  const openAICompatibleFamily = new Set(["openai-compatible", "openai-responses", "qwen", "chatglm"])
   if (target === "claude") {
     if (adapter !== "claude") return null
     return { thinking: { type: "enabled", effort: reasoning.effort } }

@@ -86,7 +86,7 @@ export const ToolDetailModal = {
       return `${sourceLabel(toolSource(toolDetail))}能力 · ${provenance.packageId || provenance.skillId || "系统内置"}`
     })
     const hasRuntimeFields = computed(() => Object.keys(asRecord(toolCommon(toolDetail).configSchema).properties || {}).length > 0)
-    const hasChannelConfig = computed(() => ["image_media", "web_search"].includes(toolDetail.name))
+    const hasChannelConfig = computed(() => ["image_media", "web_search", "tool_search"].includes(toolDetail.name))
     const hasConfig = computed(() => hasRuntimeFields.value || hasChannelConfig.value)
     const accessBadges = computed(() => policyBadges(toolCommon(toolDetail).policy))
     const tabs = computed(() => [

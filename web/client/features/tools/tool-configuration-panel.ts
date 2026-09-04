@@ -6,12 +6,13 @@ import { collectRuntimeValues, integerValue, runtimeDraftValues, runtimeFieldRow
 interface ConfigField {
   key: string
   label: string
-  kind: "boolean" | "number" | "text"
+  kind: "boolean" | "number" | "text" | "select"
   default: boolean | number | string
   min?: number
   max?: number
   placeholder?: string
   tip?: string
+  options?: Array<{ value: string; label: string }>
 }
 
 interface ChannelGuide {
@@ -25,6 +26,8 @@ interface ChannelOption {
   id: string
   label: string
   description: string
+  enabledPath?: string
+  fixed?: boolean
   fields?: ConfigField[]
   runtimeFields?: string[]
   guide: ChannelGuide
@@ -51,7 +54,7 @@ const NO_PARAMETER_GUIDE: ChannelGuide = {
 const CHANNEL_PROFILES: Record<string, ChannelProfile> = {
   image_media: {
     title: "图片搜索渠道",
-    description: "卡片顺序就是搜索优先级。首个启用渠道作为默认源，失败时按顺序向下重试，未启用渠道会被跳过。",
+    description: "本地图片渠道按卡片顺序执行；默认把搜索得到的原始 URL 直接交给消息发送。只有遇到防盗链或远程发送不稳定时才建议开启本地缓存。",
     path: "tools.builtin.imageSearch",
     channels: [
       { id: "bing", label: "Bing 图片", description: "通用图片搜索，适合作为默认来源。", guide: NO_PARAMETER_GUIDE },
@@ -75,18 +78,27 @@ const CHANNEL_PROFILES: Record<string, ChannelProfile> = {
       },
     ],
     globalFields: [
-      { key: "fallbackEnabled", label: "失败后自动换源", kind: "boolean", default: true, tip: "开启后严格按下方渠道顺序重试。" },
+      { key: "strategy", label: "默认搜索方式", kind: "select", default: "fallback", options: [{ value: "preferred", label: "只用首选渠道" }, { value: "fallback", label: "首选失败后换源" }, { value: "parallel", label: "多渠道并行聚合" }], tip: "模型未单独覆盖时使用；并行只用于只读搜索。" },
       { key: "maxResults", label: "最多候选数", kind: "number", default: 5, min: 1, max: 10 },
       { key: "timeoutMs", label: "搜索超时（毫秒）", kind: "number", default: 12000, min: 1000, max: 60000 },
-      { key: "downloadTimeoutMs", label: "缓存下载超时（毫秒）", kind: "number", default: 30000, min: 1000, max: 120000 },
-      { key: "maxImageBytes", label: "单图缓存上限（bytes）", kind: "number", default: 33554432, min: 1048576, max: 134217728, tip: "默认 32 MiB。" },
+      { key: "cacheSelectedImages", label: "本地缓存已选图片", kind: "boolean", default: false, tip: "默认关闭，直接发送搜索结果的原始 URL。开启后才会先下载到插件媒体缓存，可用于绕过部分站点防盗链。" },
+      { key: "downloadTimeoutMs", label: "缓存下载超时（毫秒）", kind: "number", default: 30000, min: 1000, max: 120000, tip: "仅开启本地缓存时生效。" },
+      { key: "maxImageBytes", label: "单图缓存上限（bytes）", kind: "number", default: 33554432, min: 1048576, max: 134217728, tip: "仅开启本地缓存时生效，默认 32 MiB。" },
     ],
   },
   web_search: {
     title: "实时搜索渠道",
-    description: "卡片顺序就是搜索优先级。首个启用渠道作为默认源，失败时按顺序向下重试，密钥只保存在服务端。",
+    description: "仅使用 OpenAI 原生渠道时直接采用 Responses 的最终回复；百度、Tavily 等渠道参与时归一化证据，再由主模型统一汇总一次。密钥只保存在服务端。",
     path: "tools.builtin.webSearch",
     channels: [
+      {
+        id: "openai:web_search",
+        label: "OpenAI 原生 Web Search",
+        description: "由 Responses 上游执行；作为唯一渠道时直接采用最终 assistant message，与本地渠道组合时通过 web_search 聚合门面进入统一证据集。",
+        enabledPath: "tools.hosted.openai.webSearch.enabled",
+        fixed: true,
+        guide: { title: "上游托管实现", description: "无需在本地配置搜索密钥，但需要 Responses 协议和上游模型支持。调用、来源和原始 output item 仍会进入本地工具链日志。" },
+      },
       {
         id: "baidu-ai",
         label: "百度 AI 搜索",
@@ -113,16 +125,45 @@ const CHANNEL_PROFILES: Record<string, ChannelProfile> = {
       },
     ],
     globalFields: [
-      { key: "fallbackEnabled", label: "失败后自动换源", kind: "boolean", default: true, tip: "开启后严格按下方渠道顺序重试。" },
+      { key: "strategy", label: "默认搜索方式", kind: "select", default: "preferred", options: [{ value: "preferred", label: "只用首选渠道" }, { value: "fallback", label: "首选失败后换源" }, { value: "parallel", label: "多渠道并行聚合" }], tip: "模型未单独覆盖时使用；只有 OpenAI 渠道可用时直接采用其最终回复。本地渠道参与失败换源或并行时，会产生一次托管搜索子请求并由主模型统一汇总。" },
       { key: "maxResults", label: "最多结果数", kind: "number", default: 5, min: 1, max: 20 },
       { key: "timeoutMs", label: "请求超时（毫秒）", kind: "number", default: 30000, min: 1000, max: 120000 },
     ],
+  },
+  tool_search: {
+    title: "工具发现实现",
+    description: "能力开关控制整个 tool_search；这里进一步选择允许使用 OpenAI 托管发现、本地 Registry 发现，或同时保留两者供模型路由。",
+    path: "tools.builtin.toolSearch",
+    channels: [
+      {
+        id: "openai:tool_search",
+        label: "OpenAI 原生 Tool Search",
+        description: "由 Responses 上游搜索延迟加载的工具定义。",
+        enabledPath: "tools.hosted.openai.toolSearch.enabled",
+        fixed: true,
+        guide: { title: "上游托管实现", description: "仅对支持原生 tool_search 的 Responses 上游生效；最终可见工具仍受本地能力开关、角色权限和模型名单约束。" },
+      },
+      {
+        id: "local:tool_search",
+        label: "本地 Registry Tool Search",
+        description: "在当前权限已允许的本地、Custom 与 MCP 工具目录中检索。",
+        enabledPath: "tools.builtin.toolSearch.localEnabled",
+        guide: { title: "本地发现实现", description: "不访问外部服务；发现结果下一轮才装载，并再次经过全局启停、角色权限和模型策略检查。" },
+      },
+    ],
+    globalFields: [],
   },
 }
 
 function readPath(value: unknown, path: string): UnknownRecord {
   let current = asRecord(value)
   for (const part of path.split(".")) current = asRecord(current[part])
+  return current
+}
+
+function readValuePath(value: unknown, path: string): unknown {
+  let current: unknown = value
+  for (const part of path.split(".")) current = asRecord(current)[part]
   return current
 }
 
@@ -164,16 +205,20 @@ export const ToolConfigurationPanel = {
       channelDraft.values = {}
       if (!currentProfile) return
       const current = readPath(store.config, currentProfile.path)
-      const knownIds = currentProfile.channels.map(channel => channel.id)
-      const configured = Array.isArray(current.enabledSources) ? current.enabledSources.map(String).filter(id => knownIds.includes(id)) : [...knownIds]
+      const localChannels = currentProfile.channels.filter(channel => !channel.enabledPath)
+      const knownLocalIds = localChannels.map(channel => channel.id)
+      const configured = Array.isArray(current.enabledSources) ? current.enabledSources.map(String).filter(id => knownLocalIds.includes(id)) : [...knownLocalIds]
       const defaultSource = String(current.defaultSource || "")
       const enabled = [...new Set(configured)]
       if (enabled.includes(defaultSource) && enabled[0] !== defaultSource) {
         enabled.splice(enabled.indexOf(defaultSource), 1)
         enabled.unshift(defaultSource)
       }
-      channelDraft.enabledSources = enabled
-      channelDraft.order = [...enabled, ...knownIds.filter(id => !enabled.includes(id))]
+      const managedEnabled = currentProfile.channels.filter(channel => channel.enabledPath && readValuePath(store.config, channel.enabledPath) !== false).map(channel => channel.id)
+      const fixed = currentProfile.channels.filter(channel => channel.fixed).map(channel => channel.id)
+      const movable = [...enabled, ...knownLocalIds.filter(id => !enabled.includes(id)), ...currentProfile.channels.filter(channel => channel.enabledPath && !channel.fixed).map(channel => channel.id)]
+      channelDraft.enabledSources = [...new Set([...enabled, ...managedEnabled])]
+      channelDraft.order = [...fixed, ...movable.filter(id => !fixed.includes(id))]
       for (const field of allProfileFields(currentProfile)) channelDraft.values[field.key] = current[field.key] ?? field.default
     }
 
@@ -208,6 +253,8 @@ export const ToolConfigurationPanel = {
 
     function reorderChannel(sourceId: string, targetId: string) {
       if (!sourceId || sourceId === targetId) return
+      const channels = new Map((profile.value?.channels || []).map(channel => [channel.id, channel]))
+      if (channels.get(sourceId)?.fixed || channels.get(targetId)?.fixed) return
       const sourceIndex = channelDraft.order.indexOf(sourceId)
       const targetIndex = channelDraft.order.indexOf(targetId)
       if (sourceIndex < 0 || targetIndex < 0) return
@@ -236,10 +283,20 @@ export const ToolConfigurationPanel = {
       const index = channelDraft.order.indexOf(id)
       const target = index + delta
       if (index < 0 || target < 0 || target >= channelDraft.order.length) return
+      const channels = new Map((profile.value?.channels || []).map(channel => [channel.id, channel]))
+      if (channels.get(id)?.fixed || channels.get(channelDraft.order[target])?.fixed) return
       const next = [...channelDraft.order]
       ;[next[index], next[target]] = [next[target], next[index]]
       channelDraft.order = next
       rebuildEnabledSources()
+    }
+
+    function canMoveChannel(id: string, delta: number): boolean {
+      const index = channelDraft.order.indexOf(id)
+      const target = index + delta
+      if (index < 0 || target < 0 || target >= channelDraft.order.length) return false
+      const channels = new Map((profile.value?.channels || []).map(channel => [channel.id, channel]))
+      return !channels.get(id)?.fixed && !channels.get(channelDraft.order[target])?.fixed
     }
 
     function channelRuntimeRows(channel: ChannelOption): RuntimeFieldRow[] {
@@ -278,16 +335,21 @@ export const ToolConfigurationPanel = {
     async function saveAll() {
       if (saving.value) return
       const currentProfile = profile.value
-      if (currentProfile && !channelDraft.enabledSources.length) return toast("请至少启用一个搜索渠道", "warn")
+      if (currentProfile && !channelDraft.enabledSources.length) return toast("请至少启用一个实现渠道", "warn")
       saving.value = true
       try {
         const updated = await saveRuntimeConfig()
         if (updated) emit("updated", updated)
         if (currentProfile) {
-          const enabledSources = channelDraft.order.filter(id => channelDraft.enabledSources.includes(id))
-          const patch: UnknownRecord = {
-            [`${currentProfile.path}.enabledSources`]: enabledSources,
-            [`${currentProfile.path}.defaultSource`]: enabledSources[0],
+          const localIds = new Set(currentProfile.channels.filter(channel => !channel.enabledPath).map(channel => channel.id))
+          const enabledSources = channelDraft.order.filter(id => localIds.has(id) && channelDraft.enabledSources.includes(id))
+          const patch: UnknownRecord = {}
+          if (localIds.size) {
+            patch[`${currentProfile.path}.enabledSources`] = enabledSources
+            patch[`${currentProfile.path}.defaultSource`] = enabledSources[0] || ""
+          }
+          for (const channel of currentProfile.channels) {
+            if (channel.enabledPath) patch[channel.enabledPath] = channelDraft.enabledSources.includes(channel.id)
           }
           for (const field of allProfileFields(currentProfile)) patch[`${currentProfile.path}.${field.key}`] = normalizeField(field)
           await saveConfigPatch(patch, `tool-channels:${props.tool.name}`)
@@ -320,6 +382,7 @@ export const ToolConfigurationPanel = {
       startDrag,
       dropChannel,
       moveChannel,
+      canMoveChannel,
       channelRuntimeRows,
       channelCredentialState,
       channelReady,
@@ -341,6 +404,7 @@ export const ToolConfigurationPanel = {
           <div class="tool-global-fields">
             <template v-for="field in profile.globalFields" :key="field.key">
               <Field v-if="field.kind === 'boolean'" :label="field.label" type="select" :options="[{ value: 'true', label: '开启' }, { value: 'false', label: '关闭' }]" v-model="channelDraft.values[field.key]" :tip="field.tip" />
+              <Field v-else-if="field.kind === 'select'" :label="field.label" type="select" :options="field.options" v-model="channelDraft.values[field.key]" :tip="field.tip" />
               <Field v-else-if="field.kind === 'number'" :label="field.label" type="number" v-model="channelDraft.values[field.key]" :tip="field.tip" />
               <Field v-else :label="field.label" type="text" :placeholder="field.placeholder" v-model="channelDraft.values[field.key]" :tip="field.tip" />
             </template>
@@ -349,7 +413,7 @@ export const ToolConfigurationPanel = {
 
         <section class="tool-config-card tool-channel-list-card">
           <div class="tool-channel-list-head">
-            <div><span class="eyebrow">渠道优先级</span><h3>搜索与重试顺序</h3><p>拖动卡片调整顺序；也可使用上下按钮。首个启用项是默认源，失败时向下重试。</p></div>
+            <div><span class="eyebrow">实现渠道</span><h3>来源与本地顺序</h3><p>托管首选位置固定；本地渠道可拖动排序。模型路由仍可指定只用托管、只用本地或多渠道并行。</p></div>
           </div>
           <div class="tool-channel-list">
             <article
@@ -361,15 +425,15 @@ export const ToolConfigurationPanel = {
               @drop="dropChannel(channel.id, $event)"
             >
               <div class="tool-channel-row-main">
-                <button class="tool-channel-drag" type="button" draggable="true" title="拖动调整优先级" aria-label="拖动调整优先级" @dragstart="startDrag(channel.id, $event)" @dragend="draggedChannel = ''"><Icon name="grip-vertical" :size="17" /></button>
+                <button class="tool-channel-drag" type="button" :draggable="!channel.fixed" :disabled="channel.fixed" :title="channel.fixed ? '托管首选位置固定；模型可在路由中改为本地' : '拖动调整本地渠道优先级'" aria-label="调整优先级" @dragstart="startDrag(channel.id, $event)" @dragend="draggedChannel = ''"><Icon name="grip-vertical" :size="17" /></button>
                 <span class="tool-channel-order">{{ index + 1 }}</span>
                 <span class="tool-channel-mark"><Icon name="search" :size="15" /></span>
                 <button class="tool-channel-copy" type="button" @click="toggleExpanded(channel.id)"><strong>{{ channel.label }}</strong><code>{{ channel.id }}</code><p>{{ channel.description }}</p></button>
                 <span v-if="channelEnabled(channel.id) && enabledOrderedChannels[0]?.id === channel.id" class="badge primary">默认</span>
                 <span class="tool-channel-state" :class="{ ready: channelReady(channel) }">{{ channelCredentialState(channel) }}</span>
                 <div class="tool-channel-order-actions">
-                  <button class="icon-btn" type="button" :disabled="index === 0" title="上移" @click="moveChannel(channel.id, -1)"><Icon name="chevron-up" :size="14" /></button>
-                  <button class="icon-btn" type="button" :disabled="index === orderedChannels.length - 1" title="下移" @click="moveChannel(channel.id, 1)"><Icon name="chevron-down" :size="14" /></button>
+                  <button class="icon-btn" type="button" :disabled="!canMoveChannel(channel.id, -1)" title="上移" @click="moveChannel(channel.id, -1)"><Icon name="chevron-up" :size="14" /></button>
+                  <button class="icon-btn" type="button" :disabled="!canMoveChannel(channel.id, 1)" title="下移" @click="moveChannel(channel.id, 1)"><Icon name="chevron-down" :size="14" /></button>
                 </div>
                 <Switch :model-value="channelEnabled(channel.id)" @update:model-value="toggleChannel(channel.id, $event)" />
                 <button class="icon-btn tool-channel-expand" type="button" :aria-expanded="expandedChannel === channel.id" :title="expandedChannel === channel.id ? '收起参数' : '展开参数'" @click="toggleExpanded(channel.id)"><Icon :name="expandedChannel === channel.id ? 'chevron-up' : 'chevron-down'" :size="15" /></button>
@@ -383,6 +447,7 @@ export const ToolConfigurationPanel = {
                 <div v-if="(channel.fields || []).length || channelRuntimeRows(channel).length" class="tool-channel-fields">
                   <template v-for="field in channel.fields || []" :key="field.key">
                     <Field v-if="field.kind === 'boolean'" :label="field.label" type="select" :options="[{ value: 'true', label: '开启' }, { value: 'false', label: '关闭' }]" v-model="channelDraft.values[field.key]" :tip="field.tip" />
+                    <Field v-else-if="field.kind === 'select'" :label="field.label" type="select" :options="field.options" v-model="channelDraft.values[field.key]" :tip="field.tip" />
                     <Field v-else-if="field.kind === 'number'" :label="field.label" type="number" v-model="channelDraft.values[field.key]" :tip="field.tip" />
                     <Field v-else :label="field.label" type="text" :placeholder="field.placeholder" v-model="channelDraft.values[field.key]" :tip="field.tip" />
                   </template>

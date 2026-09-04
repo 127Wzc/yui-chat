@@ -42,6 +42,7 @@ interface ModelConfig extends UnknownRecord {
   query?: UnknownRecord
   capabilities?: UnknownRecord
   embedding?: UnknownRecord
+  toolPolicy?: UnknownRecord
 }
 
 interface ModelTask extends UnknownRecord {

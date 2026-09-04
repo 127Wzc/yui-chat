@@ -78,6 +78,8 @@ export interface ToolCommon {
   categoryLabel?: string
   risk?: string
   tags: string[]
+  /** Responses tool_search 可延迟加载此函数定义；Chat Completions 忽略该字段。 */
+  deferLoading: boolean
   delivery: ToolDeliveryMode
   /** 未声明时不接管工具结果；仅显式集成的工具可生成自动投递计划。 */
   autoDelivery: ToolAutoDelivery | null

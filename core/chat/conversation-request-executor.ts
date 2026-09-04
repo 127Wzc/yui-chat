@@ -28,6 +28,7 @@ export interface ConversationRequestRuntime {
   prune(config: unknown): void
   waitForConversationMutations(): Promise<void>
   getHistory(key: string, version?: unknown): Promise<unknown[]>
+  getConversation(key: string, version?: unknown): Promise<UnknownRecord>
   conversationKey(event: unknown, channelId: string): string
   runObservedStep(options: UnknownRecord): Promise<UnknownRecord>
 }
@@ -54,8 +55,24 @@ function errorMessage(error: unknown): string {
 }
 
 function withoutCause(value: UnknownRecord): UnknownRecord {
-  const { cause: _cause, ...rest } = value
+  const { cause: _cause, responseState: _responseState, ...rest } = value
   return rest
+}
+
+function updatedProtocolState(value: unknown, responseStateValue: unknown): UnknownRecord {
+  const current = record(value)
+  const responseState = record(responseStateValue)
+  const key = text(responseState.key).trim()
+  if (!key) return current
+  const responses = { ...record(current.responses) }
+  if (responseState.clear === true || !text(responseState.previousResponseId).trim()) delete responses[key]
+  else responses[key] = {
+    previousResponseId: text(responseState.previousResponseId).trim(),
+    provider: text(responseState.provider),
+    model: text(responseState.model),
+    updatedAt: Date.now(),
+  }
+  return { ...current, responses }
 }
 
 class ConversationTaskError extends Error {
@@ -221,9 +238,11 @@ export async function sendConversation(
     runtime.prune(config)
     // 清理操作先进入同一队列；新请求必须等清理完成，避免旧历史在本轮结束时写回。
     await runtime.waitForConversationMutations()
+    let conversation: UnknownRecord
     let history: unknown[]
     try {
-      history = await runtime.getHistory(key, conversationVersion)
+      conversation = record(await runtime.getConversation(key, conversationVersion))
+      history = list(conversation.history)
     } catch (error) {
       return failTrace(error)
     }
@@ -233,6 +252,7 @@ export async function sendConversation(
       prompt,
       config,
       history,
+      protocolState: record(conversation.protocolState),
       step,
       channelId: options.channelId,
       prior: [],
@@ -327,6 +347,7 @@ export async function sendConversation(
       searchDeliveryStatus: text(final.searchDeliveryStatus || "not-needed"),
       toolRounds: stepResults.reduce((sum, item) => sum + number(item.toolRounds), 0),
       toolChain: finalToolChain,
+      hostedSearchSources: list(final.hostedSearchSources),
       execution: final.execution || null,
       usage: final.usage || emptyUsage(),
       steps: publicStepResult(stepResults),
@@ -358,15 +379,18 @@ export async function sendConversation(
         const turns = [...list(previous.turns), turn].slice(-Math.max(1, Math.floor(maxHistoryMessages / 2)))
         const usage = emptyUsage()
         for (const item of turns) addUsage(usage, record(item).usage)
+        const protocolState = updatedProtocolState(previous.protocolState, final.responseState)
+        const toolCalls = turns.reduce((sum: number, item) => sum + list(record(item).toolChain).length, 0)
         runtime.conversations.set(key, {
           history: nextHistory,
           turns,
           usage,
-          toolCalls: turns.reduce((sum: number, item) => sum + list(record(item).toolChain).length, 0),
+          toolCalls,
+          protocolState,
           lastSeen: Date.now(),
         })
         try {
-          await conversationStore.save({ id: key, history: nextHistory })
+          await conversationStore.save({ id: key, history: nextHistory, turns, usage, toolCalls, protocolState })
         } catch (error) {
           hostRuntime.logger?.warn?.("[yui-chat] 会话写入 SQLite 失败，内存会话继续可用", error)
         }
@@ -382,9 +406,20 @@ export async function sendConversation(
         const previousValue = runtime.conversations.get(key)
         const previous = record(previousValue)
         const currentHistory = Array.isArray(previousValue) ? previousValue : list(previous.history || history)
-        runtime.conversations.set(key, { ...previous, history: currentHistory, lastSeen: Date.now() })
+        const protocolState = updatedProtocolState(previous.protocolState, final.responseState)
+        const next = { ...previous, history: currentHistory, protocolState, lastSeen: Date.now() }
+        runtime.conversations.set(key, next)
         try {
-          await conversationStore.touch(key)
+          if (Object.keys(record(final.responseState)).length) {
+            await conversationStore.save({
+              id: key,
+              history: currentHistory,
+              turns: list(previous.turns),
+              usage: record(previous.usage),
+              toolCalls: previous.toolCalls,
+              protocolState,
+            })
+          } else await conversationStore.touch(key)
         } catch (error) {
           hostRuntime.logger?.warn?.("[yui-chat] 刷新 SQLite 会话活跃时间失败，内存会话继续可用", error)
         }

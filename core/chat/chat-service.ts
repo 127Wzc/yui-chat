@@ -1,5 +1,5 @@
 import { isEmptyResponse } from "./response-pipeline.js"
-import { ConversationState, type ConversationVersion } from "./conversation-state.js"
+import { ConversationState, type ConversationEntry, type ConversationVersion } from "./conversation-state.js"
 import { modelLogStore } from "../observability/model-log.js"
 import type { UnknownRecord } from "../message/types.js"
 import { executeToolRound as runToolRound } from "./tool-round-executor.js"
@@ -62,6 +62,10 @@ export class ChatService {
 
   async getHistory(key: unknown, version: unknown = null): Promise<unknown[]> {
     return this.conversationState.getHistory(text(key), version as ConversationVersion | null)
+  }
+
+  async getConversation(key: unknown, version: unknown = null): Promise<ConversationEntry> {
+    return this.conversationState.getConversation(text(key), version as ConversationVersion | null)
   }
 
   conversationKey(event: unknown, channelId: unknown): string {
@@ -213,6 +217,7 @@ export class ChatService {
       prune: config => this.prune(config),
       waitForConversationMutations: () => this.waitForConversationMutations(),
       getHistory: (key, version) => this.getHistory(key, version),
+      getConversation: (key, version) => this.getConversation(key, version),
       conversationKey: (value, channelId) => this.conversationKey(value, channelId),
       runObservedStep: value => this.runObservedStep(value),
     }

@@ -1,7 +1,9 @@
 import { ClaudeAdapter, messagesToClaudeMessages, parseClaudeToolCalls } from "./claude.js"
 import { GeminiAdapter, messagesToGeminiContents, parseGeminiToolCalls } from "./gemini.js"
 import { MockAdapter } from "./mock.js"
-import { ChatGLMAdapter, OpenAICompatibleAdapter, QwenAdapter } from "./openai-compatible.js"
+import { ChatGLMAdapter, OpenAICompatibleAdapter, QwenAdapter } from "./openai/chat/adapter.js"
+import { OpenAIResponsesAdapter } from "./openai/responses/adapter.js"
+import { toolsForResponses } from "./openai/responses/tool-adapter.js"
 import { normalizeListedModels } from "./base.js"
 import { normalizeModelResponse } from "../protocol/normalize.js"
 import { modelLogStore } from "../../core/observability/model-log.js"
@@ -25,10 +27,12 @@ interface RuntimeEmbeddingRequest extends EmbeddingRequest {
 
 interface RuntimeAdapter {
   readonly id: string
+  readonly protocol: string
   readonly supportsTools: boolean
   readonly supportsVision: boolean
   readonly supportsStreaming: boolean
   readonly supportsEmbeddings: boolean
+  readonly supportsNativeToolSearch: boolean
   sendMessage(request: RuntimeModelRequest): Promise<ModelResponse>
   embedTexts(request: RuntimeEmbeddingRequest): Promise<Awaited<ReturnType<import("../protocol/adapter.js").ModelAdapter["embedTexts"]>>>
   listModels?(request?: ModelListRequest): Promise<unknown[]>
@@ -37,6 +41,7 @@ interface RuntimeAdapter {
 interface ModelSendOptions {
   channel?: ModelChannel
   messages?: ModelMessage[]
+  replayMessages?: ModelMessage[]
   tools?: ToolDefinition[]
   toolChoice?: ModelToolChoice
   maxTokens?: number
@@ -94,6 +99,7 @@ export class AdapterRegistry {
   constructor() {
     this.register(new MockAdapter())
     this.register(new OpenAICompatibleAdapter())
+    this.register(new OpenAIResponsesAdapter())
     this.register(new GeminiAdapter())
     this.register(new QwenAdapter())
     this.register(new ClaudeAdapter())
@@ -108,22 +114,25 @@ export class AdapterRegistry {
     return this.adapters.get(type) || this.adapters.get("mock") as RuntimeAdapter
   }
 
-  listAdapters(): Array<Pick<RuntimeAdapter, "id" | "supportsTools" | "supportsVision" | "supportsStreaming" | "supportsEmbeddings">> {
+  listAdapters(): Array<Pick<RuntimeAdapter, "id" | "protocol" | "supportsTools" | "supportsVision" | "supportsStreaming" | "supportsEmbeddings" | "supportsNativeToolSearch">> {
     return [...this.adapters.values()].map(adapter => ({
       id: adapter.id,
+      protocol: adapter.protocol,
       supportsTools: adapter.supportsTools,
       supportsVision: adapter.supportsVision,
       supportsStreaming: adapter.supportsStreaming,
       supportsEmbeddings: adapter.supportsEmbeddings,
+      supportsNativeToolSearch: adapter.supportsNativeToolSearch,
     }))
   }
 
-  async sendMessage({ channel, messages = [], tools = [], toolChoice, maxTokens = 0, signal, event, purpose = "chat", source = "", taskName = "", operation = "chat", trace = null, parentToolId = "", metadata = {}, snapshotMetadata = {} }: ModelSendOptions = {}): Promise<ModelResponse> {
+  async sendMessage({ channel, messages = [], replayMessages, tools = [], toolChoice, maxTokens = 0, signal, event, purpose = "chat", source = "", taskName = "", operation = "chat", trace = null, parentToolId = "", metadata = {}, snapshotMetadata = {} }: ModelSendOptions = {}): Promise<ModelResponse> {
     if (!channel) throw new Error("channel is required")
     const adapter = this.get(channel.type)
-    const call = modelLogStore.beginModelCall({ trace, event, source, purpose, taskName, operation, channel, messages, tools, parentToolId, metadata, snapshotMetadata, request: { maxTokens, toolChoice } })
+    const modelVisibleTools = adapter.supportsNativeToolSearch ? toolsForResponses(tools, channel) : tools
+    const call = modelLogStore.beginModelCall({ trace, event, source, purpose, taskName, operation, channel, messages, tools: modelVisibleTools, parentToolId, metadata, snapshotMetadata, request: { maxTokens, toolChoice, protocol: adapter.protocol } })
     try {
-      const result = normalizeModelResponse(await adapter.sendMessage({ channel, messages, tools, toolChoice, maxTokens, signal, event }))
+      const result = normalizeModelResponse(await adapter.sendMessage({ channel, messages, replayMessages, tools, toolChoice, maxTokens, signal, event }))
       modelLogStore.completeModelCall(call, { response: result })
       return result
     } catch (error) {
@@ -147,21 +156,25 @@ export class AdapterRegistry {
   }
 
   async testChannel(channel: ModelChannel): Promise<ChannelTestResult> {
+    const adapter = this.get(channel.type)
     if (isEmbeddingChannel(channel)) {
       const result = await this.embedTexts({ channel, texts: ["embedding health check"], purpose: "model-test", source: "management", taskName: "channel-test" })
       const firstVector = result.vectors[0]
       if (!Array.isArray(firstVector) || !firstVector.length) throw new Error("embedding 未返回有效向量")
       return {
         channel: channel.id,
-        adapter: this.get(channel.type).id,
+        adapter: adapter.id,
         operation: "embedding",
         text: `embedding 测试通过：${firstVector.length} 维`,
         dimensions: result.dimensions || firstVector.length,
         vectorCount: result.vectors.length,
       }
     }
-    const result = await this.sendMessage({ channel, messages: [{ role: "user", content: "health check" }], tools: [], purpose: "model-test", source: "management", taskName: "channel-test" })
-    return { channel: channel.id, adapter: this.get(channel.type).id, operation: "chat", text: result.text }
+    const testChannel = adapter.supportsNativeToolSearch
+      ? { ...channel, responsesRuntime: { toolSearchAllowed: false, webSearchAllowed: false, fileSearchAllowed: false } }
+      : channel
+    const result = await this.sendMessage({ channel: testChannel, messages: [{ role: "user", content: "health check" }], tools: [], purpose: "model-test", source: "management", taskName: "channel-test" })
+    return { channel: channel.id, adapter: adapter.id, operation: "chat", text: result.text }
   }
 
   async listModels(channel: ModelChannel): Promise<{ channel?: string; adapter: string; models: ListedModel[] }> {
