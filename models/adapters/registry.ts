@@ -1,5 +1,5 @@
-import { ClaudeAdapter, messagesToClaudeMessages, parseClaudeToolCalls } from "./claude.js"
-import { GeminiAdapter, messagesToGeminiContents, parseGeminiToolCalls } from "./gemini.js"
+import { ClaudeAdapter } from "./claude.js"
+import { GeminiAdapter } from "./gemini.js"
 import { MockAdapter } from "./mock.js"
 import { ChatGLMAdapter, OpenAICompatibleAdapter, QwenAdapter } from "./openai/chat/adapter.js"
 import { OpenAIResponsesAdapter } from "./openai/responses/adapter.js"
@@ -185,5 +185,7 @@ export class AdapterRegistry {
   }
 }
 
-export { messagesToGeminiContents, parseGeminiToolCalls, messagesToClaudeMessages, parseClaudeToolCalls }
+export { messagesToGeminiContents, parseGeminiToolCalls, parseGeminiStreamResponse } from "./gemini.js"
+export { messagesToClaudeMessages, parseClaudeToolCalls, parseClaudeStreamResponse } from "./claude.js"
+export { parseResponsesStreamResponse } from "./openai/responses/response-adapter.js"
 export const adapterRegistry = new AdapterRegistry()

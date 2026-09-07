@@ -251,6 +251,10 @@ export function buildResponsesRequest(input: ResponsesRequestInput): UnknownReco
     input: previousResponseId ? incrementalResponsesInput(input.messages) : messagesForResponses(input.messages),
     store,
   }
+  // Responses 的流式开关属于传输层配置，不应混入普通模型参数；只有显式
+  // 开启时发送 stream=true，未开启时主动移除可能遗留的 params.stream。
+  delete body.stream
+  if (channel.stream === true) body.stream = true
   delete body.previous_response_id
   delete body.conversation
   if (previousResponseId) {

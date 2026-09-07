@@ -1,5 +1,6 @@
 import crypto from "node:crypto"
 import { safeJson, tokenUsage } from "../../base.js"
+import { consumeServerSentEvents } from "../../sse.js"
 import type { ModelHostedToolCall, ModelResponse, ModelSearchSource, ModelStopReason } from "../../../protocol/types.js"
 
 type UnknownRecord = Record<string, unknown>
@@ -10,6 +11,18 @@ function record(value: unknown): UnknownRecord {
 
 function text(value: unknown): string {
   return typeof value === "string" ? value : String(value ?? "")
+}
+
+function streamResponseError(data: unknown, status = 0): Error {
+  const root = record(data)
+  const error = record(root.error)
+  const result = new Error(text(error.message || error.code || root.error || `HTTP ${status}`))
+  Object.assign(result, {
+    ...(status ? { status } : {}),
+    ...(error.code || root.code ? { code: text(error.code || root.code) } : {}),
+    ...(error.type ? { providerType: text(error.type) } : {}),
+  })
+  return result
 }
 
 function outputItems(data: UnknownRecord): UnknownRecord[] {
@@ -139,4 +152,167 @@ export function parseResponsesResponse(data: unknown): ModelResponse {
     protocol: { kind: "responses", outputItems: items },
     raw: response,
   }
+}
+
+function outputIndex(value: unknown): number | null {
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null
+}
+
+function streamItemKey(item: UnknownRecord = {}, index: number | null = null): string {
+  const id = text(item.id).trim()
+  if (id) return `id:${id}`
+  if (index !== null) return `output:${index}`
+  return `event:${crypto.randomUUID()}`
+}
+
+function contentText(item: UnknownRecord): string {
+  return (Array.isArray(item.content) ? item.content : [])
+    .map(value => record(value))
+    .filter(value => value.type === "output_text" || value.type === "text")
+    .map(value => text(value.text))
+    .join("")
+}
+
+function ensureOutputText(item: UnknownRecord, value: string): UnknownRecord {
+  if (!value) return item
+  const content = Array.isArray(item.content) ? item.content.map(record) : []
+  const part = content.find(value => value.type === "output_text" || value.type === "text")
+  if (part) part.text = value
+  else content.push({ type: "output_text", text: value })
+  return { ...item, content }
+}
+
+function patchStreamOutput(
+  output: readonly unknown[],
+  eventItems: Map<string, UnknownRecord>,
+  textDeltas: Map<string, string>,
+  functionArguments: Map<string, string>,
+): UnknownRecord[] {
+  return output.map((raw, index) => {
+    const item = record(raw)
+    const key = streamItemKey(item, index)
+    const eventItem = eventItems.get(key)
+    let merged = eventItem ? { ...eventItem, ...item } : { ...item }
+    const argumentsValue = functionArguments.get(key)
+    if (merged.type === "function_call" && argumentsValue && !text(merged.arguments).trim()) merged.arguments = argumentsValue
+    const delta = textDeltas.get(key)
+    if (merged.type === "message" && delta && !contentText(merged)) merged = ensureOutputText(merged, delta)
+    return merged
+  })
+}
+
+/**
+ * 解析 OpenAI Responses 的语义事件流。
+ *
+ * Responses 不返回 Chat Completions 的 choices/delta 结构，而是通过
+ * response.output_text.delta、response.function_call_arguments.delta 以及
+ * response.completed 等事件逐步构造 output items；这里先收敛成完整响应，
+ * 再复用同一套 hosted tool、Function Call、reasoning 和 usage 归一化逻辑。
+ */
+export async function parseResponsesStreamResponse(response: Response): Promise<ModelResponse> {
+  if (!response.ok) {
+    const body = await response.text()
+    let data: unknown = {}
+    try { data = body ? JSON.parse(body) : {} } catch { data = { error: body } }
+    throw streamResponseError(data, response.status)
+  }
+
+  const eventItems = new Map<string, UnknownRecord>()
+  const eventOrder: string[] = []
+  const outputIndexKeys = new Map<number, string>()
+  const textDeltas = new Map<string, string>()
+  const functionArguments = new Map<string, string>()
+  let responseState: UnknownRecord = {}
+  let eventCount = 0
+
+  const resolveKey = (data: UnknownRecord, item: UnknownRecord = {}): string => {
+    const itemId = text(item.id || data.item_id).trim()
+    if (itemId) return `id:${itemId}`
+    const index = outputIndex(data.output_index)
+    if (index !== null && outputIndexKeys.has(index)) return outputIndexKeys.get(index) as string
+    if (index !== null) {
+      const key = `output:${index}`
+      outputIndexKeys.set(index, key)
+      return key
+    }
+    return streamItemKey(item)
+  }
+
+  const upsert = (item: UnknownRecord, index: number | null): string => {
+    const key = streamItemKey(item, index)
+    if (!eventItems.has(key)) eventOrder.push(key)
+    eventItems.set(key, { ...(eventItems.get(key) || {}), ...item })
+    if (index !== null) outputIndexKeys.set(index, key)
+    return key
+  }
+
+  await consumeServerSentEvents(response, ({ event, data: rawData }) => {
+    eventCount++
+    const payload = rawData.trim()
+    if (!payload || payload === "[DONE]") return
+    let data: UnknownRecord
+    try {
+      const parsed: unknown = JSON.parse(payload)
+      data = record(parsed)
+    } catch {
+      throw new Error("上游返回了无法解析的 Responses 流式数据")
+    }
+    const type = text(data.type || event).trim()
+    if (type === "error" || data.error) throw streamResponseError(data, response.status)
+
+    const nestedResponse = record(data.response)
+    if (type === "response.created" || type === "response.in_progress") responseState = { ...responseState, ...nestedResponse }
+    if (type === "response.completed" || type === "response.failed" || type === "response.incomplete") {
+      responseState = { ...responseState, ...(Object.keys(nestedResponse).length ? nestedResponse : data) }
+    }
+    if (data.usage || nestedResponse.usage) responseState.usage = data.usage || nestedResponse.usage
+
+    if (type === "response.output_item.added" || type === "response.output_item.done") {
+      const item = record(data.item)
+      if (Object.keys(item).length) upsert(item, outputIndex(data.output_index))
+      return
+    }
+
+    if (type === "response.output_text.delta" || type === "response.output_text.done") {
+      const key = resolveKey(data)
+      const delta = type.endsWith(".done") ? text(data.text) : text(data.delta)
+      if (delta) textDeltas.set(key, type.endsWith(".done") ? delta : `${textDeltas.get(key) || ""}${delta}`)
+      const item = eventItems.get(key) || { type: "message", role: "assistant", content: [] }
+      eventItems.set(key, ensureOutputText(item, textDeltas.get(key) || ""))
+      if (!eventOrder.includes(key)) eventOrder.push(key)
+      return
+    }
+
+    if (type === "response.function_call_arguments.delta" || type === "response.function_call_arguments.done") {
+      const key = resolveKey(data)
+      const value = type.endsWith(".done") ? text(data.arguments) : text(data.delta)
+      if (type.endsWith(".done")) functionArguments.set(key, value)
+      else functionArguments.set(key, `${functionArguments.get(key) || ""}${value}`)
+      const item = eventItems.get(key) || { type: "function_call", id: text(data.item_id), call_id: text(data.call_id) }
+      eventItems.set(key, {
+        ...item,
+        type: "function_call",
+        ...(text(data.item_id) ? { id: text(data.item_id) } : {}),
+        ...(text(data.call_id) ? { call_id: text(data.call_id) } : {}),
+        arguments: functionArguments.get(key) || "",
+      })
+      if (!eventOrder.includes(key)) eventOrder.push(key)
+      return
+    }
+  })
+
+  const completedOutput = Array.isArray(responseState.output) ? responseState.output : []
+  const output = completedOutput.length
+    ? patchStreamOutput(completedOutput, eventItems, textDeltas, functionArguments)
+    : eventOrder.map(key => {
+        const item = { ...(eventItems.get(key) || {}) }
+        const argumentsValue = functionArguments.get(key)
+        if (item.type === "function_call" && argumentsValue) item.arguments = argumentsValue
+        const delta = textDeltas.get(key)
+        return item.type === "message" && delta && !contentText(item) ? ensureOutputText(item, delta) : item
+      }).filter(item => item.type)
+  const data: UnknownRecord = { ...responseState, output }
+  const parsed = parseResponsesResponse(data)
+  return { ...parsed, raw: { stream: true, eventCount, status: text(data.status) || "unknown" } }
 }

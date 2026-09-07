@@ -26,6 +26,8 @@ models/
     └── responses/                 # Responses 请求、响应、会话状态机与 Function/Built-in Tool 转换
 ```
 
+适配器的 `stream` 只控制上游传输：OpenAI Chat Completions、Responses、Qwen、ChatGLM、Gemini 和 Claude 分别解析各自的 SSE/语义事件流，再统一收敛为 `ModelResponse`。当前 Agent Loop 仍以完整响应驱动工具轮次，因此流式不会改变工具权限、重试和最终投递语义；未开启或供应商忽略流式时继续兼容完整 JSON。
+
 `models/adapters/openai-compatible.ts` 是既有 Chat 适配器的兼容边界；新代码和文档使用 `models/adapters/openai/chat/` 或 `models/adapters/openai/responses/` 的规范入口。不要在两个协议目录复制 Agent Loop、工具执行器或权限判断。
 
 新增的 TypeScript 领域模块遵循“类型 → 归一化 → 组合/序列化 → 宿主适配”的单向依赖：`core/message-chain` 不读取宿主和网络；`models/protocol` 不感知具体供应商；`core/storage/contracts.ts` 只描述 Worker RPC；`types/host-runtime.d.ts` 是唯一的宿主全局类型声明入口。迁移期间 JS 入口可以调用这些协议，但不得在 JS 中重新定义一套相同的消息链或模型结果结构。

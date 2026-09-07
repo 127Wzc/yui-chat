@@ -511,7 +511,7 @@ export const ModelEditor = {
         <Field label="工具调用" type="select" :options="BOOL_OPTIONS" v-model="draft.toolUse" tip="主对话模型建议开启；纯识图补强模型可以按需关闭。" />
         <Field label="请求超时（秒）" type="number" v-model="draft.timeoutSeconds" placeholder="默认 60" tip="只覆盖当前模型；建议 Grok 等慢模型设置 90–180 秒。留空则继承全局默认。" />
         <Field label="上下文窗口（tokens）" type="number" v-model="draft.contextWindowTokens" placeholder="留空使用全局聊天预算" tip="模型上下文窗口。会话输入预算 = 窗口 − 输出预留 − 安全边际；留空时回落聊天设置里的全局输入预算（默认 6000），工具结果和大历史会被完整保留。" />
-        <Field label="流式响应" type="select" :options="INHERIT_BOOL_OPTIONS" v-model="draft.stream" tip="留空继承全局。OpenAI Compatible、Qwen、ChatGLM 支持；其他协议暂按非流式执行。" />
+        <Field label="流式响应" type="select" :options="INHERIT_BOOL_OPTIONS" v-model="draft.stream" tip="留空继承全局。OpenAI Compatible、Responses、Qwen、ChatGLM、Gemini、Claude 均支持协议级流式；具体模型仍以供应商能力为准。" />
       </div>
       ${MODEL_TOOL_POLICY_EDITOR_TEMPLATE}
       ${RESPONSES_MODEL_EDITOR_TEMPLATE}

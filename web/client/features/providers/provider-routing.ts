@@ -364,7 +364,7 @@ export const ModelRoutingBuilder = {
           <Field label="选择策略" type="select" :options="STRATEGY_OPTIONS" v-model="draft.replyerStrategy" tip="推荐“失败回退”：先用主模型，失败时再自动切到后备模型。" />
           <div class="form-grid dense">
             <Field label="全局请求超时（毫秒）" type="number" v-model="draft.modelRequestTimeoutMs" tip="所有模型默认使用；单个模型可以在“模型服务 → 编辑模型”中覆盖。范围 1000–600000。" />
-            <Field label="默认流式响应" type="select" :options="BOOL_OFF_OPTIONS" v-model="draft.modelStream" tip="OpenAI Compatible、Qwen、ChatGLM 会使用 SSE；其他协议暂按非流式执行。" />
+          <Field label="默认流式响应" type="select" :options="BOOL_OFF_OPTIONS" v-model="draft.modelStream" tip="OpenAI Compatible、Responses、Qwen、ChatGLM、Gemini、Claude 会使用各自的 SSE；具体模型仍以供应商能力为准。" />
           </div>
           <Field label="媒体识别增强模型" type="select" :options="modelOptions" v-model="draft.recognitionModel" tip="主模型不识图时，recognize_media 工具优先使用这个模型；留空则自动选择视觉模型或回复模型" />
           <div class="hint-banner" :class="visionOk ? 'ok' : 'warn'">

@@ -208,7 +208,9 @@ function modelPreview(model: ModelConfig, channel: ResolvedModelChannel): Record
   }
 }
 
-const streamingAdapterIds = new Set(["openai-compatible", "qwen", "chatglm"])
+// 这些适配器都实现了各自协议的上游流式传输；响应仍由统一协议层收敛，
+// 因而工具循环和最终投递行为不依赖供应商事件格式。
+const streamingAdapterIds = new Set(["openai-compatible", "openai-responses", "qwen", "chatglm", "gemini", "claude"])
 
 /**
  * 模型路由器：只负责把任务配置解析成可执行渠道，不负责发起请求或决定工具权限。

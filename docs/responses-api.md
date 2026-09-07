@@ -136,7 +136,7 @@ Responses 会话状态由独立的协议状态机管理，与 `AgentTurnState`/`
 ## 当前边界
 
 - Chat Completions 行为、流式解析和现有工具选择保持不变。
-- Responses 当前使用非流式 HTTP；Streaming 稳定后再补。
+- Responses 已支持 `stream=true` 的语义事件流；适配器会收敛 `response.output_text.delta`、Function Call 参数增量和 `response.completed`，再交给统一 Agent Loop。当前仍在适配器内聚合成一条 `ModelResponse`，因此不会改变工具循环、日志和最终投递语义。
 - 当前支持模型级 `auto`、严格 `previous_response_id` 和 `local` 三种状态模式；Responses Conversations 尚未接入，且不能与 `previous_response_id` 同时使用。
 - OpenAI 执行的 Built-in Tools 不进入本地 Function Executor；本地 Function Calling 仍完整受权限与副作用控制。
 - 本版本不迁移旧 `toolPolicy.sources`、`toolPolicy.strategies`、模型级 `responses.webSearch.enabled/toolSearch`、`fallbackEnabled` 或名单中的实现前缀。配置载入时会直接丢弃这些字段并按新版默认值处理；不会猜测旧值对应的新路由语义。

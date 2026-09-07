@@ -1830,11 +1830,17 @@ async function checkAdapterToolProtocol() {
     parseClaudeToolCalls,
     parseGeminiToolCalls,
   } = await import("../output/runtime/models/adapters/registry.js")
+  const { parseClaudeStreamResponse } = await import("../output/runtime/models/adapters/claude.js")
+  const { parseGeminiStreamResponse } = await import("../output/runtime/models/adapters/gemini.js")
+  const { parseResponsesStreamResponse } = await import("../output/runtime/models/adapters/openai/responses/response-adapter.js")
   const { buildReasoningPayload } = await import("../output/runtime/models/configuration/reasoning.js")
   const adapters = adapterRegistry.listAdapters()
   assert(adapters.find(item => item.id === "gemini")?.supportsTools === true, "gemini adapter should support tools")
   assert(adapters.find(item => item.id === "claude")?.supportsTools === true, "claude adapter should support tools")
   assert(adapters.find(item => item.id === "openai-compatible")?.supportsStreaming === true, "OpenAI-compatible adapter should declare streaming support")
+  assert(adapters.find(item => item.id === "openai-responses")?.supportsStreaming === true, "OpenAI Responses adapter should declare streaming support")
+  assert(adapters.find(item => item.id === "gemini")?.supportsStreaming === true, "Gemini adapter should declare streaming support")
+  assert(adapters.find(item => item.id === "claude")?.supportsStreaming === true, "Claude adapter should declare streaming support")
   assert(adapters.find(item => item.id === "openai-responses")?.supportsNativeToolSearch === true, "OpenAI Responses adapter should declare native tool search support")
   assert(adapters.find(item => item.id === "openai-responses")?.protocol === "responses" && adapters.find(item => item.id === "claude")?.protocol === "claude-messages" && adapters.find(item => item.id === "gemini")?.protocol === "gemini-generate-content", "adapter diagnostics should expose the actual upstream conversation protocol")
   const mockModels = await adapterRegistry.listModels({ id: "mock", type: "mock" })
@@ -1968,6 +1974,57 @@ async function checkAdapterToolProtocol() {
     assert(responses.hostedToolCalls?.[0]?.raw?.action?.sources?.[0]?.url === "https://example.com", "Responses hosted tools should retain the upstream output item for bounded audit logging")
     assert(responses.hostedSearchSources?.[0]?.title === "Example" && responses.hostedSearchSources?.[0]?.url === "https://example.com", "Responses hosted web search should expose normalized sources for the output layer")
     assert(responses.upstreamResponseId === "resp_smoke", "Responses output should expose the upstream response id separately from local conversation history")
+
+    let responsesStreamRequest
+    global.fetch = async (_url, options = {}) => {
+      responsesStreamRequest = JSON.parse(String(options.body || "{}"))
+      const source = [
+        'event: response.created',
+        'data: {"type":"response.created","response":{"id":"resp_stream","status":"in_progress"}}',
+        '',
+        'event: response.output_item.added',
+        'data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_stream","role":"assistant","content":[{"type":"output_text","text":""}]}}',
+        '',
+        'event: response.output_text.delta',
+        'data: {"type":"response.output_text.delta","item_id":"msg_stream","output_index":0,"delta":"你"}',
+        '',
+        'event: response.output_text.delta',
+        'data: {"type":"response.output_text.delta","item_id":"msg_stream","output_index":0,"delta":"好"}',
+        '',
+        'event: response.output_item.added',
+        'data: {"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","id":"fc_stream","call_id":"call_stream","name":"command_search","arguments":""}}',
+        '',
+        'event: response.function_call_arguments.delta',
+        'data: {"type":"response.function_call_arguments.delta","item_id":"fc_stream","output_index":1,"delta":"{\\"query\\":"}',
+        '',
+        'event: response.function_call_arguments.delta',
+        'data: {"type":"response.function_call_arguments.delta","item_id":"fc_stream","output_index":1,"delta":"\\"体力\\"}"}',
+        '',
+        'event: response.completed',
+        'data: {"type":"response.completed","response":{"id":"resp_stream","status":"completed","usage":{"input_tokens":4,"output_tokens":2,"total_tokens":6}}}',
+        '',
+      ].join("\n")
+      return new Response(source, { status: 200, headers: { "content-type": "text/event-stream" } })
+    }
+    const streamedResponses = await adapterRegistry.get("openai-responses").sendMessage({
+      channel: {
+        id: "responses-stream-smoke",
+        type: "openai-responses",
+        model: "gpt-5.4",
+        baseURL: "https://responses.example/v1",
+        authType: "none",
+        timeoutMs: 5000,
+        stream: true,
+        responsesRuntime: { stateMode: "local" },
+        modelConfig: { responses: { store: false } },
+      },
+      messages: [{ role: "user", content: "流式测试" }],
+      tools: [{ name: "command_search", description: "Search commands.", parameters: { type: "object", properties: {} }, async execute() {} }],
+      maxTokens: 64,
+    })
+    assert(responsesStreamRequest.stream === true, "Responses streaming requests should send stream=true")
+    assert(streamedResponses.text === "你好" && streamedResponses.toolCalls[0]?.name === "command_search" && streamedResponses.toolCalls[0]?.arguments?.query === "体力", "Responses semantic SSE should combine text and function argument deltas")
+    assert(streamedResponses.upstreamResponseId === "resp_stream" && streamedResponses.usage.total === 6 && streamedResponses.stopReason === "tool_calls", "Responses semantic SSE should preserve response id, usage and tool stop reason")
 
     const { buildResponsesRequest, messagesForResponses } = await import("../output/runtime/models/adapters/openai/responses/request-adapter.js")
     const forcedDirectRequest = buildResponsesRequest({
@@ -2174,6 +2231,71 @@ async function checkAdapterToolProtocol() {
       maxTokens: 64,
     })
     assert(geminiRequest.toolConfig?.functionCallingConfig?.mode === "ANY" && geminiRequest.toolConfig?.functionCallingConfig?.allowedFunctionNames?.[0] === "message_send", "Gemini requests should map a forced function choice")
+
+    let claudeStreamRequest
+    global.fetch = async (_url, options = {}) => {
+      claudeStreamRequest = JSON.parse(String(options.body || "{}"))
+      const source = [
+        'event: message_start',
+        'data: {"type":"message_start","message":{"id":"msg_stream","role":"assistant","content":[],"usage":{"input_tokens":3}}}',
+        '',
+        'event: content_block_start',
+        'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+        '',
+        'event: content_block_delta',
+        'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"你"}}',
+        '',
+        'event: content_block_delta',
+        'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"好"}}',
+        '',
+        'event: content_block_start',
+        'data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_stream","name":"command_search","input":{}}}',
+        '',
+        'event: content_block_delta',
+        'data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\\"query\\":"}}',
+        '',
+        'event: content_block_delta',
+        'data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"\\"体力\\"}"}}',
+        '',
+        'event: message_delta',
+        'data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":2}}',
+        '',
+        'event: message_stop',
+        'data: {"type":"message_stop"}',
+        '',
+      ].join("\n")
+      return new Response(source, { status: 200, headers: { "content-type": "text/event-stream" } })
+    }
+    const streamedClaude = await adapterRegistry.get("claude").sendMessage({
+      channel: { id: "claude-stream", type: "claude", model: "claude-smoke", apiKey: "smoke", timeoutMs: 5000, stream: true },
+      messages: [{ role: "user", content: "流式测试" }],
+      tools: [{ name: "command_search", description: "Search.", parameters: { type: "object", properties: {} }, async execute() {} }],
+      maxTokens: 64,
+    })
+    assert(claudeStreamRequest.stream === true, "Claude streaming requests should send stream=true")
+    assert(streamedClaude.text === "你好" && streamedClaude.toolCalls[0]?.id === "toolu_stream" && streamedClaude.toolCalls[0]?.arguments?.query === "体力", "Claude SSE should combine text and input_json deltas")
+    assert(streamedClaude.usage.total === 5 && streamedClaude.stopReason === "tool_calls", "Claude SSE should preserve usage and tool stop reason")
+
+    let geminiStreamRequest
+    global.fetch = async (url, options = {}) => {
+      geminiStreamRequest = { url: String(url), body: JSON.parse(String(options.body || "{}")) }
+      const source = [
+        'data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"你"}]}}],"usageMetadata":{"promptTokenCount":3}}',
+        '',
+        'data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"好"},{"functionCall":{"name":"command_search","args":"{\\"query\\":\\"体力\\"}"}}]},"finishReason":"STOP"}],"usageMetadata":{"candidatesTokenCount":2,"totalTokenCount":5}}',
+        '',
+      ].join("\n")
+      return new Response(source, { status: 200, headers: { "content-type": "text/event-stream" } })
+    }
+    const streamedGemini = await adapterRegistry.get("gemini").sendMessage({
+      channel: { id: "gemini-stream", type: "gemini", model: "gemini-smoke", apiKey: "smoke", timeoutMs: 5000, stream: true },
+      messages: [{ role: "user", content: "流式测试" }],
+      tools: [{ name: "command_search", description: "Search.", parameters: { type: "object", properties: {} }, async execute() {} }],
+      maxTokens: 64,
+    })
+    assert(geminiStreamRequest.url.includes(":streamGenerateContent") && geminiStreamRequest.url.includes("alt=sse"), "Gemini streaming requests should use streamGenerateContent with alt=sse")
+    assert(streamedGemini.text === "你好" && streamedGemini.toolCalls[0]?.name === "command_search" && streamedGemini.toolCalls[0]?.arguments?.query === "体力", "Gemini SSE should combine text and function-call chunks")
+    assert(streamedGemini.usage.total === 5 && streamedGemini.stopReason === "tool_calls", "Gemini SSE should preserve usage and tool finish reason")
   } finally {
     global.fetch = originalFetch
   }

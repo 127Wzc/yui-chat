@@ -2,7 +2,7 @@ import { fetchWithTimeout } from "../../../../core/network/fetch-timeout.js"
 import { notifyModelRequest } from "../../base.js"
 import type { ModelChannel, ModelRequest, ModelResponse } from "../../../protocol/types.js"
 import { OpenAICompatibleAdapter } from "../chat/adapter.js"
-import { parseResponsesResponse } from "./response-adapter.js"
+import { parseResponsesResponse, parseResponsesStreamResponse } from "./response-adapter.js"
 import { ResponsesConversationStateMachine } from "./state-machine.js"
 
 type UnknownRecord = Record<string, unknown>
@@ -33,7 +33,7 @@ function responseError(data: UnknownRecord, status: number): Error {
 export class OpenAIResponsesAdapter extends OpenAICompatibleAdapter {
   override readonly id = "openai-responses"
   override readonly protocol = "responses"
-  override readonly supportsStreaming = false
+  override readonly supportsStreaming = true
   override readonly supportsNativeToolSearch = true
 
   override buildUrl(channel: ModelChannel): URL {
@@ -59,6 +59,8 @@ export class OpenAIResponsesAdapter extends OpenAICompatibleAdapter {
         timeoutMs: channel.timeoutMs || 90000,
         signal,
         consume: async response => {
+          const contentType = String(response.headers.get("content-type") || "").toLowerCase()
+          if (channel.stream === true && contentType.includes("text/event-stream")) return parseResponsesStreamResponse(response)
           const data = await readJson(response)
           if (!response.ok) throw responseError(data, response.status)
           return parseResponsesResponse(data)

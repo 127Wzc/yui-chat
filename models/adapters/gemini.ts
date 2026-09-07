@@ -3,6 +3,7 @@ import { fetchWithTimeout } from "../../core/network/fetch-timeout.js"
 import { applyReasoningPayload } from "../configuration/reasoning.js"
 import { getToolCommon, modelToolDescription } from "../../tools/support/contract.js"
 import { ModelAdapter, contentParts, contentToText, normalizeListedModels, notifyModelRequest, parseDataUrl, parseResponseData, safeJson, tokenUsage } from "./base.js"
+import { consumeServerSentEvents } from "./sse.js"
 import type { ContentPart, JsonValue } from "../../core/message-chain/types.js"
 import type { ModelChannel, ModelMessage, ModelRequest, ModelResponse } from "../protocol/types.js"
 import type { ToolDefinition } from "../../tools/support/tool-contract.js"
@@ -139,6 +140,112 @@ export function parseGeminiToolCalls(data: unknown = {}): ModelResponse["toolCal
   })
 }
 
+interface GeminiStreamFunctionCall {
+  name: string
+  arguments: UnknownRecord
+  argumentText: string
+}
+
+interface GeminiStreamCandidate {
+  text: string
+  finishReason: string
+  functions: Map<string, GeminiStreamFunctionCall>
+}
+
+function mergeGeminiArguments(target: UnknownRecord, value: unknown): { arguments: UnknownRecord; argumentText: string } {
+  if (isRecord(value)) return { arguments: { ...target, ...value }, argumentText: "" }
+  if (typeof value !== "string") return { arguments: target, argumentText: "" }
+  try {
+    const parsed: unknown = JSON.parse(value)
+    return isRecord(parsed) ? { arguments: { ...target, ...parsed }, argumentText: "" } : { arguments: target, argumentText: value }
+  } catch {
+    return { arguments: target, argumentText: value }
+  }
+}
+
+/** 解析 Gemini streamGenerateContent 的 SSE chunks，并收敛为普通 GenerateContent 响应。 */
+export async function parseGeminiStreamResponse(response: Response): Promise<ModelResponse> {
+  if (!response.ok) {
+    const body = await response.text()
+    let data: unknown = {}
+    try { data = body ? JSON.parse(body) : {} } catch { data = { error: body } }
+    throw responseError(data, response.status)
+  }
+  const candidates = new Map<number, GeminiStreamCandidate>()
+  let usage: UnknownRecord = {}
+  let chunks = 0
+  await consumeServerSentEvents(response, ({ data: rawData }) => {
+    const payload = rawData.trim()
+    if (!payload || payload === "[DONE]") return
+    let data: UnknownRecord
+    try {
+      const parsed: unknown = JSON.parse(payload)
+      data = record(parsed)
+    } catch {
+      throw new Error("上游返回了无法解析的 Gemini 流式数据")
+    }
+    chunks++
+    if (data.error) throw responseError(data, response.status)
+    if (isRecord(data.usageMetadata)) usage = { ...usage, ...data.usageMetadata }
+    for (const [fallbackIndex, rawCandidate] of array(data.candidates).entries()) {
+      const candidate = record(rawCandidate)
+      const index = Number.isInteger(Number(candidate.index)) ? Number(candidate.index) : fallbackIndex
+      const current = candidates.get(index) || { text: "", finishReason: "", functions: new Map() }
+      const content = record(candidate.content)
+      for (const rawPart of array(content.parts)) {
+        const part = record(rawPart)
+        if (part.text) current.text += stringValue(part.text)
+        const functionCall = record(part.functionCall || part.function_call)
+        const name = stringValue(functionCall.name).trim()
+        if (name) {
+          const existing = current.functions.get(name) || { name, arguments: {}, argumentText: "" }
+          const merged = mergeGeminiArguments(existing.arguments, functionCall.args ?? functionCall.arguments)
+          existing.arguments = merged.arguments
+          if (merged.argumentText) {
+            existing.argumentText += merged.argumentText
+            const parsed = safeJson(existing.argumentText)
+            if (Object.keys(parsed).length) {
+              existing.arguments = { ...existing.arguments, ...parsed }
+              existing.argumentText = ""
+            }
+          }
+          current.functions.set(name, existing)
+        }
+      }
+      const finishReason = stringValue(candidate.finishReason || candidate.finish_reason)
+      if (finishReason) current.finishReason = finishReason
+      candidates.set(index, current)
+    }
+  })
+  const candidateItems = [...candidates.entries()].sort(([left], [right]) => left - right).map(([index, candidate]) => {
+    const parts: UnknownRecord[] = []
+    if (candidate.text) parts.push({ text: candidate.text })
+    for (const functionCall of candidate.functions.values()) {
+      const argumentsValue = Object.keys(functionCall.arguments).length
+        ? functionCall.arguments
+        : safeJson(functionCall.argumentText)
+      parts.push({ functionCall: { name: functionCall.name, args: argumentsValue } })
+    }
+    return {
+      index,
+      content: { role: "model", parts },
+      ...(candidate.finishReason ? { finishReason: candidate.finishReason } : {}),
+    }
+  })
+  const data = { candidates: candidateItems, ...(Object.keys(usage).length ? { usageMetadata: usage } : {}) }
+  const first = candidateItems[0] || {}
+  const firstParts = array(record(first.content).parts).map(record)
+  const parsed = {
+    id: crypto.randomUUID(),
+    text: firstParts.map(part => stringValue(part.text || "")).join(""),
+    raw: { stream: true, chunks, finishReason: first.finishReason || "" },
+    usage: tokenUsage(data, "gemini"),
+    stopReason: normalizeModelStopReason(first.finishReason, parseGeminiToolCalls(data).length),
+    toolCalls: parseGeminiToolCalls(data),
+  }
+  return parsed
+}
+
 /**
  * Gemini 适配器，统一处理 generateContent、function calling、视觉输入和 embedding。
  *
@@ -149,6 +256,7 @@ export class GeminiAdapter extends ModelAdapter {
   override readonly protocol = "gemini-generate-content"
   override readonly supportsTools = true
   override readonly supportsVision = true
+  override readonly supportsStreaming = true
   override readonly supportsEmbeddings = true
 
   buildModelsUrl(channel: ModelChannel): URL {
@@ -185,28 +293,39 @@ export class GeminiAdapter extends ModelAdapter {
       generationConfig,
     }, channel)
     notifyModelRequest(onRequest, this.protocol, body)
-    const response = await fetchWithTimeout(`${baseURL}/v1beta/models/${model}:generateContent?key=${encodeURIComponent(channel.apiKey)}`, {
+    const endpoint = channel.stream === true ? "streamGenerateContent" : "generateContent"
+    const url = new URL(`${baseURL}/v1beta/models/${model.replace(/^models\//, "")}:${endpoint}`)
+    if (channel.stream === true) url.searchParams.set("alt", "sse")
+    url.searchParams.set("key", channel.apiKey)
+    for (const [key, value] of Object.entries(record(channel.query))) {
+      if (value !== undefined && value !== null && value !== "") url.searchParams.set(key, String(value))
+    }
+    return fetchWithTimeout(url, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...stringRecord(channel.headers) },
       body: JSON.stringify(body),
       timeoutMs: channel.timeoutMs || 90000,
       signal,
+      consume: async response => {
+        const contentType = String(response.headers.get("content-type") || "").toLowerCase()
+        if (channel.stream === true && contentType.includes("text/event-stream")) return parseGeminiStreamResponse(response)
+        const data = await readJsonResponse(response)
+        if (!response.ok) throw responseError(data, response.status)
+        const candidates = array(data.candidates)
+        const first = candidates.length ? record(candidates[0]) : {}
+        const content = record(first.content)
+        const parts = array(content.parts).map(record)
+        const toolCalls = parseGeminiToolCalls(data)
+        return {
+          id: crypto.randomUUID(),
+          text: parts.map(part => stringValue(part.text || "")).join(""),
+          raw: data,
+          usage: tokenUsage(data, "gemini"),
+          stopReason: normalizeModelStopReason(first.finishReason, toolCalls.length),
+          toolCalls,
+        }
+      },
     })
-    const data = await readJsonResponse(response)
-    if (!response.ok) throw responseError(data, response.status)
-    const candidates = array(data.candidates)
-    const first = candidates.length ? record(candidates[0]) : {}
-    const content = record(first.content)
-    const parts = array(content.parts).map(record)
-    const toolCalls = parseGeminiToolCalls(data)
-    return {
-      id: crypto.randomUUID(),
-      text: parts.map(part => stringValue(part.text || "")).join(""),
-      raw: data,
-      usage: tokenUsage(data, "gemini"),
-      stopReason: normalizeModelStopReason(first.finishReason, toolCalls.length),
-      toolCalls,
-    }
   }
 
   override async embedTexts({ channel, texts = [], dimensions = 0, signal, onRequest }: { channel: ModelChannel; texts?: string[]; dimensions?: number; signal?: AbortSignal; onRequest?: Parameters<ModelAdapter["embedTexts"]>[0]["onRequest"] }): Promise<Awaited<ReturnType<ModelAdapter["embedTexts"]>>> {

@@ -436,7 +436,7 @@ function validateProviders(config: ConfigRecord, issues: ValidationIssue[]): voi
     if (capabilities.embedding === true && !isObject(embedding)) add(issues, "error", `models.${index}.embedding`, "启用 embedding 能力时必须配置 embedding 参数")
     if (model.timeoutMs !== undefined) positiveNumber(issues, `models.${index}.timeoutMs`, model.timeoutMs, { min: 1000, max: 600000 })
     if (model.stream !== undefined && typeof model.stream !== "boolean") add(issues, "error", `models.${index}.stream`, "stream 必须是布尔值")
-    if (model.stream === true && !["openai-compatible", "qwen", "chatglm"].includes(adapter)) {
+    if (model.stream === true && !["openai-compatible", "openai-responses", "qwen", "chatglm", "gemini", "claude"].includes(adapter)) {
       add(issues, "warn", `models.${index}.stream`, `模型 ${modelName} 的 ${adapter || "当前"} 适配器暂不支持流式响应，将按非流式执行`)
     }
     const reasoning = model.reasoning

@@ -3,6 +3,7 @@ import { fetchWithTimeout } from "../../core/network/fetch-timeout.js"
 import { applyReasoningPayload } from "../configuration/reasoning.js"
 import { getToolCommon, modelToolDescription } from "../../tools/support/contract.js"
 import { ModelAdapter, contentParts, contentToText, normalizeListedModels, notifyModelRequest, parseDataUrl, parseResponseData, safeJson, tokenUsage } from "./base.js"
+import { consumeServerSentEvents } from "./sse.js"
 import type { ModelChannel, ModelMessage, ModelRequest, ModelResponse } from "../protocol/types.js"
 import type { ToolDefinition } from "../../tools/support/tool-contract.js"
 import { normalizeModelStopReason } from "../protocol/normalize.js"
@@ -122,6 +123,113 @@ export function parseClaudeToolCalls(data: unknown = {}): ModelResponse["toolCal
   })
 }
 
+function streamResponseError(data: unknown, status = 0): Error {
+  const root = record(data)
+  const error = record(root.error)
+  const result = new Error(stringValue(error.message || error.type || root.error || `HTTP ${status}`))
+  Object.assign(result, {
+    ...(status ? { status } : {}),
+    ...(error.code || root.code ? { code: stringValue(error.code || root.code) } : {}),
+    ...(error.type ? { providerType: stringValue(error.type) } : {}),
+  })
+  return result
+}
+
+/** 解析 Claude Messages 的 message/content block SSE，并复用普通 JSON 响应归一化。 */
+export async function parseClaudeStreamResponse(response: Response): Promise<ModelResponse> {
+  if (!response.ok) {
+    const body = await response.text()
+    let data: unknown = {}
+    try { data = body ? JSON.parse(body) : {} } catch { data = { error: body } }
+    throw streamResponseError(data, response.status)
+  }
+  const blocks = new Map<number, UnknownRecord>()
+  const order: number[] = []
+  let message: UnknownRecord = {}
+  let stopReason = ""
+  let usage: UnknownRecord = {}
+  let events = 0
+
+  await consumeServerSentEvents(response, ({ event, data: rawData }) => {
+    const payload = rawData.trim()
+    if (!payload || payload === "[DONE]") return
+    let data: UnknownRecord
+    try {
+      const parsed: unknown = JSON.parse(payload)
+      data = record(parsed)
+    } catch {
+      throw new Error("上游返回了无法解析的 Claude 流式数据")
+    }
+    events++
+    const type = stringValue(data.type || event).trim()
+    if (type === "error" || data.error) throw streamResponseError(data, response.status)
+    if (type === "message_start") {
+      const started = record(data.message)
+      message = { ...message, ...started }
+      if (isRecord(started.usage)) usage = { ...usage, ...started.usage }
+      return
+    }
+    if (type === "content_block_start") {
+      const index = Number(data.index)
+      if (!Number.isInteger(index) || index < 0) return
+      const block = record(data.content_block)
+      if (!blocks.has(index)) order.push(index)
+      blocks.set(index, { ...(blocks.get(index) || {}), ...block })
+      return
+    }
+    if (type === "content_block_delta") {
+      const index = Number(data.index)
+      if (!Number.isInteger(index) || index < 0) return
+      const delta = record(data.delta)
+      const block = blocks.get(index) || { type: stringValue(delta.type) === "input_json_delta" ? "tool_use" : "text" }
+      if (!blocks.has(index)) order.push(index)
+      if (delta.type === "text_delta") block.text = `${stringValue(block.text)}${stringValue(delta.text)}`
+      else if (delta.type === "input_json_delta") block.__partialJson = `${stringValue(block.__partialJson)}${stringValue(delta.partial_json)}`
+      else if (delta.type === "thinking_delta") block.__thinking = `${stringValue(block.__thinking)}${stringValue(delta.thinking)}`
+      else if (delta.type === "signature_delta") block.__signature = `${stringValue(block.__signature)}${stringValue(delta.signature)}`
+      blocks.set(index, block)
+      return
+    }
+    if (type === "message_delta") {
+      const delta = record(data.delta)
+      if (delta.stop_reason) stopReason = stringValue(delta.stop_reason)
+      if (isRecord(data.usage)) usage = { ...usage, ...data.usage }
+      return
+    }
+  })
+
+  const content = order.map(index => {
+    const block = { ...(blocks.get(index) || {}) }
+    const partialJson = stringValue(block.__partialJson)
+    delete block.__partialJson
+    delete block.__thinking
+    delete block.__signature
+    if (block.type === "tool_use" && partialJson && !Object.keys(record(block.input)).length) block.input = safeJson(partialJson)
+    return block
+  }).filter(block => block.type)
+  const data: UnknownRecord = {
+    ...message,
+    content,
+    ...(stopReason ? { stop_reason: stopReason } : {}),
+    ...(Object.keys(usage).length ? { usage } : {}),
+  }
+  const parsed = parseClaudeResponse(data)
+  return { ...parsed, raw: { stream: true, events, stopReason } }
+}
+
+function parseClaudeResponse(data: UnknownRecord): ModelResponse {
+  const content = array(data.content).map(record)
+  const toolCalls = parseClaudeToolCalls(data)
+  return {
+    id: stringValue(data.id) || crypto.randomUUID(),
+    text: content.map(part => stringValue(part.text || "")).join(""),
+    raw: data,
+    usage: tokenUsage(data, "claude"),
+    stopReason: normalizeModelStopReason(data.stop_reason, toolCalls.length),
+    toolCalls,
+  }
+}
+
 /**
  * Claude Messages 适配器。
  *
@@ -132,6 +240,7 @@ export class ClaudeAdapter extends ModelAdapter {
   override readonly protocol = "claude-messages"
   override readonly supportsTools = true
   override readonly supportsVision = true
+  override readonly supportsStreaming = true
 
   buildModelsUrl(channel: ModelChannel): URL {
     if (!channel.apiKey) throw new Error("Claude channel apiKey is required")
@@ -172,26 +281,22 @@ export class ClaudeAdapter extends ModelAdapter {
       } : {}),
       messages: messagesToClaudeMessages(messages),
     }, channel)
+    if (channel.stream === true) body.stream = true
     notifyModelRequest(onRequest, this.protocol, body)
-    const response = await fetchWithTimeout(`${baseURL}/messages`, {
+    return fetchWithTimeout(`${baseURL}/messages`, {
       method: "POST",
       headers: this.headers(channel, { contentType: true }),
       body: JSON.stringify(body),
       timeoutMs: channel.timeoutMs || 90000,
       signal,
+      consume: async response => {
+        const contentType = String(response.headers.get("content-type") || "").toLowerCase()
+        if (channel.stream === true && contentType.includes("text/event-stream")) return parseClaudeStreamResponse(response)
+        const data = await readJsonResponse(response)
+        if (!response.ok) throw responseError(data, response.status)
+        return parseClaudeResponse(data)
+      },
     })
-    const data = await readJsonResponse(response)
-    if (!response.ok) throw responseError(data, response.status)
-    const content = array(data.content).map(record)
-    const toolCalls = parseClaudeToolCalls(data)
-    return {
-      id: stringValue(data.id) || crypto.randomUUID(),
-      text: content.map(part => stringValue(part.text || "")).join(""),
-      raw: data,
-      usage: tokenUsage(data, "claude"),
-      stopReason: normalizeModelStopReason(data.stop_reason, toolCalls.length),
-      toolCalls,
-    }
   }
 
   override async listModels({ channel }: { channel: ModelChannel }): Promise<unknown[]> {
