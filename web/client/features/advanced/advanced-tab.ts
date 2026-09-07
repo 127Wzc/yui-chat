@@ -377,7 +377,7 @@ export const AdvancedTab = {
     async function saveCaptureDefaults() {
       try {
         const retentionDays = Math.round(Math.min(100000000, Math.max(0, Number(draft.captureRetentionDays) || 0)))
-        const tokenLimit = Math.round(Math.min(60000, Math.max(256, Number(draft.captureTokenLimit) || 30000)))
+        const tokenLimit = Math.round(Math.min(60000, Math.max(3000, Number(draft.captureTokenLimit) || 30000)))
         const maxTokens = Math.round(Math.min(65536, Math.max(256, Number(draft.captureMaxTokens) || 4096)))
         const confidence = Number(draft.captureMinConfidence)
         const minConfidence = Number.isFinite(confidence) ? Math.min(1, Math.max(0, confidence)) : 0.7
@@ -644,7 +644,7 @@ export const AdvancedTab = {
             <div class="developer-section-head"><div><b>原始消息与输入切分</b><span>保留期更新后，继承默认的群会按消息发送时间重新计算到期时间。</span></div></div>
             <div class="form-grid capture-token-limits">
               <Field label="原始消息保留天数" type="number" v-model="draft.captureRetentionDays" hint="0 表示永久保留；有限保留最少 1 天" />
-              <Field label="输入 Token 上限（单日子窗口）" type="number" v-model="draft.captureTokenLimit" hint="256–60,000；超限消息不会被截断" />
+              <Field label="输入 Token 上限（单日子窗口）" type="number" v-model="draft.captureTokenLimit" hint="3,000–60,000；仅估算群聊消息 Token，不含记忆提炼系统提示词；超限消息不会被截断" />
             </div>
           </div>
 

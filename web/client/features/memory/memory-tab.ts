@@ -385,9 +385,10 @@ export const MemoryTab = {
 
     function captureFieldHint(field: PolicyOverrideField): string {
       const label = captureDefaultLabel(field)
-      return captureDraft.useDefault[field]
+      const suffix = field === "tokenLimit" ? "；范围 3,000–60,000，仅估算群聊消息 Token，不含记忆提炼系统提示词" : ""
+      return (captureDraft.useDefault[field]
         ? `跟随系统默认：${label}。直接编辑会自动变为本群自定义。`
-        : `当前为本群自定义；系统默认：${label}`
+        : `当前为本群自定义；系统默认：${label}`) + suffix
     }
 
     function captureFieldSource(field: PolicyOverrideField): string {

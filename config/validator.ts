@@ -908,7 +908,7 @@ function validateRuntimeNumbers(config: ConfigRecord, issues: ValidationIssue[])
     ["memory.groupCapture.consolidation.minConfidence", config.memory?.groupCapture?.consolidation?.minConfidence, 0, 1],
     ["memory.groupCapture.consolidation.maxWindowsPerScan", config.memory?.groupCapture?.consolidation?.maxWindowsPerScan, 1, 64],
     ["memory.groupCapture.defaultRetentionDays", config.memory?.groupCapture?.defaultRetentionDays, 0, 100000000],
-    ["memory.groupCapture.defaultTokenLimit", config.memory?.groupCapture?.defaultTokenLimit, 256, 60000],
+    ["memory.groupCapture.defaultTokenLimit", config.memory?.groupCapture?.defaultTokenLimit, 3000, 60000],
     ["memory.groupCapture.flushDelayMs", config.memory?.groupCapture?.flushDelayMs, 100, 300000],
     ["memory.groupCapture.maxPendingMessages", config.memory?.groupCapture?.maxPendingMessages, 100, 50000],
     ["memory.groupCapture.maxSegmentsPerMessage", config.memory?.groupCapture?.maxSegmentsPerMessage, 1, 1000],

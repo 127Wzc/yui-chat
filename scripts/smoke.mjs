@@ -6076,13 +6076,13 @@ async function checkWebAndBoot() {
       headers: { "content-type": "application/json", cookie },
       body: JSON.stringify({ patch: {
         "memory.groupCapture.defaultRetentionDays": 30,
-        "memory.groupCapture.defaultTokenLimit": 1200,
+        "memory.groupCapture.defaultTokenLimit": 3000,
         "memory.groupCapture.promptTemplate": "自定义群记忆提示词",
         "memory.groupCapture.consolidation.modelName": "mock",
       } }),
     })
     const captureConfigPayload = await captureConfigResponse.json()
-    assert(captureConfigResponse.ok && captureConfigPayload.config?.memory?.groupCapture?.defaultTokenLimit === 1200 && captureConfigPayload.config?.memory?.groupCapture?.consolidation?.modelName === "mock", "memory capture's shared retention, Token, prompt, and model settings should save through the global configuration API")
+    assert(captureConfigResponse.ok && captureConfigPayload.config?.memory?.groupCapture?.defaultTokenLimit === 3000 && captureConfigPayload.config?.memory?.groupCapture?.consolidation?.modelName === "mock", "memory capture's shared retention, Token, prompt, and model settings should save through the global configuration API")
     const capturePolicyResponse = await fetch(`http://127.0.0.1:${port}/api/memory/captures/group/${memoryGroupId}`, {
       method: "PUT",
       headers: { "content-type": "application/json", cookie },
@@ -6090,7 +6090,7 @@ async function checkWebAndBoot() {
       body: JSON.stringify({ enabled: true, retentionDays: 1, tokenLimit: 17, promptTemplate: "忽略的旧字段", modelName: "ignored" }),
     })
     const capturePolicyPayload = await capturePolicyResponse.json()
-    assert(capturePolicyResponse.ok && capturePolicyPayload.policy?.scopeId === memoryGroupId && capturePolicyPayload.policy?.enabled === true && capturePolicyPayload.policy?.tokenLimit === 1200 && capturePolicyPayload.policy?.promptTemplate === "自定义群记忆提示词" && capturePolicyPayload.policy?.modelName === "mock" && !Object.values(capturePolicyPayload.policy?.overrides || {}).some(Boolean), "new capture policies should inherit global defaults until an override is explicitly enabled")
+    assert(capturePolicyResponse.ok && capturePolicyPayload.policy?.scopeId === memoryGroupId && capturePolicyPayload.policy?.enabled === true && capturePolicyPayload.policy?.tokenLimit === 3000 && capturePolicyPayload.policy?.promptTemplate === "自定义群记忆提示词" && capturePolicyPayload.policy?.modelName === "mock" && !Object.values(capturePolicyPayload.policy?.overrides || {}).some(Boolean), "new capture policies should inherit global defaults until an override is explicitly enabled")
     const captureOverrideResponse = await fetch(`http://127.0.0.1:${port}/api/memory/captures/group/${memoryGroupId}`, {
       method: "PUT",
       headers: { "content-type": "application/json", cookie },
@@ -6101,7 +6101,7 @@ async function checkWebAndBoot() {
       }),
     })
     const captureOverridePayload = await captureOverrideResponse.json()
-    assert(captureOverrideResponse.ok && captureOverridePayload.policy?.retentionDays === 1 && captureOverridePayload.policy?.tokenLimit === 1300 && captureOverridePayload.policy?.promptTemplate === "仅用于 Web 测试群" && captureOverridePayload.policy?.modelName === "mock" && captureOverridePayload.policy?.maxTokens === 2048 && captureOverridePayload.policy?.minConfidence === 0.8 && captureOverridePayload.policy?.retrievalResultLimit === 2 && Object.values(captureOverridePayload.policy?.overrides || {}).every(Boolean), "memory capture policy API should persist explicit per-group overrides and report effective values")
+    assert(captureOverrideResponse.ok && captureOverridePayload.policy?.retentionDays === 1 && captureOverridePayload.policy?.tokenLimit === 3000 && captureOverridePayload.policy?.promptTemplate === "仅用于 Web 测试群" && captureOverridePayload.policy?.modelName === "mock" && captureOverridePayload.policy?.maxTokens === 2048 && captureOverridePayload.policy?.minConfidence === 0.8 && captureOverridePayload.policy?.retrievalResultLimit === 2 && Object.values(captureOverridePayload.policy?.overrides || {}).every(Boolean), "memory capture policy API should persist explicit per-group overrides and report effective values")
     const historyBackfillResponse = await fetch(`http://127.0.0.1:${port}/api/memory/captures/group/${memoryGroupId}/history`, {
       method: "POST",
       headers: { "content-type": "application/json", cookie },

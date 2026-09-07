@@ -265,7 +265,7 @@ function policyDefaults(config: UnknownRecord = groupConfig()): {
   const retrieval = record(record(record(configStore.get()).memory).retrieval)
   return {
     retentionDays: integer(config.defaultRetentionDays, 30, 0, 100000000),
-    tokenLimit: integer(config.defaultTokenLimit, 30000, 256, 60000),
+    tokenLimit: integer(config.defaultTokenLimit, 30000, 3000, 60000),
     promptTemplate: policyPrompt(config.promptTemplate || ""),
     modelName: cleanText(consolidation.modelName || "", 120),
     maxTokens: integer(consolidation.maxTokens, 4096, 256, 65536),
@@ -398,7 +398,7 @@ function rowPolicy(row: UnknownRecord = {}): GroupPolicy {
     defaults,
     overrides,
     retentionDays: overrides.retentionDays ? integer(row.retention_days, defaults.retentionDays, 0, 100000000) : defaults.retentionDays,
-    tokenLimit: overrides.tokenLimit ? integer(row.token_limit, defaults.tokenLimit, 256, 60000) : defaults.tokenLimit,
+    tokenLimit: overrides.tokenLimit ? integer(row.token_limit, defaults.tokenLimit, 3000, 60000) : defaults.tokenLimit,
     promptTemplate: prompt,
     // 原始覆盖文本（未解析为内置词），供编辑器回显与保存回填，避免把内置提示词物化成本群快照。
     promptTemplateOverride: overrides.promptTemplate ? String(row.prompt_template || "") : "",
@@ -530,11 +530,12 @@ function resultItemsWithTargetNames(items: UnknownRecord[] = [], targetNames: Ma
 }
 
 function tokenLimit(value: unknown = policyDefaults().tokenLimit): number {
-  return integer(value, policyDefaults().tokenLimit, 256, 60000)
+  return integer(value, policyDefaults().tokenLimit, 3000, 60000)
 }
 
 function rowTokenCount(row: UnknownRecord = {}): number {
-  // 给消息 ID、发言人和提示词分隔符留余量，估算比正文更保守。
+  // 这里只估算群聊消息行（含消息 ID、发言人和分隔符）的输入量；记忆提炼
+  // 的系统提示词与固定指令由 extractionPrompt 单独发送，不计入日窗口切分预算。
   return estimateTokens(`[${row.message_id || ""}] ${row.sender_id || ""}${row.sender_name ? `(${row.sender_name})` : ""}：${row.text_content || ""}`) + 8
 }
 
@@ -1081,7 +1082,7 @@ export class GroupCaptureStore {
     const requestedOverrides = record(patch.overrides)
     const inherit = (key: string): boolean => Object.hasOwn(requestedOverrides, key) ? requestedOverrides[key] !== true : !current?.overrides?.[key]
     const retention = inherit("retentionDays") ? null : integer(patch.retentionDays ?? current?.retentionDays, defaults.retentionDays, 0, 100000000)
-    const inputTokenLimit = inherit("tokenLimit") ? null : integer(patch.tokenLimit ?? current?.tokenLimit, defaults.tokenLimit, 256, 60000)
+    const inputTokenLimit = inherit("tokenLimit") ? null : integer(patch.tokenLimit ?? current?.tokenLimit, defaults.tokenLimit, 3000, 60000)
     const promptTemplate = inherit("promptTemplate") ? null : cleanPrompt(patch.promptTemplate ?? current?.promptTemplateOverride ?? "")
     const modelName = inherit("modelName") ? null : cleanText(patch.modelName ?? current?.modelName ?? "", 120)
     const maxTokens = inherit("maxTokens") ? null : integer(patch.maxTokens ?? current?.maxTokens, defaults.maxTokens, 256, 65536)
@@ -2292,7 +2293,8 @@ export class GroupCaptureStore {
          ORDER BY sent_at ASC, message_id ASC`,
         [first.group_id, first.window_start, first.window_end],
       )
-      const partition = partitionRowsByTokens(sourceRows, Number(first.token_limit) || tokenLimit(policy?.tokenLimit))
+      const inputTokenLimit = Number(first.token_limit) || tokenLimit(policy?.tokenLimit)
+      const partition = partitionRowsByTokens(sourceRows, inputTokenLimit)
       const chunks = partition.chunks
       const batchTextChars = sourceRows.reduce((sum, row) => sum + String(row.text_content || "").length, 0)
       // 完成时回写实际处理内容的哈希（与 createDailyWindow/markChangedDailyWindows 同一公式）：
@@ -2301,7 +2303,7 @@ export class GroupCaptureStore {
       if (clearEpoch !== this.clearEpoch(scopeKey)) return
       await sqliteClient.run(
         `UPDATE group_memory_extraction_jobs SET status='running', attempt_count=?, processing_chunk=0, processing_chunk_total=?, token_limit=?, estimated_input_tokens=?, skipped_message_count=?, needs_reextract=0, updated_at=? WHERE id=?`,
-        [attempts, chunks.length, Number(first.token_limit) || tokenLimit(policy?.tokenLimit), partition.estimatedTokens, partition.skipped.length, now(), first.id],
+        [attempts, chunks.length, inputTokenLimit, partition.estimatedTokens, partition.skipped.length, now(), first.id],
       )
       if (!sourceRows.length || !chunks.length) {
         await sqliteClient.run(

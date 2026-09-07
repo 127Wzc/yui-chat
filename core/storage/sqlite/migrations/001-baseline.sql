@@ -284,7 +284,7 @@ CREATE TABLE group_memory_policies (
   group_id TEXT PRIMARY KEY,
   enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0, 1)),
   retention_days INTEGER CHECK(retention_days IS NULL OR retention_days >= 0),
-  token_limit INTEGER CHECK(token_limit IS NULL OR token_limit BETWEEN 256 AND 60000),
+  token_limit INTEGER CHECK(token_limit IS NULL OR token_limit BETWEEN 3000 AND 60000),
   prompt_template TEXT,
   model_name TEXT,
   max_tokens INTEGER CHECK(max_tokens IS NULL OR max_tokens BETWEEN 256 AND 65536),
