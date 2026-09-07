@@ -140,7 +140,7 @@ export async function runSubAgent(
       startedAt,
       durationMs: Date.now() - started,
     })
-    modelLogStore.finishTrace(childTrace, { status: "error", error: errorMessage(failure), metadata: { depth: depth + 1 } })
+    modelLogStore.finishTrace(childTrace, { status: "error", error: failure, metadata: { depth: depth + 1 } })
     throw failure
   } finally {
     clearTimeout(timeout)

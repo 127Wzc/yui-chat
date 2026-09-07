@@ -387,6 +387,7 @@ async function checkConfigSafety() {
   assert(Number(config.persona?.initiativeGreeting?.probabilityPercent) >= 0, "initiative greeting probability should be configured")
   assert(config.context?.recentMessageCount === 20 && config.context.recentMessageCount === defaults.context?.recentMessageCount, "context should default to twenty recent messages for capture and injection")
   assert(config.memory?.groupCapture?.defaultTokenLimit === 30000 && config.memory.groupCapture.defaultTokenLimit === defaults.memory?.groupCapture?.defaultTokenLimit, "group memory input windows should default to thirty thousand tokens")
+  assert(config.memory?.groupCapture?.consolidation?.schedule?.mode === "interval" && config.memory.groupCapture.consolidation.schedule.time === "03:00" && config.memory.groupCapture.consolidation.schedule.cron === "0 3 * * *", "group memory consolidation should expose a compatible interval default and friendly time/Cron options")
   assert(retiredContextConfigKeys.every(key => !Object.hasOwn(config.context || {}, key)), "retired context switches and split counts must not remain in defaults")
   assert(retiredSegmentationConfigKeys.every(key => !Object.hasOwn(config.response?.segmentation || {}, key)), "segmentation should not expose a configurable LLM-only switch")
   assert(!Object.hasOwn(config.chat || {}, "promptBudgets"), "retired prompt budget splits must not remain in defaults")
@@ -424,6 +425,7 @@ async function checkConfigSafety() {
   assert(contextFieldPaths.includes("context.recentMessageCount") && retiredContextConfigKeys.every(key => !contextFieldPaths.includes(`context.${key}`)), "schema should expose only the unified recent-message count for context capture and injection")
   const fieldIds = manifest.sections.flatMap(section => section.fields.map(field => field.id))
   const fieldPaths = manifest.sections.flatMap(section => section.fields.map(field => field.path))
+  assert(["memory.groupCapture.consolidation.schedule.mode", "memory.groupCapture.consolidation.schedule.time", "memory.groupCapture.consolidation.schedule.cron"].every(path => fieldPaths.includes(path)), "schema should expose group memory consolidation schedule controls")
   assert(new Set(fieldIds).size === fieldIds.length, "schema manifest field ids should be unique")
   assert(new Set(fieldPaths).size === fieldPaths.length, "schema manifest field paths should be unique")
   const invalid = JSON.parse(JSON.stringify(config))
@@ -463,6 +465,16 @@ async function checkConfigSafety() {
     smoke: { enabled: false, transport: "stdio", executionByAction: { read: { repeatPolicy: "not-a-policy" } } },
   }
   assert(!validateConfig(invalidMcpExecutionPolicy).ok, "MCP action execution policy should reject unknown values")
+  const invalidCaptureSchedule = JSON.parse(JSON.stringify(config))
+  invalidCaptureSchedule.memory.groupCapture.consolidation.schedule.mode = "unsupported"
+  assert(!validateConfig(invalidCaptureSchedule).ok, "group memory consolidation should reject an unknown schedule mode")
+  invalidCaptureSchedule.memory.groupCapture.consolidation.schedule.mode = "time"
+  invalidCaptureSchedule.memory.groupCapture.consolidation.schedule.time = "25:99"
+  assert(!validateConfig(invalidCaptureSchedule).ok, "group memory consolidation should reject an invalid fixed schedule time")
+  invalidCaptureSchedule.memory.groupCapture.consolidation.schedule.time = "03:00"
+  invalidCaptureSchedule.memory.groupCapture.consolidation.schedule.mode = "cron"
+  invalidCaptureSchedule.memory.groupCapture.consolidation.schedule.cron = "not a cron"
+  assert(!validateConfig(invalidCaptureSchedule).ok, "group memory consolidation should reject an invalid Cron expression")
 }
 
 async function checkConfigHotReload() {
@@ -5306,6 +5318,11 @@ async function checkUnifiedModelLogs() {
       request: { protocol: "responses" },
     })
     assert(call?.id, "Responses model log smoke should start a model call")
+    modelLogStore.captureModelRequest(call, {
+      protocol: "responses",
+      phase: "initial",
+      body: { model: "gpt-5.4", input: [{ role: "user", content: "调试请求" }], authorization: "MUST_NOT_PERSIST" },
+    })
     modelLogStore.completeModelCall(call, {
       response: {
         id: "resp_log_smoke",
@@ -5323,6 +5340,22 @@ async function checkUnifiedModelLogs() {
     assert(!JSON.stringify(detail?.modelCall?.hosted_tool_calls || []).includes("RAW_ONLY_IN_TOOL_EVENT"), "model metadata should omit hosted raw payloads that are stored on their dedicated tool events")
     assert(detail?.snapshot?.tools?.[0]?.type === "web_search" && detail.snapshot.tools?.[1]?.description === "Search commands.", "model logs should preserve Responses top-level function and built-in tool definitions")
     assert(!JSON.stringify(detail?.snapshot || {}).includes("MUST_NOT_PERSIST"), "model snapshots should redact encrypted Responses reasoning content")
+    assert(detail?.snapshot?.request?.rawRequests?.[0]?.protocol === "responses" && !JSON.stringify(detail?.snapshot?.request?.rawRequests || []).includes("MUST_NOT_PERSIST"), "model logs should retain bounded, redacted raw protocol request bodies")
+
+    const failureCall = modelLogStore.beginModelCall({
+      source: "smoke",
+      purpose: "chat",
+      channel: { id: "failure-log-smoke", type: "openai-compatible", model: "gpt-test", modelConfig: { name: "failure-log-smoke" } },
+      messages: [{ role: "user", content: "超时测试" }],
+      request: { protocol: "chat-completions" },
+    })
+    assert(failureCall?.id, "failure model log smoke should start a model call")
+    const timeoutError = new Error("请求超时：90000ms")
+    timeoutError.code = "ETIMEDOUT"
+    timeoutError.yuiNetwork = { target: "https://example.invalid/chat", method: "POST", timeoutMs: 90000, responseReceived: false }
+    modelLogStore.completeModelCall(failureCall, { error: timeoutError })
+    const failureDetail = await modelLogStore.getModelCallDetail(failureCall.id)
+    assert(failureDetail?.modelCall?.error_message?.includes("请求超时") && failureDetail.modelCall.error_details?.code === "ETIMEDOUT" && failureDetail.modelCall.error_details?.responseReceived === false, "model logs should expose failure messages and timeout diagnostics")
   } finally {
     await modelLogStore.stop({ flush: true })
     if (ownsSqliteClient) await sqliteClient.close()
@@ -5683,7 +5716,10 @@ async function checkWebAndBoot() {
   assert(webOverviewSource.includes("home-hero") && webOverviewSource.includes("home-dashboard-grid") && webOverviewSource.includes("模型排行") && webOverviewSource.includes("用途分布"), "overview should act as the primary health and usage dashboard")
   assert(webOverviewSource.includes("home-setup-strip") && webOverviewSource.indexOf("home-setup-strip") < webOverviewSource.indexOf("<MetricGrid") && webOverviewSource.includes("继续配置") && !webOverviewSource.includes('v-if="homeStatus !== \'good\'"') && !webOverviewSource.includes("能力架构") && !webOverviewSource.includes("快速操作"), "overview should keep one setup action inside the top status area and remove architecture and quick-operation panels")
   assert(webLogsSource.includes("logs-summary-row") && webLogsSource.includes("logs-filter-row") && webLogsSource.includes("settingsDrawerOpen") && webLogsSource.includes("群聊记忆提炼") && webLogsSource.includes("查看本次提炼输入") && !webLogsSource.includes("filterDrawerOpen") && !webLogsSource.includes('<h1>日志与用量</h1>') && !webLogsSource.includes('<Panel title="模型排行"') && !webLogsSource.includes('<Panel title="Token 趋势"'), "logs page should keep only compact summary metrics with settings, use one-line filters above the run list, and avoid duplicating the shell heading")
-  assert(webLogsSource.includes("logs-session-workbench") && webLogsSource.includes("loadConversationTurn") && webLogsSource.includes("toolGroupsForModel") && webLogsSource.includes("contextSourceLabel") && webLogsSource.includes("modelDetail.snapshot") && webLogsSource.includes("loadExtractionResult") && webLogsSource.includes("logs-extraction-result") && webLogsSource.includes("提炼结果"), "logs page should provide a session workbench with lazy turn details, grouped tool rounds, context source labels, and linked extraction results")
+  assert(webLogsSource.includes("logs-session-workbench") && webLogsSource.includes("loadConversationTurn") && webLogsSource.includes("toolGroupsForModel") && webLogsSource.includes("contextSourceLabel") && webLogsSource.includes("modelDetail.snapshot") && webLogsSource.includes("loadExtractionResult") && webLogsSource.includes("logs-extraction-result") && webLogsSource.includes("提炼结果") && webLogsSource.includes("rawRequests") && webLogsSource.includes("setDeveloperMode") && webLogsSource.includes("失败 message"), "logs page should provide a session workbench with lazy turn details, grouped tool rounds, raw-request developer diagnostics, and explicit failure messages")
+  assert(webAdvancedSource.includes("captureScheduleMode") && webAdvancedSource.includes("captureScheduleTime") && webAdvancedSource.includes("captureScheduleCron") && webAdvancedSource.includes("Cron（分 时 日 月 周）"), "advanced memory settings should expose friendly fixed-time and Cron scheduling controls")
+  assert(webLogsSource.includes("运行失败诊断详情"), "logs page should expose run-level failure diagnostics in developer mode")
+  assert(webLogsSource.includes("row.error_message"), "logs page should show failure messages in the run list")
   assert(webOverviewSource.includes("wizard-inline-config") && webOverviewSource.includes("saveProviderAndTest") && webOverviewSource.includes("saveRouting") && webOverviewSource.includes("savePersona") && webOverviewSource.includes("saveTools") && webOverviewSource.includes("saveKnowledge") && webOverviewSource.includes("saveOutput") && webOverviewSource.includes("sendWizardTest"), "overview setup guide should configure the common path and run the final chat test without leaving the drawer")
   assert(!webPersonaSource.includes("/api/persona/expression") && !webPersonaSource.includes("deleteExpression") && !webPersonaSource.includes("learnAssistant") && !webPersonaSource.includes("expressionExamples"), "persona page should remove expression learning controls")
   assert(webPersonaSource.includes("previewGreeting") && webPersonaSource.includes("initiativeGreetingScheduled"), "persona page should expose initiative greeting controls")

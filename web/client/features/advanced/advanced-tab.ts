@@ -29,7 +29,7 @@ interface SchemaManifest extends UnknownRecord {
 }
 interface ManifestTab { sections?: string[] }
 interface ModelConfig { name?: string; modelIdentifier?: string; capabilities?: { chat?: boolean; embedding?: boolean } }
-interface ConsolidationConfig { modelName?: string; maxTokens?: number; minConfidence?: number; maxWindowsPerScan?: number }
+interface ConsolidationConfig { modelName?: string; maxTokens?: number; minConfidence?: number; maxWindowsPerScan?: number; schedule?: { mode?: string; time?: string; cron?: string } }
 interface GroupCaptureConfig {
   defaultRetentionDays?: number
   defaultTokenLimit?: number
@@ -83,6 +83,9 @@ export const AdvancedTab = {
       captureMaxTokens: config.value.memory?.groupCapture?.consolidation?.maxTokens ?? 4096,
       captureMinConfidence: config.value.memory?.groupCapture?.consolidation?.minConfidence ?? 0.7,
       captureMaxWindowsPerScan: config.value.memory?.groupCapture?.consolidation?.maxWindowsPerScan ?? 2,
+      captureScheduleMode: config.value.memory?.groupCapture?.consolidation?.schedule?.mode || "interval",
+      captureScheduleTime: config.value.memory?.groupCapture?.consolidation?.schedule?.time || "03:00",
+      captureScheduleCron: config.value.memory?.groupCapture?.consolidation?.schedule?.cron || "0 3 * * *",
       captureRetrievalResultLimit: config.value.memory?.retrieval?.resultLimit ?? 3,
       capturePromptTokenBudget: config.value.memory?.retrieval?.promptTokenBudget ?? 2000,
       captureEmbeddingModel: config.value.memory?.retrieval?.embeddingModel || "",
@@ -220,6 +223,9 @@ export const AdvancedTab = {
       const confidence = Number(consolidation.minConfidence)
       draft.captureMinConfidence = Number.isFinite(confidence) ? confidence : 0.7
       draft.captureMaxWindowsPerScan = Number(consolidation.maxWindowsPerScan) || 2
+      draft.captureScheduleMode = consolidation.schedule?.mode || "interval"
+      draft.captureScheduleTime = consolidation.schedule?.time || "03:00"
+      draft.captureScheduleCron = consolidation.schedule?.cron || "0 3 * * *"
       draft.captureRetrievalResultLimit = Number(config.value.memory?.retrieval?.resultLimit) || 3
       draft.capturePromptTokenBudget = Number(config.value.memory?.retrieval?.promptTokenBudget) || 2000
       draft.captureEmbeddingModel = String(config.value.memory?.retrieval?.embeddingModel || "")
@@ -380,6 +386,11 @@ export const AdvancedTab = {
         const promptTokenBudget = Math.round(Math.min(10000, Math.max(30, Number(draft.capturePromptTokenBudget) || 2000)))
         const promptTemplate = draft.captureUseBuiltInPrompt ? "" : String(draft.capturePromptTemplate || "").trim()
         if (!draft.captureUseBuiltInPrompt && !promptTemplate) throw new Error("请填写自定义提示词，或切换为内置默认提示词")
+        const scheduleMode = ["interval", "time", "cron"].includes(String(draft.captureScheduleMode)) ? String(draft.captureScheduleMode) : "interval"
+        const scheduleTime = String(draft.captureScheduleTime || "03:00").trim()
+        if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(scheduleTime)) throw new Error("记忆提炼固定时间必须是 HH:mm（00:00–23:59）")
+        const scheduleCron = String(draft.captureScheduleCron || "0 3 * * *").trim()
+        if (scheduleMode === "cron" && scheduleCron.split(/\s+/).length !== 5) throw new Error("Cron 必须填写五段：分 时 日 月 周")
         await saveConfigPatch({
           "memory.groupCapture.defaultRetentionDays": retentionDays,
           "memory.groupCapture.defaultTokenLimit": tokenLimit,
@@ -388,6 +399,9 @@ export const AdvancedTab = {
           "memory.groupCapture.consolidation.maxTokens": maxTokens,
           "memory.groupCapture.consolidation.minConfidence": minConfidence,
           "memory.groupCapture.consolidation.maxWindowsPerScan": maxWindowsPerScan,
+          "memory.groupCapture.consolidation.schedule.mode": scheduleMode,
+          "memory.groupCapture.consolidation.schedule.time": scheduleTime,
+          "memory.groupCapture.consolidation.schedule.cron": scheduleCron,
           "memory.retrieval.resultLimit": retrievalResultLimit,
           "memory.retrieval.promptTokenBudget": promptTokenBudget,
           "memory.retrieval.embeddingModel": draft.captureEmbeddingModel || "",
@@ -646,8 +660,14 @@ export const AdvancedTab = {
           </div>
 
           <div class="form-section">
-            <div class="developer-section-head"><div><b>全局调度</b><span>这是全局吞吐上限，不提供单群覆盖，避免一个群占满提炼队列。</span></div></div>
-            <Field label="每轮扫描窗口数" type="number" v-model="draft.captureMaxWindowsPerScan" hint="1–64；积压时可临时调高" />
+            <div class="developer-section-head"><div><b>全局调度</b><span>控制已关闭自然日何时交给模型提炼；不提供单群覆盖，避免一个群占满提炼队列。</span></div></div>
+            <div class="form-grid capture-token-limits">
+              <Field label="每轮扫描窗口数" type="number" v-model="draft.captureMaxWindowsPerScan" hint="1–64；积压时可临时调高" />
+              <Field label="提炼触发方式" type="select" v-model="draft.captureScheduleMode" :options="[{ value: 'interval', label: '跟随扫描间隔（兼容默认）' }, { value: 'time', label: '每天固定时间' }, { value: 'cron', label: 'Cron 表达式' }]" />
+            </div>
+            <Field v-if="draft.captureScheduleMode === 'time'" label="每天触发时间" type="time" v-model="draft.captureScheduleTime" hint="按服务器本地时区执行，例如 03:00。" />
+            <Field v-if="draft.captureScheduleMode === 'cron'" label="Cron（分 时 日 月 周）" v-model="draft.captureScheduleCron" placeholder="0 3 * * *" hint="五段本地 Cron；例如 0 3 * * * = 每天 03:00，*/30 * * * * = 每 30 分钟。" />
+            <p class="muted tiny">原始消息仍按实时采集；这里仅控制自动提炼。手动“立即执行”不受此计划限制。</p>
           </div>
 
           <div class="form-section">

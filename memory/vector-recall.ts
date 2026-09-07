@@ -159,7 +159,7 @@ export class MemoryVectorRecall {
       this.lastError = ""
       this.failureStreak = 0
     } catch (error: unknown) {
-      if (trace) modelLogStore.finishTrace(trace, { status: "error", error: errorMessage(error) })
+      if (trace) modelLogStore.finishTrace(trace, { status: "error", error })
       this.lastError = errorMessage(error)
       this.failureStreak += 1
       if (record(error).code === "BUDGET_EXHAUSTED" || this.failureStreak >= FAIL_STREAK_LIMIT) {
@@ -199,7 +199,7 @@ export class MemoryVectorRecall {
       })
       modelLogStore.finishTrace(trace, { status: "ok", metadata: { modelName } })
     } catch (error) {
-      modelLogStore.finishTrace(trace, { status: "error", error: errorMessage(error) })
+      modelLogStore.finishTrace(trace, { status: "error", error })
       throw error
     }
     const vector = embedded.vectors[0]

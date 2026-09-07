@@ -107,6 +107,14 @@ export interface ModelChannel {
   [key: string]: unknown
 }
 
+/** 适配器即将发出的协议请求快照；仅用于开发者日志，不参与模型业务。 */
+export interface ModelRequestCapture {
+  protocol: string
+  body: unknown
+  /** Responses 等协议可能在一次模型调用内发出恢复请求。 */
+  phase?: string
+}
+
 /** 供应商无关的模型请求。 */
 export interface ModelRequest {
   channel: ModelChannel
@@ -118,6 +126,7 @@ export interface ModelRequest {
   maxTokens?: number
   signal?: AbortSignal
   metadata?: Record<string, JsonValue>
+  onRequest?: (capture: ModelRequestCapture) => void
 }
 
 /** embedding 请求。 */
@@ -126,6 +135,7 @@ export interface EmbeddingRequest {
   texts: string[]
   dimensions?: number
   signal?: AbortSignal
+  onRequest?: (capture: ModelRequestCapture) => void
 }
 
 /** embedding 响应。 */

@@ -2,7 +2,7 @@ import crypto from "node:crypto"
 import { fetchWithTimeout } from "../../core/network/fetch-timeout.js"
 import { applyReasoningPayload } from "../configuration/reasoning.js"
 import { getToolCommon, modelToolDescription } from "../../tools/support/contract.js"
-import { ModelAdapter, contentParts, contentToText, normalizeListedModels, parseDataUrl, parseResponseData, safeJson, tokenUsage } from "./base.js"
+import { ModelAdapter, contentParts, contentToText, normalizeListedModels, notifyModelRequest, parseDataUrl, parseResponseData, safeJson, tokenUsage } from "./base.js"
 import type { ModelChannel, ModelMessage, ModelRequest, ModelResponse } from "../protocol/types.js"
 import type { ToolDefinition } from "../../tools/support/tool-contract.js"
 import { normalizeModelStopReason } from "../protocol/normalize.js"
@@ -43,7 +43,13 @@ async function readJsonResponse(response: Response): Promise<UnknownRecord> {
 function responseError(data: unknown, status: number): Error {
   const root = record(data)
   const error = record(root.error)
-  return new Error(stringValue(error.message || error.status || root.error || `HTTP ${status}`))
+  const result = new Error(stringValue(error.message || error.status || root.error || `HTTP ${status}`))
+  Object.assign(result, {
+    ...(status ? { status } : {}),
+    ...(error.code || root.code ? { code: String(error.code || root.code) } : {}),
+    ...(error.type ? { providerType: String(error.type) } : {}),
+  })
+  return result
 }
 
 function toClaudeContent(content: unknown): UnknownRecord[] {
@@ -147,7 +153,7 @@ export class ClaudeAdapter extends ModelAdapter {
     }
   }
 
-  override async sendMessage({ channel, messages, tools = [], toolChoice, maxTokens = 0, signal }: ModelRequest): Promise<ModelResponse> {
+  override async sendMessage({ channel, messages, tools = [], toolChoice, maxTokens = 0, signal, onRequest }: ModelRequest): Promise<ModelResponse> {
     if (!channel.apiKey) throw new Error("Claude channel apiKey is required")
     const baseURL = (channel.baseURL || "https://api.anthropic.com/v1").replace(/\/$/, "")
     const systemValue = messages.find(item => item.role === "system")?.content
@@ -166,6 +172,7 @@ export class ClaudeAdapter extends ModelAdapter {
       } : {}),
       messages: messagesToClaudeMessages(messages),
     }, channel)
+    notifyModelRequest(onRequest, this.protocol, body)
     const response = await fetchWithTimeout(`${baseURL}/messages`, {
       method: "POST",
       headers: this.headers(channel, { contentType: true }),

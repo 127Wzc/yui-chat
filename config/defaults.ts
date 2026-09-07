@@ -479,6 +479,12 @@ export const defaults = {
       consolidation: {
         enabled: true,
         taskName: "replyer",
+        // 记忆提炼默认沿用原有扫描间隔；可改为每天固定时间或五段本地 Cron。
+        schedule: {
+          mode: "interval",
+          time: "03:00",
+          cron: "0 3 * * *",
+        },
         // 新采集群的提炼模型默认值；留空跟随当前默认对话模型，单群可覆盖。
         modelName: "",
         maxAttempts: 3,

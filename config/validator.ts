@@ -2,6 +2,7 @@ import { isLogLevel } from "./logging.js"
 import { isToolDeliveryMode, isToolExecutionEffect, isToolRepeatPolicy, isToolRetryPolicy, isToolRiskLevel } from "../tools/support/contract.js"
 import type { UnknownRecord } from "../core/message/types.js"
 import { isValidAllowedHostPattern, parseHttpUrl } from "../core/network/link-safety-policy.js"
+import { parseCronExpression } from "../core/scheduling/cron.js"
 
 export type ValidationLevel = "error" | "warn"
 
@@ -939,6 +940,24 @@ function validateRuntimeNumbers(config: ConfigRecord, issues: ValidationIssue[])
   }
   if (config.memory?.groupCapture?.consolidation?.enabled !== undefined && typeof config.memory.groupCapture.consolidation.enabled !== "boolean") {
     add(issues, "error", "memory.groupCapture.consolidation.enabled", "consolidation.enabled 必须是布尔值")
+  }
+  const consolidationSchedule = config.memory?.groupCapture?.consolidation?.schedule
+  if (consolidationSchedule !== undefined) {
+    const schedule = section(consolidationSchedule)
+    const mode = String(schedule.mode || "interval").trim().toLowerCase()
+    if (!new Set(["interval", "time", "cron"]).has(mode)) {
+      add(issues, "error", "memory.groupCapture.consolidation.schedule.mode", "调度模式只能是 interval、time 或 cron")
+    }
+    const time = String(schedule.time || "03:00").trim()
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) {
+      add(issues, "error", "memory.groupCapture.consolidation.schedule.time", "固定时间必须是 00:00–23:59 的 HH:mm 格式")
+    }
+    const cron = String(schedule.cron || "").trim()
+    if (cron || mode === "cron") {
+      try { parseCronExpression(cron) } catch (error) {
+        add(issues, "error", "memory.groupCapture.consolidation.schedule.cron", String((error as UnknownRecord)?.message || error))
+      }
+    }
   }
   const commandRetrievalMode = String(config.knowledge?.commandRetrieval?.mode || "hybrid").trim().toLowerCase()
   if (!new Set(["lexical", "hybrid"]).has(commandRetrievalMode)) {

@@ -2,7 +2,7 @@ import crypto from "node:crypto"
 import { fetchWithTimeout } from "../../core/network/fetch-timeout.js"
 import { applyReasoningPayload } from "../configuration/reasoning.js"
 import { getToolCommon, modelToolDescription } from "../../tools/support/contract.js"
-import { ModelAdapter, contentParts, contentToText, normalizeListedModels, parseDataUrl, parseResponseData, safeJson, tokenUsage } from "./base.js"
+import { ModelAdapter, contentParts, contentToText, normalizeListedModels, notifyModelRequest, parseDataUrl, parseResponseData, safeJson, tokenUsage } from "./base.js"
 import type { ContentPart, JsonValue } from "../../core/message-chain/types.js"
 import type { ModelChannel, ModelMessage, ModelRequest, ModelResponse } from "../protocol/types.js"
 import type { ToolDefinition } from "../../tools/support/tool-contract.js"
@@ -44,7 +44,13 @@ async function readJsonResponse(response: Response): Promise<UnknownRecord> {
 function responseError(data: unknown, status: number): Error {
   const root = record(data)
   const error = record(root.error)
-  return new Error(stringValue(error.message || error.status || root.error || `HTTP ${status}`))
+  const result = new Error(stringValue(error.message || error.status || root.error || `HTTP ${status}`))
+  Object.assign(result, {
+    ...(status ? { status } : {}),
+    ...(error.code || root.code ? { code: String(error.code || root.code) } : {}),
+    ...(error.status ? { providerStatus: String(error.status) } : {}),
+  })
+  return result
 }
 
 function toGeminiParts(content: unknown): UnknownRecord[] {
@@ -156,7 +162,7 @@ export class GeminiAdapter extends ModelAdapter {
     return url
   }
 
-  override async sendMessage({ channel, messages, tools = [], toolChoice, maxTokens = 0, signal }: ModelRequest): Promise<ModelResponse> {
+  override async sendMessage({ channel, messages, tools = [], toolChoice, maxTokens = 0, signal, onRequest }: ModelRequest): Promise<ModelResponse> {
     if (!channel.apiKey) throw new Error("Gemini channel apiKey is required")
     const baseURL = (channel.baseURL || "https://generativelanguage.googleapis.com").replace(/\/$/, "")
     const model = channel.model || "gemini-flash-latest"
@@ -178,6 +184,7 @@ export class GeminiAdapter extends ModelAdapter {
       } : {}),
       generationConfig,
     }, channel)
+    notifyModelRequest(onRequest, this.protocol, body)
     const response = await fetchWithTimeout(`${baseURL}/v1beta/models/${model}:generateContent?key=${encodeURIComponent(channel.apiKey)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...stringRecord(channel.headers) },
@@ -202,7 +209,7 @@ export class GeminiAdapter extends ModelAdapter {
     }
   }
 
-  override async embedTexts({ channel, texts = [], dimensions = 0, signal }: { channel: ModelChannel; texts?: string[]; dimensions?: number; signal?: AbortSignal }): Promise<Awaited<ReturnType<ModelAdapter["embedTexts"]>>> {
+  override async embedTexts({ channel, texts = [], dimensions = 0, signal, onRequest }: { channel: ModelChannel; texts?: string[]; dimensions?: number; signal?: AbortSignal; onRequest?: Parameters<ModelAdapter["embedTexts"]>[0]["onRequest"] }): Promise<Awaited<ReturnType<ModelAdapter["embedTexts"]>>> {
     if (!channel.apiKey) throw new Error("Gemini channel apiKey is required")
     const baseURL = (channel.baseURL || "https://generativelanguage.googleapis.com").replace(/\/$/, "")
     const model = channel.model || "text-embedding-004"
@@ -211,6 +218,7 @@ export class GeminiAdapter extends ModelAdapter {
       requests: texts.map(text => ({ model: `models/${model.replace(/^models\//, "")}`, content: { parts: [{ text }] }, ...(dimensions ? { outputDimensionality: dimensions } : {}) })),
       ...record(embeddingConfig.params),
     }
+    notifyModelRequest(onRequest, this.protocol, body)
     const response = await fetchWithTimeout(`${baseURL}/v1beta/models/${model.replace(/^models\//, "")}:batchEmbedContents?key=${encodeURIComponent(channel.apiKey)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...stringRecord(channel.headers) },

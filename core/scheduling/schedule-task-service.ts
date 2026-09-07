@@ -3,6 +3,7 @@ import { dataDir } from "../../config/store.js"
 import { AtomicJsonRepository } from "../storage/atomic-json-repository.js"
 import { hostRuntime } from "../runtime/host-runtime.js"
 import { convertCQCodes } from "../message/cq-code.js"
+import { estimateCronIntervalMinutes, matchesCronExpression } from "./cron.js"
 
 type UnknownRecord = Record<string, unknown>
 
@@ -66,17 +67,6 @@ interface ScheduleServiceOptions {
   repository?: ScheduleRepository
   sender?: (row: TaskRow, config: unknown) => Promise<void>
   clock?: () => number
-}
-
-interface CronParts {
-  raw: string
-  minute: Set<number> | null
-  hour: Set<number> | null
-  day: Set<number> | null
-  month: Set<number> | null
-  weekday: Set<number> | null
-  minuteField: string
-  hourField: string
 }
 
 interface FormatScheduleTaskListOptions {
@@ -195,96 +185,8 @@ const taskRepository: ScheduleRepository = new AtomicJsonRepository<TaskStore>({
   },
 })
 
-function cronValues(field: unknown = "*", min: number, max: number): Set<number> | null {
-  const input = text(field || "*").trim()
-  if (input === "*") return null
-  const values = new Set<number>()
-  for (const part of input.split(",")) {
-    const item = part.trim()
-    if (!item) continue
-    if (item.startsWith("*/")) {
-      const step = Number(item.slice(2))
-      if (!Number.isInteger(step) || step <= 0) throw new Error(`cron 字段无效：${input}`)
-      for (let value = min; value <= max; value += step) values.add(value)
-      continue
-    }
-    const range = item.match(/^(\d+)-(\d+)(?:\/(\d+))?$/)
-    if (range) {
-      const start = Math.max(min, Number(range[1]))
-      const end = Math.min(max, Number(range[2]))
-      const step = Number(range[3] || 1)
-      if (!Number.isInteger(step) || step <= 0 || start > end) throw new Error(`cron 字段无效：${input}`)
-      for (let value = start; value <= end; value += step) values.add(value)
-      continue
-    }
-    const number = Number(item)
-    if (Number.isInteger(number) && number >= min && number <= max) {
-      values.add(number)
-      continue
-    }
-    throw new Error(`cron 字段无效：${input}`)
-  }
-  if (!values.size) throw new Error(`cron 字段无效：${input}`)
-  return values
-}
-
-function parseCron(expression: unknown = ""): CronParts {
-  const fields = text(expression).trim().split(/\s+/)
-  if (fields.length !== 5) throw new Error("cron 表达式需要 5 段：分 时 日 月 周。")
-  return {
-    raw: fields.join(" "),
-    minute: cronValues(fields[0], 0, 59),
-    hour: cronValues(fields[1], 0, 23),
-    day: cronValues(fields[2], 1, 31),
-    month: cronValues(fields[3], 1, 12),
-    weekday: cronValues(fields[4], 0, 7),
-    minuteField: fields[0],
-    hourField: fields[1],
-  }
-}
-
 function matchesCron(task: TaskRow, date = new Date()): boolean {
-  let cron: CronParts
-  try {
-    cron = parseCron(task.cron)
-  } catch {
-    // 非法的持久化 cron 只跳过本轮，列表和取消仍可正常工作。
-    return false
-  }
-  const minute = date.getMinutes()
-  const hour = date.getHours()
-  const day = date.getDate()
-  const month = date.getMonth() + 1
-  const weekday = date.getDay()
-  const weekdayAlt = weekday === 0 ? 7 : weekday
-  const has = (set: Set<number> | null, value: number, alt?: number) => !set || set.has(value) || (alt !== undefined && set.has(alt))
-  return has(cron.minute, minute)
-    && has(cron.hour, hour)
-    && has(cron.day, day)
-    && has(cron.month, month)
-    && has(cron.weekday, weekday, weekdayAlt)
-}
-
-function minCircularGap(values: readonly number[] = [], cycle: number): number {
-  const sorted = [...new Set(values)].sort((a, b) => a - b)
-  if (sorted.length <= 1) return cycle
-  let min = cycle
-  for (let index = 0; index < sorted.length; index += 1) {
-    const current = sorted[index]
-    const next = sorted[(index + 1) % sorted.length]
-    const gap = index === sorted.length - 1 ? cycle - current + next : next - current
-    if (gap > 0 && gap < min) min = gap
-  }
-  return min
-}
-
-function estimateCronIntervalMinutes(expression: unknown = ""): number {
-  const cron = parseCron(expression)
-  if (!cron.minute) return 1
-  const minuteGap = minCircularGap([...cron.minute], 60)
-  if (minuteGap < 60) return minuteGap
-  if (!cron.hour) return 60
-  return minCircularGap([...cron.hour], 24) * 60
+  return matchesCronExpression(task.cron, date)
 }
 
 function visibleTask(row: TaskRow): UnknownRecord {

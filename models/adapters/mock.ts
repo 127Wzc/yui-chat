@@ -1,5 +1,5 @@
 import crypto from "node:crypto"
-import { ModelAdapter, contentToText } from "./base.js"
+import { ModelAdapter, contentToText, notifyModelRequest } from "./base.js"
 import type { JsonValue } from "../../core/message-chain/types.js"
 import type { ModelListRequest, ModelRequest, ModelResponse } from "../protocol/types.js"
 
@@ -31,10 +31,11 @@ export class MockAdapter extends ModelAdapter {
   override readonly protocol = "mock"
   override readonly supportsTools = true
 
-  override async sendMessage({ channel, messages, tools = [], signal }: ModelRequest): Promise<ModelResponse> {
+  override async sendMessage({ channel, messages, tools = [], signal, onRequest }: ModelRequest): Promise<ModelResponse> {
     if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("模型请求已终止")
     const channelParams = params({ channel, messages })
     if (channelParams.fail === true) throw new Error(String(channelParams.failMessage || "mock adapter configured to fail"))
+    notifyModelRequest(onRequest, this.protocol, { model: channel.model || "mock", messages, tools }, "mock")
     const lastTool = [...messages].reverse().find(item => item.role === "tool")
     if (lastTool) {
       return {

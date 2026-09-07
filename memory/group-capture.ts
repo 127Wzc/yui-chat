@@ -5,11 +5,13 @@ import { isCommandMessage } from "../core/message/command-prefixes.js"
 import { stripMessageCodes } from "../core/message/message-context.js"
 import { hostRuntime } from "../core/runtime/host-runtime.js"
 import { sqliteClient } from "../core/storage/sqlite/client.js"
+import { matchesCronExpression } from "../core/scheduling/cron.js"
 import { runIsolatedModelTask } from "../models/isolated-task.js"
 import { expiryFor } from "./decay.js"
 import { memoryRepository } from "./repository.js"
 import { sqliteMemoryStore } from "./sqlite-store.js"
 import { validateMemoryWrite } from "./write-policy.js"
+import { errorSummary } from "../core/shared/error-details.js"
 
 const DAY = 24 * 60 * 60 * 1000
 const EXTRACTOR_VERSION = "group-memory-v4-daily"
@@ -230,6 +232,26 @@ export function serializeExtractionResult(value: unknown = {}, maxChars = EXTRAC
 function groupConfig(): UnknownRecord {
   return record(record(configStore.get()).memory && record(record(configStore.get()).memory).groupCapture)
 }
+
+interface ConsolidationSchedule {
+  mode: "interval" | "time" | "cron"
+  time: string
+  cron: string
+}
+
+function consolidationSchedule(config: UnknownRecord = groupConfig()): ConsolidationSchedule {
+  const value = record(record(config.consolidation).schedule)
+  const requested = String(value.mode || "interval").trim().toLowerCase()
+  const mode: ConsolidationSchedule["mode"] = requested === "time" || requested === "cron" ? requested : "interval"
+  const time = /^([01]\d|2[0-3]):[0-5]\d$/.test(String(value.time || "")) ? String(value.time) : "03:00"
+  const cron = String(value.cron || "0 3 * * *").trim()
+  return { mode, time, cron }
+}
+
+function localMinuteKey(date = new Date()): string {
+  const pad = (value: number): string => String(value).padStart(2, "0")
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
 function policyDefaults(config: UnknownRecord = groupConfig()): {
   retentionDays: number
   tokenLimit: number
@@ -428,9 +450,7 @@ function modelJson(text: unknown = ""): JsonResult | null {
 }
 
 function safeError(err: unknown): string {
-  return String(record(err).message || err || "处理失败")
-    .replace(/(api[_ -]?key|token|secret|password|authorization|cookie)\s*[:=]\s*[^\s,]+/ig, "$1=<redacted>")
-    .slice(0, 500)
+  return errorSummary(err, 500) || "处理失败"
 }
 
 function parseMoment(value: unknown): number {
@@ -756,6 +776,7 @@ export class GroupCaptureStore {
   // 0 表示默认整批（500）；数据级写失败后减半重试，用于隔离毒消息。
   retryBatchSize = 0
   scanTimer: ReturnType<typeof setInterval> | null = null
+  lastConsolidationScheduleKey = ""
   initialized = false
   processing = false
   manualWindowRuns = new Set<string>()
@@ -836,6 +857,7 @@ export class GroupCaptureStore {
     if (this.scanTimer) clearInterval(this.scanTimer)
     if (this.flushTimer) clearTimeout(this.flushTimer)
     this.scanTimer = null
+    this.lastConsolidationScheduleKey = ""
     this.flushTimer = null
     if (flush) await this.drain()
     if (this.flushTimer) clearTimeout(this.flushTimer)
@@ -845,11 +867,35 @@ export class GroupCaptureStore {
 
   startScanner(): void {
     if (this.scanTimer) clearInterval(this.scanTimer)
-    const interval = number(groupConfig().scanIntervalMs, 300000, 10000, 3600000)
+    this.lastConsolidationScheduleKey = ""
+    const scanConfig = groupConfig()
+    const schedule = consolidationSchedule(scanConfig)
+    const configuredInterval = number(scanConfig.scanIntervalMs, 300000, 10000, 3600000)
+    // 固定时间/Cron 不能依赖五分钟扫描恰好落在目标分钟；最多每分钟唤醒一次，
+    // 仍保留 scanIntervalMs 作为普通（interval）模式的低频开销控制。
+    const interval = schedule.mode === "interval" ? configuredInterval : Math.min(configuredInterval, 60000)
     this.scanTimer = setInterval(() => {
       this.scan().catch(err => this.noteError(err))
     }, interval)
     this.scanTimer.unref?.()
+  }
+
+  shouldRunScheduledConsolidation(date = new Date()): boolean {
+    const schedule = consolidationSchedule()
+    if (schedule.mode === "interval") return true
+    const minuteKey = localMinuteKey(date)
+    // 固定时间按“当天是否已经触发”记账，而不是要求扫描器恰好落在目标分钟；
+    // 启动、热更新或一次长耗时扫描落后几分钟时，仍应在当天第一次醒来后补跑。
+    const key = schedule.mode === "time" ? minuteKey.slice(0, 10) : minuteKey
+    if (key === this.lastConsolidationScheduleKey) return false
+    const currentMinutes = date.getHours() * 60 + date.getMinutes()
+    const [targetHour, targetMinute] = schedule.time.split(":").map(Number)
+    const due = schedule.mode === "time"
+      ? currentMinutes >= targetHour * 60 + targetMinute
+      : matchesCronExpression(schedule.cron, date)
+    if (!due) return false
+    this.lastConsolidationScheduleKey = key
+    return true
   }
 
   noteError(err: unknown): void {
@@ -2196,7 +2242,7 @@ export class GroupCaptureStore {
     await this.cleanupExpired()
     await sqliteClient.run("UPDATE group_memory_extraction_jobs SET status='pending', next_attempt_at=0, processing_chunk=0, processing_chunk_total=0, updated_at=? WHERE status='running' AND updated_at < ?", [now(), now() - 10 * 60000])
     await this.scheduleClosedWindows()
-    await this.processDueWindows()
+    if (this.shouldRunScheduledConsolidation()) await this.processDueWindows()
   }
 
   // 暂停采集的群保留已排队任务但不处理，重新开启后继续，不白耗模型调用。
@@ -2558,6 +2604,7 @@ export class GroupCaptureStore {
       lastError: this.lastError,
       defaultPromptTemplate: DEFAULT_GROUP_MEMORY_PROMPT,
       defaultPolicy: policyDefaults(),
+      consolidationSchedule: consolidationSchedule(),
       historyBackfillMaxMessages: integer(groupConfig().historyBackfillMaxMessages, 500, 1, 5000),
       policies,
       windows: Object.fromEntries(windows.map(row => [row.status, Number(row.count || 0)])),
@@ -2570,6 +2617,7 @@ export class GroupCaptureStore {
       policies: this.policies.size,
       pendingMessages: this.queue.length,
       processing: this.processing,
+      consolidationSchedule: consolidationSchedule(),
       lastError: this.lastError,
     }
   }

@@ -2,7 +2,7 @@ import crypto from "node:crypto"
 import { fetchWithTimeout } from "../../../../core/network/fetch-timeout.js"
 import { applyReasoningPayload } from "../../../configuration/reasoning.js"
 import { modelToolDefinition } from "../../../../tools/support/contract.js"
-import { ModelAdapter, contentToText, messagesForOpenAI, normalizeListedModels, parseResponseData, safeJson, tokenUsage } from "../../base.js"
+import { ModelAdapter, contentToText, messagesForOpenAI, normalizeListedModels, notifyModelRequest, parseResponseData, safeJson, tokenUsage } from "../../base.js"
 import type { JsonValue } from "../../../../core/message-chain/types.js"
 import type { ModelChannel, ModelRequest, ModelResponse } from "../../../protocol/types.js"
 import type { ToolDefinition } from "../../../../tools/support/tool-contract.js"
@@ -54,7 +54,13 @@ async function readJsonResponse(response: Response): Promise<UnknownRecord> {
 function responseError(data: unknown, status = 0): Error {
   const root = record(data)
   const error = record(root.error)
-  return new Error(stringValue(error.message || error.status || root.error || `HTTP ${status}`))
+  const result = new Error(stringValue(error.message || error.status || root.error || `HTTP ${status}`))
+  Object.assign(result, {
+    ...(status ? { status } : {}),
+    ...(error.code || root.code ? { code: String(error.code || root.code) } : {}),
+    ...(error.type ? { providerType: String(error.type) } : {}),
+  })
+  return result
 }
 
 function mergeStreamToolCalls(target: Map<number, StreamToolCall>, deltas: readonly unknown[]): void {
@@ -192,10 +198,11 @@ export class OpenAICompatibleAdapter extends ModelAdapter {
     return url
   }
 
-  async embedTexts({ channel, texts = [], dimensions = 0, signal }: Parameters<ModelAdapter["embedTexts"]>[0]): ReturnType<ModelAdapter["embedTexts"]> {
+  async embedTexts({ channel, texts = [], dimensions = 0, signal, onRequest }: Parameters<ModelAdapter["embedTexts"]>[0]): ReturnType<ModelAdapter["embedTexts"]> {
     const embeddingConfig = record(record(channel.modelConfig).embedding)
     const body: UnknownRecord = { model: channel.model, input: texts, ...record(embeddingConfig.params) }
     if (dimensions && embeddingConfig.supportsDimensionOverride !== false) body.dimensions = dimensions
+    notifyModelRequest(onRequest, this.protocol, body)
     return fetchWithTimeout(this.buildEmbeddingsUrl(channel), {
       method: "POST",
       headers: this.buildHeaders(channel),
@@ -228,7 +235,7 @@ export class OpenAICompatibleAdapter extends ModelAdapter {
     return headers
   }
 
-  override async sendMessage({ channel, messages, tools = [], toolChoice, maxTokens = 0, signal }: ModelRequest): Promise<ModelResponse> {
+  override async sendMessage({ channel, messages, tools = [], toolChoice, maxTokens = 0, signal, onRequest }: ModelRequest): Promise<ModelResponse> {
     const body = applyReasoningPayload({ model: channel.model || "gpt-4o-mini", messages: messagesForOpenAI(messages as unknown as readonly UnknownRecord[]), ...channelRecord(channel, "params") }, channel)
     const stream = channel.stream === true
     if (stream) body.stream = true
@@ -248,6 +255,7 @@ export class OpenAICompatibleAdapter extends ModelAdapter {
           : { type: "function", function: { name: toolChoice.name } }
       }
     }
+    notifyModelRequest(onRequest, this.protocol, body)
     return fetchWithTimeout(this.buildUrl(channel), {
       method: "POST",
       headers: this.buildHeaders(channel),

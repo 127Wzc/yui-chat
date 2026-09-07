@@ -6,6 +6,7 @@ import { hostRuntime } from "../runtime/host-runtime.js"
 import { getToolCommon, modelToolDefinition } from "../../tools/support/contract.js"
 import { groupIdFromEvent, isGroupEvent } from "../message/event-scope.js"
 import { errorDetails, errorSummary } from "../shared/error-details.js"
+import type { ModelRequestCapture } from "../../models/protocol/types.js"
 
 const DETAIL_QUEUE_LIMIT = 5000
 const DETAIL_QUEUE_BYTE_LIMIT = 16 * 1024 * 1024
@@ -173,6 +174,7 @@ interface ModelCallRecord {
   row: LogRow
   ownsTrace: boolean
   requestMeta: UnknownRecord
+  snapshot?: LogRow
   finished?: boolean
   terminalQueued?: boolean
   traceUpdated?: boolean
@@ -250,6 +252,17 @@ function errorMessage(error: unknown): string {
   return errorSummary(error)
 }
 
+function failureMetadata(error: unknown, previousDetails: unknown = {}): UnknownRecord {
+  if (!error) return {}
+  const details = errorDetails(error)
+  return {
+    error: redactText(errorMessage(error), 500),
+    // 调用方可能已经附带了步骤、响应摘要等诊断；模型/网络错误只补充字段，
+    // 不覆盖这些更具体的失败上下文。
+    errorDetails: { ...record(previousDetails), ...details },
+  }
+}
+
 function isTraceRecord(value: unknown): value is TraceRecord {
   const source = record(value)
   return typeof source.id === "string"
@@ -300,7 +313,7 @@ function redactText(value: unknown = "", limit = 20000): string {
     .replace(/(Bearer\s+)[^\s,;]+/gi, "$1<redacted>")
     .replace(/((?:["']?)authorization(?:["']?)\s*[:=]\s*(?:["']?)(?:Basic|Bearer)\s+)[^"'\s,;}&]+/gi, "$1<redacted>")
     .replace(/(https?:\/\/)([^/\s:@]+):([^@\s/]+)@/gi, "$1<redacted>@")
-    .replace(/([?&](?:api[_-]?key|access[_-]?token|token|secret|password)=)[^&#\s]+/gi, "$1<redacted>")
+    .replace(/([?&](?:api[_-]?key|key|access[_-]?token|token|secret|password)=)[^&#\s]+/gi, "$1<redacted>")
     .replace(/((?:["']?)(?:api[_-]?key|access[_-]?token|token|secret|password|credential|authorization|cookie)(?:["']?)\s*[:=]\s*(?:["']?))[^"'\s,;}&]+/gi, "$1<redacted>")
   return boundedText(text, limit)
 }
@@ -868,7 +881,10 @@ class ModelLogStore {
       tool_calls: asInt(trace.toolCalls),
       failed_tools: asInt(trace.failedTools),
       estimated_cost: asNumber(trace.cost),
-      metadata_json: json({ ...record(metadata), ...(error ? { error: redactText(error, 500) } : {}) }),
+      metadata_json: json({
+        ...record(metadata),
+        ...failureMetadata(error, record(metadata).errorDetails),
+      }),
     }
     this.enqueueDetail({ kind: "run", row, terminal: true, priority: "high" })
     trace.terminalQueued = true
@@ -876,7 +892,7 @@ class ModelLogStore {
     return row
   }
 
-  finishTraceFallback(trace: TraceRecord | null, { status = "error", response = "" }: { status?: unknown; response?: unknown } = {}, captureError: unknown = null): LogRow | null {
+  finishTraceFallback(trace: TraceRecord | null, { status = "error", response = "", error = null, metadata = {} }: { status?: unknown; response?: unknown; error?: unknown; metadata?: unknown } = {}, captureError: unknown = null): LogRow | null {
     if (!trace || trace.finished) return null
     if (!trace.persisted) {
       trace.finished = true
@@ -910,7 +926,13 @@ class ModelLogStore {
       tool_calls: asInt(trace.toolCalls),
       failed_tools: asInt(trace.failedTools),
       estimated_cost: asNumber(trace.cost),
-      metadata_json: json({ captureError: redactText(errorMessage(captureError), 300) }),
+      metadata_json: json({
+        ...record(metadata),
+        ...failureMetadata(error || captureError, record(metadata).errorDetails),
+        ...(captureError && captureError !== error
+          ? { captureError: redactText(errorMessage(captureError), 300), captureErrorDetails: errorDetails(captureError) }
+          : {}),
+      }),
     }
     if (!trace.terminalQueued) this.enqueueDetail({ kind: "run", row, terminal: true, priority: "high" })
     trace.terminalQueued = true
@@ -991,7 +1013,34 @@ class ModelLogStore {
     snapshot.updated_at = startedAt
     this.enqueueDetail({ kind: "snapshot", row: snapshot, terminal: true, priority: "high" })
     run.currentModelCallId = id
-    return { id, trace: run, row, ownsTrace, requestMeta: { operation, messages, tools, estimatedInputTokens: row.estimated_input_tokens } }
+    return { id, trace: run, row, ownsTrace, snapshot, requestMeta: { operation, messages, tools, estimatedInputTokens: row.estimated_input_tokens } }
+  }
+
+  /** 记录适配器已构建、即将发送的协议请求；只更新当前调用的有界快照。 */
+  captureModelRequest(call: ModelCallRecord | null, capture: ModelRequestCapture = { protocol: "", body: {} }): void {
+    if (!call || call.finished || !this.enabled) return
+    try {
+      const snapshot = call.snapshot || this.memorySnapshots.get(call.id)
+      if (!snapshot) return
+      const request = parseJson(snapshot.request_json)
+      const protocol = String(capture.protocol || "")
+      const phase = String(capture.phase || "")
+      const rawRequests = Array.isArray(request.rawRequests) ? request.rawRequests : []
+      const item = snapshotValue({
+        capturedAt: now(),
+        ...(protocol ? { protocol } : {}),
+        ...(phase ? { phase } : {}),
+        body: Object.hasOwn(capture, "body") ? capture.body : {},
+      })
+      const next = [...rawRequests, item].slice(-8)
+      const serialized = serializedSnapshotObject({ ...request, rawRequests: next }, SNAPSHOT_REQUEST_LIMIT)
+      snapshot.request_json = serialized.text
+      snapshot.truncated = Boolean(snapshot.truncated || serialized.truncated)
+      snapshot.updated_at = now()
+      this.enqueueDetail({ kind: "snapshot", row: snapshot, terminal: true, priority: "high" })
+    } catch (error) {
+      this.noteError(error, "记录原始模型请求")
+    }
   }
 
   completeModelCall(call: ModelCallRecord | null, options: UnknownRecord = {}): LogRow | null {
@@ -1004,6 +1053,7 @@ class ModelLogStore {
     const usage = normalizeUsage(response, call.requestMeta)
     if (error && !response?.usage) usage.source = "unknown"
     const status = modelCallStatus(error)
+    const previousMetadata = parseJson(call.row.metadata_json)
     const row = {
       ...call.row,
       status,
@@ -1020,7 +1070,7 @@ class ModelLogStore {
       estimated_cost: ((usage.input / 1000000) * asNumber(call.row.price_in)) + ((usage.output / 1000000) * asNumber(call.row.price_out)),
       error_message: error ? redactText(errorMessage(error), 500) : "",
       metadata_json: json({
-        ...parseJson(call.row.metadata_json),
+        ...previousMetadata,
         responseId: opaqueIdForLog(response.id),
         responseText: responseForLog(call.row, response.text || ""),
         stopReason: response.stopReason || "unknown",
@@ -1029,7 +1079,7 @@ class ModelLogStore {
         ...(Object.keys(record(response.responsesStateRecovery)).length
           ? { responsesStateRecovery: record(response.responsesStateRecovery) }
           : {}),
-        ...(error ? { errorDetails: errorDetails(error) } : {}),
+        ...(error ? { errorDetails: { ...record(previousMetadata.errorDetails), ...errorDetails(error) } } : {}),
       }),
     }
     const budgetEstimate = call.requestMeta.operation === "embedding"
@@ -1066,7 +1116,7 @@ class ModelLogStore {
         cost: asNumber(row.estimated_cost),
       })
     }
-    if (call.ownsTrace) this.finishTrace(trace, { status, response: response.text, error: errorMessage(error) })
+    if (call.ownsTrace) this.finishTrace(trace, { status, response: response.text, error })
     call.finished = true
     return row
   }
@@ -1074,15 +1124,23 @@ class ModelLogStore {
   completeModelCallFallback(call: ModelCallRecord | null, { response = {}, error = null }: { response?: UnknownRecord; error?: unknown } = {}, captureError: unknown = null): LogRow | null {
     if (!call || call.finished) return null
     const endedAt = now()
-    const status = modelCallStatus(error)
+    const failure = error || captureError
+    const status = modelCallStatus(failure)
+    const previousMetadata = parseJson(call.row.metadata_json)
     const row = {
       ...call.row,
       status,
       ended_at: endedAt,
       duration_ms: Math.max(0, endedAt - call.row.started_at),
       usage_source: "unknown",
-      error_message: error ? redactText(errorMessage(error), 500) : "",
-      metadata_json: json({ ...parseJson(call.row.metadata_json), captureError: redactText(errorMessage(captureError), 300) }),
+      error_message: failure ? redactText(errorMessage(failure), 500) : "",
+      metadata_json: json({
+        ...previousMetadata,
+        ...failureMetadata(failure, previousMetadata.errorDetails),
+        ...(captureError && captureError !== error
+          ? { captureError: redactText(errorMessage(captureError), 300), captureErrorDetails: errorDetails(captureError) }
+          : {}),
+      }),
     }
     if (!call.terminalQueued) this.enqueueDetail({ kind: "model", row, terminal: true, priority: "high" })
     call.terminalQueued = true
@@ -1090,7 +1148,7 @@ class ModelLogStore {
       call.trace.modelCalls += 1
       call.traceUpdated = true
     }
-    if (call.ownsTrace) this.finishTrace(call.trace, { status, response: response?.text, error: errorMessage(error) || errorMessage(captureError) })
+    if (call.ownsTrace) this.finishTrace(call.trace, { status, response: response?.text, error: error || captureError })
     call.finished = true
     return row
   }
@@ -1613,10 +1671,12 @@ class ModelLogStore {
     const clauses = where.sql ? [where.sql] : []
     const params = [...where.params]
     if (cursor) { clauses.push("(started_at < ? OR (started_at = ? AND id < ?))"); params.push(Number(cursor.startedAt), Number(cursor.startedAt), String(cursor.id)) }
-    const sql = `SELECT ${RUN_LIST_COLUMNS.join(", ")} FROM ai_runs${clauses.length ? ` WHERE ${clauses.join(" AND ")}` : ""} ORDER BY started_at DESC, id DESC LIMIT ?`
+    // 列表只返回精简字段；额外读取 metadata_json 仅为提取失败 message，
+    // publicRunSummary 会把元数据本身留在服务端，不把它扩散到列表响应。
+    const sql = `SELECT ${[...RUN_LIST_COLUMNS, "metadata_json"].join(", ")} FROM ai_runs${clauses.length ? ` WHERE ${clauses.join(" AND ")}` : ""} ORDER BY started_at DESC, id DESC LIMIT ?`
     params.push(limit + 1)
     const rows = await sqliteClient.all<LogRow>(sql, params)
-    return { items: rows.slice(0, limit).map(row => this.publicRun(row)), nextCursor: rows.length > limit ? encodeCursor({ startedAt: rows[limit - 1].started_at, id: rows[limit - 1].id }) : "", persistence: true }
+    return { items: rows.slice(0, limit).map(row => this.publicRunSummary(row)), nextCursor: rows.length > limit ? encodeCursor({ startedAt: rows[limit - 1].started_at, id: rows[limit - 1].id }) : "", persistence: true }
   }
 
   async getRun(id: unknown): Promise<UnknownRecord | null> {
@@ -1743,15 +1803,20 @@ class ModelLogStore {
 
   publicRun(row: LogRow): UnknownRecord {
     const result: UnknownRecord = { ...row }
-    for (const key of ["metadata_json"]) {
-      try { result[key.replace("_json", "")] = JSON.parse(String(result[key] || "{}")) } catch { result[key.replace("_json", "")] = {} }
-      delete result[key]
-    }
+    const metadata = parseJson(result.metadata_json)
+    result.metadata = metadata
+    delete result.metadata_json
+    if (typeof metadata.error === "string" && metadata.error) result.error_message = metadata.error
+    if (metadata.errorDetails && typeof metadata.errorDetails === "object") result.error_details = metadata.errorDetails
     return result
   }
 
   publicRunSummary(row: LogRow): UnknownRecord {
-    return Object.fromEntries(RUN_LIST_COLUMNS.map(key => [key, row?.[key]]))
+    const result = Object.fromEntries(RUN_LIST_COLUMNS.map(key => [key, row?.[key]]))
+    const metadata = parseJson(row?.metadata_json)
+    const error = String(row?.error_message || metadata.error || "")
+    if (error) result.error_message = error
+    return result
   }
 
   publicModel(row: LogRow = { id: "", started_at: 0, ended_at: 0 }): UnknownRecord {
@@ -1767,6 +1832,8 @@ class ModelLogStore {
     return {
       ...row,
       metadata,
+      error_message: row.error_message || (typeof metadata.error === "string" ? metadata.error : ""),
+      error_details: metadata.errorDetails && typeof metadata.errorDetails === "object" ? metadata.errorDetails : {},
       response_text: typeof metadata.responseText === "string" ? metadata.responseText : "",
       stop_reason: typeof metadata.stopReason === "string" ? metadata.stopReason : "unknown",
       route,

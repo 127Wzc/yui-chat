@@ -52,10 +52,6 @@ function list(value: unknown): unknown[] {
   return Array.isArray(value) ? value : []
 }
 
-function errorMessage(error: unknown): string {
-  return errorSummary(error)
-}
-
 function withoutCause(value: UnknownRecord): UnknownRecord {
   const { cause: _cause, responseState: _responseState, historyUserContent: _history, imageReferences: _images, ...rest } = value
   return rest
@@ -144,7 +140,7 @@ export async function sendConversation(
     metadata: { transient: options.transient === true },
   })
   const failTrace = (error: unknown): never => {
-    modelLogStore.finishTrace(trace, { status: "error", error: errorMessage(error) })
+    modelLogStore.finishTrace(trace, { status: "error", error })
     throw error
   }
 
@@ -296,7 +292,7 @@ export async function sendConversation(
       const resultError = record(result.error)
       const message = text(resultError.message || "unknown error")
       const diagnostic = errorSummary(result.cause || result.error || message)
-      modelLogStore.finishTrace(trace, { status: "error", error: diagnostic, metadata: { step: result.stepId, errorDetails: record(resultError.details) } })
+      modelLogStore.finishTrace(trace, { status: "error", error: result.cause || result.error || message, metadata: { step: result.stepId, errorDetails: record(resultError.details) } })
       conversationLog.failed(config, {
         scope: scopeFor(event),
         step: result.stepId,

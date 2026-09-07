@@ -1,6 +1,6 @@
 import type { ContentPart, JsonValue } from "../../core/message-chain/types.js"
 import { ModelAdapter as ProtocolModelAdapter } from "../protocol/adapter.js"
-import type { EmbeddingRequest, EmbeddingResponse, ModelListRequest, ModelRequest, ModelResponse, ModelUsage } from "../protocol/types.js"
+import type { EmbeddingRequest, EmbeddingResponse, ModelListRequest, ModelRequest, ModelRequestCapture, ModelResponse, ModelUsage } from "../protocol/types.js"
 
 type UnknownRecord = Record<string, unknown>
 
@@ -12,6 +12,21 @@ export interface ListedModel {
   ownedBy: string
   methods: string[]
   raw: unknown
+}
+
+/** 向观测层发送已构建的请求体；观测失败不能影响真正的模型请求。 */
+export function notifyModelRequest(
+  callback: ((capture: ModelRequestCapture) => void) | undefined,
+  protocol: string,
+  body: unknown,
+  phase?: string,
+): void {
+  if (!callback) return
+  try {
+    callback({ protocol, body, ...(phase ? { phase } : {}) })
+  } catch {
+    // 日志捕获属于旁路能力，不能阻断模型请求。
+  }
 }
 
 function isRecord(value: unknown): value is UnknownRecord {

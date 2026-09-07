@@ -21,7 +21,7 @@ export function redactErrorText(value: unknown, limit = MAX_MESSAGE_LENGTH): str
     .replace(/-----BEGIN(?: [A-Z0-9]+)? PRIVATE KEY-----[\s\S]*?-----END(?: [A-Z0-9]+)? PRIVATE KEY-----/gi, "<redacted-private-key>")
     .replace(/(Bearer\s+)[^\s,;]+/gi, "$1<redacted>")
     .replace(/((?:["']?)(?:api[_-]?key|access[_-]?token|token|secret|password|credential|authorization|cookie)(?:["']?)\s*[:=]\s*(?:["']?))[^"'\s,;}&]+/gi, "$1<redacted>")
-    .replace(/([?&](?:api[_-]?key|access[_-]?token|token|secret|password)=)[^&#\s]+/gi, "$1<redacted>")
+    .replace(/([?&](?:api[_-]?key|key|access[_-]?token|token|secret|password)=)[^&#\s]+/gi, "$1<redacted>")
     .replace(/(https?:\/\/)([^/\s:@]+):([^@\s/]+)@/gi, "$1<redacted>@")
     .replace(/\s+/g, " ")
     .slice(0, Math.max(1, limit))
@@ -45,6 +45,8 @@ function nestedError(value: unknown, depth: number): UnknownRecord | undefined {
   const name = optionalText(source.name)
   const code = optionalText(source.code)
   const status = numberOrText(source.status)
+  const providerType = optionalText(source.providerType || source.type)
+  const providerStatus = optionalText(source.providerStatus)
   const syscall = optionalText(source.syscall)
   const address = optionalText(source.address)
   const port = numberOrText(source.port)
@@ -60,6 +62,8 @@ function nestedError(value: unknown, depth: number): UnknownRecord | undefined {
   if (message) result.message = message
   if (code) result.code = code
   if (status !== undefined) result.status = status
+  if (providerType) result.providerType = providerType
+  if (providerStatus) result.providerStatus = providerStatus
   if (syscall) result.syscall = syscall
   if (address) result.address = address
   if (port !== undefined) result.port = port

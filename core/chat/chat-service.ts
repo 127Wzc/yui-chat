@@ -176,7 +176,7 @@ export class ChatService {
       }
       return result
     } catch (error) {
-      if (ownsTrace) modelLogStore.finishTrace(trace, { status: "error", error: error instanceof Error ? error.message : error })
+      if (ownsTrace) modelLogStore.finishTrace(trace, { status: "error", error })
       throw error
     }
   }

@@ -1,4 +1,5 @@
 import { fetchWithTimeout } from "../../../../core/network/fetch-timeout.js"
+import { notifyModelRequest } from "../../base.js"
 import type { ModelChannel, ModelRequest, ModelResponse } from "../../../protocol/types.js"
 import { OpenAICompatibleAdapter } from "../chat/adapter.js"
 import { parseResponsesResponse } from "./response-adapter.js"
@@ -49,7 +50,9 @@ export class OpenAIResponsesAdapter extends OpenAICompatibleAdapter {
     const { channel, signal } = request
     const state = new ResponsesConversationStateMachine(request)
     const body = state.initialRequest()
-    const send = (requestBody: UnknownRecord): Promise<ModelResponse> => fetchWithTimeout(this.buildUrl(channel), {
+    const send = (requestBody: UnknownRecord, phase = "initial"): Promise<ModelResponse> => {
+      notifyModelRequest(request.onRequest, this.protocol, requestBody, phase)
+      return fetchWithTimeout(this.buildUrl(channel), {
         method: "POST",
         headers: this.buildHeaders(channel),
         body: JSON.stringify(requestBody),
@@ -61,12 +64,13 @@ export class OpenAIResponsesAdapter extends OpenAICompatibleAdapter {
           return parseResponsesResponse(data)
         },
       })
+    }
     try {
       return state.complete(await send(body))
     } catch (error) {
       const recovery = state.recoveryRequest(error)
       if (!recovery) throw error
-      return state.complete(await send(recovery.body), recovery.recovery)
+      return state.complete(await send(recovery.body, "recovery"), recovery.recovery)
     }
   }
 }
