@@ -2355,6 +2355,7 @@ async function checkMedia() {
   const { prepareMediaForVision } = await import("../output/runtime/core/media/media-cache.js")
   const { buildMediaUserContent, recentImageRecallModeForPrompt, resolveMediaContext, summarizeMediaContext, visionInputModeForPrompt } = await import("../output/runtime/core/message/media-context.js")
   const { buildOpenAiUserContent, contentToText } = await import("../output/runtime/core/message/message-context.js")
+  const { buildUserMessage } = await import("../output/runtime/core/persona/persona-chain.js")
   const { MessageSendTool } = await import("../output/runtime/tools/builtins/media.js")
   const { linkSafetyConfig, matchesHostTarget, resolveTrustedResourceRequest, trustedResourcePolicies, trustedResourceRequest } = await import("../output/runtime/core/network/link-safety-policy.js")
   const { BilibiliMediaTool, ImageMediaTool } = await import("../output/runtime/tools/builtins/network.js")
@@ -2459,6 +2460,22 @@ async function checkMedia() {
     const quotedParts = Array.isArray(quotedContent) ? quotedContent.filter(part => part.type === "image_url") : []
     assert(quotedParts.length === 1 && quotedParts[0].image_url.url === "data:image/png;base64,AAAA", `quoted image should enter multimodal content: ${prompt}`)
   }
+  const quotedFirstPerson = await resolveMediaContext(quotedOnlyEvent, "埋埋帮我看看", { mediaRecognition: { includeQuotedMedia: true, useAtAvatar: false } }, { quoteAsCurrent: true })
+  const preparedQuotedFirstPerson = await prepareMediaForVision(quotedFirstPerson, { mediaRecognition: { remoteFetch: { enabled: true } } })
+  const quotedFirstPersonMessage = buildUserMessage(quotedOnlyEvent, "埋埋帮我看看", {}, { media: preparedQuotedFirstPerson, vision: true })
+  const quotedFirstPersonText = contentToText(quotedFirstPersonMessage.content)
+  assert(quotedFirstPersonText.includes("引用消息") && quotedFirstPersonText.includes("8416071") && Array.isArray(quotedFirstPersonMessage.content) && quotedFirstPersonMessage.content.some(part => part.type === "image_url"), "first-person quoted requests should include quoted text and image in the current multimodal user message")
+  const quotedTextEvent = {
+    reply_id: "8416073",
+    getReply: async () => ({
+      message_id: "8416073",
+      sender: { user_id: "10002", nickname: "quoted-user" },
+      message: [{ type: "text", text: "这是被引用的正文" }],
+    }),
+  }
+  const quotedTextMedia = await resolveMediaContext(quotedTextEvent, "埋埋帮我看看", { mediaRecognition: { includeQuotedMedia: true, useAtAvatar: false } }, { quoteAsCurrent: true })
+  const quotedTextMessage = buildUserMessage(quotedTextEvent, "埋埋帮我看看", {}, { media: quotedTextMedia, vision: false })
+  assert(contentToText(quotedTextMessage.content).includes("这是被引用的正文"), "first-person quoted requests should include quoted text in the current user message")
   const replySegmentEvent = {
     isGroup: true,
     message: [{ type: "reply", data: { id: "8416072" } }],
@@ -3705,6 +3722,8 @@ async function checkConversations() {
     mockConfig.mediaRecognition.recognitionModel = "mock"
     mockConfig.mediaRecognition.remoteFetch.enabled = true
     await configStore.save(mockConfig)
+    const { checkQuotedContext } = await import("./check-quoted-context.mjs")
+    await checkQuotedContext(tinyPngDataUrl)
     recentContextStore.clear()
     const recentImageEvent = {
       isGroup: true,

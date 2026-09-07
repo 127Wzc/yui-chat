@@ -10,6 +10,7 @@ import { createExecutionRuntime } from "../../tools/support/execution-runtime.js
 import { buildPersonaMessagesWithContext, buildUserMessage, type PersonaContextSection } from "../persona/persona-chain.js"
 import { findUnsupportedMediaCQCodes } from "../message/cq-code.js"
 import type { UnknownRecord } from "../message/types.js"
+import { contentToText } from "../message/message-context.js"
 import { hostRuntime } from "../runtime/host-runtime.js"
 import { modelLogStore } from "../observability/model-log.js"
 import { conversationLog } from "./conversation-log.js"
@@ -454,8 +455,9 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
     .filter((item): item is UnknownRecord => Boolean(item))
   const personaBuild = await buildPersonaMessagesWithContext(options.e, prompt, root, { media: options.media, source, extraSystemPrompt: options.extraSystemPrompt })
   const stepMessage: UnknownRecord = { role: "system", content: stepInstruction }
+  const vision = adapter.supportsVision && record(channel.modelConfig).visual !== false && mediaRecognition.preferNativeVision !== false
   const currentMessage = buildUserMessage(options.e, prompt, root, {
-    vision: adapter.supportsVision && record(channel.modelConfig).visual !== false && mediaRecognition.preferNativeVision !== false,
+    vision,
     media: options.media,
   })
   const contextHints = new WeakMap<object, ContextHint>()
@@ -1266,6 +1268,14 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
   const summary = executionRuntime.summary()
   return {
     id: response.id,
+    historyUserContent: contentToText(currentMessage.content),
+    imageReferences: vision && Array.isArray(record(options.media).attachments)
+      ? (record(options.media).attachments as unknown[]).map(record)
+        // 引用图片使用触发瞬间的最新资源，不写入会话缓存；只允许本轮的
+        // 普通图片参与“上一轮图片”回看，避免过期签名 URL 被持久化。
+        .filter(item => item.source !== "quote" && item.kind === "image" && item.visionEligible !== false && item.preparedUrl && item.cacheKey)
+        .map(item => ({ cacheKey: item.cacheKey, source: item.source, messageId: item.messageId, sender: item.sender, imageNumber: item.imageNumber }))
+      : [],
     stepId: text(step.id || step.task || "step"),
     mode: text(step.mode || "final"),
     channel: channel.id,

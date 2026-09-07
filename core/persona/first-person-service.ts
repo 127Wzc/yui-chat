@@ -52,7 +52,13 @@ export async function handleFirstPersonMessage(event: unknown, options: UnknownR
   if (!gate.ok) return false
   try {
     await sendConfirm(e, config)
-    const result = await chatService.send(e, message, { source: continuation ? "firstPersonContinuation" : "firstPerson", extraSystemPrompt: trigger.extraSystemPrompt })
+    const result = await chatService.send(e, message, {
+      source: continuation ? "firstPersonContinuation" : "firstPerson",
+      extraSystemPrompt: trigger.extraSystemPrompt,
+      // 引用触发的第一人称请求把被引用消息提升为当前轮上下文；媒体识别开关
+      // 仍由对话执行器执行，开启时引用图片会进入同一条多模态 user content。
+      includeQuotedContext: true,
+    })
     e.__yuiChatReplied = true
     await sendChatOutput(e, result, config, { source: "firstPerson", replyOptions: trigger.outputOptions, armContinuation: !continuation })
     return true

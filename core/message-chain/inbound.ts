@@ -126,6 +126,8 @@ export function extractMessageChain(event: unknown = {}, prompt: unknown = ""): 
   for (const segment of segments) {
     const source = record(segment)
     const data = segmentData(segment)
+    // 显式 prompt 已经过指令剥离/输入过滤，宿主 text 段不能再补回原正文。
+    if (primary && text(source.type || data.type) === "text") continue
     addRawPart(parts, text(source.type || data.type), data)
   }
   const raw = text(e.raw_message || "")

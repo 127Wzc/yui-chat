@@ -29,7 +29,7 @@ export function extractMessageContext(event: unknown = {}, prompt: unknown = "")
   const chain = extractMessageChain(event, prompt)
   const out: MessageContext = {
     chain,
-    text: chain.filter(part => part.type === "text").map(part => part.type === "text" ? part.text : "").join(" ").replace(/\s+/g, " ").trim(),
+    text: chain.filter(part => part.type === "text").map(part => part.type === "text" ? part.text : "").join("").trim(),
     images: [], records: [], videos: [], files: [], mentions: [], replies: [], rawTypes: [],
   }
   for (const part of chain) {

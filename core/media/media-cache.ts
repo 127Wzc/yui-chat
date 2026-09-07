@@ -104,10 +104,16 @@ function toDataUrl(mimeType: string, bytes: Uint8Array): string {
 }
 
 async function readCached(url: string, cacheTtlMs: number): Promise<MediaResult | null> {
-  const files = await cachePaths(url)
+  return readCachedKey(hash(url), cacheTtlMs)
+}
+
+async function readCachedKey(key: string, cacheTtlMs: number, maxBytes = 4 * 1024 * 1024): Promise<MediaResult | null> {
+  if (!/^[a-f0-9]{64}$/.test(key)) return null
+  const files = { metaFile: path.join(mediaCacheDir, `${key}.json`), dataFile: path.join(mediaCacheDir, `${key}.bin`) }
   try {
     const meta = record(JSON.parse(await fs.readFile(files.metaFile, "utf8")))
     if (Date.now() - number(meta.cachedAt) > cacheTtlMs) return null
+    if ((await fs.stat(files.dataFile)).size > maxBytes) return null
     const data = await fs.readFile(files.dataFile)
     return {
       dataUrl: toDataUrl(text(meta.mimeType), data),
@@ -124,7 +130,7 @@ async function readCached(url: string, cacheTtlMs: number): Promise<MediaResult 
 async function writeCached(url: string, mimeType: string, bytes: Uint8Array): Promise<void> {
   const files = await cachePaths(url)
   await fs.writeFile(files.dataFile, bytes)
-  await fs.writeFile(files.metaFile, `${JSON.stringify({ url, mimeType, size: bytes.length, cachedAt: Date.now() }, null, 2)}\n`, "utf8")
+  await fs.writeFile(files.metaFile, `${JSON.stringify({ url: /^data:/i.test(url) ? undefined : url, mimeType, size: bytes.length, cachedAt: Date.now() }, null, 2)}\n`, "utf8")
 }
 
 function parseDataImageUrl(dataUrl: unknown): { mimeType: string; bytes: BufferLike } | null {
@@ -164,13 +170,15 @@ async function thumbnailFromDataUrl(dataUrl: unknown, options: UnknownRecord): P
   }
 }
 
-async function fetchRemoteImage(url: string, options: UnknownRecord, config: unknown): Promise<MediaResult> {
+async function fetchRemoteImage(url: string, options: UnknownRecord, config: unknown, useCache = true): Promise<MediaResult> {
   const safety = linkSafetyConfig(config)
   const trustedRequest = resolveTrustedResourceRequest(url, ["qq-media"], config)
   const allowPrivateHosts = safety.allowPrivateHosts || trustedRequest?.allowPrivateHosts === true
   const safeUrl = trustedRequest?.url || await assertSafeHttpUrl(url, { allowPrivateHosts })
-  const cached = await readCached(safeUrl, number(options.cacheTtlMs))
-  if (cached) return { ...cached, thumbnailDataUrl: await thumbnailFromDataUrl(cached.dataUrl, record(options.thumbnail)) }
+  if (useCache) {
+    const cached = await readCached(safeUrl, number(options.cacheTtlMs))
+    if (cached) return { ...cached, thumbnailDataUrl: await thumbnailFromDataUrl(cached.dataUrl, record(options.thumbnail)) }
+  }
 
   const response = await fetchSafeHttp(safeUrl, {
     method: "GET",
@@ -187,7 +195,7 @@ async function fetchRemoteImage(url: string, options: UnknownRecord, config: unk
   const allowed = new Set(Array.isArray(options.allowedMimeTypes) ? options.allowedMimeTypes.map(text) : defaultAllowedMime)
   if (!allowed.has(mimeType)) throw new Error(`不支持的媒体类型：${mimeType || "unknown"}`)
   const bytes = new Uint8Array(await response.arrayBuffer())
-  await writeCached(safeUrl, mimeType, bytes)
+  if (useCache) await writeCached(safeUrl, mimeType, bytes)
   return {
     dataUrl: toDataUrl(mimeType, bytes),
     thumbnailDataUrl: await makeThumbnailDataUrl(bytes, record(options.thumbnail)).catch(error => {
@@ -200,7 +208,7 @@ async function fetchRemoteImage(url: string, options: UnknownRecord, config: unk
   }
 }
 
-/** 下载并缓存可安全传给视觉模型的图片；缓存和缩略图都属于可选优化。 */
+/** 准备可安全传给视觉模型的图片；普通图片可缓存，引用图片始终只在本轮使用。 */
 export async function prepareMediaForVision(media: unknown = {}, config: unknown = {}): Promise<unknown> {
   const input = record(media)
   const cfg = mediaConfig(config)
@@ -210,18 +218,68 @@ export async function prepareMediaForVision(media: unknown = {}, config: unknown
   const diagnostics = Array.isArray(input.diagnostics) ? [...input.diagnostics] : []
   const next: UnknownRecord = { ...input, attachments, diagnostics }
   let processed = 0
-  for (const attachment of attachments) {
-    if (processed >= Math.max(0, number(options.maxAttachments))) break
+  // 比较时先为两种来源各保留一张，避免引用中的多图挤掉本次新图。
+  const candidates = attachments.filter(item => item.kind === "image" && item.visionEligible !== false)
+  const other = candidates.find(item => item.source !== candidates[0]?.source)
+  const preparationOrder = input.imageFocus === "both" && other
+    ? [...new Set([candidates[0], other, ...attachments])]
+    : attachments
+  for (const attachment of preparationOrder) {
     const kind = text(attachment.kind)
     const url = text(attachment.url)
-    if (kind !== "image" || !url) continue
+    if (kind !== "image") continue
+    if (attachment.source === "quote") {
+      // 调用方不能把上一次请求留下的已准备内容带回引用；每次引用都
+      // 必须由刚解析出的 URL 重新准备，且不允许携带缓存键或命中标记。
+      delete attachment.preparedUrl
+      delete attachment.cacheKey
+      delete attachment.cached
+      delete attachment.thumbnailDataUrl
+      delete attachment.originalUrl
+    }
     if (attachment.visionEligible === false) {
       attachment.visionSkipped = true
       continue
     }
+    if (processed >= Math.max(0, number(options.maxAttachments))) {
+      attachment.limitSkipped = true
+      delete attachment.preparedUrl
+      continue
+    }
+    if (attachment.source !== "quote" && attachment.cacheKey && attachment.fromHistory) {
+      const cached = await readCachedKey(text(attachment.cacheKey), number(options.cacheTtlMs), number(options.maxBytes))
+      if (cached) {
+        attachment.preparedUrl = cached.dataUrl
+        attachment.cached = true
+        processed += 1
+      } else {
+        attachment.prepareError = "之前讨论的图片缓存已过期或不可用，需要重新提供图片。"
+        diagnostics.push(attachment.prepareError)
+      }
+      continue
+    }
+    if (!url) continue
+    // 引用消息里的 URL 可能是短时签名地址。它必须使用本轮由 getMessage
+    // 取得的最新值并即时解码，既不读取旧缓存，也不把正文写回缓存。
+    const cacheable = attachment.source !== "quote"
     if (/^data:/i.test(url)) {
+      const parsed = parseDataImageUrl(url)
+      if (!parsed || parsed.bytes.length > number(options.maxBytes)) {
+        attachment.prepareError = "图片格式无效或超过大小限制。"
+        diagnostics.push(attachment.prepareError)
+        continue
+      }
       attachment.preparedUrl = url
       attachment.thumbnailDataUrl = await thumbnailFromDataUrl(url, cfg.thumbnail)
+      if (cacheable) {
+        try {
+          await writeCached(url, parsed.mimeType, parsed.bytes)
+          attachment.cacheKey = hash(url)
+        } catch (error) {
+          // 缓存只用于下一轮按需回看，写入失败不影响本轮已准备好的图片。
+          hostRuntime.logger?.warn?.("[yui-chat] 图片上下文缓存失败", error)
+        }
+      }
       processed += 1
       continue
     }
@@ -238,13 +296,14 @@ export async function prepareMediaForVision(media: unknown = {}, config: unknown
     }
     try {
       attachment.originalUrl = url
-      const result = await fetchRemoteImage(url, options, config)
+      const result = await fetchRemoteImage(url, options, config, cacheable)
       attachment.url = result.dataUrl
       attachment.preparedUrl = result.dataUrl
       attachment.thumbnailDataUrl = result.thumbnailDataUrl || ""
       attachment.mimeType = result.mimeType
       attachment.size = result.size
       attachment.cached = result.cached
+      if (cacheable) attachment.cacheKey = hash(url)
       processed += 1
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)

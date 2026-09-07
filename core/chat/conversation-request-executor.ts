@@ -2,12 +2,13 @@ import crypto from "node:crypto"
 import { configStore } from "../../config/store.js"
 import { providerResolver } from "../../models/routing/provider-resolver.js"
 import { prepareMediaForVision } from "../media/media-cache.js"
-import { recentImageRecallModeForPrompt, resolveMediaContext } from "../message/media-context.js"
+import { conversationImageFollowup, recentImageRecallMode, resolveMediaContext, type ResolvedMediaContext } from "../message/media-context.js"
+import { truncateTextToTokens } from "./token-budget.js"
 import { recentContextStore } from "./recent-context.js"
 import { isEmptyResponse, normalizeResponseText } from "./response-pipeline.js"
 import { hostRuntime } from "../runtime/host-runtime.js"
 import { conversationLog } from "./conversation-log.js"
-import { applyInputFilters } from "../../filters/message/message-filter-service.js"
+import { applyInputFilters, type MessageFilterResult } from "../../filters/message/message-filter-service.js"
 import { conversationStore } from "./conversation-store.js"
 import { modelLogStore } from "../observability/model-log.js"
 import type { UnknownRecord } from "../message/types.js"
@@ -56,7 +57,7 @@ function errorMessage(error: unknown): string {
 }
 
 function withoutCause(value: UnknownRecord): UnknownRecord {
-  const { cause: _cause, responseState: _responseState, ...rest } = value
+  const { cause: _cause, responseState: _responseState, historyUserContent: _history, imageReferences: _images, ...rest } = value
   return rest
 }
 
@@ -154,7 +155,7 @@ export async function sendConversation(
   })
 
   const skipInputFilters = options.applyInputFilters === false
-  let input
+  let input: Pick<MessageFilterResult, "text" | "blocked" | "traces"> & { reason?: string }
   try {
     input = skipInputFilters
       ? { text: originalPrompt, blocked: false, traces: [] as UnknownRecord[] }
@@ -162,7 +163,7 @@ export async function sendConversation(
   } catch (error) {
     return failTrace(error)
   }
-  if (input.blocked) {
+  const blockedResult = (): UnknownRecord => {
     modelLogStore.finishTrace(trace, { status: "blocked", response: "", metadata: { reason: input.reason || "input-filter" } })
     conversationLog.completed(config, {
       scope: scopeFor(event),
@@ -189,31 +190,28 @@ export async function sendConversation(
       steps: [],
     }
   }
+  if (input.blocked) return blockedResult()
 
   const prompt = input.text
-  let media: unknown = null
+  let media: ResolvedMediaContext | null = null
+  const mediaRecognition = record(config.mediaRecognition)
+  const mediaEnabled = mediaRecognition.enabled !== false
   try {
-    if (record(config.mediaRecognition).enabled !== false) {
-      const resolved = await resolveMediaContext(event, prompt, config)
-      const hasEligibleImage = resolved.attachments.some(item => item.kind === "image" && item.visionEligible !== false)
-      const recallMode = hasEligibleImage ? "none" : recentImageRecallModeForPrompt(prompt)
-      if (recallMode !== "none") {
-        const recentImage = recentContextStore.findRecentImage(event, {
-          ...(recallMode === "adjacent" ? { maxRowsBack: 1 } : {}),
-          prompt,
-        })
-        if (recentImage) {
-          resolved.attachments.push({
-            kind: "image",
-            url: recentImage.url,
-            source: recentImage.source,
-            messageId: recentImage.messageId,
-            sender: { userId: recentImage.userId, name: recentImage.name },
-            visionEligible: true,
-          })
+    // 文字引用属于消息语义，不依赖媒体开关；所有普通对话入口使用相同规则。
+    media = await resolveMediaContext(event, prompt, config, { quoteAsCurrent: options.includeQuotedContext !== false })
+    if (media.quote?.text) {
+      if (!skipInputFilters) {
+        const quotedInput = await applyInputFilters(media.quote.text, { event, e: event, config, source, inputKind: "quote" })
+        media.quote.text = quotedInput.text
+        if (quotedInput.blocked) {
+          input = quotedInput
+          return blockedResult()
         }
       }
-      media = await prepareMediaForVision(resolved, config)
+      const quoteBudget = Math.max(256, Math.min(4000, Math.floor(number(record(config.chat).inputTokenBudget, 6000) * 0.4)))
+      const bounded = truncateTextToTokens(media.quote.text.slice(0, quoteBudget * 4), quoteBudget)
+      if (bounded !== media.quote.text) media.quote.status = "partial"
+      media.quote.text = bounded
     }
   } catch (error) {
     return failTrace(error)
@@ -246,6 +244,34 @@ export async function sendConversation(
       history = list(conversation.history)
     } catch (error) {
       return failTrace(error)
+    }
+
+    if (media && mediaEnabled) {
+      // 明确引用/本次附件始终优先；跟进本轮图片时先读取会话里的受管缓存引用。
+      const canRecall = !media.quote && !media.attachments.some(item => item.kind === "image" && item.visionEligible !== false)
+      const previousUser = [...history].reverse().map(record).find(item => item.role === "user")
+      // 引用图片是请求级资源，不应从旧会话元数据恢复；兼容清理历史中
+      // 可能已经存在的旧引用条目，后续只回看可受管缓存的普通图片。
+      const previousImages = list(record(previousUser?.metadata).imageReferences)
+        .map(record)
+        .filter(item => item.source !== "quote")
+      if (canRecall && conversationImageFollowup(prompt) && previousImages.length) {
+        media.attachments.push(...previousImages.filter(item => /^[a-f0-9]{64}$/.test(text(item.cacheKey))).map(item => ({
+          kind: "image" as const, cacheKey: text(item.cacheKey), source: text(item.source),
+          messageId: item.messageId, sender: record(item.sender), imageNumber: item.imageNumber, fromHistory: true, visionEligible: true,
+        })))
+      }
+      const recallMode = recentImageRecallMode(media, prompt)
+      if (recallMode !== "none") {
+        const recentImage = recentContextStore.findRecentImage(event, { ...(recallMode === "adjacent" ? { maxRowsBack: 1 } : {}), prompt })
+        if (recentImage) media.attachments.push({
+          kind: "image", url: recentImage.url, source: recentImage.source, messageId: recentImage.messageId,
+          sender: { userId: recentImage.userId, name: recentImage.name }, visionEligible: true,
+        })
+      }
+      media = await prepareMediaForVision(media, config) as ResolvedMediaContext
+    } else if (media) {
+      media.attachments = media.attachments.map(item => ({ ...item, visionEligible: false }))
     }
 
     const result = await runtime.runObservedStep({
@@ -382,7 +408,7 @@ export async function sendConversation(
         const baseHistory = Array.isArray(previousValue) ? previousValue : list(previous.history)
         const nextHistory = [
           ...baseHistory,
-          { role: "user", content: prompt },
+          { role: "user", content: text(final.historyUserContent) || prompt, metadata: { imageReferences: list(final.imageReferences) } },
           { role: "assistant", content: finalText },
         ].slice(-maxHistoryMessages)
         const turns = [...list(previous.turns), turn].slice(-Math.max(1, Math.floor(maxHistoryMessages / 2)))
