@@ -2,6 +2,7 @@ import { configStore, registerConfigPublishHook } from "../../config/store.js"
 import { isCommandMessage } from "../message/command-prefixes.js"
 import { extractMessageContext } from "../message/message-context.js"
 import { groupIdFromEvent, isGroupEvent } from "../message/event-scope.js"
+import { hostRuntime } from "../runtime/host-runtime.js"
 import type { UnknownRecord } from "../message/types.js"
 
 interface ContextRow {
@@ -38,6 +39,8 @@ interface RecentImageLookupOptions {
 }
 
 const buffers = new Map<string, ContextRow[]>()
+const hydratedScopes = new Set<string>()
+const hydrationInFlight = new Map<string, Promise<void>>()
 
 function record(value: unknown): UnknownRecord {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value) ? value as UnknownRecord : {}
@@ -74,6 +77,20 @@ function messageId(event: unknown): string {
 
 function compact(value: unknown = ""): string {
   return text(value).replace(/\s+/g, " ").trim()
+}
+
+function historyRows(value: unknown): UnknownRecord[] {
+  if (Array.isArray(value)) return value.filter(item => Boolean(item) && typeof item === "object" && !Array.isArray(item)) as UnknownRecord[]
+  const source = record(value)
+  for (const key of ["messages", "history", "data", "records"]) {
+    if (Array.isArray(source[key])) return source[key].filter(item => Boolean(item) && typeof item === "object" && !Array.isArray(item)) as UnknownRecord[]
+  }
+  return []
+}
+
+function historyTime(value: UnknownRecord): number {
+  const raw = Number(value.time || value.timestamp || 0)
+  return Number.isFinite(raw) && raw > 0 ? raw : 0
 }
 
 function mediaUrl(value: unknown): string {
@@ -187,6 +204,7 @@ export class RecentContextStore {
     const maxMessages = configuredMessageCount(config)
     if (!maxMessages) {
       buffers.clear()
+      hydratedScopes.clear()
       return
     }
     const context = contextConfig(config)
@@ -274,6 +292,72 @@ export class RecentContextStore {
     return `最近聊天上下文（按顺序；“↳”表示回复对象；只作理解语境，不要逐字复述）：\n${lines.join("\n")}`
   }
 
+  /** 首次实际群聊对话前补入宿主可提供的最近历史；后续仍只使用进程内短期缓冲。 */
+  async buildPromptWithHistory(event: unknown = {}): Promise<string> {
+    const config = configStore.get()
+    this.prune(config)
+    const limit = configuredMessageCount(config)
+    if (!limit || !isGroupEvent(event) || contextConfig(config).captureGroups === false) return this.buildPrompt(event)
+
+    const key = scopeKey(event)
+    if (!hydratedScopes.has(key)) {
+      const pending = hydrationInFlight.get(key) || this.hydrateGroupHistory(event, limit, key)
+      hydrationInFlight.set(key, pending)
+      await pending
+    }
+    return this.buildPrompt(event)
+  }
+
+  private async hydrateGroupHistory(event: unknown, limit: number, key: string): Promise<void> {
+    try {
+      const e = record(event)
+      const groupId = groupIdFromEvent(e)
+      if (!groupId) return
+      const eventGroup = record(e.group)
+      let owner = eventGroup
+      let getChatHistory = owner.getChatHistory
+      if (typeof getChatHistory !== "function") {
+        const eventBot = record(e.bot)
+        const bot = typeof eventBot.pickGroup === "function" ? e.bot : hostRuntime.bot
+        const pickGroup = record(bot).pickGroup
+        if (typeof pickGroup !== "function") return
+        owner = record(await (pickGroup as (...args: unknown[]) => Promise<unknown> | unknown).call(bot, groupId, true))
+        getChatHistory = owner.getChatHistory
+      }
+      if (typeof getChatHistory !== "function") return
+
+      const response = await (getChatHistory as (...args: unknown[]) => Promise<unknown> | unknown).call(owner, 0, limit)
+      const rows = historyRows(response)
+        .map((row, index) => ({ row, index }))
+        .sort((a, b) => {
+          const left = historyTime(a.row)
+          const right = historyTime(b.row)
+          if (left && right && left !== right) return left - right
+          return a.index - b.index
+        })
+      for (const { row } of rows) {
+        const sender = record(row.sender)
+        const sourceText = row.msg || row.raw_message || row.text || ""
+        const rowText = extractMessageContext(row, sourceText).text || text(sourceText)
+        this.record({
+          ...row,
+          isGroup: true,
+          isPrivate: false,
+          message_type: "group",
+          group_id: groupId,
+          user_id: row.user_id || row.userId || sender.user_id || sender.userId,
+          message_id: row.message_id || row.messageId || row.id || row.seq,
+          msg: row.msg || row.raw_message || rowText,
+        })
+      }
+    } catch {
+      hostRuntime.logger?.debug?.("[yui-chat] 群聊短期上下文历史读取失败，继续使用当前消息")
+    } finally {
+      hydratedScopes.add(key)
+      hydrationInFlight.delete(key)
+    }
+  }
+
   /** 按回复语境、点名对象和人称指代选择最近图片；无明确对象时使用时间上最近的一张。 */
   findRecentImage(event: unknown = {}, options: RecentImageLookupOptions = {}): RecentImageReference | null {
     const config = configStore.get()
@@ -347,6 +431,8 @@ export class RecentContextStore {
 
   clear(): void {
     buffers.clear()
+    hydratedScopes.clear()
+    hydrationInFlight.clear()
   }
 }
 

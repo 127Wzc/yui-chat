@@ -286,6 +286,7 @@
 .logs-tool-result summary { padding:7px 9px; color:var(--muted-foreground); cursor:pointer; font-size:11.5px; }
 .logs-tool-result pre { max-height:260px; margin:0; padding:8px 9px; border-top:1px solid var(--border); overflow:auto; white-space:pre-wrap; word-break:break-word; color:var(--foreground); font:11.5px/1.55 var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); }
 .logs-tool-error { margin:8px 0 0; padding:7px 9px; border-radius:7px; background:var(--bad-weak); color:var(--bad); font-size:11.5px; white-space:pre-wrap; word-break:break-word; }
+.logs-tool-error.logs-inline-message { max-width:min(360px, 100%); margin:5px 0 0; padding:0; overflow:hidden; background:transparent; font-size:10.5px; line-height:1.35; text-overflow:ellipsis; white-space:nowrap; }
 .logs-empty.compact { min-height:100px; }
 .table-subvalue { display:block; margin-top:2px; color:var(--bad); font-size:10px; font-weight:500; }
 .diagnostic-overview { display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; margin-bottom:14px; }

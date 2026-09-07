@@ -167,7 +167,7 @@ async function buildPersonaPrompt(event: unknown, prompt: unknown, config: unkno
   if (memoryPrompt) add("memory", "记忆召回", memoryPrompt)
   const knowledgePrompt = await knowledgeStore.buildPrompt(event, prompt)
   if (knowledgePrompt) add("knowledge", "知识库召回", knowledgePrompt)
-  const recentPrompt = recentContextStore.buildPrompt(event)
+  const recentPrompt = await recentContextStore.buildPromptWithHistory(event)
   if (recentPrompt) add("recent", "最近消息上下文", recentPrompt)
   return { content: parts.join("\n"), sections }
 }

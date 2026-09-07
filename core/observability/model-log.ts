@@ -186,6 +186,7 @@ interface ChannelLike {
   name?: unknown
   id?: unknown
   model?: unknown
+  stream?: boolean
   apiProvider?: unknown
   type?: unknown
 }
@@ -439,6 +440,7 @@ function snapshotRequest({ operation, source, purpose, channel, metadata, reques
   metadata?: unknown
   request?: unknown
 } = {}): UnknownRecord {
+  const requestValue = record(request)
   return {
     operation: String(operation || "chat"),
     source: String(source || ""),
@@ -448,6 +450,8 @@ function snapshotRequest({ operation, source, purpose, channel, metadata, reques
       identifier: String(channel?.model || ""),
       provider: providerNameOf(channel),
       adapter: String(channel?.type || ""),
+      protocol: String(requestValue.protocol || protocolForAdapter(channel?.type)),
+      stream: channel?.stream === true,
     },
     options: snapshotValue(request || {}),
     metadata: snapshotValue(metadata || {}),
@@ -583,6 +587,37 @@ function modelNameOf(channel: ChannelLike = {}): string {
 
 function providerNameOf(channel: ChannelLike = {}): string {
   return String(channel.provider?.name || channel.provider?.id || channel.modelConfig?.apiProvider || channel.apiProvider || "")
+}
+
+function protocolForAdapter(value: unknown): string {
+  const adapter = String(value || "").trim()
+  if (adapter === "openai-responses") return "responses"
+  if (["openai-compatible", "qwen", "chatglm"].includes(adapter)) return "chat-completions"
+  if (adapter === "claude") return "claude-messages"
+  if (adapter === "gemini") return "gemini-generate-content"
+  if (adapter === "mock") return "mock"
+  return adapter
+}
+
+function modelStreamValue(row: LogRow): boolean | null {
+  const metadata = parseJson(row.metadata_json)
+  if (!Object.hasOwn(metadata, "stream")) return null
+  return metadata.stream === true
+}
+
+function modelSummary(rows: LogRow[] = []): UnknownRecord {
+  const names = [...new Set(rows.map(row => String(row.model_name || "").trim()).filter(Boolean))]
+  const adapters = [...new Set(rows.map(row => String(row.adapter || "").trim()).filter(Boolean))]
+  const streams = [...new Set(rows.map(modelStreamValue))]
+  const result: UnknownRecord = {
+    model_names: names,
+    model_adapters: adapters,
+    model_streams: streams,
+  }
+  if (names.length) result.model_name = names.length === 1 ? names[0] : names.join("、")
+  if (adapters.length) result.model_adapter = adapters.length === 1 ? adapters[0] : adapters.join("、")
+  if (streams.length === 1) result.model_stream = streams[0]
+  return result
 }
 
 function retention(config: unknown = configStore.get()): RetentionSettings {
@@ -965,6 +1000,7 @@ class ModelLogStore {
     this.startTrace(run)
     const startedAt = now()
     const id = crypto.randomUUID()
+    const requestValue = record(request)
     const row: LogRow = {
       id,
       run_id: run.id,
@@ -992,7 +1028,14 @@ class ModelLogStore {
       estimated_cost: 0,
       error_message: "",
       input_text: shouldStoreMemoryConsolidationInput({ source, purpose }) ? memoryConsolidationInput(messages) : "",
-      metadata_json: json({ ...record(metadata), messageCount: messages.length, toolCount: tools.length, embeddingTextCount: texts.length }),
+      metadata_json: json({
+        ...record(metadata),
+        protocol: String(requestValue.protocol || record(metadata).protocol || ""),
+        stream: channel.stream === true,
+        messageCount: messages.length,
+        toolCount: tools.length,
+        embeddingTextCount: texts.length,
+      }),
     }
     this.enqueueDetail({ kind: "model", row, terminal: false })
     const snapshot = buildModelSnapshot({
@@ -1665,7 +1708,13 @@ class ModelLogStore {
     if (!sqliteClient.status.available) {
       const rows = [...this.memoryRuns.values()].filter(row => this.matchesRun(row, filters)).sort((a, b) => b.started_at - a.started_at || String(b.id).localeCompare(String(a.id)))
       const filtered = cursor ? rows.filter(row => row.started_at < cursor.startedAt || (row.started_at === cursor.startedAt && row.id < cursor.id)) : rows
-      return { items: filtered.slice(0, limit).map(row => this.publicRunSummary(row)), nextCursor: filtered.length > limit ? encodeCursor({ startedAt: filtered[limit - 1].started_at, id: filtered[limit - 1].id }) : "", persistence: false }
+      const selected = filtered.slice(0, limit)
+      const models = [...this.memoryModels.values()]
+      return {
+        items: selected.map(row => this.publicRunSummary(row, modelSummary(models.filter(model => model.run_id === row.id)))),
+        nextCursor: filtered.length > limit ? encodeCursor({ startedAt: filtered[limit - 1].started_at, id: filtered[limit - 1].id }) : "",
+        persistence: false,
+      }
     }
     const where = this.buildRunWhere(filters)
     const clauses = where.sql ? [where.sql] : []
@@ -1676,7 +1725,25 @@ class ModelLogStore {
     const sql = `SELECT ${[...RUN_LIST_COLUMNS, "metadata_json"].join(", ")} FROM ai_runs${clauses.length ? ` WHERE ${clauses.join(" AND ")}` : ""} ORDER BY started_at DESC, id DESC LIMIT ?`
     params.push(limit + 1)
     const rows = await sqliteClient.all<LogRow>(sql, params)
-    return { items: rows.slice(0, limit).map(row => this.publicRunSummary(row)), nextCursor: rows.length > limit ? encodeCursor({ startedAt: rows[limit - 1].started_at, id: rows[limit - 1].id }) : "", persistence: true }
+    const selected = rows.slice(0, limit)
+    const ids = selected.map(row => String(row.id || "")).filter(Boolean)
+    const modelsByRun = new Map<string, LogRow[]>()
+    if (ids.length) {
+      const placeholders = ids.map(() => "?").join(",")
+      const models = await sqliteClient.all<LogRow>(
+        `SELECT id, run_id, model_name, adapter, metadata_json FROM model_call_events WHERE run_id IN (${placeholders}) ORDER BY sequence ASC, started_at ASC, id ASC`,
+        ids,
+      )
+      for (const model of models) {
+        const runId = String(model.run_id || "")
+        modelsByRun.set(runId, [...(modelsByRun.get(runId) || []), model])
+      }
+    }
+    return {
+      items: selected.map(row => this.publicRunSummary(row, modelSummary(modelsByRun.get(String(row.id || "")) || []))),
+      nextCursor: rows.length > limit ? encodeCursor({ startedAt: rows[limit - 1].started_at, id: rows[limit - 1].id }) : "",
+      persistence: true,
+    }
   }
 
   async getRun(id: unknown): Promise<UnknownRecord | null> {
@@ -1685,9 +1752,10 @@ class ModelLogStore {
     if (!sqliteClient.status.available) {
       const run = this.memoryRuns.get(key)
       if (!run) return null
+      const modelRows = [...this.memoryModels.values()].filter(row => row.run_id === key)
       return {
-        run: this.publicRun(run),
-        modelCalls: [...this.memoryModels.values()].filter(row => row.run_id === key).map(row => this.publicModel(row)),
+        run: { ...this.publicRun(run), ...modelSummary(modelRows) },
+        modelCalls: modelRows.map(row => this.publicModel(row, run)),
         toolCalls: [...this.memoryTools.values()].filter(row => row.run_id === key).map(row => this.publicTool(row)),
         childRuns: [...this.memoryRuns.values()].filter(row => row.parent_run_id === key).map(row => this.publicRun(row)),
         persistence: false,
@@ -1698,7 +1766,7 @@ class ModelLogStore {
     const modelCalls = await sqliteClient.all<LogRow>("SELECT * FROM model_call_events WHERE run_id=? ORDER BY sequence ASC, started_at ASC", [key])
     const toolCalls = await sqliteClient.all<LogRow>("SELECT * FROM tool_call_events WHERE run_id=? ORDER BY round ASC, call_index ASC, started_at ASC", [key])
     const childRuns = await sqliteClient.all<LogRow>("SELECT * FROM ai_runs WHERE parent_run_id=? ORDER BY started_at ASC, id ASC", [key])
-    return { run: this.publicRun(run), modelCalls: modelCalls.map(row => this.publicModel(row)), toolCalls: toolCalls.map(row => this.publicTool(row)), childRuns: childRuns.map(row => this.publicRun(row)), persistence: true }
+    return { run: { ...this.publicRun(run), ...modelSummary(modelCalls) }, modelCalls: modelCalls.map(row => this.publicModel(row, run)), toolCalls: toolCalls.map(row => this.publicTool(row)), childRuns: childRuns.map(row => this.publicRun(row)), persistence: true }
   }
 
   async getModelCallDetail(id: unknown): Promise<UnknownRecord | null> {
@@ -1711,8 +1779,10 @@ class ModelLogStore {
       snapshot = await sqliteClient.get<LogRow>("SELECT * FROM model_call_snapshots WHERE model_call_id=?", [key]) || snapshot
     }
     if (!model) return null
+    let run: LogRow | null = this.memoryRuns.get(String(model.run_id || "")) || null
+    if (sqliteClient.status.available && model.run_id) run = await sqliteClient.get<LogRow>("SELECT * FROM ai_runs WHERE id=?", [model.run_id]) || run
     return {
-      modelCall: this.publicModel(model),
+      modelCall: this.publicModel(model, run),
       snapshot: snapshot ? this.publicSnapshot(snapshot) : null,
       available: Boolean(snapshot),
       persistence: Boolean(sqliteClient.status.available),
@@ -1808,18 +1878,21 @@ class ModelLogStore {
     delete result.metadata_json
     if (typeof metadata.error === "string" && metadata.error) result.error_message = metadata.error
     if (metadata.errorDetails && typeof metadata.errorDetails === "object") result.error_details = metadata.errorDetails
+    if (row.conversation_key) result.session_id = row.conversation_key
     return result
   }
 
-  publicRunSummary(row: LogRow): UnknownRecord {
+  publicRunSummary(row: LogRow, summary: UnknownRecord = {}): UnknownRecord {
     const result = Object.fromEntries(RUN_LIST_COLUMNS.map(key => [key, row?.[key]]))
     const metadata = parseJson(row?.metadata_json)
     const error = String(row?.error_message || metadata.error || "")
     if (error) result.error_message = error
+    if (row?.conversation_key) result.session_id = row.conversation_key
+    Object.assign(result, summary)
     return result
   }
 
-  publicModel(row: LogRow = { id: "", started_at: 0, ended_at: 0 }): UnknownRecord {
+  publicModel(row: LogRow = { id: "", started_at: 0, ended_at: 0 }, run: LogRow | null = null): UnknownRecord {
     const metadata = parseJson(row.metadata_json)
     const route = record(metadata.route)
     const fallbackActualModel = {
@@ -1829,9 +1902,15 @@ class ModelLogStore {
       provider: row.provider_name || "",
       adapter: row.adapter || "",
     }
+    const protocol = String(metadata.protocol || protocolForAdapter(row.adapter))
+    const stream = Object.hasOwn(metadata, "stream") ? metadata.stream === true : null
+    const sessionId = String(run?.conversation_key || row.conversation_key || "")
     return {
       ...row,
       metadata,
+      protocol,
+      stream,
+      ...(sessionId ? { session_id: sessionId, conversation_key: sessionId } : {}),
       error_message: row.error_message || (typeof metadata.error === "string" ? metadata.error : ""),
       error_details: metadata.errorDetails && typeof metadata.errorDetails === "object" ? metadata.errorDetails : {},
       response_text: typeof metadata.responseText === "string" ? metadata.responseText : "",

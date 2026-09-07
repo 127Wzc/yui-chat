@@ -144,7 +144,7 @@ export class AdapterRegistry {
   async embedTexts({ channel, texts = [], dimensions = 0, signal, event, purpose = "embedding", source = "embedding", taskName = "", trace = null, parentToolId = "", metadata = {} }: EmbeddingSendOptions = {}): Promise<Awaited<ReturnType<RuntimeAdapter["embedTexts"]>>> {
     if (!channel) throw new Error("channel is required")
     const adapter = this.get(channel.type)
-    const call = modelLogStore.beginModelCall({ trace, event, source, purpose, taskName, operation: "embedding", channel, texts, parentToolId, metadata, request: { dimensions } })
+    const call = modelLogStore.beginModelCall({ trace, event, source, purpose, taskName, operation: "embedding", channel, texts, parentToolId, metadata, request: { dimensions, protocol: adapter.protocol } })
     try {
       const result = await adapter.embedTexts({ channel, texts, dimensions, signal, event, purpose, source, taskName, trace, parentToolId, metadata, onRequest: capture => modelLogStore.captureModelRequest(call, capture) })
       modelLogStore.completeModelCall(call, { response: result })
