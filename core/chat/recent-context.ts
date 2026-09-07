@@ -12,6 +12,14 @@ interface ContextRow {
   text: string
   attachments: { images: number; records: number; videos: number }
   imageUrls: string[]
+  /** 被动观察阶段只保存一层回复关系；引用媒体仍在真正触发时按 ID 懒读取。 */
+  replyTo?: {
+    messageId: string
+    userId: string
+    name: string
+    text: string
+    images: number
+  }
   time: number
 }
 
@@ -68,6 +76,67 @@ function compact(value: unknown = ""): string {
   return text(value).replace(/\s+/g, " ").trim()
 }
 
+function mediaUrl(value: unknown): string {
+  if (typeof value === "string") return value.trim()
+  const source = record(value)
+  return text(source.url || source.file || source.path || source.src || source.image).trim()
+}
+
+function messageIdOf(value: unknown): string {
+  const source = record(value)
+  return text(source.message_id || source.messageId || source.id || source.seq).trim()
+}
+
+function replySnapshots(event: UnknownRecord): UnknownRecord[] {
+  const segments = Array.isArray(event.message) ? event.message : []
+  const replySegments = segments
+    .map(segment => {
+      const source = record(segment)
+      const data = record(source.data)
+      return { ...source, ...data }
+    })
+    .filter(segment => ["reply", "source"].includes(text(segment.type).toLowerCase()))
+  return [
+    record(event.reply),
+    record(event.source),
+    record(event.quote),
+    record(event.quotedMessage),
+    record(event.quoted_message),
+    ...replySegments,
+  ].filter(item => Object.keys(item).length > 0)
+}
+
+function replyContext(event: UnknownRecord, context: ReturnType<typeof extractMessageContext>): { target: ContextRow["replyTo"]; imageUrls: string[] } | null {
+  const snapshots = replySnapshots(event)
+  const reply = context.replies[0]
+  const targetId = text(event.reply_id || event.replyId || reply?.id || snapshots.map(messageIdOf).find(Boolean)).trim()
+  if (!targetId) return null
+  const snapshot = snapshots.find(item => messageIdOf(item) === targetId)
+    || snapshots.find(item => !messageIdOf(item) && (item.message || item.content || item.segments || item.raw_message || item.msg || item.text))
+  const sender = record(snapshot?.sender)
+  const userId = text(sender.user_id || sender.userId || snapshot?.user_id || snapshot?.userId).trim()
+  const name = compact(sender.card || sender.nickname || sender.name || snapshot?.senderNickname || snapshot?.nickname || snapshot?.card)
+  const snapshotPrompt = text(snapshot?.selectedText || snapshot?.text || snapshot?.msg).trim()
+  const snapshotContext = snapshot
+    ? extractMessageContext(snapshot, snapshotPrompt)
+    : { text: "", images: [], records: [], videos: [], files: [], mentions: [], replies: [], rawTypes: [] }
+  const imageUrls = [...new Set([
+    ...snapshotContext.images.map(item => item.url),
+    ...[snapshot?.img, snapshot?.image, snapshot?.images].flatMap(value => Array.isArray(value) ? value : value ? [value] : []).map(mediaUrl),
+  ].filter(Boolean))]
+  const preview = compact(reply?.selectedText || snapshotPrompt || snapshotContext.text)
+  return {
+    target: {
+      messageId: targetId,
+      userId,
+      name,
+      text: preview,
+      images: imageUrls.length,
+    },
+    imageUrls,
+  }
+}
+
 function referenceText(value: unknown = ""): string {
   return compact(value).toLocaleLowerCase().replace(/[\s@＠,，。.!！?？:：;；、~～_\-]/g, "")
 }
@@ -97,12 +166,17 @@ function shouldRecord(event: unknown, config: unknown): boolean {
   if (!isGroupEvent(e) && context.capturePrivate === false) return false
   const value = compact(e.msg || e.raw_message || "")
   const segments = Array.isArray(e.message) ? e.message : []
+  const hasReply = Boolean(e.reply_id || e.replyId) || segments.some(segment => {
+    const source = record(segment)
+    const data = record(source.data)
+    return ["reply", "source"].includes(text(source.type || data.type).toLowerCase())
+  })
   const hasMedia = (Array.isArray(e.img) && e.img.length > 0) || segments.some(segment => {
     const source = record(segment)
     const data = record(source.data)
     return ["image", "record", "voice", "audio", "video"].includes(text(source.type || data.type).toLowerCase())
   })
-  if (!value && !hasMedia) return false
+  if (!value && !hasMedia && !hasReply) return false
   if (context.ignoreCommands !== false && isCommandMessage(value, config)) return false
   return true
 }
@@ -145,13 +219,19 @@ export class RecentContextStore {
     if (!shouldRecord(event, config)) return false
     const e = record(event)
     const context = extractMessageContext(e, e.msg || e.raw_message || "")
-    const settings = contextConfig(config)
-    const value = compact(context.text || e.msg || e.raw_message || "").slice(0, Number(settings.maxMessageChars) || 220)
+    const reply = replyContext(e, context)
+    const rawText = text(e.msg || e.raw_message || "")
+    const replyCodeOnly = context.replies.length > 0 && /\[CQ:(?:reply|source)[,\]]/i.test(rawText)
+    const value = compact(context.text || (replyCodeOnly ? "" : rawText))
+    // 宿主有时会把引用快照展开到当前事件；能拿到快照地址时先从当前发言的
+    // 媒体里扣除，避免把“回复别人的图”记录成发送者自己的图。没有快照时
+    // 不做猜测，关系仍保留在 replyTo 中。
+    const quotedImageUrls = new Set(reply?.imageUrls || [])
     const imageUrls = [...new Set([
       ...context.images.map(item => item.url),
       ...(Array.isArray(e.img) ? e.img.map(text) : []),
-    ].filter(Boolean))]
-    if (!value && !imageUrls.length && !context.records.length && !context.videos.length) return false
+    ].filter(url => Boolean(url) && !quotedImageUrls.has(url)))]
+    if (!value && !imageUrls.length && !context.records.length && !context.videos.length && !reply?.target) return false
     const key = scopeKey(e)
     const rows = buffers.get(key) || []
     const row: ContextRow = {
@@ -159,6 +239,7 @@ export class RecentContextStore {
       userId: text(e.user_id), name: userName(e), aliases: userAliases(e), text: value,
       attachments: { images: imageUrls.length, records: context.records.length, videos: context.videos.length },
       imageUrls,
+      ...(reply?.target ? { replyTo: reply.target } : {}),
       time: Date.now(),
     }
     const duplicateIndex = row.messageId ? rows.findIndex(item => item.messageId === row.messageId) : -1
@@ -181,9 +262,16 @@ export class RecentContextStore {
       if (item.attachments.records) attachments.push(`${item.attachments.records}语音`)
       if (item.attachments.videos) attachments.push(`${item.attachments.videos}视频`)
       const suffix = attachments.length ? ` [${attachments.join(",")}]` : ""
-      return `- ${item.name}(${item.userId})：${item.text || "非文本消息"}${suffix}`
+      const reply = item.replyTo
+      const replyAuthor = reply?.name || (reply?.userId ? `成员${reply.userId}` : "上一条消息")
+      const replyMedia = reply?.images ? `，含${reply.images}张图` : ""
+      const replyPreview = reply?.text ? `：“${reply.text}”` : ""
+      const relation = reply
+        ? ` ↳ 回复${replyAuthor}的消息${replyMedia}${replyPreview}`
+        : ""
+      return `- ${item.name}(${item.userId})：${item.text || "非文本消息"}${suffix}${relation}`
     })
-    return `最近聊天上下文（只作理解语境，不要逐字复述）：\n${lines.join("\n")}`
+    return `最近聊天上下文（按顺序；“↳”表示回复对象；只作理解语境，不要逐字复述）：\n${lines.join("\n")}`
   }
 
   /** 按回复语境、点名对象和人称指代选择最近图片；无明确对象时使用时间上最近的一张。 */

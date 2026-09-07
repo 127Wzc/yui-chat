@@ -234,7 +234,6 @@ export const schema: SchemaGroup[] = [
       { path: "context.ignoreCommands", label: "忽略指令消息", type: "boolean" },
       { path: "context.maxScopes", label: "最多最近上下文作用域", type: "number" },
       { path: "context.scopeTtlMs", label: "最近上下文保留毫秒", type: "number" },
-      { path: "context.maxMessageChars", label: "单条最大字符", type: "number" },
     ],
   },
 ]

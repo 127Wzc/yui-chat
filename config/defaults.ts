@@ -499,7 +499,6 @@ export const defaults = {
     ignoreCommands: true,
     maxScopes: 1000,
     scopeTtlMs: 21600000,
-    maxMessageChars: 220,
   },
   mediaRecognition: {
     enabled: true,

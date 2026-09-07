@@ -42,7 +42,7 @@ const retiredPersonaOutputConfigKeys = [
   "splitMaxDelayMs",
   "quoteSplitReplies",
 ]
-const retiredContextConfigKeys = ["enabled", "injectRecent", "maxMessages", "injectLimit"]
+const retiredContextConfigKeys = ["enabled", "injectRecent", "maxMessages", "injectLimit", "maxMessageChars"]
 const retiredSegmentationConfigKeys = ["llmOnly"]
 const webServerSourceFiles = [
   "web/http/app.js",
@@ -3547,6 +3547,10 @@ async function checkPersonaTrigger() {
     imageSelectionConfig.context.recentMessageCount = 4
     await configStore.save(imageSelectionConfig)
     recentContextStore.clear()
+    const longContextText = "这是一条较长的群聊正文，用来确认最近上下文不会因为单条字符上限而丢失内容。".repeat(12)
+    assert(recentContextStore.record({ ...contextEvent, message_id: "long-context", msg: longContextText }), "recent context should retain a long message without a per-message character cap")
+    assert(recentContextStore.buildPrompt(contextEvent).includes(longContextText), "recent context prompt should keep the complete long message")
+    recentContextStore.clear()
     const selfImageUrl = "https://multimedia.nt.qq.com.cn/download?fileid=recent-self"
     const otherImageUrl = "https://multimedia.nt.qq.com.cn/download?fileid=recent-other"
     assert(recentContextStore.record({ ...contextEvent, message_id: "self-image", msg: "", message: [{ type: "image", data: { url: selfImageUrl } }] }), "recent context should retain image-only messages as volatile references for intentional lookback")
@@ -3563,6 +3567,43 @@ async function checkPersonaTrigger() {
     assert(recentContextStore.record({ ...contextEvent, message_id: "fallback-image", user_id: "other-user", sender: { nickname: "Other User" }, msg: "他人发图", message: [{ type: "image", data: { url: otherImageUrl } }] }), "recent context should record a fallback group image")
     const fallbackGroupImage = recentContextStore.findRecentImage(contextEvent)
     assert(fallbackGroupImage?.url === otherImageUrl && fallbackGroupImage.source === "recent-group", "recent image lookup should fall back to another group member only when the current speaker has no image")
+    recentContextStore.clear()
+    const passiveQuotedImageUrl = "https://multimedia.nt.qq.com.cn/download?fileid=passive-quoted"
+    const passiveQuotedText = "这是一段超过四十八字的被引用正文，用来验证群聊上下文会保留完整的直接上级内容，而不是过早截断。".repeat(2)
+    const passiveQuotedEvent = {
+      ...contextEvent,
+      message_id: "passive-reply",
+      user_id: "other-user",
+      sender: { user_id: "other-user", card: "引用者", nickname: "引用者" },
+      msg: "这个怎么样",
+      // 模拟部分宿主把引用图片同时展开到当前消息；它不应被记录成引用者自己发的图。
+      message: [
+        { type: "reply", data: { id: "passive-source" } },
+        { type: "image", data: { url: passiveQuotedImageUrl } },
+      ],
+      reply: {
+        message_id: "passive-source",
+        sender: { user_id: "source-user", nickname: "原作者" },
+        text: passiveQuotedText,
+        message: [{ type: "image", data: { url: passiveQuotedImageUrl } }],
+      },
+    }
+    assert(recentContextStore.record(passiveQuotedEvent), "recent context should retain a passive group's reply relation")
+    const passiveReplyPrompt = recentContextStore.buildPrompt(contextEvent)
+    assert(passiveReplyPrompt.includes("引用者(other-user)：这个怎么样"), "recent context should keep the replying speaker")
+    assert(passiveReplyPrompt.includes("↳ 回复原作者的消息，含1张图"), "recent context should expose a compact quoted-message relation")
+    assert(passiveReplyPrompt.includes(passiveQuotedText), "reply relation should keep the complete quoted text without a per-message character cap")
+    assert(!passiveReplyPrompt.includes(passiveQuotedImageUrl) && !passiveReplyPrompt.includes("[1图]"), "passive quoted media should not leak URLs or be misclassified as the replier's own image")
+    assert(recentContextStore.record({
+      ...contextEvent,
+      message_id: "passive-reply-only",
+      user_id: "reply-only-user",
+      sender: { user_id: "reply-only-user", card: "纯引用者" },
+      msg: "",
+      raw_message: "",
+      message: [{ type: "reply", data: { id: "passive-source" } }],
+    }), "recent context should retain a reply-only message for group relation continuity")
+    assert(recentContextStore.buildPrompt(contextEvent).includes("纯引用者(reply-only-user)：非文本消息 ↳ 回复上一条消息"), "reply-only context should remain compact and relation-aware")
     recentContextStore.clear()
     const adjacentImageEvent = { ...contextEvent, message_id: "adjacent-image", msg: "", message: [{ type: "image", data: { url: selfImageUrl } }] }
     const adjacentQuestionEvent = { ...contextEvent, message_id: "adjacent-question", msg: "玉玉看看这个图" }

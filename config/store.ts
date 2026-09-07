@@ -328,7 +328,7 @@ function normalizeConfig(config: Config): Config {
       }
     }
   }
-  if (isObject(config.context)) for (const key of ["enabled", "injectRecent", "maxMessages", "injectLimit"]) delete config.context[key]
+  if (isObject(config.context)) for (const key of ["enabled", "injectRecent", "maxMessages", "injectLimit", "maxMessageChars"]) delete config.context[key]
   // 输入预算改为"模型上下文窗口优先、全局预算回落"，分项预算无运行时消费，整体下线。
   if (isObject(config.chat)) delete config.chat.promptBudgets
   const response = isObject(config.response) ? config.response : null
