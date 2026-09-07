@@ -2324,7 +2324,6 @@ export class GroupCaptureStore {
           systemPrompt: EXTRACTOR_SYSTEM,
           prompt: extractionPrompt(first.group_id, { window_start: first.window_start, window_end: first.window_end }, chunk, policy?.promptTemplate),
           maxTokens: consolidationMaxTokens,
-          timeoutMs: 90000,
           source: "group-memory-consolidation",
           purpose: "memory-consolidation",
           event: { group_id: first.group_id, isGroup: true, user_id: "memory-consolidator" },

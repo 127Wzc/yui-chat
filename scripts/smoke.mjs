@@ -2305,6 +2305,8 @@ async function checkModelRoutingPreview() {
   const { providerResolver } = await import("../output/runtime/models/routing/provider-resolver.js")
   const { chatService } = await import("../output/runtime/core/chat/chat-service.js")
   const { configStore } = await import("../output/runtime/config/store.js")
+  const { adapterRegistry } = await import("../output/runtime/models/adapters/registry.js")
+  const { runIsolatedModelTask } = await import("../output/runtime/models/isolated-task.js")
   const config = JSON.parse(JSON.stringify(await configStore.load()))
   const digest = providerResolver.buildRoutingDigest(config)
   assert(digest.summary.providers >= 1, "routing digest should count providers")
@@ -2358,6 +2360,39 @@ async function checkModelRoutingPreview() {
   })
   assert(fallbackStep.channel === "mock-ok", "fallback step should use second model after first fails")
   assert(fallbackStep.attempts.length === 2 && fallbackStep.attempts[0].status === "error" && fallbackStep.attempts[1].status === "ok", "fallback step should record error and success attempts")
+  const originalResolveIsolatedChannels = providerResolver.resolveCandidateChannels
+  const originalIsolatedSendMessage = adapterRegistry.sendMessage
+  const originalSetTimeout = global.setTimeout
+  const isolatedTimeouts = []
+  const isolatedChannels = []
+  providerResolver.resolveCandidateChannels = () => [
+    { id: "smoke-isolated-primary", type: "smoke-isolated-primary", model: "smoke", timeoutMs: 120000, stream: true },
+    { id: "smoke-isolated-fallback", type: "smoke-isolated-fallback", model: "smoke", timeoutMs: 600000, stream: true },
+  ]
+  adapterRegistry.sendMessage = async ({ channel }) => {
+    isolatedChannels.push(channel.id)
+    if (channel.id === "smoke-isolated-primary") throw new Error("smoke primary isolated failure")
+    return { id: "smoke-isolated", text: "{}", usage: {} }
+  }
+  global.setTimeout = (callback, delay, ...args) => {
+    isolatedTimeouts.push(delay)
+    return originalSetTimeout(callback, delay, ...args)
+  }
+  try {
+    const isolatedConfig = {
+      ...transportConfig,
+      modelTasks: {
+        ...transportConfig.modelTasks,
+        replyer: { ...transportConfig.modelTasks.replyer, selectionStrategy: "fallback" },
+      },
+    }
+    const isolatedResult = await runIsolatedModelTask({ config: isolatedConfig, taskName: "replyer", prompt: "isolated timeout smoke" })
+    assert(isolatedResult.channel === "smoke-isolated-fallback" && isolatedChannels.join(",") === "smoke-isolated-primary,smoke-isolated-fallback" && isolatedTimeouts.join(",") === "120000,600000", "isolated fallback candidates should each use their own resolved timeout")
+  } finally {
+    providerResolver.resolveCandidateChannels = originalResolveIsolatedChannels
+    adapterRegistry.sendMessage = originalIsolatedSendMessage
+    global.setTimeout = originalSetTimeout
+  }
 }
 
 async function checkModelRoutingApi() {

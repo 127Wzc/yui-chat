@@ -58,54 +58,58 @@ export async function runIsolatedModelTask(options: IsolatedTaskOptions = {}): P
     channelId: text(options.channelId).trim() || undefined,
     config,
   })
-  const timeoutMs = Math.max(10000, Math.min(180000, Number(options.timeoutMs) || 90000))
+  const requestedTimeout = Number(options.timeoutMs)
+  const explicitTimeoutMs = Number.isFinite(requestedTimeout) && requestedTimeout > 0 ? requestedTimeout : 0
+  const defaultTimeoutMs = Number(chat.modelRequestTimeoutMs)
   const tasks = record(config.modelTasks)
   const task = record(tasks[taskName])
   const taskMaxTokens = Number(task.maxTokens) || 4096
   // 推理型模型的思考 token 也计入上限，调用方可以显式调大但不能越过统一边界。
   const maxTokens = Math.max(512, Math.min(65536, Number(options.maxTokens) || taskMaxTokens))
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(new Error(`项目 AI 生成超过 ${timeoutMs}ms`)), timeoutMs)
   const attempts: Attempt[] = []
-  try {
-    for (const channel of channels) {
-      try {
-        if (channel.type === "mock") throw new Error("当前任务使用 Mock 模型，请先配置真实模型渠道")
-        const adapter = adapterRegistry.get(channel.type)
-        const response = await adapterRegistry.sendMessage({
-          channel,
-          messages: [
-            { role: "system", content: text(options.systemPrompt) },
-            { role: "user", content: text(options.prompt) },
-          ],
-          tools: [],
-          event: options.event,
-          maxTokens,
-          signal: controller.signal,
-          purpose: text(options.purpose) || "isolated-generation",
-          source: text(options.source) || "isolated-task",
-          taskName,
-          trace: options.trace || null,
-          metadata: options.metadata || {},
-          snapshotMetadata: options.snapshotMetadata || options.metadata || {},
-        })
-        return {
-          id: response.id || "",
-          text: text(response.text),
-          channel: channel.id,
-          adapter: adapter.id,
-          task: taskName,
-          usage: response.usage || {},
-          attempts: [...attempts, { channel: channel.id, adapter: adapter.id, status: "ok" }],
-        }
-      } catch (error) {
-        const failure = controller.signal.aborted && controller.signal.reason instanceof Error ? controller.signal.reason : error
-        attempts.push(attemptError(channel, failure))
-        if (controller.signal.aborted || text(task.selectionStrategy) !== "fallback") break
+  // 每次 fallback 都重新创建 controller/timer，让每个候选模型拥有自己的请求期限。
+  for (const channel of channels) {
+    const channelTimeoutMs = Number(channel.timeoutMs)
+    const timeoutValue = explicitTimeoutMs || (Number.isFinite(channelTimeoutMs) && channelTimeoutMs > 0 ? channelTimeoutMs : defaultTimeoutMs)
+    const timeoutMs = Math.max(1000, Math.min(600000, Number.isFinite(timeoutValue) && timeoutValue > 0 ? timeoutValue : 90000))
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(new Error(`项目 AI 生成超过 ${timeoutMs}ms`)), timeoutMs)
+    try {
+      if (channel.type === "mock") throw new Error("当前任务使用 Mock 模型，请先配置真实模型渠道")
+      const adapter = adapterRegistry.get(channel.type)
+      const response = await adapterRegistry.sendMessage({
+        channel,
+        messages: [
+          { role: "system", content: text(options.systemPrompt) },
+          { role: "user", content: text(options.prompt) },
+        ],
+        tools: [],
+        event: options.event,
+        maxTokens,
+        signal: controller.signal,
+        purpose: text(options.purpose) || "isolated-generation",
+        source: text(options.source) || "isolated-task",
+        taskName,
+        trace: options.trace || null,
+        metadata: options.metadata || {},
+        snapshotMetadata: options.snapshotMetadata || options.metadata || {},
+      })
+      return {
+        id: response.id || "",
+        text: text(response.text),
+        channel: channel.id,
+        adapter: adapter.id,
+        task: taskName,
+        usage: response.usage || {},
+        attempts: [...attempts, { channel: channel.id, adapter: adapter.id, status: "ok" }],
       }
+    } catch (error) {
+      const failure = controller.signal.aborted && controller.signal.reason instanceof Error ? controller.signal.reason : error
+      attempts.push(attemptError(channel, failure))
+      if (text(task.selectionStrategy) !== "fallback") break
+    } finally {
+      clearTimeout(timer)
     }
-  } finally {
-    clearTimeout(timer)
   }
   const last = attempts.at(-1)
   const error = new Error(last?.error || "项目 AI 没有可用模型渠道") as Error & { attempts: Attempt[] }
