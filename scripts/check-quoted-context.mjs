@@ -62,6 +62,21 @@ export async function checkQuotedContext(image) {
   assert.equal(getMessageCalls, 1)
   assert.equal(getReplyCalls, 0)
   assert.equal(freshResolved.quote.attachments.find(item => item.source === "quote")?.url, freshQuoteImage)
+  let adapterArgs = []
+  const adapterResolved = await resolveMediaContext({
+    ...event,
+    reply_id: "adapter-quote",
+    bot: {
+      adapter: {
+        getMsg: async (groupId, messageId) => {
+          adapterArgs = [groupId, messageId]
+          return { message_id: messageId, text: "适配器引用正文" }
+        },
+      },
+    },
+  }, "看看这个", config, options)
+  assert.deepEqual(adapterArgs, [event.group_id, "adapter-quote"], "未绑定适配器的参数差异应由宿主边界处理")
+  assert.equal(adapterResolved.quote.text, "适配器引用正文")
   const freshPrepared = await prepareMediaForVision(freshResolved, config)
   const freshAttachment = freshPrepared.attachments.find(item => item.source === "quote" && item.kind === "image")
   assert.equal(freshAttachment.preparedUrl, freshQuoteImage)

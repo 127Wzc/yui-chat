@@ -1,5 +1,6 @@
 import { extractMessageContext, summarizeMessageContext } from "./message-context.js"
 import type { MessageContext, MessageMediaItem, UnknownRecord, OpenAiUserContent } from "./types.js"
+import { hostRuntime } from "../runtime/host-runtime.js"
 
 type MediaKind = "image" | "video" | "audio" | "file"
 
@@ -249,71 +250,23 @@ async function getQuotedMessage(event: unknown = {}): Promise<unknown> {
     }
   }
   const diagnostics: string[] = []
-  const select = (value: unknown): unknown => {
+  const select = (value: unknown): { value: UnknownRecord | null; diagnostics?: string[] } => {
     const candidates = quotedHistory(value).filter(quotedPayload)
     const candidate = candidates.find(matches)
-    if (candidate) return merge(candidate)
-    if (candidates.length) diagnostics.push("引用读取结果与目标消息不匹配，未采用其他消息。")
-    return null
+    if (candidate) return { value: merge(candidate) }
+    return {
+      value: null,
+      ...(candidates.length ? { diagnostics: ["引用读取结果与目标消息不匹配，未采用其他消息。"] } : {}),
+    }
   }
 
   // 引用中的图片地址通常是短时签名 URL。触发引用时优先重新读取目标消息，
   // 不能先采用事件里可能已经过期的 source/quote 快照。Yunzai 的原生方法
-  // 叫 getMsg，其他适配器可能提供 getMessage；两者都按消息序号/ID读取一次。
+  // 与参数差异由宿主边界统一处理，领域层只校验并归一化候选消息。
   if (sequence) {
-    const readers: Array<{ owner: UnknownRecord; name: string; fn: (...args: unknown[]) => unknown }> = []
-    const addReader = (ownerValue: unknown, name: string): void => {
-      const owner = record(ownerValue)
-      const fn = owner[name]
-      if (typeof fn !== "function") return
-      if (readers.some(reader => reader.owner === owner && reader.name === name && reader.fn === fn)) return
-      readers.push({ owner, name, fn: fn as (...args: unknown[]) => unknown })
-    }
-    addReader(e, "getMessage")
-    addReader(e, "getMsg")
-    if (e.isGroup) addReader(e.group, "getMessage")
-    if (e.isGroup) addReader(e.group, "getMsg")
-    if (!e.isGroup) addReader(e.friend, "getMessage")
-    if (!e.isGroup) addReader(e.friend, "getMsg")
-    addReader(e.bot, "getMessage")
-    addReader(e.bot, "getMsg")
-    addReader(record(e.bot).adapter, "getMessage")
-    addReader(record(e.bot).adapter, "getMsg")
-
-    for (const reader of readers) {
-      try {
-        // 已绑定到群/好友对象的方法通常只接收消息 ID；未绑定的适配器方法
-        // 可能要求目标群号作为第一个参数，按函数形态兼容这两种调用。
-        const args = reader.fn.length >= 2 && e.group_id
-          ? [e.group_id, sequence]
-          : [sequence]
-        const value = select(await reader.fn.apply(reader.owner, args))
-        if (value) return value
-      } catch (error) {
-        diagnostics.push(`读取最新引用消息失败（${reader.name}）：${error instanceof Error ? error.message : String(error)}`)
-      }
-    }
-  }
-  try {
-    const getReply = e.getReply
-    if (typeof getReply === "function" && sequence) {
-      const value = select(await (getReply as () => Promise<unknown>).call(event))
-      if (value) return value
-    }
-  } catch (error) {
-    diagnostics.push(`读取引用消息失败：${error instanceof Error ? error.message : String(error)}`)
-  }
-  if (sequence) {
-    try {
-      const owner = e.isGroup ? record(e.group) : record(e.friend)
-      const getHistory = owner.getChatHistory
-      if (typeof getHistory === "function") {
-        const value = select(await (getHistory as (seq: unknown, count: number) => Promise<unknown>).call(owner, sequence, 1))
-        if (value) return value
-      }
-    } catch (error) {
-      diagnostics.push(`读取历史消息失败：${error instanceof Error ? error.message : String(error)}`)
-    }
+    const result = await hostRuntime.readQuotedMessage(event, sequence, select)
+    diagnostics.push(...result.diagnostics)
+    if (result.value) return result.value
   }
   if (inline && matches(inline)) return { ...merge(inline, "partial"), diagnostics }
   return { ...merge({}, "unavailable"), diagnostics }
