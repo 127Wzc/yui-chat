@@ -355,7 +355,7 @@ export const ToolConfigurationPanel = {
           await saveConfigPatch(patch, `tool-channels:${props.tool.name}`)
           syncChannels()
         } else {
-          toast("运行变量已保存并热应用")
+          toast("运行变量已保存")
           await refreshTab("tools")
         }
       } catch (error) { toast(errorMessage(error)) }

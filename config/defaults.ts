@@ -381,16 +381,14 @@ export const defaults = {
     },
     render: {
       enabled: true,
-      engine: "sharp-svg",
-      cache: true,
-      cacheTtlMs: 86400000,
+      // HTML 是全局首选；HTML 后端不可用或渲染失败时自动回退 SVG。
+      engine: "html",
       width: 1120,
       maxTextChars: 8000,
-      markdownEngine: "auto",
-      markmapEngine: "auto",
-      chatCardAsImage: true,
-      helpAsImage: true,
-      conversationListAsImage: true,
+      // 系统图片与工具图片各自使用一套引擎策略。
+      system: {
+        engine: "html",
+      },
       mediaThumbnails: true,
       mediaThumbnailMaxCount: 3,
       mediaThumbnailMaxDataUrlChars: 800000,

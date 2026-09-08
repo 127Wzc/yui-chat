@@ -100,8 +100,7 @@ const adapterIds = new Set(["mock", "openai-compatible", "openai-responses", "qw
 const authTypes = new Set(["bearer", "none", "query", "x-api-key", "api-key", "custom-header"])
 const selectionStrategies = new Set(["sequential", "random", "fallback"])
 const boundaryRoles = new Set(["user", "groupAdmin", "groupOwner", "master"])
-const renderEngines = new Set(["sharp-svg", "html"])
-const markdownRenderEngines = new Set(["svg", "html", "auto"])
+const renderEngines = new Set(["html", "svg"])
 const pokeResponseModes = new Set(["ai", "fallback", "ai-with-fallback"])
 const segmentationIntervalMethods = new Set(["random", "log"])
 const segmentationModes = new Set(["regex", "natural"])
@@ -830,18 +829,17 @@ function validateRuntimeNumbers(config: ConfigRecord, issues: ValidationIssue[])
   const render = section(response.render)
   if (response.render !== undefined && !isObject(response.render)) add(issues, "error", "response.render", "response.render 必须是对象")
   const renderEngine = String(render.engine || "")
-  const markdownEngine = String(render.markdownEngine || "")
-  const markmapEngine = String(render.markmapEngine || "")
   if (renderEngine && !renderEngines.has(renderEngine)) {
     add(issues, "error", "response.render.engine", `未知渲染引擎：${renderEngine}`)
   }
-  if (markdownEngine && !markdownRenderEngines.has(markdownEngine)) {
-    add(issues, "error", "response.render.markdownEngine", `未知 Markdown 渲染引擎：${markdownEngine}`)
+  const systemRender = render.system
+  if (systemRender !== undefined) {
+    if (!isObject(systemRender)) add(issues, "error", "response.render.system", "系统渲染策略必须是对象")
+    else {
+      const systemEngine = String(systemRender.engine || "")
+      if (systemEngine && !renderEngines.has(systemEngine)) add(issues, "error", "response.render.system.engine", `未知系统渲染引擎：${systemEngine}`)
+    }
   }
-  if (markmapEngine && !markdownRenderEngines.has(markmapEngine)) {
-    add(issues, "error", "response.render.markmapEngine", `未知思维导图渲染引擎：${markmapEngine}`)
-  }
-  positiveNumber(issues, "response.render.cacheTtlMs", render.cacheTtlMs, { min: 1000 })
   positiveNumber(issues, "response.render.width", render.width, { min: 720, max: 1800 })
   positiveNumber(issues, "response.render.maxTextChars", render.maxTextChars, { min: 200 })
   positiveNumber(issues, "response.render.mediaThumbnailMaxCount", render.mediaThumbnailMaxCount, { min: 0, max: 6 })
@@ -871,7 +869,7 @@ function validateRuntimeNumbers(config: ConfigRecord, issues: ValidationIssue[])
       positiveNumber(issues, "response.render.html.maxUrlLength", renderHtml.maxUrlLength, { min: 32, max: 8192 })
       positiveNumber(issues, "response.render.html.maxHtmlChars", renderHtml.maxHtmlChars, { min: 1000, max: 2000000 })
       positiveNumber(issues, "response.render.html.timeoutMs", renderHtml.timeoutMs, { min: 1000, max: 120000 })
-      positiveNumber(issues, "response.render.html.waitMs", renderHtml.waitMs, { min: 0, max: 10000 })
+      positiveNumber(issues, "response.render.html.waitMs", renderHtml.waitMs, { min: 0, max: 3000 })
       positiveNumber(issues, "response.render.html.deviceScaleFactor", renderHtml.deviceScaleFactor, { min: 0.5, max: 3 })
       if (renderHtml.enabled === true && !asArray(section(section(config.security).linkSafety).screenshotAllowedHosts).length) {
         add(issues, "warn", "security.linkSafety.screenshotAllowedHosts", "HTML 后端已启用，但 URL 截图没有允许域名；本地 HTML、Markdown 和思维导图渲染仍可使用")

@@ -866,8 +866,7 @@ pre {
 
 /* 渲染预览 */
 .render-preview { display: grid; gap: 10px; }
-.render-cache { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
-.render-preview img, .render-cache img {
+.render-preview img {
   width: 100%;
   max-height: 480px;
   object-fit: contain;

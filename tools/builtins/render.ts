@@ -2,12 +2,14 @@ import { commandObserver } from "../../knowledge/command-observer.js"
 import { groupIdFromEvent, isGroupEvent } from "../../core/message/event-scope.js"
 import { configStore } from "../../config/store.js"
 import {
+  listImageRenderers,
   renderImageByKind,
-  renderKindCatalog,
+  renderImageByConfiguredEngine,
   renderKindLabels,
   normalizeRenderKind,
+  resolveRenderEngine,
 } from "../../core/rendering/render-service.js"
-import { renderHtmlToPng, renderMarkdownHtmlToPng, renderMarkmapHtmlToPng, renderUrlToPng } from "../../core/rendering/render-html-service.js"
+import { renderHtmlToPng, renderUrlToPng } from "../../core/rendering/render-html-service.js"
 import { deliverRenderedImage } from "../../core/rendering/render-delivery.js"
 import type { UnknownRecord } from "../../core/message/types.js"
 import type { ToolExecutionContext } from "../support/tool-contract.js"
@@ -21,7 +23,6 @@ type ToolArgs = UnknownRecord
 
 interface RenderResult extends UnknownRecord {
   buffer: Uint8Array
-  cache?: UnknownRecord
 }
 
 function record(value: unknown): UnknownRecord {
@@ -34,23 +35,18 @@ function text(value: unknown): string {
 
 function renderResult(value: unknown): RenderResult {
   const result = record(value)
-  return { ...result, buffer: result.buffer instanceof Uint8Array ? result.buffer : new Uint8Array(), cache: record(result.cache) }
+  return { ...result, buffer: result.buffer instanceof Uint8Array ? result.buffer : new Uint8Array() }
+}
+
+async function renderByConfiguredEngine(kind: string, input: ToolArgs, config: unknown): Promise<RenderResult> {
+  return renderResult(await renderImageByConfiguredEngine(kind, input, config))
 }
 
 export function resolveRenderImageEngine(kind: unknown, requested: unknown, config: unknown = {}): "svg" | "html" {
-  const normalized = normalizeRenderKind(kind)
-  const response = record(record(config).response)
-  const render = record(response.render)
-  const html = record(render.html)
-  const configured = normalized === "markdown" ? render.markdownEngine : normalized === "mindmap" ? render.markmapEngine : "svg"
-  const engine = text(requested || configured || "svg").toLowerCase()
-  if (engine === "html") return "html"
-  if (normalized === "markdown" && engine === "auto") return "html"
-  if (engine === "auto" && html.enabled === true) return "html"
-  return "svg"
+  return resolveRenderEngine(kind, requested, config)
 }
 
-/** 渲染工具基类：统一渲染、缓存结果和消息交付；不负责模板算法与权限判断。 */
+/** 渲染工具基类：统一渲染和消息交付；不负责模板算法与权限判断。 */
 class BaseRenderTool {
   kind!: string
   message?: string
@@ -70,7 +66,7 @@ class BaseRenderTool {
     const result = renderResult(await renderImageByKind(this.kind, this.input(args, context), config))
     if (args.send === false) {
       const label = renderKindLabels[this.kind] || this.message || "图片"
-      return `${label}渲染完成：${result.buffer.length} bytes${result.cache?.pngFile ? `\n缓存：${text(result.cache.pngFile)}` : ""}`
+      return `${label}渲染完成：${result.buffer.length} bytes`
     }
     return deliverRenderedImage(result, context, {
       label: this.message || renderKindLabels[this.kind] || "图片",
@@ -133,7 +129,7 @@ export class RenderMarkdownDocumentTool extends BaseRenderTool {
   kind = "markdown"
   message = "Markdown 图片"
   source = "builtin"
-  description = "Render a Markdown document as a polished PNG image with local KaTeX formulas and Mermaid diagrams. Auto uses the plugin-owned rich renderer; svg remains available as a lightweight fallback."
+  description = "Render a Markdown document as a polished PNG image with local KaTeX formulas and Mermaid diagrams. Auto follows the global HTML-first priority; SVG remains available as a lightweight fallback."
   tags = ["markdown", "math", "mermaid", "image"]
   parameters = {
     type: "object",
@@ -144,10 +140,6 @@ export class RenderMarkdownDocumentTool extends BaseRenderTool {
         type: "string",
         description: "Markdown content. Use $...$ or $$...$$ for formulas and fenced ```mermaid blocks for diagram source.",
       },
-      engine: {
-        type: "string",
-        description: "Renderer: auto (default rich Markdown), html, or svg (lightweight fallback).",
-      },
       send: { type: "boolean", description: "Whether to send the image. Defaults to true." },
     },
     required: ["title", "markdown"],
@@ -155,20 +147,14 @@ export class RenderMarkdownDocumentTool extends BaseRenderTool {
 
   async execute(args: ToolArgs = {}, context: RenderToolContext = {}): Promise<string> {
     const config = context.config || record(configStore.get())
-    const engine = resolveRenderImageEngine("markdown", args.engine, config)
-    if (engine === "html") {
-      const result = renderResult(await renderMarkdownHtmlToPng({
-        title: args.title,
-        subtitle: args.subtitle,
-        markdown: args.markdown,
-        footer: "Yui Chat · HTML Markdown Render Tool",
-      }, config))
-      if (args.send === false) {
-        return `Markdown HTML 图片渲染完成：${result.buffer.length} bytes${result.cache?.pngFile ? `\n缓存：${text(result.cache.pngFile)}` : ""}`
-      }
-      return deliverRenderedImage(result, context, { label: "Markdown HTML 图片" })
-    }
-    return this.render(args, context)
+    const result = await renderByConfiguredEngine("markdown", {
+      title: args.title,
+      subtitle: args.subtitle,
+      markdown: args.markdown,
+      footer: "Yui Chat · Markdown Render Tool",
+    }, config)
+    if (args.send === false) return `Markdown 图片渲染完成：${result.buffer.length} bytes`
+    return deliverRenderedImage(result, context, { label: "Markdown 图片" })
   }
 
   input(args: ToolArgs = {}): ToolArgs {
@@ -186,7 +172,7 @@ export class RenderMindMapTool extends BaseRenderTool {
   kind = "mindmap"
   message = "思维导图图片"
   source = "builtin"
-  description = "Render a Markdown hierarchy as a mind map PNG image. Supports svg and optional HTML markmap engine."
+  description = "Render a Markdown hierarchy as a mind map PNG image. Auto follows the global HTML-first priority and falls back to SVG."
   tags = ["mindmap", "markdown", "image"]
   parameters = {
     type: "object",
@@ -196,10 +182,6 @@ export class RenderMindMapTool extends BaseRenderTool {
         type: "string",
         description: "Standard Markdown hierarchy. Use # for root, ## for branches, ### and list items for details.",
       },
-      engine: {
-        type: "string",
-        description: "Renderer: svg (default), html, or auto. html requires response.render.html.enabled.",
-      },
       send: { type: "boolean", description: "Whether to send the image. Defaults to true." },
     },
     required: ["title", "markdown"],
@@ -207,21 +189,13 @@ export class RenderMindMapTool extends BaseRenderTool {
 
   async execute(args: ToolArgs = {}, context: RenderToolContext = {}): Promise<string> {
     const config = context.config || record(configStore.get())
-    const render = record(record(config.response).render)
-    const html = record(render.html)
-    const engine = text(args.engine || render.markmapEngine || "svg").toLowerCase()
-    if (engine === "html" || (engine === "auto" && html.enabled === true)) {
-      const result = renderResult(await renderMarkmapHtmlToPng({
-        title: args.title,
-        markdown: args.markdown,
-        footer: "Yui Chat · HTML Markmap Render Tool",
-      }, config))
-      if (args.send === false) {
-        return `Markmap HTML 图片渲染完成：${result.buffer.length} bytes${result.cache?.pngFile ? `\n缓存：${text(result.cache.pngFile)}` : ""}`
-      }
-      return deliverRenderedImage(result, context, { label: "Markmap HTML 图片" })
-    }
-    return this.render(args, context)
+    const result = await renderByConfiguredEngine("mindmap", {
+      title: args.title,
+      markdown: args.markdown,
+      footer: "Yui Chat · Mindmap Render Tool",
+    }, config)
+    if (args.send === false) return `思维导图图片渲染完成：${result.buffer.length} bytes`
+    return deliverRenderedImage(result, context, { label: "思维导图图片" })
   }
 
   input(args: ToolArgs = {}): ToolArgs {
@@ -484,21 +458,20 @@ export class RenderConversationListTool extends BaseRenderTool {
 export class RenderImageTool extends BaseRenderTool {
   name = "render_image"
   source = "builtin"
-  description = "Unified dynamic image renderer. Supports text cards, rich Markdown with local KaTeX/Mermaid, Markmap mind maps, safe Cartesian function plots, word clouds and status panels. For markdown formulas use $...$, $$...$$, \\(...\\), or \\[...\\]. Markdown auto uses the plugin-owned rich renderer; raw HTML and URL screenshots remain separately gated."
+  description = "Unified image renderer. Public templates are text cards, Markdown and mind maps; system scenarios use the same base card internally. For markdown formulas use $...$, $$...$$, \\(...\\), or \\[...\\]. Raw HTML and URL screenshots remain separately gated."
   tags = ["image", "render", "template", "dynamic"]
   parameters = {
     type: "object",
     properties: {
       template: {
         type: "string",
-        enum: renderKindCatalog.map(item => item.kind),
+        enum: listImageRenderers(true).map(item => item.kind),
         description: "Renderer template. Defaults to text-card.",
       },
       data: {
         type: "object",
-        description: "Template data. Use title/content/sections for text-card; title/markdown for markdown or mindmap; expressions plus optional xMin/xMax/yMin/yMax for function-plot; query for command-help; prompt/answer for chat-card; words or text for word-cloud; metrics/sections for dynamic-panel; rows for conversation-list.",
+        description: "Template data. Use title/content/sections for text-card, title/markdown for markdown or mindmap.",
       },
-      engine: { type: "string", enum: ["auto", "svg", "html"], description: "markdown/mindmap renderer override. Defaults to the corresponding response.render setting." },
       send: { type: "boolean", description: "Whether to send the image. Defaults to true." },
       targetType: { type: "string", description: "Optional target type: group or user. Defaults to current chat. Requires master and response.render.delivery.allowTargetSend." },
       targetId: { type: "string", description: "Optional target group/user id. Requires master and response.render.delivery.allowTargetSend." },
@@ -508,6 +481,7 @@ export class RenderImageTool extends BaseRenderTool {
 
   async execute(args: ToolArgs = {}, context: RenderToolContext = {}): Promise<string> {
     const kind = normalizeRenderKind(args.template || args.kind || "text-card")
+    if (!listImageRenderers(true).some(item => item.kind === kind)) return "render_image 仅支持公开模板：text-card、markdown、mindmap。系统场景由内部渲染器处理。"
     const config = context.config || record(configStore.get())
     const input: ToolArgs = {
       ...record(args.data),
@@ -520,15 +494,10 @@ export class RenderImageTool extends BaseRenderTool {
       input.matches = commandObserver.findMatches(query, Number(input.limit) || 8)
       input.stats = commandObserver.stats()
     }
-    const engine = resolveRenderImageEngine(kind, args.engine, config)
-    let rawResult: unknown
-    if (kind === "markdown" && engine === "html") rawResult = await renderMarkdownHtmlToPng(input, config)
-    else if (kind === "mindmap" && engine === "html") rawResult = await renderMarkmapHtmlToPng(input, config)
-    else rawResult = await renderImageByKind(kind, input, config)
-    const result = renderResult(rawResult)
+    const result = await renderByConfiguredEngine(kind, input, config)
     const label = renderKindLabels[kind] || "图片"
     if (args.send === false) {
-      return `${label}渲染完成：${result.buffer.length} bytes${result.cache?.pngFile ? `\n缓存：${text(result.cache.pngFile)}` : ""}`
+      return `${label}渲染完成：${result.buffer.length} bytes`
     }
     return deliverRenderedImage(result, context, {
       label,
@@ -571,7 +540,7 @@ export class RenderUrlScreenshotTool {
     const config = context.config || record(configStore.get())
     const result = renderResult(await renderUrlToPng(text(args.url), args, config))
     if (args.send === false) {
-      return `URL 截图完成：${result.buffer.length} bytes${result.cache?.pngFile ? `\n缓存：${text(result.cache.pngFile)}` : ""}`
+      return `URL 截图完成：${result.buffer.length} bytes`
     }
     return deliverRenderedImage(result, context, { label: "URL 截图" })
   }
@@ -590,7 +559,7 @@ export class RenderHtmlScreenshotTool {
     type: "object",
     properties: {
       html: { type: "string", description: "HTML document or fragment to render. Length is bounded by response.render.html.maxHtmlChars." },
-      name: { type: "string", description: "Optional safe cache/debug name prefix." },
+      name: { type: "string", description: "Optional safe debug name prefix." },
       fullPage: { type: "boolean", description: "Capture full page. Defaults to true." },
       waitMs: { type: "number", description: "Extra wait before screenshot, bounded by config timeout." },
       viewport: {
@@ -609,7 +578,7 @@ export class RenderHtmlScreenshotTool {
     const config = context.config || record(configStore.get())
     const result = renderResult(await renderHtmlToPng(text(args.html), args, config))
     if (args.send === false) {
-      return `HTML 截图完成：${result.buffer.length} bytes${result.cache?.pngFile ? `\n缓存：${text(result.cache.pngFile)}` : ""}`
+      return `HTML 截图完成：${result.buffer.length} bytes`
     }
     return deliverRenderedImage(result, context, { label: "HTML 截图" })
   }

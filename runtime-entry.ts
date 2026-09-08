@@ -9,7 +9,6 @@ import { YuiChatFriendPoke, YuiChatGroupPoke, YuiChatNotifyPoke } from "./apps/p
 import { registerFirstPersonListener } from "./core/persona/first-person-listener.js"
 import { initiativeGreetingScheduler } from "./core/persona/initiative-greeting.js"
 import { cleanupMediaCache } from "./core/media/media-cache.js"
-import { cleanupRenderCache } from "./core/rendering/render-service.js"
 import { scheduleTaskService } from "./core/scheduling/schedule-task-service.js"
 import { hostRuntime } from "./core/runtime/host-runtime.js"
 import { sqliteClient } from "./core/storage/sqlite/client.js"
@@ -54,16 +53,9 @@ async function boot(): Promise<void> {
   initiativeGreetingScheduler.start(config)
   scheduleTaskService.start(config)
   const mediaRecognition = record(record(config).mediaRecognition)
-  const response = record(record(config).response)
   const remoteFetch = record(mediaRecognition.remoteFetch)
-  const render = record(response.render)
-  Promise.all([
-    cleanupMediaCache({ mode: "expired", cacheTtlMs: remoteFetch.cacheTtlMs }),
-    cleanupRenderCache({ mode: "expired", cacheTtlMs: render.cacheTtlMs }),
-  ]).then(([media, render]) => {
-    if (media.files || render.files) {
-      hostRuntime.logger?.mark?.(`[yui-chat] 已清理过期缓存：媒体 ${media.files} 个，渲染 ${render.files} 个`)
-    }
+  cleanupMediaCache({ mode: "expired", cacheTtlMs: remoteFetch.cacheTtlMs }).then(media => {
+    if (media.files) hostRuntime.logger?.mark?.(`[yui-chat] 已清理过期媒体缓存：${media.files} 个`)
   }).catch(err => hostRuntime.logger?.warn?.("[yui-chat] 启动清理过期缓存失败", err))
 
   const web = record(record(config).web)

@@ -11,11 +11,10 @@ import { createWebTestEvent as webTestEvent, sanitizeWebId as sanitizeId } from 
 import { handleRoute } from "../route-handler.js"
 import type { RouteApp, RouteRequest, RouteResponse } from "../route-handler.js"
 
-/** 注册运行状态、Web 测试会话、缓存与渲染预览接口。 */
+/** 注册运行状态、Web 测试会话、媒体缓存与渲染预览接口。 */
 export function registerRuntimeRoutes(app: RouteApp): void {
   app.get("/api/health", handleRoute(async (_req, res) => {
     const { mediaCacheStats } = await import("../../../core/media/media-cache.js")
-    const { renderCacheStats } = await import("../../../core/rendering/render-service.js")
     const { buildCapabilityRegistry } = await import("../../../core/runtime/capability-registry.js")
     const capabilities = await buildCapabilityRegistry()
     res.json({
@@ -27,7 +26,6 @@ export function registerRuntimeRoutes(app: RouteApp): void {
       memory: memoryStore.stats(),
       context: recentContextStore.stats(),
       mediaCache: await mediaCacheStats(),
-      renderCache: await renderCacheStats(),
       adapters: adapterRegistry.listAdapters(),
       storage: sqliteClient.status,
       auth: authStats(),
@@ -128,36 +126,27 @@ export function registerRuntimeRoutes(app: RouteApp): void {
   }, { errorStatus: 400 }))
   app.post("/api/runtime/cleanup-cache", auth, handleRoute(async (req, res) => {
     const { cleanupMediaCache, mediaCacheStats } = await import("../../../core/media/media-cache.js")
-    const { cleanupRenderCache, renderCacheStats } = await import("../../../core/rendering/render-service.js")
     const options = {
       mode: String(req.body?.mode || "expired"),
       cacheTtlMs: req.body?.cacheTtlMs,
     }
-    const [media, render] = await Promise.all([
-      cleanupMediaCache(options),
-      cleanupRenderCache(options),
-    ])
+    const media = await cleanupMediaCache(options)
     res.json({
       ok: true,
       result: {
         mode: options.mode,
-        files: (Number(media.files) || 0) + (Number(render.files) || 0),
-        bytes: (Number(media.bytes) || 0) + (Number(render.bytes) || 0),
         media,
-        render,
       },
       stats: {
         mediaCache: await mediaCacheStats(),
-        renderCache: await renderCacheStats(),
       },
     })
   }, { errorStatus: 400 }))
-  const sendRenderTemplates = handleRoute(async (req, res) => {
-    const { listRenderCache, renderApiOverview } = await import("../../../core/rendering/render-api-service.js")
+  const sendRenderTemplates = handleRoute(async (_req, res) => {
+    const { renderApiOverview } = await import("../../../core/rendering/render-api-service.js")
     res.json({
       ok: true,
       render: await renderApiOverview(configStore.getPublic()),
-      cache: await listRenderCache({ limit: Number(req.query.limit || 20) }),
     })
   })
   app.get("/api/render/templates", auth, sendRenderTemplates)
@@ -166,13 +155,4 @@ export function registerRuntimeRoutes(app: RouteApp): void {
     const { renderPreview } = await import("../../../core/rendering/render-api-service.js")
     res.json({ ok: true, preview: await renderPreview(req.body || {}, configStore.getPublic()) })
   }, { errorStatus: 400 }))
-  app.get("/api/render/cache", auth, handleRoute(async (req, res) => {
-    const { listRenderCache } = await import("../../../core/rendering/render-api-service.js")
-    res.json({ ok: true, cache: await listRenderCache({ limit: Number(req.query.limit || 60) }) })
-  }))
-  app.get("/api/render/cache/:id.png", auth, handleRoute(async (req, res) => {
-    const { readRenderCacheImage } = await import("../../../core/rendering/render-api-service.js")
-    const buffer = await readRenderCacheImage(req.params.id)
-    res.type("png").send(buffer)
-  }, { errorStatus: 404 }))
 }

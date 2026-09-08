@@ -224,10 +224,10 @@ export async function buildSetupGuide(config: RuntimeConfigObject = configStore.
     ),
     step(
       "output-cache",
-      "输出与缓存",
+      "输出与临时文件",
       pathInside(tempDir, cacheDir) && render.enabled !== false ? "ready" : "warn",
       pathInside(tempDir, cacheDir)
-        ? `临时产物位于插件缓存目录；渲染服务 ${render.enabled === false ? "未开启" : "已开启"}。`
+        ? `临时产物位于插件缓存目录；渲染服务 ${render.enabled === false ? "未开启" : "已开启"}，图片按请求即时生成。`
         : "临时目录不在插件缓存目录内，需要检查路径安全。",
       { label: "检查输出", tab: "persona" },
       {

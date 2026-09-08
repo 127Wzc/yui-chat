@@ -36,7 +36,7 @@ export function buildNextHelpMenu(config: unknown = {}): UnknownRecord {
           { command: pluginCommand("诊断"), description: "查看模型、工具、缓存和安全开关", permission: "master" },
           { command: pluginCommand("对话列表"), description: "查看当前活跃会话", permission: "master" },
           { command: pluginCommand("全部定时任务"), description: "查看所有用户的待执行提醒", permission: "master" },
-          { command: `${pluginCommand("清理缓存")} / ${pluginCommand("清理全部缓存")}`, description: "清理插件内媒体与渲染缓存", permission: "master" },
+          { command: `${pluginCommand("清理缓存")} / ${pluginCommand("清理全部缓存")}`, description: "清理插件内媒体缓存", permission: "master" },
         ],
       },
       {

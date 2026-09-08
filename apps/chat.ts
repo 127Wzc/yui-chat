@@ -11,10 +11,10 @@ import { cleanupMediaCache } from "../core/media/media-cache.js"
 import { buildDiagnostics } from "../core/runtime/diagnostics.js"
 import { buildWebAddresses, issueQuickLogin } from "../web/http/auth.js"
 import {
-  cleanupRenderCache,
   renderCommandHelp,
   renderConversationList,
   renderHelpMenu,
+  withRenderScope,
 } from "../core/rendering/render-service.js"
 import { buildNextHelpMenu } from "./help-menu.js"
 import { deliverRenderedImage } from "../core/rendering/render-delivery.js"
@@ -92,6 +92,10 @@ function renderConfig(config: AppConfig): UnknownRecord {
   return record(config.response.render)
 }
 
+function systemRenderConfig(config: AppConfig): AppConfig {
+  return withRenderScope(config, "system") as AppConfig
+}
+
 async function updateConfig(mutator: (config: AppConfig) => void): Promise<AppConfig> {
   const saved = await configStore.update(current => {
     const draft = appConfig(current)
@@ -159,12 +163,13 @@ export class YuiChatCommandHandlers extends hostRuntime.Plugin {
   async help() {
     const query = stripPluginCommand(this.e.msg, "help")
     const config = appConfig(await configStore.load())
+    const renderConfigValue = systemRenderConfig(config)
     if (!query) {
       const stats = commandObserver.stats()
-      if (renderConfig(config).helpAsImage !== false) {
+      if (renderConfig(renderConfigValue).enabled !== false) {
         try {
-          const image = await renderHelpMenu(buildNextHelpMenu(config), config)
-          return deliverRenderedImage(image, { e: this.e, config }, { label: "帮助菜单图片" })
+          const image = await renderHelpMenu(buildNextHelpMenu(renderConfigValue), renderConfigValue)
+          return deliverRenderedImage(image, { e: this.e, config: renderConfigValue }, { label: "帮助菜单图片" })
         } catch (err) {
           hostRuntime.logger?.warn?.("[yui-chat] 指令帮助图片渲染失败，回退文本", err)
         }
@@ -177,10 +182,10 @@ export class YuiChatCommandHandlers extends hostRuntime.Plugin {
     const recommendation = record(commandObserver.recommendCommands(query, { limit: 8 }))
     const matches = records(recommendation.results)
     if (!matches.length) return this.reply("没有找到匹配指令。可以换一种说法，或稍后等知识库完成扫描。", true)
-    if (renderConfig(config).helpAsImage !== false) {
+    if (renderConfig(renderConfigValue).enabled !== false) {
       try {
-        const image = await renderCommandHelp({ query, matches, stats: commandObserver.stats(), config })
-        return deliverRenderedImage(image, { e: this.e, config }, { label: "指令帮助图片" })
+        const image = await renderCommandHelp({ query, matches, stats: commandObserver.stats(), config: renderConfigValue })
+        return deliverRenderedImage(image, { e: this.e, config: renderConfigValue }, { label: "指令帮助图片" })
       } catch (err) {
         hostRuntime.logger?.warn?.("[yui-chat] 指令推荐图片渲染失败，回退文本", err)
       }
@@ -202,12 +207,13 @@ export class YuiChatCommandHandlers extends hostRuntime.Plugin {
 
   async conversationList() {
     const config = appConfig(await configStore.load())
+    const renderConfigValue = systemRenderConfig(config)
     const rows = chatService.listConversations({ limit: 20 })
     if (!rows.length) return this.reply("当前没有 Yui Chat 活跃对话。", true)
-    if (renderConfig(config).conversationListAsImage !== false) {
+    if (renderConfig(renderConfigValue).enabled !== false) {
       try {
-        const image = await renderConversationList(rows, config)
-        return deliverRenderedImage(image, { e: this.e, config }, { label: "会话列表图" })
+        const image = await renderConversationList(rows, renderConfigValue)
+        return deliverRenderedImage(image, { e: this.e, config: renderConfigValue }, { label: "会话列表图" })
       } catch (err) {
         hostRuntime.logger?.warn?.("[yui-chat] 对话列表图片渲染失败，回退文本", err)
       }
@@ -259,12 +265,9 @@ export class YuiChatCommandHandlers extends hostRuntime.Plugin {
 
   async cleanupCache() {
     const all = Boolean(matchPluginCommand(this.e.msg, "清理全部缓存"))
-    const [media, render] = await Promise.all([
-      cleanupMediaCache({ mode: all ? "all" : "expired" }),
-      cleanupRenderCache({ mode: all ? "all" : "expired" }),
-    ])
+    const media = await cleanupMediaCache({ mode: all ? "all" : "expired" })
     return this.reply(
-      `Yui Chat 缓存清理完成。\n模式：${all ? "全部" : "过期"}\n媒体：${media.files} 个，${media.bytes} bytes\n渲染：${render.files} 个，${render.bytes} bytes`,
+      `Yui Chat 媒体缓存清理完成。\n模式：${all ? "全部" : "过期"}\n媒体：${media.files} 个，${media.bytes} bytes`,
       true,
     )
   }
@@ -288,7 +291,6 @@ export class YuiChatCommandHandlers extends hostRuntime.Plugin {
       `扩展：Custom 工具 ${Number(summary.customTools) || 0} 个 / Markdown Skill ${Number(summary.markdownSkills) || 0} 个`,
       `MCP：${Number(summary.mcpClients) || 0} 个客户端 / ${Number(summary.mcpTools) || 0} 个工具`,
       `缓存：${Number(summary.mediaCacheFiles) || 0} 个文件，${Number(summary.mediaCacheBytes) || 0} bytes`,
-      `渲染缓存：${Number(summary.renderCacheFiles) || 0} 个文件，${Number(summary.renderCacheBytes) || 0} bytes`,
       `渲染能力：${Number(summary.renderKinds) || 0} 类图片`,
       `闭嘴记录：${records(access.mutedScopes).length} 个`,
       `临时目录：${text(paths.tempDir)}`,

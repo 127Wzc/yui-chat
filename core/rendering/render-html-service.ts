@@ -1,10 +1,11 @@
 import fs from "node:fs/promises"
+import { randomUUID } from "node:crypto"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { pluginRoot, tempDir, yunzaiRoot } from "../../config/store.js"
-import { persistRender } from "./render-service.js"
 import { fetchSafeHttp } from "../network/safe-http-client.js"
 import { assertSafeHttpUrl, linkSafetyConfig, matchesAllowedHost } from "../network/link-safety-policy.js"
+import { htmlRenderBaseCss, renderFooter, renderTheme } from "./render-theme.js"
 
 type UnknownRecord = Record<string, unknown>
 
@@ -36,6 +37,7 @@ interface RenderInput extends UnknownRecord {
   viewport?: unknown
   deviceScaleFactor?: unknown
   waitMs?: unknown
+  waitForRenderComplete?: unknown
   fullPage?: unknown
   waitUntil?: unknown
 }
@@ -51,6 +53,7 @@ interface RenderPage {
   on?(event: string, handler: (request: RenderRequest) => Promise<unknown>): void
   setViewport(options: RenderViewport & { deviceScaleFactor: number }): Promise<unknown>
   goto(url: string, options: { timeout: number; waitUntil: string }): Promise<unknown>
+  evaluate?<T>(pageFunction: (limit: number) => T | Promise<T>, arg: number): Promise<T>
   screenshot(options: { fullPage: boolean; type: "png" }): Promise<Uint8Array>
   close(): Promise<unknown>
 }
@@ -174,7 +177,7 @@ function buildMarkdownHtml(input: RenderInput = {}, config: unknown = {}): strin
   const title = compactText(input.title || "Markdown 渲染", 100)
   const subtitle = compactText(input.subtitle || "", 160)
   const markdown = normalizeMarkdownMathDelimiters(input.markdown || input.content || "").slice(0, Math.max(1000, numberValue(cfg.maxHtmlChars, 200000)))
-  const footer = compactText(input.footer || "Created by Yui Chat", 180)
+  const footer = renderFooter("html")
   const katexCssUrl = resourceUrl("math/css/katex.min.css")
   const katexJsUrl = resourceUrl("math/js/katex.min.js")
   const markdownItUrl = resourceUrl("math/js/markdown-it.min.js")
@@ -187,58 +190,8 @@ function buildMarkdownHtml(input: RenderInput = {}, config: unknown = {}): strin
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="${katexCssUrl}">
 <style>
-  :root { color-scheme: light; }
-  * { box-sizing: border-box; }
-  html {
-    min-width: fit-content;
-    min-height: 100%;
-    background: #fff8f8 linear-gradient(135deg, #ffe5e7 0%, #ffeae0 34%, #f4e6ff 69%, #e2fbfb 100%);
-    background-repeat: no-repeat;
-    background-size: cover;
-  }
-  body {
-    margin: 0;
-    min-width: fit-content;
-    min-height: 100vh;
-    overflow: hidden;
-    background: transparent;
-    color: #4a3735;
-    font-family: "Outfit", "Nunito", -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
-    position: relative;
-  }
-  body::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    opacity: .025;
-    pointer-events: none;
-    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-  }
-  #container { width: fit-content; padding: 50px; position: relative; z-index: 1; }
-  .card {
-    width: 1200px;
-    min-height: 800px;
-    padding: 40px 45px 30px;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    background: rgba(255,255,255,.76);
-    border: 1.5px solid rgba(244,219,216,.88);
-    border-radius: 40px;
-    box-shadow: 0 30px 70px -15px rgba(244,190,190,.27), 0 15px 35px -20px rgba(0,0,0,.08), inset 0 1.5px 2px rgba(255,255,255,.92);
-    backdrop-filter: blur(35px) saturate(140%);
-  }
-  .window-header { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 5px 0 22px; margin-bottom: 25px; border-bottom: 1.5px dashed rgba(244,219,216,.62); }
-  .window-buttons { width: 100px; display: flex; gap: 8px; }
-  .window-buttons span { width: 12px; height: 12px; border-radius: 50%; box-shadow: inset 0 1px 2px rgba(0,0,0,.12); }
-  .window-buttons span:nth-child(1) { background: #ff5f56; }
-  .window-buttons span:nth-child(2) { background: #ffbd2e; }
-  .window-buttons span:nth-child(3) { background: #27c93f; }
-  .window-title { flex: 1; text-align: center; }
-  .window-title span { display: inline-block; max-width: 780px; padding: 7px 30px; overflow: hidden; color: #c8a7a4; background: rgba(255,255,255,.76); border: 1px solid rgba(255,180,190,.38); border-radius: 24px; box-shadow: 0 6px 15px rgba(255,143,163,.09), inset 0 1px 2px rgba(255,255,255,.92); font-size: 20px; font-weight: 800; letter-spacing: 2px; text-overflow: ellipsis; white-space: nowrap; }
-  .window-tag { width: 100px; color: #c8a7a4; font-size: 11px; font-weight: 800; letter-spacing: .4px; text-align: right; text-transform: uppercase; }
+${htmlRenderBaseCss}
   article { flex: 1; padding: 10px 20px; color: #4a3735; font-size: 24px; line-height: 1.72; }
-  .document-subtitle { margin: 0 0 24px; color: #a88d8b; font-size: 19px; font-weight: 650; text-align: center; }
   h1, h2, h3, h4, h5, h6 { color: #ff8fa3; line-height: 1.28; padding-bottom: 10px; margin: 1.5em 0 .7em; border-bottom: 2px dashed rgba(244,219,216,.58); }
   h1 { font-size: 42px; }
   h2 { font-size: 34px; }
@@ -271,8 +224,6 @@ function buildMarkdownHtml(input: RenderInput = {}, config: unknown = {}): strin
   .katex-error { display: inline-block; padding: 4px 8px; color: #a33d50; background: #fff0f2; border-radius: 8px; font-family: Menlo, Consolas, monospace; font-size: .8em; }
   .mermaid { display: flex; justify-content: center; margin: 28px 0; padding: 24px; overflow-x: auto; background: rgba(255,255,255,.48); border: 1px dashed rgba(244,219,216,.88); border-radius: 20px; }
   .render-error { margin: 18px 0; padding: 16px 20px; color: #a33d50; background: #fff0f2; border: 1px solid #efb5bf; border-radius: 12px; }
-  footer { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: auto; padding-top: 20px; color: #c8a7a4; border-top: 1.5px dashed rgba(244,219,216,.62); font-size: 14px; font-weight: 700; }
-  footer::before { content: "✨"; }
 </style>
 <script src="${katexJsUrl}"></script>
 <script src="${markdownItUrl}"></script>
@@ -285,7 +236,7 @@ function buildMarkdownHtml(input: RenderInput = {}, config: unknown = {}): strin
     <header class="window-header">
       <div class="window-buttons"><span></span><span></span><span></span></div>
       <div class="window-title"><span>${escapeHtml(title)}</span></div>
-      <div class="window-tag">Math &amp; Graph</div>
+      <div class="window-tag">HTML</div>
     </header>
     ${subtitle ? `<p class="document-subtitle">${escapeHtml(subtitle)}</p>` : ""}
     <article id="content"><p>渲染中...</p></article>
@@ -295,7 +246,7 @@ function buildMarkdownHtml(input: RenderInput = {}, config: unknown = {}): strin
 <script type="application/json" id="markdown-data">${safeJsonScript(markdown)}</script>
 <script>
   (async function renderMarkdown() {
-    const done = detail => window.dispatchEvent(new CustomEvent("yui-chat-render-complete", { detail }));
+    const done = detail => { document.documentElement.dataset.yuiRenderComplete = "true"; window.dispatchEvent(new CustomEvent("yui-chat-render-complete", { detail })); };
     try {
       const raw = JSON.parse(document.getElementById("markdown-data").textContent || '""');
       if (typeof window.markdownit !== "function" || typeof window.markdownitKatex !== "function" || typeof window.katex !== "object") {
@@ -357,18 +308,12 @@ function buildMarkmapHtml(input: RenderInput = {}, config: unknown = {}): string
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="${fontsUrl}">
 <style>
-  * { box-sizing: border-box; }
-  body { margin: 0; min-width: 900px; background: #f7f6ee; color: #1f2520; font-family: Outfit, Nunito, "Noto Sans SC", "PingFang SC", sans-serif; }
-  #container { padding: 28px; width: fit-content; }
-  .card { width: 1200px; min-height: 760px; background: #fff; border: 1px solid #d9ded4; border-radius: 12px; padding: 28px 34px 22px; box-shadow: 0 20px 50px rgba(31,37,32,.08); display: flex; flex-direction: column; }
-  header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-bottom: 18px; border-bottom: 1px solid #d9ded4; }
-  .dots { display: flex; gap: 8px; width: 92px; }
-  .dot { width: 12px; height: 12px; border-radius: 50%; }
-  .dot:nth-child(1) { background: #e4665f; } .dot:nth-child(2) { background: #d8a027; } .dot:nth-child(3) { background: #36a56e; }
-  h1 { margin: 0; font-size: 28px; letter-spacing: 0; color: #257c6a; }
-  .tag { width: 92px; text-align: right; color: #667064; font-size: 13px; font-weight: 800; text-transform: uppercase; }
-  #markmap { width: 100%; flex: 1; min-height: 620px; overflow: visible; }
-  footer { padding-top: 14px; border-top: 1px solid #d9ded4; text-align: center; color: #667064; font-size: 14px; }
+${htmlRenderBaseCss}
+  .markmap-content { flex: 1; min-height: 620px; display: flex; padding: 0 12px; }
+  #markmap { width: 100%; min-height: 620px; overflow: visible; }
+  #markmap text { fill: ${renderTheme.ink}; }
+  #markmap .markmap-node > circle { stroke: ${renderTheme.accent}; stroke-width: 3px; fill: #fff !important; }
+  #markmap .markmap-foreign div { color: ${renderTheme.ink}; background: transparent !important; border: 0 !important; border-radius: 0; box-shadow: none; padding: 2px 0; text-shadow: 0 1px 0 rgba(255,255,255,.96), 0 0 4px rgba(255,248,248,.88); }
 </style>
 <script src="${d3Url}"></script>
 <script src="${libUrl}"></script>
@@ -376,23 +321,27 @@ function buildMarkmapHtml(input: RenderInput = {}, config: unknown = {}): string
 </head>
 <body>
 <div id="container">
-  <div class="card">
-    <header><div class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div><h1>${escapeHtml(title)}</h1><div class="tag">Mind Map</div></header>
-    <svg id="markmap"></svg>
-    <footer>Yui Chat · HTML Markmap Render</footer>
-  </div>
+  <main class="card" id="render-card">
+    <header class="window-header">
+      <div class="window-buttons"><span></span><span></span><span></span></div>
+      <div class="window-title"><span>${escapeHtml(title)}</span></div>
+      <div class="window-tag">HTML</div>
+    </header>
+    <article class="markmap-content" id="content"><svg id="markmap"></svg></article>
+    <footer>${escapeHtml(renderFooter("html"))}</footer>
+  </main>
 </div>
 <script type="application/json" id="markdown-data">${safeJsonScript(markdown)}</script>
 <script>
   (function renderMarkmap() {
-    const done = detail => window.dispatchEvent(new CustomEvent("yui-chat-render-complete", { detail }));
+    const done = detail => { document.documentElement.dataset.yuiRenderComplete = "true"; window.dispatchEvent(new CustomEvent("yui-chat-render-complete", { detail })); };
     try {
       const markdown = JSON.parse(document.getElementById("markdown-data").textContent || '""');
       const { Transformer, Markmap } = window.markmap || {};
       const transformer = new Transformer();
       const { root } = transformer.transform(markdown || "# 空思维导图");
       const svg = document.getElementById("markmap");
-      const colors = ["#257c6a", "#2d5f8b", "#7654a6", "#a84f61", "#a9842c"];
+      const colors = ["${renderTheme.accent}", "${renderTheme.blue}", "${renderTheme.violet}", "${renderTheme.rose}", "${renderTheme.gold}"];
       const color = window.d3.scaleOrdinal(colors);
       const mm = Markmap.create(svg, {
         autoFit: true,
@@ -403,9 +352,9 @@ function buildMarkmapHtml(input: RenderInput = {}, config: unknown = {}): string
         paddingX: 22,
         style: id => \`
           \${id} * { font-family: Outfit, Nunito, "Noto Sans SC", "PingFang SC", sans-serif !important; }
-          \${id} path.markmap-link { stroke-width: 3px; stroke-linecap: round; opacity: .78; }
-          \${id} .markmap-node > circle { stroke-width: 3px; fill: #fff !important; }
-          \${id} .markmap-foreign div { font-size: 19px; font-weight: 700; color: #1f2520; line-height: 1.35; padding: 5px 10px; background: rgba(255,255,255,.78); border: 1px solid #d9ded4; border-radius: 8px; }
+          \${id} path.markmap-link { stroke: ${renderTheme.accent}; stroke-width: 3px; stroke-linecap: round; opacity: .78; }
+          \${id} .markmap-node > circle { stroke: ${renderTheme.accent}; stroke-width: 3px; fill: #fff !important; }
+          \${id} .markmap-foreign div { font-size: 19px; font-weight: 700; color: ${renderTheme.ink}; line-height: 1.35; padding: 2px 0; background: transparent !important; border: 0 !important; border-radius: 0; box-shadow: none; text-shadow: 0 1px 0 rgba(255,255,255,.96), 0 0 4px rgba(255,248,248,.88); }
         \`
       }, root);
       setTimeout(() => {
@@ -414,10 +363,10 @@ function buildMarkmapHtml(input: RenderInput = {}, config: unknown = {}): string
         if (rect) {
           const idealW = Math.max(1200, Math.round(rect.x2 - rect.x1 + 260));
           const idealH = Math.max(760, Math.round(rect.y2 - rect.y1 + 220));
-          const card = document.querySelector(".card");
+          const card = document.getElementById("render-card");
           card.style.width = idealW + "px";
           card.style.minHeight = idealH + "px";
-          svg.style.height = Math.max(620, idealH - 140) + "px";
+          svg.style.height = Math.max(620, idealH - 190) + "px";
           setTimeout(() => { mm.fit(); done({ ok: true, type: "markmap-html", width: idealW, height: idealH }); }, 120);
         } else {
           done({ ok: true, type: "markmap-html" });
@@ -484,9 +433,26 @@ async function loadRenderBrowser(): Promise<RenderBrowser> {
 
 async function persistHtml(html: string = "", name: unknown = "render"): Promise<string> {
   await fs.mkdir(htmlRenderDir, { recursive: true })
-  const file = path.join(htmlRenderDir, `${text(name || "render")}-${Date.now()}.html`)
+  const prefix = text(name || "render").trim().replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "render"
+  const file = path.join(htmlRenderDir, `${prefix}-${randomUUID()}.html`)
   await fs.writeFile(file, html, "utf8")
   return file
+}
+
+async function waitForRenderComplete(page: RenderPage, timeoutMs = 3000): Promise<void> {
+  const timeout = Math.min(3000, Math.max(100, numberValue(timeoutMs, 3000)))
+  if (typeof page.evaluate !== "function") {
+    await new Promise(resolve => setTimeout(resolve, timeout))
+    return
+  }
+  await page.evaluate((limit: number) => new Promise(resolve => {
+    if (document.documentElement.dataset.yuiRenderComplete === "true") return resolve(true)
+    const timer = window.setTimeout(() => resolve(false), limit)
+    window.addEventListener("yui-chat-render-complete", () => {
+      window.clearTimeout(timer)
+      resolve(true)
+    }, { once: true })
+  }), timeout)
 }
 
 function isAllowedLocalFileUrl(requestUrl: string = "", opts: UnknownRecord = {}): boolean {
@@ -553,15 +519,57 @@ async function renderHtmlDocumentToPng(html: string = "", input: RenderInput = {
       deviceScaleFactor: numberValue(input.deviceScaleFactor || cfg.deviceScaleFactor, 1),
     })
     await page.goto(fileUrl, { timeout: cfg.timeoutMs, waitUntil: cfg.waitUntil })
-    const waitMs = numberValue(input.waitMs ?? cfg.waitMs, 0)
-    if (waitMs > 0) await new Promise(resolve => setTimeout(resolve, Math.min(waitMs, cfg.timeoutMs)))
+    if (input.waitForRenderComplete === true) {
+      await waitForRenderComplete(page, 3000)
+    } else {
+      const waitMs = numberValue(input.waitMs ?? cfg.waitMs, 0)
+      if (waitMs > 0) await new Promise(resolve => setTimeout(resolve, Math.min(waitMs, 3000)))
+    }
     const buffer = await page.screenshot({ fullPage: input.fullPage !== false, type: "png" })
     const meta = { file, engine: "html-puppeteer" }
-    const cache = await persistRender("html-screenshot", buffer, meta, record(config))
-    return { buffer, cache, meta }
+    return { buffer, meta }
   } finally {
     await page?.close?.().catch(() => {})
     await fs.unlink(file).catch(() => {})
+  }
+}
+
+function svgViewport(svg: string): RenderViewport {
+  const tag = svg.match(/<svg\b[^>]*>/i)?.[0] || ""
+  const read = (name: string, fallback: number): number => {
+    const value = tag.match(new RegExp(`${name}=["']([0-9.]+)`))?.[1]
+    return numberValue(value, fallback)
+  }
+  return {
+    width: Math.min(2400, Math.max(320, Math.ceil(read("width", 1280)))),
+    height: Math.min(2400, Math.max(240, Math.ceil(read("height", 900)))),
+  }
+}
+
+/** 将插件生成的 SVG 包装进受控 HTML 页面，以便统一使用 HTML 优先策略。 */
+export async function renderSvgToPng(svg: string = "", kind = "render", meta: UnknownRecord = {}, config: unknown = {}, requireEnabled = true): Promise<UnknownRecord> {
+  const viewport = svgViewport(svg)
+  const html = `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; padding: 0; width: max-content; min-height: 100%; background: ${renderTheme.page}; }
+  body > svg { display: block; }
+</style>
+</head>
+<body>${svg}</body>
+</html>`
+  const result = await renderHtmlDocumentToPng(html, {
+    name: `${text(kind || "render")}-html`,
+    viewport,
+    fullPage: true,
+    waitMs: 0,
+  }, config, requireEnabled)
+  return {
+    ...result,
+    meta: { ...record(result.meta), ...meta, engine: "html-puppeteer" },
   }
 }
 
@@ -576,17 +584,19 @@ export async function renderMarkdownHtmlToPng(input: RenderInput = {}, config: u
     viewport: input.viewport || { width: 1300, height: 900 },
     fullPage: input.fullPage !== false,
     waitMs: input.waitMs ?? 900,
+    waitForRenderComplete: true,
   }, config, false)
 }
 
 export async function renderMarkmapHtmlToPng(input: RenderInput = {}, config: unknown = {}): Promise<UnknownRecord> {
   const html = buildMarkmapHtml(input, config)
-  return renderHtmlToPng(html, {
+  return renderHtmlDocumentToPng(html, {
     name: input.name || "markmap-html",
     viewport: input.viewport || { width: 1280, height: 860 },
     fullPage: input.fullPage !== false,
     waitMs: input.waitMs ?? 1200,
-  }, config)
+    waitForRenderComplete: true,
+  }, config, false)
 }
 
 export async function renderUrlToPng(inputUrl: string = "", input: RenderInput = {}, config: unknown = {}): Promise<UnknownRecord> {
@@ -609,8 +619,7 @@ export async function renderUrlToPng(inputUrl: string = "", input: RenderInput =
     if (waitMs > 0) await new Promise(resolve => setTimeout(resolve, Math.min(waitMs, cfg.timeoutMs)))
     const buffer = await page.screenshot({ fullPage: input.fullPage !== false, type: "png" })
     const meta = { url: safeUrl, engine: "url-puppeteer" }
-    const cache = await persistRender("url-screenshot", buffer, meta, record(config))
-    return { buffer, cache, meta }
+    return { buffer, meta }
   } finally {
     await page.close().catch(() => {})
   }

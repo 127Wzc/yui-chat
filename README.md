@@ -58,7 +58,7 @@ pnpm run build:runtime
 | `#yui设置AI第一人称埋埋` | 修改第一人称称谓（主人） |
 | `#yui打招呼` | 在当前群主动问候（主人） |
 | `#yui文本模式` / `#yui图片模式` / `#yui语音模式` | 设置个人输出模式 |
-| `#yui清理缓存` | 清理过期媒体和渲染缓存（主人） |
+| `#yui清理缓存` | 清理过期媒体缓存（主人） |
 
 第一人称自然呼叫不经过指令前缀正则。默认称谓“埋埋”可在管理台或主人命令中修改；直呼、@、戳一戳和可选群聊旁路复用同一人格与访问控制链路。
 
@@ -72,7 +72,7 @@ pnpm run build:runtime
 | 可重建向量库 | `data/yui-chat/storage/vectors.sqlite3` |
 | Custom Tool、Filter、Skill | `data/yui-chat/extensions/` |
 | 手动配置包 | `data/yui-chat/backups/` |
-| 临时媒体和渲染缓存 | `plugins/yui-chat/cache/` |
+| 临时媒体与 HTML 渲染文件 | `plugins/yui-chat/cache/` |
 
 用户配置保存在 SQLite 的 `runtime_config` 中，未覆盖字段继承 `config/defaults.ts`。`configStore.get()` 返回冻结快照，配置修改通过管理台或 `configStore.update()` 原子提交。手动配置包不包含日志、用量、聊天、记忆和知识正文。
 

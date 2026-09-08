@@ -93,6 +93,9 @@ export const ToolListPanel = {
     function hasRuntimeConfig(tool: unknown) {
       return ["image_media", "web_search", "tool_search"].includes(String(asRecord(tool).name || "")) || Object.keys(toolCommon(tool).configSchema?.properties || {}).length > 0
     }
+    function hasWebConfig(tool: unknown) {
+      return String(asRecord(tool).name || "") === "render_image" || hasRuntimeConfig(tool)
+    }
     function openToolDetail(tool: ToolRecord, action = "view") {
       emit("open-tool-detail", { name: tool.name, action })
     }
@@ -100,7 +103,7 @@ export const ToolListPanel = {
       const next = String(value || "all")
       if (filter.tag !== next) filter.tag = next
     })
-    return { filter, toolTags, selectedTag, allTools, visible, statusOptions, enabledToolTokenEstimate, toggleTool, reset, clearTag, emitCategoryChange, reloadTools, formatTokenEstimate, subAgentEnabled, hasRuntimeConfig, openToolDetail, riskBadgeClass, riskLabel, toolCommon, toolProvenance, toolSource, toolDescription, toolDescriptionExtra, toolDisplayName, toolEnglishName, toolRepeatabilityLabel, toolHasRepeatProtection }
+    return { filter, toolTags, selectedTag, allTools, visible, statusOptions, enabledToolTokenEstimate, toggleTool, reset, clearTag, emitCategoryChange, reloadTools, formatTokenEstimate, subAgentEnabled, hasRuntimeConfig, hasWebConfig, openToolDetail, riskBadgeClass, riskLabel, toolCommon, toolProvenance, toolSource, toolDescription, toolDescriptionExtra, toolDisplayName, toolEnglishName, toolRepeatabilityLabel, toolHasRepeatProtection }
   },
   template: `
     <Panel title="内置能力" icon="wrench">
@@ -142,7 +145,7 @@ export const ToolListPanel = {
                   </td>
                   <td><span class="badge" :class="riskBadgeClass(toolCommon(tool).risk)">{{ riskLabel(tool) }}</span></td>
                   <td>
-                    <span v-if="hasRuntimeConfig(tool)" class="badge" data-tip="该工具有可配置的运行变量（如密钥、超时）">可配置</span>
+                    <span v-if="hasWebConfig(tool)" class="badge" :data-tip="tool.name === 'render_image' ? '调整工具和系统渲染策略' : '该工具有可配置的运行变量（如密钥、超时）'">可配置</span>
                     <span v-if="toolHasRepeatProtection(tool)" class="badge" :data-tip="toolRepeatabilityLabel(tool)">重复保护</span>
                     <span v-if="tool.name === 'dispatch_subagent' && !subAgentEnabled" class="badge risk-medium" data-tip="工具已在列表启用，但需在「模型渠道 · 对话流程 · 子代理」开启后才会真正对 AI 生效">待开启子代理</span>
                   </td>
@@ -150,7 +153,7 @@ export const ToolListPanel = {
                     <div class="capability-row-actions">
                       <button class="btn small outline" type="button" data-tip="查看工具详情" @click="openToolDetail(tool)"><Icon name="info" :size="13" />查看</button>
                       <button v-if="toolSource(tool) === 'custom'" class="btn small outline" type="button" data-tip="编辑 Custom 工具" @click="openToolDetail(tool, 'edit')"><Icon name="pencil" :size="13" />编辑</button>
-                      <button v-if="hasRuntimeConfig(tool)" class="btn small outline" type="button" data-tip="设置密钥等运行变量" @click="openToolDetail(tool, 'config')"><Icon name="sliders" :size="13" />配置</button>
+                      <button v-if="hasWebConfig(tool)" class="btn small outline" type="button" :data-tip="tool.name === 'render_image' ? '调整工具和系统渲染策略' : '设置密钥等运行变量'" @click="openToolDetail(tool, 'config')"><Icon name="sliders" :size="13" />配置</button>
                     </div>
                     <Switch :model-value="tool.enabled" @update:model-value="toggleTool(tool.name, $event)" />
                   </td>

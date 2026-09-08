@@ -1,4 +1,4 @@
-import { renderChatCard, renderTextCard } from "../rendering/render-service.js"
+import { renderChatCard, renderTextCard, withRenderScope } from "../rendering/render-service.js"
 import { checkAccess } from "./access-control.js"
 import { hostRuntime } from "../runtime/host-runtime.js"
 import { hasCQAtCode, stripUnsupportedCQCodes } from "../message/cq-code.js"
@@ -138,24 +138,20 @@ function eventScope(event: unknown): { type: "group" | "private"; groupId: strin
 }
 
 async function textToImage(value: string, config: unknown, options: UnknownRecord = {}): Promise<unknown> {
-  const root = record(config)
-  const response = record(root.response)
+  const root = record(withRenderScope(config, "system"))
   const persona = record(root.persona)
-  const render = record(response.render)
   const event = options.e
-  if (render.chatCardAsImage !== false) {
-    try {
-      const result = await renderChatCard({
-        prompt: text(record(options.result).prompt || options.prompt), answer: value, sender: eventSender(event), scope: eventScope(event),
-        quote: record(options.result).media && record(record(options.result).media).quote,
-        media: record(options.result).media,
-        metadata: { channel: record(options.result).channel, adapter: record(options.result).adapter, toolRounds: record(options.result).toolRounds, source: options.source || record(options.result).source },
-        steps: record(options.result).steps,
-      }, root)
-      return record(result).buffer
-    } catch (error) {
-      hostRuntime.logger?.warn?.("[yui-chat] 富聊天卡片渲染失败，回退文本卡片", error)
-    }
+  try {
+    const result = await renderChatCard({
+      prompt: text(record(options.result).prompt || options.prompt), answer: value, sender: eventSender(event), scope: eventScope(event),
+      quote: record(options.result).media && record(record(options.result).media).quote,
+      media: record(options.result).media,
+      metadata: { channel: record(options.result).channel, adapter: record(options.result).adapter, toolRounds: record(options.result).toolRounds, source: options.source || record(options.result).source },
+      steps: record(options.result).steps,
+    }, root)
+    return record(result).buffer
+  } catch (error) {
+    hostRuntime.logger?.warn?.("[yui-chat] 富聊天卡片渲染失败，回退文本卡片", error)
   }
   const result = await renderTextCard({ title: text(record(persona).assistantLabel || "Yui Chat"), subtitle: "自动转图回复", content: value, footer: "Yui Chat · Auto Render" }, root)
   return record(result).buffer
@@ -163,7 +159,7 @@ async function textToImage(value: string, config: unknown, options: UnknownRecor
 
 /** 构建最终回复载荷；这里不发送消息，只决定文本、图片或分块形态。 */
 export async function buildReplyPayload(value: unknown, config: unknown, options: UnknownRecord = {}): Promise<ReplyPayload> {
-  const root = record(config)
+  const root = record(withRenderScope(config, "system"))
   const response = record(root.response)
   const persona = record(root.persona)
   let output = normalizeResponseText(value)

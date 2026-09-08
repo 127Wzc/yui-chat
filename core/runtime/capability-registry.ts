@@ -123,10 +123,10 @@ const capabilityDefinitions: CapabilityDefinition[] = [
     label: "缓存与生命周期",
     layer: "runtime",
     owner: "core/lifecycle.js",
-    configPaths: ["chat.conversationTtlMs", "mediaRecognition.remoteFetch.cacheTtlMs", "response.render.cacheTtlMs"],
+    configPaths: ["chat.conversationTtlMs", "mediaRecognition.remoteFetch.cacheTtlMs"],
     commands: ["#yui结束对话", "#yui结束全部对话", "#yui清理缓存"],
     apis: ["/api/runtime", "/api/runtime/end-all-conversations", "/api/runtime/cleanup-cache"],
-    description: "会话、限流锁、MCP/WS disposers、媒体缓存和渲染缓存统一统计与清理。",
+    description: "会话、限流锁、MCP/WS disposers 和媒体缓存统一统计与清理；图片渲染按请求即时生成。",
   },
 ]
 

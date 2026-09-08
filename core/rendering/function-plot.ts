@@ -1,3 +1,5 @@
+import { buildSvgFrame, renderFooterToken, renderTheme } from "./render-theme.js"
+
 type Token = { type: "number" | "name" | "operator" | "paren" | "comma"; value: string }
 type RpnToken = Token & { arity?: number }
 
@@ -168,19 +170,19 @@ export function buildFunctionPlotSvg(input: FunctionPlotInput = {}): { svg: stri
   if (!Number.isFinite(Number(input.yMin))) yMin -= padding
   if (!Number.isFinite(Number(input.yMax))) yMax += padding
   const width = 1200
-  const height = 820
-  const plot = { left: 100, top: 130, right: 1140, bottom: 740 }
+  const height = 920
+  const plot = { left: 100, top: 240, right: 1140, bottom: 820 }
   const px = (x: number) => plot.left + (x - xMin) / (xMax - xMin) * (plot.right - plot.left)
   const py = (y: number) => plot.bottom - (y - yMin) / (yMax - yMin) * (plot.bottom - plot.top)
-  const colors = ["#257c6a", "#2d5f8b", "#7654a6", "#a84f61", "#a9842c", "#c15f2e"]
+  const colors = [renderTheme.accent, renderTheme.blue, renderTheme.violet, renderTheme.rose, renderTheme.gold, "#c9775c"]
   const grid: string[] = []
   for (let index = 0; index <= 10; index++) {
     const x = plot.left + (plot.right - plot.left) * index / 10
     const y = plot.top + (plot.bottom - plot.top) * index / 10
     const xv = xMin + (xMax - xMin) * index / 10
     const yv = yMax - (yMax - yMin) * index / 10
-    grid.push(`<line x1="${x}" y1="${plot.top}" x2="${x}" y2="${plot.bottom}" stroke="#e5e9e2"/><text x="${x}" y="${plot.bottom + 30}" text-anchor="middle">${escapeXml(xv.toFixed(2).replace(/\.00$/, ""))}</text>`)
-    grid.push(`<line x1="${plot.left}" y1="${y}" x2="${plot.right}" y2="${y}" stroke="#e5e9e2"/><text x="${plot.left - 16}" y="${y + 7}" text-anchor="end">${escapeXml(yv.toFixed(2).replace(/\.00$/, ""))}</text>`)
+    grid.push(`<line x1="${x}" y1="${plot.top}" x2="${x}" y2="${plot.bottom}" stroke="#f4dbd8"/><text x="${x}" y="${plot.bottom + 30}" text-anchor="middle">${escapeXml(xv.toFixed(2).replace(/\.00$/, ""))}</text>`)
+    grid.push(`<line x1="${plot.left}" y1="${y}" x2="${plot.right}" y2="${y}" stroke="#f4dbd8"/><text x="${plot.left - 16}" y="${y + 7}" text-anchor="end">${escapeXml(yv.toFixed(2).replace(/\.00$/, ""))}</text>`)
   }
   const paths = compiled.map((item, expressionIndex) => {
     const segments: string[] = []
@@ -197,10 +199,11 @@ export function buildFunctionPlotSvg(input: FunctionPlotInput = {}): { svg: stri
     }
     return `<path d="${segments.join(" ")}" fill="none" stroke="${colors[expressionIndex]}" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>`
   })
-  const xAxis = xMin <= 0 && xMax >= 0 ? `<line x1="${px(0)}" y1="${plot.top}" x2="${px(0)}" y2="${plot.bottom}" stroke="#667064" stroke-width="2"/>` : ""
-  const yAxis = yMin <= 0 && yMax >= 0 ? `<line x1="${plot.left}" y1="${py(0)}" x2="${plot.right}" y2="${py(0)}" stroke="#667064" stroke-width="2"/>` : ""
-  const legend = expressions.map((expression, index) => `<g transform="translate(${plot.left + index * 170},92)"><line x1="0" y1="0" x2="28" y2="0" stroke="${colors[index]}" stroke-width="5"/><text x="38" y="7" font-weight="700">${escapeXml(expression.slice(0, 18))}</text></g>`).join("")
+  const xAxis = xMin <= 0 && xMax >= 0 ? `<line x1="${px(0)}" y1="${plot.top}" x2="${px(0)}" y2="${plot.bottom}" stroke="${renderTheme.muted}" stroke-width="2"/>` : ""
+  const yAxis = yMin <= 0 && yMax >= 0 ? `<line x1="${plot.left}" y1="${py(0)}" x2="${plot.right}" y2="${py(0)}" stroke="${renderTheme.muted}" stroke-width="2"/>` : ""
+  const legend = expressions.map((expression, index) => `<g transform="translate(${plot.left + index * 170},210)"><line x1="0" y1="0" x2="28" y2="0" stroke="${colors[index]}" stroke-width="5"/><text x="38" y="7" font-weight="700">${escapeXml(expression.slice(0, 18))}</text></g>`).join("")
   const title = String(input.title || "函数图").slice(0, 80)
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="#f7f6ee"/><rect x="28" y="24" width="1144" height="772" rx="18" fill="#fff" stroke="#d9ded4"/><text x="64" y="66" font-family="sans-serif" font-size="30" font-weight="800" fill="#1f2520">${escapeXml(title)}</text><g font-family="sans-serif" font-size="15" fill="#667064">${grid.join("")}${xAxis}${yAxis}${paths.join("")}${legend}</g></svg>`
+  const body = `<g font-family="Outfit, Nunito, 'Noto Sans SC', 'PingFang SC', sans-serif" font-size="15" fill="${renderTheme.muted}">${grid.join("")}${xAxis}${yAxis}${paths.join("")}${legend}</g>`
+  const svg = buildSvgFrame({ width, height, title, subtitle: "函数曲线", body, footer: renderFooterToken })
   return { svg, meta: { title, expressions, xMin, xMax, yMin, yMax, engine: "sharp-svg" } }
 }

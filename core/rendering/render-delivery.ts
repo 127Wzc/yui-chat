@@ -39,7 +39,6 @@ interface RenderResult extends UnknownRecord {
   base64?: unknown
   url?: unknown
   file?: unknown
-  cache?: UnknownRecord
 }
 
 interface DeliveryOptions extends UnknownRecord {
@@ -174,15 +173,14 @@ async function targetFromOptions(e: RenderEvent, opts: DeliveryOptions = {}, con
 
 /**
  * 渲染交付门面：只负责把可信渲染结果转成宿主图片消息并投递。
- * 渲染算法、缓存生命周期和跨目标权限分别由渲染服务、缓存模块和配置控制。
+ * 渲染算法和跨目标权限分别由渲染服务与配置控制；图片按请求即时生成，不保留渲染缓存。
  */
 export async function deliverRenderedImage(result: RenderResult = {}, context: DeliveryContext = {}, opts: DeliveryOptions = {}): Promise<string> {
   const config = context.config || configStore.get() as RenderConfig
   assertRenderImage(result)
   const event = context.e
   if (!event?.reply) {
-    const cache = record(result.cache)
-    return `${text(opts.label) || "图片"}渲染完成：${Buffer.isBuffer(result.buffer) ? result.buffer.length : 0} bytes${cache.pngFile ? `\n缓存：${text(cache.pngFile)}` : ""}`
+    return `${text(opts.label) || "图片"}渲染完成：${Buffer.isBuffer(result.buffer) ? result.buffer.length : 0} bytes`
   }
   const target = await targetFromOptions(event, opts, config)
   await target.send(imageSegmentFromRender(result))

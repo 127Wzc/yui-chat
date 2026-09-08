@@ -333,6 +333,27 @@ function normalizeConfig(config: Config): Config {
   if (isObject(config.chat)) delete config.chat.promptBudgets
   const response = isObject(config.response) ? config.response : null
   if (response && isObject(response.segmentation)) delete response.segmentation.llmOnly
+  // 渲染配置只保留当前结构；旧开关、细分系统引擎和缓存字段直接丢弃，不再迁移。
+  if (response && isObject(response.render)) {
+    if (response.render.engine === "sharp-svg" || response.render.engine === "auto") delete response.render.engine
+    delete response.render.markdownEngine
+    delete response.render.markmapEngine
+    delete response.render.chatCardAsImage
+    delete response.render.helpAsImage
+    delete response.render.conversationListAsImage
+    delete response.render.cache
+    delete response.render.cacheTtlMs
+    if (isObject(response.render.system)) {
+      if (response.render.system.engine === "sharp-svg" || response.render.system.engine === "auto") delete response.render.system.engine
+      delete response.render.system.chatCardAsImage
+      delete response.render.system.helpAsImage
+      delete response.render.system.conversationListAsImage
+      delete response.render.system.markdownEngine
+      delete response.render.system.markmapEngine
+      delete response.render.system.cache
+      delete response.render.system.cacheTtlMs
+    }
+  }
   // 链接安全授权已经统一到 security.linkSafety；旧功能级字段直接退役，不迁移旧值。
   const mediaRecognition = isObject(config.mediaRecognition) ? config.mediaRecognition : null
   if (mediaRecognition && isObject(mediaRecognition.remoteFetch)) delete mediaRecognition.remoteFetch.allowPrivateHosts

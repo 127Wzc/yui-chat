@@ -2,6 +2,7 @@ import { computed, reactive, ref, watch } from "vue"
 import { confirmAction, refreshSlices, request, saveConfigPatch, setDeveloperMode, setTab, store, toast } from "../../app/store/store.js"
 import { toJson } from "../../shared/format.js"
 import { asRecord, asRecords, errorMessage, type UnknownRecord } from "../../shared/data.js"
+import { SystemRenderStrategyPanel } from "../tools/system-render-strategy-panel.js"
 
 interface ConfigMeta extends UnknownRecord {
   loaded?: boolean
@@ -58,9 +59,13 @@ interface CaptureDefaults {
 interface MemorySummary extends UnknownRecord {
   capture?: { defaultPolicy?: Partial<CaptureDefaults>; defaultPromptTemplate?: string }
 }
+interface SystemRenderStrategyPanelHandle {
+  getPatch?: () => UnknownRecord
+}
 
 export const AdvancedTab = {
   name: "AdvancedTab",
+  components: { SystemRenderStrategyPanel },
   setup() {
     const config = computed(() => asRecord<AdvancedConfig>(store.config))
     const draft = reactive({
@@ -96,6 +101,7 @@ export const AdvancedTab = {
     const webTokenVisible = ref(false)
     const webTokenLoaded = ref(false)
     const webTokenBusy = ref(false)
+    const systemRenderPanel = ref<SystemRenderStrategyPanelHandle | null>(null)
     const configMeta = computed(() => asRecord<ConfigMeta>(store.configMeta))
     const backups = computed(() => store.configBackups)
     const manifest = computed(() => asRecord<SchemaManifest>(store.schemaManifest))
@@ -231,10 +237,21 @@ export const AdvancedTab = {
       draft.captureEmbeddingModel = String(config.value.memory?.retrieval?.embeddingModel || "")
       draft.captureAdaptiveVector = config.value.memory?.retrieval?.adaptiveVector !== false
     }
-    async function saveLoggingLevel() {
+    async function saveDeveloperSettings() {
       try {
-        await saveConfigPatch({ "logging.level": draft.loggingLevel }, "logging-level")
-        toast("对话日志等级已保存")
+        const memory = Number(draft.memoryEmbeddingTokensPerDay)
+        const knowledge = Number(draft.knowledgeEmbeddingTokensPerDay)
+        if (![memory, knowledge].every(value => Number.isInteger(value) && value >= 0 && value <= 100000000)) {
+          throw new Error("Embedding 每日预算必须是 0 到 100000000 之间的整数")
+        }
+        await saveConfigPatch({
+          "logging.level": draft.loggingLevel,
+          "memory.retrieval.embeddingTokensPerDay": memory,
+          "knowledge.indexing.globalEmbeddingTokensPerDay": knowledge,
+          ...(systemRenderPanel.value?.getPatch?.() || {}),
+        }, "developer-settings")
+        await syncDraft()
+        toast("开发者设置已保存", "success")
       } catch (err) { toast(errorMessage(err)) }
     }
     async function loadWebAuthToken(force = false) {
@@ -290,7 +307,7 @@ export const AdvancedTab = {
         await saveConfigPatch({ "web.publicBaseUrl": normalized }, "web-public-base-url")
         draft.webPublicBaseUrl = normalized
         await refreshSlices(["config"])
-        toast(normalized ? "服务器地址前缀已保存并热应用" : "已恢复自动获取服务器地址", "success")
+        toast(normalized ? "服务器地址前缀已保存" : "已恢复自动获取服务器地址", "success")
       } catch (err) { toast(errorMessage(err)) }
     }
     async function saveLinkSafety() {
@@ -318,7 +335,7 @@ export const AdvancedTab = {
         }, "link-safety")
         await syncDraft()
         await refreshSlices(["config", "render", "diagnostics"])
-        toast("链接安全策略已统一保存并热应用", "success")
+        toast("链接安全策略已保存", "success")
       } catch (err) { toast(errorMessage(err)) }
     }
     async function copyWebAuthToken() {
@@ -357,21 +374,6 @@ export const AdvancedTab = {
       try {
         const result = await request("/api/config/backups")
         store.configBackups = asRecords(result.backups)
-      } catch (err) { toast(errorMessage(err)) }
-    }
-    async function saveEmbeddingBudgets() {
-      try {
-        const memory = Number(draft.memoryEmbeddingTokensPerDay)
-        const knowledge = Number(draft.knowledgeEmbeddingTokensPerDay)
-        if (![memory, knowledge].every(value => Number.isInteger(value) && value >= 0 && value <= 100000000)) {
-          throw new Error("Embedding 每日预算必须是 0 到 100000000 之间的整数")
-        }
-        await saveConfigPatch({
-          "memory.retrieval.embeddingTokensPerDay": memory,
-          "knowledge.indexing.globalEmbeddingTokensPerDay": knowledge,
-        })
-        await syncDraft()
-        toast("Embedding 每日预算已保存")
       } catch (err) { toast(errorMessage(err)) }
     }
     async function saveCaptureDefaults() {
@@ -535,10 +537,10 @@ export const AdvancedTab = {
     }, { immediate: true })
 
     return {
-      draft, showJsonDrawer, webTokenVisible, webTokenLoaded, webTokenBusy, webAddressPreview, configMeta, backups, manifest, activeSection, systemSectionItems,
+      draft, showJsonDrawer, webTokenVisible, webTokenLoaded, webTokenBusy, systemRenderPanel, webAddressPreview, configMeta, backups, manifest, activeSection, systemSectionItems,
       systemState, systemTitle, systemDescription, systemMetrics, diagnosticRows, manifestMetrics,
       captureDefaults, captureModelOptions, memoryEmbeddingModelOptions, defaultReplyModelName,
-      sectionPills, saveJson, saveLoggingLevel, loadWebAuthToken, saveWebAddress, saveWebAuthToken, copyWebAuthToken, saveLinkSafety, saveBackupPolicy, createBackup, loadBackupDetails, saveEmbeddingBudgets, saveCaptureDefaults, requestRestore, requestDeleteBackup,
+      sectionPills, saveJson, saveDeveloperSettings, loadWebAuthToken, saveWebAddress, saveWebAuthToken, copyWebAuthToken, saveLinkSafety, saveBackupPolicy, createBackup, loadBackupDetails, saveCaptureDefaults, requestRestore, requestDeleteBackup,
       toggleDeveloperMode, applyDiagnosticAction, shortTime, formatBytes, backupContents, store,
     }
   },
@@ -568,7 +570,7 @@ export const AdvancedTab = {
       </Panel>
 
       <Panel title="Web 访问与登录" icon="key">
-        <p class="muted small">服务器地址前缀保存在 SQLite 运行配置中并热应用；静态入口只读取 <code>config/config.json</code> 中的 <code>web.authToken</code>。主人通过 <code>#yui面板</code> 获取的一次性快捷链接独立签发，页面不能主动生成。</p>
+        <p class="muted small">服务器地址前缀保存在运行配置中；静态入口只读取 <code>config/config.json</code> 中的 <code>web.authToken</code>。主人通过 <code>#yui面板</code> 获取的一次性快捷链接独立签发，页面不能主动生成。</p>
         <div class="form-section web-auth-settings">
           <div class="developer-section-head">
             <div><b>服务器地址前缀</b><span>可填写自定义域名、端口和反向代理路径；系统会在后面拼接 Web 路由与一次性快捷码。</span></div>
@@ -593,7 +595,7 @@ export const AdvancedTab = {
       </div>
 
       <Panel v-if="activeSection === 'link-safety'" title="统一链接安全" icon="shield">
-        <template #actions><button class="btn primary small" type="button" @click="saveLinkSafety"><Icon name="save" :size="14" />保存并热应用</button></template>
+        <template #actions><button class="btn primary small" type="button" @click="saveLinkSafety"><Icon name="save" :size="14" />保存</button></template>
         <p class="muted small">网页读取、入站图片预处理、图片缓存、出站媒体和 URL 截图统一读取这里；各功能页不再保留重复的私网开关。</p>
         <div class="settings-toggle-grid">
           <div class="settings-toggle-item"><div><strong>允许任意私网链接</strong><small>默认开启；关闭后网页、媒体、图片缓存、消息发送和截图统一拦截私网。</small></div><Switch :model-value="draft.linkAllowPrivateHosts" @update:model-value="draft.linkAllowPrivateHosts = $event" /></div>
@@ -702,16 +704,21 @@ export const AdvancedTab = {
           <div class="developer-warning"><Icon name="alert" :size="16" /><span>修改完整 JSON 可能导致模型、工具或权限无法启动。需要回滚时请先手动备份；后端校验仍会阻止无效配置。</span></div>
 
           <div class="developer-section-head">
+            <div><b>开发者设置</b><span>日志、预算和系统渲染</span></div>
+            <button class="btn primary small" type="button" @click="saveDeveloperSettings"><Icon name="save" :size="14" />保存</button>
+          </div>
+
+          <SystemRenderStrategyPanel ref="systemRenderPanel" :show-save="false" />
+
+          <div class="developer-section-head">
             <div><b>对话日志等级</b><span>控制模型、工具链和 Token 汇总日志；不会输出密钥或完整工具结果</span></div>
             <div class="toolbar">
               <select class="input" v-model="draft.loggingLevel"><option value="off">关闭</option><option value="error">仅错误</option><option value="warn">警告</option><option value="info">常规</option><option value="debug">调试</option></select>
-              <button class="btn small outline" type="button" @click="saveLoggingLevel"><Icon name="save" :size="14" />保存</button>
             </div>
           </div>
 
           <div class="developer-section-head">
             <div><b>Embedding 每日预算</b><span>本地预检通过后才占用；0 表示关闭本地上限</span></div>
-            <button class="btn small outline" type="button" @click="saveEmbeddingBudgets"><Icon name="save" :size="14" />保存预算</button>
           </div>
           <div class="form-grid">
             <Field label="记忆 embedding Token / 天" type="number" v-model="draft.memoryEmbeddingTokensPerDay" hint="默认 200000" />

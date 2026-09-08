@@ -63,6 +63,8 @@ const webToolsSourceFiles = [
   "web/client/features/tools/builtin-category-panel.ts",
   "web/client/features/tools/global-tool-settings-panel.ts",
   "web/client/features/tools/tool-detail-modal.ts",
+  "web/client/features/tools/render-panel.ts",
+  "web/client/features/tools/system-render-strategy-panel.ts",
   "web/client/features/tools/tool-configuration-panel.ts",
   "web/client/features/tools/extension-panel.js",
   "web/client/features/tools/extension-library-panel.ts",
@@ -331,6 +333,7 @@ async function checkConfigSafety() {
   assert(redacted.tokens.every(value => value === "********"), "public config should redact secret arrays using their parent key")
   assert(redacted.headers["x-trace-id"] === "trace-value" && redacted.env.REGION === "cn-test" && redacted.maxTokens === 1024, "public config should preserve non-secret values")
   assert(config.response?.render?.enabled === true, "render service must default enabled")
+  assert(config.response?.render?.engine === "html", "image rendering should default to HTML-first priority")
   const unsafeMountPath = JSON.parse(JSON.stringify(config))
   unsafeMountPath.web.mountPath = '/yui-chat"><script>alert(1)</script>'
   assert(!validateConfig(unsafeMountPath).ok, "web.mountPath must reject HTML-significant characters")
@@ -340,9 +343,8 @@ async function checkConfigSafety() {
   const ambiguousPublicUrl = JSON.parse(JSON.stringify(config))
   ambiguousPublicUrl.web.publicBaseUrl = "https://bot.example.com/admin?token=wrong#fragment"
   assert(!validateConfig(ambiguousPublicUrl).ok, "Web server prefix must reject query strings and fragments reserved for the quick-login route")
-  assert(config.response?.render?.markdownEngine === "auto", "Markdown render engine should default to the plugin-owned rich renderer")
-  assert(config.response?.render?.markmapEngine === "auto", "Markmap render engine should default to auto with safe SVG fallback")
-  assert(config.response?.render?.chatCardAsImage === true, "rich chat card image mode must default enabled")
+  assert(config.response?.render?.system?.engine === "html", "system image rendering should default to HTML-first priority")
+  assert(!Object.hasOwn(config.response?.render || {}, "markdownEngine") && !Object.hasOwn(config.response?.render || {}, "markmapEngine"), "render config should not keep per-template engine settings")
   assert(config.response?.render?.mediaThumbnails === true, "rich chat card media thumbnails must default enabled")
   assert(Number(config.response?.render?.mediaThumbnailMaxCount) >= 1, "media thumbnail max count should be configured")
   assert(config.response?.render?.mediaThumbnail?.enabled === true, "media thumbnail compression must default enabled")
@@ -3150,20 +3152,26 @@ async function checkAccessControl() {
 }
 
 async function checkRenderService() {
-  const { listImageRenderers, registerImageRenderer, renderCacheStats, renderChatCard, renderCommandHelp, renderConversationList, renderDynamicPanel, renderFunctionPlot, renderHelpMenu, renderImageByKind, renderKindCatalog, renderMarkdownDocument, renderMindMap, renderRendererRegistry, renderTextCard, renderWordCloud, unregisterImageRenderer } = await import("../output/runtime/core/rendering/render-service.js")
+  const { listImageRenderers, registerImageRenderer, renderChatCard, renderCommandHelp, renderConversationList, renderDynamicPanel, renderFunctionPlot, renderHelpMenu, renderImageByConfiguredEngine, renderImageByKind, renderKindCatalog, renderMarkdownDocument, renderMindMap, renderRendererRegistry, renderTextCard, renderWordCloud, unregisterImageRenderer, withRenderScope } = await import("../output/runtime/core/rendering/render-service.js")
   const { assertSafeRenderUrl, isAllowedRenderHost, normalizeMarkdownMathDelimiters, renderHtmlToPng, renderMarkdownHtmlToPng, renderMarkmapHtmlToPng, renderUrlToPng } = await import("../output/runtime/core/rendering/render-html-service.js")
   const { compileFunctionExpression } = await import("../output/runtime/core/rendering/function-plot.js")
   const { resolveRenderImageEngine } = await import("../output/runtime/tools/builtins/render.js")
-  const { listRenderCache, readRenderCacheImage, renderApiOverview, renderPreview } = await import("../output/runtime/core/rendering/render-api-service.js")
+  const { renderApiOverview, renderPreview } = await import("../output/runtime/core/rendering/render-api-service.js")
   const { buildNextHelpMenu } = await import("../output/runtime/apps/help-menu.js")
   const { deliverRenderedImage, renderAndDeliverImage } = await import("../output/runtime/core/rendering/render-delivery.js")
-  const { cacheDir, configStore } = await import("../output/runtime/config/store.js")
+  const { configStore } = await import("../output/runtime/config/store.js")
   const config = await configStore.load()
   assert(normalizeMarkdownMathDelimiters("\\[x^2\\]\n`\\(raw\\)`\n```tex\n\\[raw\\]\n```") === "$$x^2$$\n`\\(raw\\)`\n```tex\n\\[raw\\]\n```", "rich Markdown should normalize common LaTeX delimiters outside code spans and fences")
   assert(Math.abs(compileFunctionExpression("sin(x) + x^2")(2) - (Math.sin(2) + 4)) < 1e-9, "function plot expressions should use the safe math parser")
   const htmlEngineConfig = JSON.parse(JSON.stringify(config))
-  htmlEngineConfig.response.render.html.enabled = true
-  assert(resolveRenderImageEngine("markdown", "", htmlEngineConfig) === "html" && resolveRenderImageEngine("mindmap", "auto", htmlEngineConfig) === "html", "unified render_image should route auto Markdown and Markmap through the enabled HTML engine")
+  assert(htmlEngineConfig.response.render.html.enabled === false && resolveRenderImageEngine("dynamic-panel", "", htmlEngineConfig) === "html" && resolveRenderImageEngine("markdown", "", htmlEngineConfig) === "html" && resolveRenderImageEngine("mindmap", "auto", htmlEngineConfig) === "html", "unified render_image should keep HTML-first priority independent of the raw HTML screenshot gate")
+  const svgPriorityConfig = JSON.parse(JSON.stringify(htmlEngineConfig))
+  svgPriorityConfig.response.render.engine = "svg"
+  assert(resolveRenderImageEngine("dynamic-panel", "", svgPriorityConfig) === "svg" && resolveRenderImageEngine("markdown", "auto", svgPriorityConfig) === "svg", "global SVG priority should override HTML for every template")
+  const systemPriorityConfig = JSON.parse(JSON.stringify(htmlEngineConfig))
+  systemPriorityConfig.response.render.engine = "html"
+  systemPriorityConfig.response.render.system.engine = "svg"
+  assert(resolveRenderImageEngine("dynamic-panel", "", systemPriorityConfig) === "html" && resolveRenderImageEngine("dynamic-panel", "", withRenderScope(systemPriorityConfig, "system")) === "svg", "system rendering priority should be independent from render_image")
   assert(resolveRenderImageEngine("markdown", "", config) === "html", "unified render_image should use the plugin-owned rich Markdown renderer by default")
   assert(resolveRenderImageEngine("markdown", "svg", config) === "svg", "unified render_image should keep the explicit lightweight SVG fallback")
   const card = await renderTextCard({
@@ -3173,7 +3181,7 @@ async function checkRenderService() {
   }, config)
   assert(Buffer.isBuffer(card.buffer), "renderTextCard should return a buffer")
   assert(card.buffer.subarray(0, 8).toString("hex") === "89504e470d0a1a0a", "rendered card should be PNG")
-  assert(card.cache?.pngFile?.startsWith(cacheDir), "render cache should stay inside plugin cache")
+  assert(!card.cache, "render results should not expose a persistent render cache")
   const help = await renderCommandHelp({
     query: "怎么查体力",
     matches: [{ pluginName: "Smoke", description: "体力查询", suggestedCommand: "#体力", reason: "匹配体力查询", permission: "all", event: "message" }],
@@ -3231,7 +3239,7 @@ async function checkRenderService() {
     steps: [{ stepId: "reply", channel: "mock", adapter: "mock", status: "ok", durationMs: 2 }],
   }, config)
   assert(chatCard.buffer.subarray(0, 8).toString("hex") === "89504e470d0a1a0a", "renderChatCard should return PNG")
-  assert(chatCard.cache?.pngFile?.startsWith(cacheDir), "renderChatCard cache should stay inside plugin cache")
+  assert(!chatCard.cache, "chat cards should not expose a persistent render cache")
   const thumbnailChatCard = await renderChatCard({
     prompt: "这张图是什么？",
     answer: "这是一张用于 smoke 的 tiny PNG 缩略图。",
@@ -3246,47 +3254,40 @@ async function checkRenderService() {
   assert(renderKindCatalog.some(item => item.kind === "chat-card" && item.toolName === "render_image"), "render catalog should use unified image tool")
   assert(renderKindCatalog.some(item => item.kind === "help-menu" && item.toolName === "render_image"), "render catalog should use unified image tool")
   assert(renderKindCatalog.some(item => item.kind === "conversation-list" && item.toolName === "render_image"), "render catalog should use unified image tool")
-  assert(renderKindCatalog.some(item => item.kind === "function-plot" && item.toolName === "render_image"), "render catalog should expose the unified safe function plot template")
-  assert(renderKindCatalog.every(item => item.engine && item.toolName && item.description), "render catalog entries should expose engine, toolName, and description")
+  assert(renderKindCatalog.some(item => item.kind === "function-plot" && item.publicTemplate === false), "internal function plot scenario should stay available without being a public template")
+  assert(renderKindCatalog.every(item => !Object.hasOwn(item, "engine") && item.toolName && item.description), "render catalog entries should use the shared engine strategy")
   assert(renderKindCatalog.every(item => typeof renderRendererRegistry[item.kind]?.render === "function"), "each render catalog kind should have a renderer object")
   assert(listImageRenderers().every(item => Array.isArray(item.aliases) && Array.isArray(item.tags)), "renderer listing should expose cloned aliases and tags")
+  assert(listImageRenderers(true).map(item => item.kind).join(",") === "text-card,markdown,mindmap", "public renderer listing should only expose the three base templates")
   assert(renderRendererRegistry.help.kind === "command-help", "render renderer registry should expose aliases")
   const apiOverview = await renderApiOverview(config)
-  assert(apiOverview.catalog.some(item => item.kind === "dynamic-panel"), "render API overview should expose renderer catalog")
+  assert(apiOverview.catalog.some(item => item.kind === "markdown") && !apiOverview.catalog.some(item => item.kind === "dynamic-panel"), "render API overview should expose only public templates")
+  assert(apiOverview.system?.engine === config.response.render.system.engine && !Object.hasOwn(apiOverview.system || {}, "chatCardAsImage") && !Object.hasOwn(apiOverview.system || {}, "helpAsImage") && !Object.hasOwn(apiOverview.system || {}, "conversationListAsImage"), "render API overview should expose the independent system rendering strategy")
   assert(apiOverview.html.enabled === false, "render API overview should expose disabled HTML backend by default")
   assert(apiOverview.html.allowedUrlHosts?.join(",") === "*", "render API overview should expose the default all-domain URL host policy")
   const webPreview = await renderPreview({
-    template: "dynamic-panel",
-    data: { title: "Web 预览", metrics: [{ label: "API", value: "OK" }], sections: [{ title: "说明", lines: ["Web render preview 正常"] }] },
+    template: "text-card",
+    data: { title: "Web 预览", sections: [{ title: "说明", lines: ["Web render preview 正常"] }] },
   }, config)
   assert(webPreview.imageBase64 && Buffer.from(webPreview.imageBase64, "base64").subarray(0, 8).toString("hex") === "89504e470d0a1a0a", "render preview API should return base64 PNG")
-  assert(webPreview.cache?.imageUrl?.startsWith("api/render/cache/"), "render preview API should expose cache image URL")
-  const cacheRows = await listRenderCache({ limit: 20 })
-  assert(cacheRows.some(row => row.id === webPreview.cache.id), "render cache list should include preview cache entry")
-  const cachedImage = await readRenderCacheImage(webPreview.cache.id)
-  assert(cachedImage.subarray(0, 8).toString("hex") === "89504e470d0a1a0a", "render cache image reader should return PNG")
-  let invalidCacheBlocked = false
-  try {
-    await readRenderCacheImage("../bad")
-  } catch {
-    invalidCacheBlocked = true
-  }
-  assert(invalidCacheBlocked, "render cache image reader should reject invalid ids")
+  assert(!webPreview.cache && !apiOverview.cache, "render API should not expose persistent render cache state")
+  const unifiedMarkdown = await renderImageByConfiguredEngine("markdown", { title: "统一分发", markdown: "# OK" }, config)
+  assert(unifiedMarkdown.buffer.subarray(0, 8).toString("hex") === "89504e470d0a1a0a" && unifiedMarkdown.meta?.requestedEngine === "html", "configured engine dispatcher should render public Markdown through the selected priority")
   registerImageRenderer({
     kind: "smoke-card",
     label: "Smoke 卡片",
     toolName: "render_smoke_card",
     command: "#yui渲染Smoke",
     description: "Smoke-only renderer registration test.",
-    aliases: ["smoke_card"],
+    aliases: ["smoke_card", "smoke_alias"],
     tags: ["smoke"],
     render: (input, currentConfig) => renderTextCard({ title: input.title || "Smoke Registry", content: "renderer registry ok" }, currentConfig),
   })
-  assert(renderRendererRegistry["smoke-card"]?.kind === "smoke-card" && renderRendererRegistry.smoke_card?.kind === "smoke-card", "custom renderer should register kind and aliases")
+  assert(renderRendererRegistry["smoke-card"]?.kind === "smoke-card" && renderRendererRegistry["smoke-alias"]?.kind === "smoke-card", "custom renderer should register normalized kind and aliases")
   const customRender = await renderImageByKind("smoke_card", { title: "Smoke Registry" }, config)
   assert(customRender.buffer.subarray(0, 8).toString("hex") === "89504e470d0a1a0a", "custom registered renderer should render PNG")
   assert(unregisterImageRenderer("smoke-card"), "custom renderer should unregister cleanly")
-  assert(!renderRendererRegistry["smoke-card"] && !renderRendererRegistry.smoke_card, "custom renderer aliases should be removed")
+  assert(!renderRendererRegistry["smoke-card"] && !renderRendererRegistry["smoke-alias"] && !renderRendererRegistry.smoke_card, "custom renderer aliases should be removed")
   const conversations = await renderConversationList([{
     channel: "mock",
     type: "group",
@@ -3336,14 +3337,12 @@ async function checkRenderService() {
   assert(genericHelpMenu.buffer.subarray(0, 8).toString("hex") === "89504e470d0a1a0a", "renderImageByKind should normalize menu alias")
   const functionPlot = await renderFunctionPlot({ title: "Smoke Function", expressions: ["sin(x)", "x^2/8"], xMin: -6, xMax: 6 }, config)
   assert(functionPlot.buffer.subarray(0, 8).toString("hex") === "89504e470d0a1a0a", "safe function plot renderer should return PNG")
-  const stats = await renderCacheStats()
-  assert(stats.dir.startsWith(cacheDir), "render cache stats should report plugin cache path")
   const webAppSource = await readWebServerSource()
   const webShellSource = await fs.readFile(path.join(pluginRoot, "web/http/shell.ts"), "utf8")
   const webRenderToolsSource = await readWebToolsSource()
   assert(webAppSource.includes("/api/render/templates") && webAppSource.includes("/api/render/preview"), "web app should expose render template API routes")
   assert(webShellSource.includes("assetVersion") && webShellSource.includes("assets/main.js?v="), "web shell should version the SPA entry to avoid stale browser modules")
-  assert(webRenderToolsSource.includes("/api/render/preview") && webRenderToolsSource.includes("isFoldedRenderTool"), "tools page should expose the unified template render preview")
+  assert(webRenderToolsSource.includes("/api/render/preview") && webRenderToolsSource.includes("isFoldedRenderTool") && webRenderToolsSource.includes("response.render.engine") && webRenderToolsSource.includes("工具渲染") && webRenderToolsSource.includes("系统渲染策略") && webRenderToolsSource.includes("SystemRenderStrategyPanel") && !webRenderToolsSource.includes("aiMarkdownEngine") && !webRenderToolsSource.includes("chatCardAsImage"), "tools page should expose one independent strategy per render scope")
   assert(webRenderToolsSource.includes("render_image"), "tools page should keep the unified render_image entry")
   assert(webRenderToolsSource.includes("PermissionPreviewResult") && webRenderToolsSource.includes("showPreviewDrawer"), "role permission verification should use the shared preview drawer")
   assert(webRenderToolsSource.includes("openRolePreview") && webRenderToolsSource.includes("全部角色对比"), "permission verification should compare roles without expanding the role cards")
@@ -3385,13 +3384,12 @@ async function checkRenderService() {
     disabledBackend = /未启用/.test(err.message)
   }
   assert(disabledBackend, "HTML screenshot backend should be disabled by default")
-  disabledBackend = false
   try {
-    await renderMarkmapHtmlToPng({ title: "HTML Markmap", markdown: "# hello" }, config)
+    const markmap = await renderMarkmapHtmlToPng({ title: "HTML Markmap", markdown: "# hello" }, config)
+    assert(markmap?.buffer, "internal Markmap HTML renderer should return an image when available")
   } catch (err) {
-    disabledBackend = /未启用/.test(err.message)
+    assert(!/未启用/.test(err.message), "internal Markmap HTML renderer should not require the raw HTML backend")
   }
-  assert(disabledBackend, "HTML Markmap renderer should require enabled HTML backend")
   for (const resource of [
     "resources/render/math/css/katex.min.css",
     "resources/render/math/css/fonts/KaTeX_Main-Regular.woff2",
@@ -5771,6 +5769,35 @@ async function checkWebAndBoot() {
   const compactLogMedia = JSON.stringify(compactMediaDataForDisplay(logMediaMessages))
   assert(modelMessageImageCount(logMediaMessages[0]) === 2 && modelMessagesImageCount(logMediaMessages) === 2, "log media display should count every image content part")
   assert(compactLogMedia.includes("Base64 image/png") && !compactLogMedia.includes(tinyPngDataUrl), "log media display should compact Base64 image URLs without changing the snapshot")
+  const { buildContextDisplay, contextSourceLabel } = await import("../output/runtime/web/client/features/logs/log-context-display.js")
+  const promptSnapshot = {
+    messages: [
+      { role: "system", content: "角色正文\n记忆正文" },
+      logMediaMessages[0],
+      { role: "assistant", content: "", tool_calls: [{ id: "call-1", function: { name: "search", arguments: "{}" } }] },
+      { role: "tool", content: "工具正文", tool_call_id: "call-1" },
+    ],
+    request: { metadata: { context: {
+      items: [{ index: 0, source: "system-context" }, { index: 1, source: "current" }, { index: 2, source: "model-decision" }, { index: 3, source: "tool-result" }],
+      sections: [
+        { source: "persona", label: "角色设定", content: "角色正文", messageIndexes: [0] },
+        { source: "memory", label: "记忆召回", content: "记忆正文", messageIndexes: [0] },
+        { source: "current", messageIndexes: [1, 1, 99] },
+      ],
+    } } },
+  }
+  const beforePromptDisplay = JSON.stringify(promptSnapshot)
+  const promptDisplay = buildContextDisplay(promptSnapshot)
+  assert(promptDisplay.groups.length === 5 && promptDisplay.groups[0].body === "角色正文" && promptDisplay.groups[0].entries.length === 0, "prompt sources should display each injection once without duplicating the composed system message")
+  assert(promptDisplay.groups[2].entries.length === 1 && promptDisplay.groups[2].entries[0].images === 2, "source references should ignore duplicate and out-of-range indexes while preserving images")
+  assert(promptDisplay.groups[3].entries[0].toolCalls[0].id === "call-1" && promptDisplay.groups[4].entries[0].body === "工具正文", "incomplete source metadata should not hide unlisted tool decisions or results")
+  assert(!promptDisplay.messages[1].body.includes(tinyPngDataUrl) && promptDisplay.messages[0].body === promptSnapshot.messages[0].content && JSON.stringify(promptSnapshot) === beforePromptDisplay, "message display should compact media without mutating snapshot content or order")
+  const missingSectionBodies = buildContextDisplay({ messages: promptSnapshot.messages, request: { metadata: { context: { sections: [{ source: "persona", messageIndexes: [0] }, { source: "memory", messageIndexes: [0] }] } } } })
+  assert(missingSectionBodies.groups.slice(0, 2).every(group => group.unavailable && !group.entries.length), "missing shared source bodies should be labeled unavailable, not replaced by the entire system prompt")
+  const oldPromptDisplay = buildContextDisplay({ messages: promptSnapshot.messages })
+  assert(!oldPromptDisplay.hasSources && oldPromptDisplay.groups[0].entries.length === 4, "old snapshots should retain every message without guessing prompt sources")
+  assert(contextSourceLabel({ source: "message-reference" }) === "本轮指代" && contextSourceLabel({ source: "future-source", label: "未来来源" }) === "未来来源", "prompt source labels should cover reference instructions and preserve unknown source names")
+  assert(buildContextDisplay(null).groups.length === 0 && buildContextDisplay({ messages: [] }).messages.length === 0, "missing and embedding snapshots should keep the empty state")
   const app = createWebApp()
   assert(Boolean(app.stack), "web app should be an express router")
   const pluginEntrySource = await fs.readFile(path.join(pluginRoot, "index.js"), "utf8")
@@ -5875,7 +5902,7 @@ async function checkWebAndBoot() {
   assert(webOverviewSource.includes("home-hero") && webOverviewSource.includes("home-dashboard-grid") && webOverviewSource.includes("模型排行") && webOverviewSource.includes("用途分布"), "overview should act as the primary health and usage dashboard")
   assert(webOverviewSource.includes("home-setup-strip") && webOverviewSource.indexOf("home-setup-strip") < webOverviewSource.indexOf("<MetricGrid") && webOverviewSource.includes("继续配置") && !webOverviewSource.includes('v-if="homeStatus !== \'good\'"') && !webOverviewSource.includes("能力架构") && !webOverviewSource.includes("快速操作"), "overview should keep one setup action inside the top status area and remove architecture and quick-operation panels")
   assert(webLogsSource.includes("logs-summary-row") && webLogsSource.includes("logs-filter-row") && webLogsSource.includes("settingsDrawerOpen") && webLogsSource.includes("群聊记忆提炼") && webLogsSource.includes("查看本次提炼输入") && !webLogsSource.includes("filterDrawerOpen") && !webLogsSource.includes('<h1>日志与用量</h1>') && !webLogsSource.includes('<Panel title="模型排行"') && !webLogsSource.includes('<Panel title="Token 趋势"'), "logs page should keep only compact summary metrics with settings, use one-line filters above the run list, and avoid duplicating the shell heading")
-  assert(webLogsSource.includes("logs-session-workbench") && webLogsSource.includes("loadConversationTurn") && webLogsSource.includes("toolGroupsForModel") && webLogsSource.includes("contextSourceLabel") && webLogsSource.includes("modelDetail.snapshot") && webLogsSource.includes("loadExtractionResult") && webLogsSource.includes("logs-extraction-result") && webLogsSource.includes("提炼结果") && webLogsSource.includes("rawRequests") && webLogsSource.includes("setDeveloperMode") && webLogsSource.includes("toggleDeveloperMode") && webLogsSource.includes("logs-developer-panel") && webLogsSource.includes("protocolShortLabel") && webLogsSource.includes("streamLabel") && webLogsSource.includes("sessionId") && webLogsSource.includes("logs-inline-message"), "logs page should provide a session workbench with lazy turn details, grouped tool rounds, protocol/stream/session metadata, visible developer diagnostics, and compact failure messages")
+  assert(webLogsSource.includes("logs-session-workbench") && webLogsSource.includes("loadConversationTurn") && webLogsSource.includes("toolGroupsForModel") && webLogsSource.includes("LogContextView") && webLogsSource.includes("modelDetail.snapshot") && webLogsSource.includes("loadExtractionResult") && webLogsSource.includes("logs-extraction-result") && webLogsSource.includes("提炼结果") && webLogsSource.includes("rawRequests") && webLogsSource.includes("setDeveloperMode") && webLogsSource.includes("toggleDeveloperMode") && webLogsSource.includes("logs-developer-panel") && webLogsSource.includes("protocolShortLabel") && webLogsSource.includes("streamLabel") && webLogsSource.includes("sessionId") && webLogsSource.includes("logs-inline-message"), "logs page should provide a session workbench with lazy turn details, grouped tool rounds, protocol/stream/session metadata, visible developer diagnostics, and compact failure messages")
   assert(webAdvancedSource.includes("captureScheduleMode") && webAdvancedSource.includes("captureScheduleTime") && webAdvancedSource.includes("captureScheduleCron") && webAdvancedSource.includes("Cron（分 时 日 月 周）"), "advanced memory settings should expose friendly fixed-time and Cron scheduling controls")
   assert(webLogsSource.includes("运行失败诊断详情"), "logs page should expose run-level failure diagnostics in developer mode")
   assert(webLogsSource.includes("row.error_message"), "logs page should show failure messages in the run list")
@@ -5931,9 +5958,9 @@ async function checkWebAndBoot() {
   assert(!webMemorySource.includes("补录并保存原始记录") && !webMemorySource.includes("goToExtractionMessages") && webMemorySource.indexOf("补录历史") > webMemorySource.indexOf("extractionPane === 'messages'") && webMemorySource.indexOf("扫描昨日及历史") > webMemorySource.indexOf("提炼运行记录") && webMemorySource.includes("captureDraft.useDefault") && webMemorySource.includes("captureDefaultLabel") && webMemorySource.includes("updateCaptureField") && webMemorySource.includes("恢复系统默认") && webMemorySource.includes("设置全局默认值") && webMemorySource.includes("capture-enable-control") && !webMemorySource.includes(':disabled="captureDraft.useDefault'), "capture settings should show per-field inheritance, allow direct edits to create an override, link deliberately to global defaults, combine the capture description with its switch, and provide a one-click default reset while operational actions live in their respective extraction panes")
   assert(webMemorySource.includes("memory-summary-row") && webMemorySource.includes("memoryLifecycle") && webMemorySource.includes("resultAction") && webMemorySource.includes("taskResultSummary") && webMemorySource.includes("extractionResultLabel") && webMemorySource.includes("reviewDuplicateMemories") && webMemorySource.includes("openMemoryEditor") && webMemorySource.includes("confirmAction") && webMemorySource.includes("编辑用户画像") && webMemorySource.includes("删除这条记忆"), "memory page should truncate long list entries, show lifecycle and extraction actions, identify the target member for personal extraction results, review duplicates, open them for editing, retain profile editing, and confirm deletion")
   assert(webChatSource.includes("/api/chat/test/sessions") && webChatSource.includes("历史对话") && webChatSource.includes("删除这段测试对话") && !webChatSource.includes("persistMessages"), "chat page should use SQLite-backed test history without browser-local transcripts")
-  assert(webAdvancedSource.includes("开发者模式") && webAdvancedSource.includes("developer-gate") && webAdvancedSource.includes("confirmAction") && webAdvancedSource.includes("确认回滚") && !webAdvancedSource.includes("window.confirm"), "system page should gate advanced configuration and use modal backup restore confirmation")
+  assert(webAdvancedSource.includes("开发者模式") && webAdvancedSource.includes("developer-gate") && webAdvancedSource.includes("SystemRenderStrategyPanel") && webAdvancedSource.includes("confirmAction") && webAdvancedSource.includes("确认回滚") && !webAdvancedSource.includes("window.confirm"), "system page should expose hot-updatable system rendering strategy and gate advanced configuration")
   assert(webAdvancedSource.includes("backupMaxFiles") && webAdvancedSource.includes("backupMaxAgeDays") && webAdvancedSource.includes("saveBackupPolicy") && webAdvancedSource.includes("同时超过保留天数") && webAdvancedSource.includes("SQLite 中的能力权限") && webAdvancedSource.includes("运行日志、用量流水") && webAdvancedSource.includes("configBackupDir") && webAdvancedSource.includes("backupContents"), "system backup page should explain the package directory, contents, SQLite whitelist, and excluded detail data")
-  assert(webAdvancedSource.includes("saveEmbeddingBudgets") && webAdvancedSource.includes("memoryEmbeddingTokensPerDay") && webAdvancedSource.includes("knowledgeEmbeddingTokensPerDay"), "system page should let administrators configure embedding budgets")
+  assert(webAdvancedSource.includes("saveDeveloperSettings") && webAdvancedSource.includes("memoryEmbeddingTokensPerDay") && webAdvancedSource.includes("knowledgeEmbeddingTokensPerDay") && webAdvancedSource.includes("systemRenderPanel"), "system page should save developer budgets and rendering settings together")
   assert(webAdvancedSource.includes("capturePromptTokenBudget") && webAdvancedSource.includes("captureEmbeddingModel") && webAdvancedSource.includes("captureAdaptiveVector") && webAdvancedSource.includes("记忆提示 Token 预算") && webAdvancedSource.includes("记忆向量模型"), "group-memory defaults should expose prompt budget, vector model, and adaptive vector recall")
   assert(webLogsSource.includes("统一使用 CNY") && !webLogsSource.includes("USD") && webProvidersSource.includes("输入价格 / 1M（CNY）"), "usage and model pricing UI should expose CNY as the only currency")
   assert(webProvidersSource.includes("setDefault") && webProvidersSource.includes("removeModel") && webProvidersSource.includes("ModelEditor"), "providers page should expose model management actions")
@@ -5964,6 +5991,8 @@ async function checkWebAndBoot() {
       && webToolsSource.includes("capability-tool-table")
       && webToolsSource.includes("capability-row-actions")
       && webToolsSource.includes("openToolDetail(tool, 'config')")
+      && webToolsSource.includes("hasWebConfig(tool)")
+      && webToolsSource.includes("tool.name === 'render_image'")
       && webToolsSource.includes("toolRepeatabilityLabel, toolHasRepeatProtection")
       && webToolsSource.includes("ToolDetailModal")
       && webToolsSource.includes("ToolConfigurationPanel")

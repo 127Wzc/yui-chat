@@ -17,7 +17,7 @@ import { chatService } from "../chat/chat-service.js"
 import { mediaCacheStats } from "../media/media-cache.js"
 import { recentContextStore } from "../chat/recent-context.js"
 import { sqliteClient } from "../storage/sqlite/client.js"
-import { renderCacheStats, renderKindCatalog } from "../rendering/render-service.js"
+import { renderKindCatalog } from "../rendering/render-service.js"
 import { responseStateStats } from "../chat/response-pipeline.js"
 import { modelLogStore } from "../observability/model-log.js"
 import { listMutedScopes, mutedStats } from "../chat/access-control.js"
@@ -105,7 +105,6 @@ export async function buildDiagnostics(): Promise<UnknownRecord> {
   const providers = await providerResolver.diagnostics(adapterIds)
   const configValidation = configStore.validate(config)
   const mediaCache = await mediaCacheStats()
-  const renderCache = record(await renderCacheStats())
   const mcp = record(toolRegistry.mcpStatus())
   const custom = record(toolRegistry.customStatus())
   const skills = record(toolRegistry.skillStatus())
@@ -138,7 +137,6 @@ export async function buildDiagnostics(): Promise<UnknownRecord> {
     cacheDir,
     tempDir,
     mediaCacheDir: mediaCache.dir,
-    renderCacheDir: renderCache.dir,
     rootTempDir,
     rootTempExists: await exists(rootTempDir),
     tempInsidePluginCache: pathInside(tempDir, cacheDir) && pathInside(cacheDir, pluginRoot),
@@ -243,8 +241,6 @@ export async function buildDiagnostics(): Promise<UnknownRecord> {
       extensionErrors: numberValue(record(extensionDigest.summary).errors),
       mediaCacheFiles: numberValue(record(mediaCache).files),
       mediaCacheBytes: numberValue(record(mediaCache).bytes),
-      renderCacheFiles: numberValue(renderCache.files),
-      renderCacheBytes: numberValue(renderCache.bytes),
       renderKinds: renderKindCatalog.length,
       capabilities: numberValue(record(capabilities.summary).enabled),
       capabilityTotal: numberValue(record(capabilities.summary).total),
@@ -293,7 +289,6 @@ export async function buildDiagnostics(): Promise<UnknownRecord> {
       memory: memoryStore.stats(),
       groupCapture: await groupCaptureStore.summary(),
       mediaCache,
-      renderCache,
       renderKinds: renderKindCatalog,
       mcp: mcpManager.status(),
       commandKnowledge: knowledgeDigest,

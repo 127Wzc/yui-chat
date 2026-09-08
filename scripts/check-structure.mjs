@@ -180,8 +180,8 @@ assertRule(!lifecycle.includes("web/app.js") && !lifecycle.includes("web/http/ap
 
 const renderService = await domainSource("core/rendering/render-service.js")
 assertRule(
-  renderService.includes("./render-cache.js") && renderService.includes("./image-renderer-registry.js"),
-  "core/rendering/render-service.ts 应保持渲染算法、缓存生命周期和注册表职责分离",
+  renderService.includes("./image-renderer-registry.js") && renderService.includes("./render-engine.js"),
+  "core/rendering/render-service.ts 应保持渲染算法、引擎策略和注册表职责分离",
   errors,
 )
 assertRule(renderService.split("\n").length <= 1000, "core/rendering/render-service.ts 超过 1000 行，请按渲染领域继续拆分", errors)

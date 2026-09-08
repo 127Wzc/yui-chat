@@ -54,7 +54,6 @@
     "core/network/safe-http-client.ts",
     "core/media/tts-service.ts",
     "core/media/media-cache.ts",
-    "core/rendering/render-cache.ts",
     "core/rendering/image-renderer-registry.ts",
     "core/rendering/render-delivery.ts",
     "core/rendering/render-api-service.ts",

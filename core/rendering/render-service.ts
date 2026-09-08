@@ -11,117 +11,97 @@ import {
   renderRendererRegistry,
   unregisterImageRenderer,
 } from "./image-renderer-registry.js"
-import { cleanupRenderCache, persistRender, renderCacheStats } from "./render-cache.js"
 import { buildFunctionPlotSvg } from "./function-plot.js"
+import { normalizeConfiguredEngine, resolveRenderEngine, withRenderEngine, withRenderScope, type RenderStrategyScope } from "./render-engine.js"
+import { buildSvgFrame, renderFooter, renderFooterToken, renderTheme } from "./render-theme.js"
 
 type UnknownRecord = Record<string, unknown>
-
 interface RenderConfig extends UnknownRecord {
   enabled: boolean
   engine: string
-  cache: boolean
-  cacheTtlMs: number
   width: number
   maxTextChars: number
-  helpAsImage: boolean
-  conversationListAsImage: boolean
   mediaThumbnails: boolean
   mediaThumbnailMaxCount: number
   mediaThumbnailMaxDataUrlChars: number
 }
-
 interface RenderInput extends UnknownRecord {}
-
 interface MarkdownRow {
   type: string
   text?: string
   images?: ImagePreview[]
 }
-
 interface TextSection {
   title?: unknown
   content?: unknown
   lines?: unknown
   images?: unknown
 }
-
 interface ImagePreview {
   dataUrl: string
   label: string
 }
-
 interface MindMapNode {
   title: string
   depth: number
   children: MindMapNode[]
 }
-
 function record(value: unknown): UnknownRecord {
   return value && typeof value === "object" && !Array.isArray(value) ? value as UnknownRecord : {}
 }
-
 function text(value: unknown): string {
   return typeof value === "string" ? value : String(value ?? "")
 }
-
 function numberValue(value: unknown, fallback = 0): number {
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : fallback
 }
-
 function records(value: unknown): UnknownRecord[] {
   return Array.isArray(value) ? value.filter(item => item && typeof item === "object" && !Array.isArray(item)) as UnknownRecord[] : []
 }
-
 export {
   ImageRenderer,
-  cleanupRenderCache,
   listImageRenderers,
   normalizeRenderKind,
-  persistRender,
   registerImageRenderer,
-  renderCacheStats,
   renderImageByKind,
   renderKindCatalog,
   renderKindLabels,
   renderRendererRegistry,
   unregisterImageRenderer,
 }
-
 const palette = {
-  bg: "#f7f6ee",
-  panel: "#ffffff",
-  panelSoft: "#eef4f0",
-  ink: "#1f2520",
-  muted: "#667064",
-  line: "#d9ded4",
-  accent: "#257c6a",
-  accentSoft: "#dff0ea",
-  warn: "#a35d00",
-  blue: "#2d5f8b",
-  violet: "#7654a6",
-  rose: "#a84f61",
-  gold: "#a9842c",
+  bg: renderTheme.page,
+  panel: renderTheme.card,
+  panelSoft: renderTheme.cardSoft,
+  ink: renderTheme.ink,
+  muted: renderTheme.muted,
+  line: renderTheme.cardLine,
+  accent: renderTheme.accent,
+  accentStrong: renderTheme.accentStrong,
+  accentSoft: renderTheme.accentSoft,
+  warn: renderTheme.gold,
+  blue: renderTheme.blue,
+  violet: renderTheme.violet,
+  rose: renderTheme.rose,
+  gold: renderTheme.gold,
 }
-
 function renderConfig(config: unknown = {}): RenderConfig {
   const response = record(record(config).response)
   return {
     enabled: true,
-    engine: "sharp-svg",
-    cache: true,
-    cacheTtlMs: 24 * 60 * 60 * 1000,
+    engine: "html",
     width: 1120,
     maxTextChars: 8000,
-    helpAsImage: true,
-    conversationListAsImage: true,
     mediaThumbnails: true,
     mediaThumbnailMaxCount: 3,
     mediaThumbnailMaxDataUrlChars: 800000,
     ...record(response.render),
   }
 }
-
+export { resolveRenderEngine, withRenderEngine, withRenderScope }
+export { normalizeConfiguredEngine }
+export type { ImageRenderEngine } from "./render-engine.js"
 function escapeHtml(value: unknown = ""): string {
   return text(value)
     .replace(/&/g, "&amp;")
@@ -129,7 +109,6 @@ function escapeHtml(value: unknown = ""): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
 }
-
 function wrapLine(line: unknown = "", maxVisual = 58): string[] {
   const chunks: string[] = []
   let current = ""
@@ -148,7 +127,6 @@ function wrapLine(line: unknown = "", maxVisual = 58): string[] {
   chunks.push(current)
   return chunks
 }
-
 function wrapText(value: unknown = "", maxVisual = 58, maxChars = 8000): string[] {
   const safe = text(value || "").slice(0, Math.max(200, numberValue(maxChars, 8000)))
   const lines: string[] = []
@@ -161,15 +139,15 @@ function wrapText(value: unknown = "", maxVisual = 58, maxChars = 8000): string[
   }
   return lines
 }
-
 function textNode(line: unknown, x: number, y: number, opts: UnknownRecord = {}): string {
   const fill = text(opts.fill || palette.ink)
   const size = numberValue(opts.size, 26)
   const weight = opts.weight ? ` font-weight="${text(opts.weight)}"` : ""
+  const anchor = opts.anchor ? ` text-anchor="${text(opts.anchor)}"` : ""
   const family = opts.mono === true
     ? "Menlo, Consolas, 'Noto Sans SC', monospace"
-    : "Inter, 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif"
-  return `<text x="${x}" y="${y}" fill="${fill}" font-size="${size}" font-family="${family}"${weight}>${escapeHtml(line)}</text>`
+    : "Outfit, Nunito, 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif"
+  return `<text x="${x}" y="${y}" fill="${fill}" font-size="${size}" font-family="${family}"${weight}${anchor}>${escapeHtml(line)}</text>`
 }
 
 function compactText(value: unknown = "", max = 160): string {
@@ -235,7 +213,7 @@ function renderMarkdownRows(rows: MarkdownRow[] = [], width: number, config: unk
   const cfg = renderConfig(config)
   const maxVisual = Math.max(30, Math.floor((width - 156) / 17))
   const body: string[] = []
-  let y = 176
+  let y = 220
   for (const row of rows.length ? rows : [{ type: "p", text: "暂无内容" }]) {
     if (row.type === "gap") {
       y += 16
@@ -267,12 +245,12 @@ function renderMarkdownRows(rows: MarkdownRow[] = [], width: number, config: unk
       continue
     }
     if (row.type === "code" || row.type === "mermaid" || row.type === "math") {
-      const fill = row.type === "math" ? "#fbf6e5" : "#f2f4ef"
-      const stroke = row.type === "math" ? "#ead9a8" : palette.line
+      const fill = row.type === "math" ? "#fff7e7" : palette.panelSoft
+      const stroke = row.type === "math" ? "#f0d9aa" : palette.line
       const height = Math.max(42, wrapped.length * 30 + 18)
       body.push(`<rect x="56" y="${y - 25}" width="${width - 112}" height="${height}" rx="8" fill="${fill}" stroke="${stroke}" stroke-width="2"/>`)
       for (const line of wrapped) {
-        body.push(textNode(line, 76, y, { size: 20, fill: row.type === "math" ? palette.warn : "#28312d", mono: row.type !== "math" }))
+        body.push(textNode(line, 76, y, { size: 20, fill: row.type === "math" ? palette.warn : palette.ink, mono: row.type !== "math" }))
         y += 30
       }
       y += 22
@@ -301,12 +279,57 @@ function renderMarkdownRows(rows: MarkdownRow[] = [], width: number, config: unk
 }
 
 async function svgToPng(svg: string, kind: string, meta: UnknownRecord, config: unknown): Promise<UnknownRecord> {
-  const buffer = await sharp(Buffer.from(svg)).png().toBuffer()
-  const cache = await persistRender(kind, buffer, meta, record(config)).catch(error => {
-    hostRuntime.logger?.warn?.("[yui-chat] 渲染缓存写入失败", error)
-    return null
-  })
-  return { buffer, cache }
+  const cfg = renderConfig(config)
+  const engineKind = kind === "markdown-document" ? "markdown" : kind === "mind-map" ? "mindmap" : kind
+  const resolvedEngine = resolveRenderEngine(engineKind, "", config)
+  const fallbackFrom = text(cfg.fallbackFrom).toLowerCase() === "html"
+  // 内置模板统一优先使用受控 HTML 页面；通用 HTML/URL 截图仍由独立后端开关保护。
+  if (resolvedEngine === "html") {
+    try {
+      const { renderSvgToPng } = await import("./render-html-service.js")
+      return await renderSvgToPng(svg.replaceAll(renderFooterToken, renderFooter("html")), kind, meta, config, false)
+    } catch (error) {
+      hostRuntime.logger?.warn?.(`[yui-chat] ${kind} HTML 渲染失败，回退 SVG`, error)
+    }
+  }
+  const fallback = resolvedEngine === "html" || fallbackFrom || normalizeConfiguredEngine(cfg.engine, "html") === "html"
+  const buffer = await sharp(Buffer.from(svg.replaceAll(renderFooterToken, renderFooter("svg", fallback)))).png().toBuffer()
+  const fallbackMeta = {
+    ...meta,
+    engine: "svg",
+    renderer: fallback ? "sharp-svg-fallback" : "sharp-svg",
+    requestedEngine: resolvedEngine,
+    fallback,
+  }
+  return { buffer, meta: fallbackMeta }
+}
+
+/** 统一处理公开模板的引擎选择；HTML 失败时只在这里切换到 SVG。 */
+export async function renderImageByConfiguredEngine(
+  kind: unknown,
+  input: UnknownRecord = {},
+  config: unknown = {},
+  requested: unknown = "",
+  scope: RenderStrategyScope = "ai",
+): Promise<UnknownRecord> {
+  const normalized = normalizeRenderKind(kind)
+  const engine = resolveRenderEngine(normalized, requested, config, scope)
+  if (engine === "html" && (normalized === "markdown" || normalized === "mindmap")) {
+    try {
+      const htmlService = await import("./render-html-service.js")
+      const result = normalized === "markdown"
+        ? await htmlService.renderMarkdownHtmlToPng(input, config)
+        : await htmlService.renderMarkmapHtmlToPng(input, config)
+      return {
+        ...record(result),
+        meta: { ...record(record(result).meta), engine: "html", renderer: "html-puppeteer", requestedEngine: "html", fallback: false },
+      }
+    } catch (error) {
+      hostRuntime.logger?.warn?.(`[yui-chat] ${normalized} HTML 渲染失败，回退 SVG`, error)
+      return renderImageByKind(normalized, input, withRenderEngine(config, "svg", { fallbackFrom: "html" })) as Promise<UnknownRecord>
+    }
+  }
+  return renderImageByKind(normalized, input, withRenderEngine(config, engine)) as Promise<UnknownRecord>
 }
 
 function normalizeSections(input: RenderInput = {}): TextSection[] {
@@ -364,12 +387,15 @@ export async function renderTextCard(input: RenderInput = {}, config: unknown = 
   const maxVisual = Math.max(28, Math.floor((width - 144) / 18))
   const sections = normalizeSections(input)
   const rows: MarkdownRow[] = []
-  for (const section of sections) {
+  const maxRows = 420
+  for (const section of sections.slice(0, 32)) {
+    if (rows.length >= maxRows) break
     if (section.title) rows.push({ type: "section", text: text(section.title) })
     const images = normalizeSectionImages(section.images, config)
     if (images.length) rows.push({ type: "images", images })
-    const rawLines = Array.isArray(section.lines) ? section.lines : text(section.content || "").split("\n")
+    const rawLines = (Array.isArray(section.lines) ? section.lines : text(section.content || "").split("\n")).slice(0, 64)
     for (const raw of rawLines) {
+      if (rows.length >= maxRows) break
       for (const line of wrapText(raw, maxVisual, cfg.maxTextChars)) rows.push({ type: "line", text: line })
     }
     rows.push({ type: "gap" })
@@ -378,8 +404,7 @@ export async function renderTextCard(input: RenderInput = {}, config: unknown = 
 
   const title = text(input.title || "Yui Chat").slice(0, 80)
   const subtitle = text(input.subtitle || "").slice(0, 120)
-  const footer = text(input.footer || `Generated at ${new Date().toLocaleString("zh-CN", { hour12: false })}`).slice(0, 160)
-  const headerHeight = subtitle ? 132 : 100
+  const headerHeight = subtitle ? 210 : 176
   let y = headerHeight + 42
   const body = []
   for (const row of rows) {
@@ -402,20 +427,16 @@ export async function renderTextCard(input: RenderInput = {}, config: unknown = 
     body.push(textNode(row.text, 72, y, { size: 24, fill: palette.ink }))
     y += 34
   }
-  const height = Math.max(280, y + 86)
-  const svg = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">
-    <rect width="100%" height="100%" fill="${palette.bg}"/>
-    <rect x="28" y="28" width="${width - 56}" height="${height - 56}" rx="10" fill="${palette.panel}" stroke="${palette.line}" stroke-width="2"/>
-    <rect x="28" y="28" width="${width - 56}" height="${headerHeight}" rx="10" fill="${palette.panelSoft}"/>
-    <rect x="28" y="${28 + headerHeight - 10}" width="${width - 56}" height="12" fill="${palette.panelSoft}"/>
-    <circle cx="72" cy="74" r="18" fill="${palette.accent}"/>
-    ${textNode(title, 104, 82, { size: 32, fill: palette.ink, weight: 800 })}
-    ${subtitle ? textNode(subtitle, 104, 122, { size: 22, fill: palette.muted }) : ""}
-    ${body.join("\n")}
-    <line x1="56" y1="${height - 62}" x2="${width - 56}" y2="${height - 62}" stroke="${palette.line}" stroke-width="2"/>
-    ${textNode(footer, 56, height - 30, { size: 18, fill: palette.muted })}
-  </svg>`
-  return svgToPng(svg, text(input.cacheKind || "text-card"), { title, subtitle, rows: rows.length }, config)
+  const height = Math.max(320, y + 86)
+  const svg = buildSvgFrame({
+    width,
+    height,
+    title,
+    subtitle,
+    body: body.join("\n"),
+    footer: renderFooterToken,
+  })
+  return svgToPng(svg, text(input.renderKind || "text-card"), { title, subtitle, rows: rows.length }, config)
 }
 
 export async function renderChatCard(input: RenderInput = {}, config: unknown = {}): Promise<UnknownRecord> {
@@ -493,7 +514,7 @@ export async function renderChatCard(input: RenderInput = {}, config: unknown = 
     sections,
     footer: input.footer || "Yui Chat · Rich Chat Card",
     width: input.width,
-    cacheKind: "chat-card",
+    renderKind: "chat-card",
   }, config)
 }
 
@@ -582,7 +603,7 @@ function normalizeHelpGroups(input: RenderInput = {}): TextSection[] {
       title: "管理入口",
       lines: [
         "#yui面板 - 获取一次性 Web 管理端快捷登录链接",
-        "#yui诊断 - 查看模型、工具、知识库和缓存状态",
+        "#yui诊断 - 查看模型、工具、知识库和运行状态",
         "#yui对话列表 - 查看当前活跃会话",
       ],
     },
@@ -607,7 +628,7 @@ export async function renderHelpMenu(input: RenderInput = {}, config: unknown = 
     sections,
     footer: input.footer || "Yui Chat · Help Menu Render",
     width: input.width,
-    cacheKind: "help-menu",
+    renderKind: "help-menu",
   }, config)
 }
 
@@ -642,19 +663,14 @@ export async function renderMarkdownDocument(input: RenderInput = {}, config: un
   const subtitle = compactText(input.subtitle || "支持 Markdown、代码块、公式文本和 Mermaid 源码卡片", 140)
   const rows = parseMarkdownRows(input.markdown || input.content || "", { maxChars: cfg.maxTextChars })
   const { body, height } = renderMarkdownRows(rows, width, config)
-  const footer = compactText(input.footer || "Yui Chat · Markdown Render", 160)
-  const svg = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">
-    <rect width="100%" height="100%" fill="${palette.bg}"/>
-    <rect x="28" y="28" width="${width - 56}" height="${height - 56}" rx="10" fill="${palette.panel}" stroke="${palette.line}" stroke-width="2"/>
-    <rect x="28" y="28" width="${width - 56}" height="116" rx="10" fill="${palette.panelSoft}"/>
-    <rect x="28" y="134" width="${width - 56}" height="14" fill="${palette.panelSoft}"/>
-    <rect x="62" y="58" width="36" height="36" rx="8" fill="${palette.accent}"/>
-    ${textNode(title, 116, 82, { size: 32, fill: palette.ink, weight: 800 })}
-    ${textNode(subtitle, 116, 120, { size: 21, fill: palette.muted })}
-    ${body.join("\n")}
-    <line x1="56" y1="${height - 62}" x2="${width - 56}" y2="${height - 62}" stroke="${palette.line}" stroke-width="2"/>
-    ${textNode(footer, 56, height - 30, { size: 18, fill: palette.muted })}
-  </svg>`
+  const svg = buildSvgFrame({
+    width,
+    height,
+    title,
+    subtitle,
+    body: body.join("\n"),
+    footer: renderFooterToken,
+  })
   return svgToPng(svg, "markdown-document", { title, rows: rows.length }, config)
 }
 
@@ -717,42 +733,41 @@ export async function renderMindMap(input: RenderInput = {}, config: unknown = {
   const childHeight = 34
   const columnX = 430
   const childX = 720
-  const rootY = Math.max(180, 120 + Math.floor(branches.length * branchHeight / 2))
-  let y = 120
+  const rootY = Math.max(260, 210 + Math.floor(branches.length * branchHeight / 2))
+  let y = 210
   const rootLines = wrapText(root.title, 18, 120).slice(0, 3)
-  const body = [
-    `<rect x="58" y="${rootY - 54}" width="300" height="108" rx="12" fill="${palette.accent}" filter="url(#shadow)"/>`,
-  ]
+  const body: string[] = []
   rootLines.forEach((line, lineIndex) => {
-    body.push(textNode(line, 86, rootY - 18 + lineIndex * 32, { size: 26, fill: "#ffffff", weight: 800 }))
+    body.push(textNode(line, 86, rootY - 18 + lineIndex * 32, { size: 26, fill: palette.accentStrong, weight: 800 }))
   })
+  body.push(`<circle cx="358" cy="${rootY}" r="11" fill="${palette.panel}" stroke="${palette.accent}" stroke-width="4"/>`)
   for (const [index, branch] of branches.entries()) {
     const childrenHeight = Math.max(branchHeight, branch.children.length * childHeight + 24)
     const branchY = y + Math.floor(childrenHeight / 2)
     const color = [palette.blue, palette.violet, palette.rose, palette.gold, palette.accent][index % 5]
     body.push(`<path d="M358 ${rootY} C390 ${rootY}, 390 ${branchY}, ${columnX - 18} ${branchY}" fill="none" stroke="${color}" stroke-width="4"/>`)
-    body.push(`<rect x="${columnX}" y="${branchY - 30}" width="250" height="60" rx="10" fill="${color}"/>`)
+    body.push(`<circle cx="${columnX - 18}" cy="${branchY}" r="10" fill="${palette.panel}" stroke="${color}" stroke-width="4"/>`)
     wrapText(branch.title, 15, 100).slice(0, 2).forEach((line, lineIndex) => {
-      body.push(textNode(line, columnX + 20, branchY - 4 + lineIndex * 25, { size: 20, fill: "#ffffff", weight: 700 }))
+      body.push(textNode(line, columnX + 20, branchY - 4 + lineIndex * 25, { size: 20, fill: color, weight: 700 }))
     })
     let childY = y + 24
     for (const child of branch.children) {
       const offset = Math.min(54, child.level * 22)
       body.push(`<path d="M${columnX + 250} ${branchY} C${columnX + 300} ${branchY}, ${childX - 28 + offset} ${childY - 8}, ${childX + offset} ${childY - 8}" fill="none" stroke="${palette.line}" stroke-width="3"/>`)
-      body.push(`<rect x="${childX + offset}" y="${childY - 28}" width="${width - childX - offset - 60}" height="36" rx="8" fill="${palette.panelSoft}" stroke="${palette.line}"/>`)
       body.push(textNode(child.title, childX + offset + 16, childY - 3, { size: 18, fill: palette.ink }))
       childY += childHeight
     }
     y += childrenHeight + 22
   }
-  const height = Math.max(420, y + 70)
-  const svg = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">
-    <defs><filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="8" stdDeviation="9" flood-color="#1f2520" flood-opacity="0.14"/></filter></defs>
-    <rect width="100%" height="100%" fill="${palette.bg}"/>
-    <rect x="28" y="28" width="${width - 56}" height="${height - 56}" rx="10" fill="${palette.panel}" stroke="${palette.line}" stroke-width="2"/>
-    ${body.join("\n")}
-    ${textNode("Yui Chat · Mind Map Render", 56, height - 30, { size: 18, fill: palette.muted })}
-  </svg>`
+  const height = Math.max(520, y + 100)
+  const svg = buildSvgFrame({
+    width,
+    height,
+    title: root.title,
+    subtitle: text(input.subtitle || "结构关系"),
+    body: body.join("\n"),
+    footer: renderFooterToken,
+  })
   return svgToPng(svg, "mind-map", { title: root.title, branches: branches.length }, config)
 }
 
@@ -784,7 +799,7 @@ export async function renderWordCloud(input: RenderInput = {}, config: unknown =
   const body = []
   const cols = 4
   const cellW = (width - 120) / cols
-  const startY = 150
+  const startY = 218
   for (const [index, item] of words.entries()) {
     const row = Math.floor(index / cols)
     const col = index % cols
@@ -797,15 +812,14 @@ export async function renderWordCloud(input: RenderInput = {}, config: unknown =
   const height = Math.max(360, startY + rows * 58 + 86)
   const title = compactText(input.title || "动态词云", 80)
   const subtitle = compactText(input.subtitle || `共 ${words.length} 个关键词`, 120)
-  const svg = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">
-    <rect width="100%" height="100%" fill="${palette.bg}"/>
-    <rect x="28" y="28" width="${width - 56}" height="${height - 56}" rx="10" fill="${palette.panel}" stroke="${palette.line}" stroke-width="2"/>
-    <rect x="44" y="44" width="${width - 88}" height="76" rx="8" fill="${palette.panelSoft}"/>
-    ${textNode(title, 70, 84, { size: 32, fill: palette.ink, weight: 800 })}
-    ${textNode(subtitle, 70, 112, { size: 19, fill: palette.muted })}
-    ${body.join("\n")}
-    ${textNode("Yui Chat · Word Cloud Render", 56, height - 30, { size: 18, fill: palette.muted })}
-  </svg>`
+  const svg = buildSvgFrame({
+    width,
+    height,
+    title,
+    subtitle,
+    body: body.join("\n"),
+    footer: renderFooterToken,
+  })
   return svgToPng(svg, "word-cloud", { title, words: words.length }, config)
 }
 
@@ -817,7 +831,7 @@ export async function renderDynamicPanel(input: RenderInput = {}, config: unknow
   const subtitle = compactText(input.subtitle || new Date().toLocaleString("zh-CN", { hour12: false }), 140)
   const metrics = records(input.metrics).slice(0, 8)
   const sections = records(input.sections).slice(0, 8)
-  let y = 156
+  let y = 214
   const body = []
   const metricW = Math.floor((width - 112 - Math.max(0, metrics.length - 1) * 16) / Math.max(1, Math.min(4, metrics.length || 1)))
   for (const [index, metric] of metrics.entries()) {
@@ -841,17 +855,15 @@ export async function renderDynamicPanel(input: RenderInput = {}, config: unknow
     }
     y += 64 + Math.min(6, lines.length) * 30
   }
-  const height = Math.max(360, y + 84)
-  const svg = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">
-    <rect width="100%" height="100%" fill="${palette.bg}"/>
-    <rect x="28" y="28" width="${width - 56}" height="${height - 56}" rx="10" fill="${palette.panel}" stroke="${palette.line}" stroke-width="2"/>
-    <rect x="28" y="28" width="${width - 56}" height="108" rx="10" fill="${palette.accent}"/>
-    <rect x="28" y="118" width="${width - 56}" height="18" fill="${palette.accent}"/>
-    ${textNode(title, 64, 76, { size: 34, fill: "#ffffff", weight: 800 })}
-    ${textNode(subtitle, 64, 112, { size: 21, fill: "#e5f5ef" })}
-    ${body.join("\n")}
-    ${textNode(input.footer || "Yui Chat · Dynamic Render", 56, height - 30, { size: 18, fill: palette.muted })}
-  </svg>`
+  const height = Math.max(420, y + 84)
+  const svg = buildSvgFrame({
+    width,
+    height,
+    title,
+    subtitle,
+    body: body.join("\n"),
+    footer: renderFooterToken,
+  })
   return svgToPng(svg, "dynamic-panel", { title, metrics: metrics.length, sections: sections.length }, config)
 }
 
@@ -868,6 +880,7 @@ export async function renderDynamicPanel(input: RenderInput = {}, config: unknow
   },
   {
     kind: "chat-card",
+    publicTemplate: false,
     label: "富聊天卡片",
     toolName: "render_image",
     command: "#yui图片模式 / 长文本自动转图",
@@ -878,6 +891,7 @@ export async function renderDynamicPanel(input: RenderInput = {}, config: unknow
   },
   {
     kind: "command-help",
+    publicTemplate: false,
     label: "指令帮助图",
     toolName: "render_image",
     command: "#yuihelp / #yui渲染帮助",
@@ -888,6 +902,7 @@ export async function renderDynamicPanel(input: RenderInput = {}, config: unknow
   },
   {
     kind: "help-menu",
+    publicTemplate: false,
     label: "帮助菜单图",
     toolName: "render_image",
     command: "#yuihelp / #yui渲染帮助菜单",
@@ -898,6 +913,7 @@ export async function renderDynamicPanel(input: RenderInput = {}, config: unknow
   },
   {
     kind: "conversation-list",
+    publicTemplate: false,
     label: "会话列表图",
     toolName: "render_image",
     command: "#yui对话列表",
@@ -928,6 +944,7 @@ export async function renderDynamicPanel(input: RenderInput = {}, config: unknow
   },
   {
     kind: "function-plot",
+    publicTemplate: false,
     label: "函数图",
     toolName: "render_image",
     command: "#yui渲染函数图",
@@ -938,6 +955,7 @@ export async function renderDynamicPanel(input: RenderInput = {}, config: unknow
   },
   {
     kind: "word-cloud",
+    publicTemplate: false,
     label: "词云图片",
     toolName: "render_image",
     command: "#yui渲染词云",
@@ -948,6 +966,7 @@ export async function renderDynamicPanel(input: RenderInput = {}, config: unknow
   },
   {
     kind: "dynamic-panel",
+    publicTemplate: false,
     label: "动态面板图片",
     toolName: "render_image",
     command: "#yui渲染动态",
@@ -969,6 +988,7 @@ export const renderService = {
   renderWordCloud,
   renderDynamicPanel,
   renderImageByKind,
+  renderImageByConfiguredEngine,
   normalizeRenderKind,
   renderKindCatalog,
   renderKindLabels,
@@ -976,6 +996,4 @@ export const renderService = {
   listImageRenderers,
   registerImageRenderer,
   unregisterImageRenderer,
-  renderCacheStats,
-  cleanupRenderCache,
 }

@@ -2,6 +2,7 @@ import { computed, nextTick, reactive, ref, watch } from "vue"
 import { request, toast } from "../../app/store/store.js"
 import { asRecord, errorMessage, type UnknownRecord } from "../../shared/data.js"
 import { ToolConfigurationPanel } from "./tool-configuration-panel.js"
+import { RenderPanel } from "./render-panel.js"
 import {
   policyBadges,
   sourceLabel,
@@ -64,7 +65,7 @@ const EMPTY_TOOL = cloneTool()
 
 export const ToolDetailModal = {
   name: "ToolDetailModal",
-  components: { ToolConfigurationPanel },
+  components: { ToolConfigurationPanel, RenderPanel },
   props: {
     open: Boolean,
     tool: { type: Object, default: () => EMPTY_TOOL },
@@ -81,6 +82,7 @@ export const ToolDetailModal = {
     let sourceRequestId = 0
 
     const title = computed(() => toolDisplayName(toolDetail) || toolDetail.name || "能力详情")
+    const isRenderImage = computed(() => toolDetail.name === "render_image")
     const subtitle = computed(() => {
       const provenance = toolProvenance(toolDetail)
       return `${sourceLabel(toolSource(toolDetail))}能力 · ${provenance.packageId || provenance.skillId || "系统内置"}`
@@ -91,6 +93,7 @@ export const ToolDetailModal = {
     const accessBadges = computed(() => policyBadges(toolCommon(toolDetail).policy))
     const tabs = computed(() => [
       { id: "overview", label: "能力概览", icon: "info" },
+      ...(isRenderImage.value ? [{ id: "render", label: "渲染设置", icon: "sparkles", badge: "统一入口" }] : []),
       { id: "configuration", label: "渠道与变量", icon: "sliders", badge: hasConfig.value ? "可配置" : "无额外项" },
       { id: "source", label: "定义与源码", icon: "code" },
     ])
@@ -146,7 +149,7 @@ export const ToolDetailModal = {
 
     watch(() => [props.open, props.tool, props.initialTab], () => {
       syncTool()
-      activeTab.value = ["configuration", "source"].includes(String(props.initialTab)) ? String(props.initialTab) : "overview"
+      activeTab.value = ["render", "configuration", "source"].includes(String(props.initialTab)) && (String(props.initialTab) !== "render" || isRenderImage.value) ? String(props.initialTab) : "overview"
       if (activeTab.value === "source") void loadSource()
       if (props.open) resetScroll()
     }, { immediate: true, deep: true })
@@ -161,6 +164,7 @@ export const ToolDetailModal = {
       title,
       subtitle,
       tabs,
+      isRenderImage,
       accessBadges,
       hasConfig,
       selectTab,
@@ -201,7 +205,11 @@ export const ToolDetailModal = {
             <article class="tool-overview-card"><span class="eyebrow">权限边界</span><div v-if="accessBadges.length" class="tool-badge-cloud"><span v-for="badge in accessBadges" :key="badge" class="badge">{{ badge }}</span></div><p v-else>没有额外角色限制，仍受全局工具开关与会话策略控制。</p></article>
             <article class="tool-overview-card"><span class="eyebrow">来源</span><dl><div><dt>类型</dt><dd>{{ sourceLabel(toolSource(toolDetail)) }}</dd></div><div><dt>归属</dt><dd>{{ toolProvenance(toolDetail).packageId || toolProvenance(toolDetail).skillId || 'builtin' }}</dd></div><div><dt>标签</dt><dd>{{ (toolCommon(toolDetail).tags || []).join(' · ') || '无' }}</dd></div></dl></article>
           </div>
-          <div v-if="hasConfig" class="tool-detail-next"><Icon name="sliders" :size="17" /><div><strong>此能力支持独立配置</strong><p>渠道开关、默认来源与密钥集中在“渠道与变量”，保存后立即热应用。</p></div><button class="btn small outline" type="button" @click="selectTab('configuration')">去配置<Icon name="chevron-right" :size="13" /></button></div>
+          <div v-if="hasConfig" class="tool-detail-next"><Icon name="sliders" :size="17" /><div><strong>此能力支持独立配置</strong><p>渠道开关、默认来源与密钥集中在“渠道与变量”，保存后生效。</p></div><button class="btn small outline" type="button" @click="selectTab('configuration')">去配置<Icon name="chevron-right" :size="13" /></button></div>
+        </section>
+
+        <section v-else-if="activeTab === 'render'" class="tool-detail-page">
+          <RenderPanel />
         </section>
 
         <section v-else-if="activeTab === 'configuration'" class="tool-detail-page">

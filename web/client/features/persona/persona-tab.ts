@@ -53,7 +53,6 @@ interface ConfigNode extends UnknownRecord {
   recentMessageCount?: number
   mediaThumbnails?: boolean
   mediaThumbnailMaxCount?: number
-  chatCardAsImage?: boolean
   intervalMethod?: string
   intervalMinSeconds?: number
   intervalMaxSeconds?: number
@@ -171,7 +170,6 @@ function initDraft(cfg: PersonaConfig = {}) {
     responseMode: cfg.response?.defaultMode || "text",
     pictureAutoEnabled: cfg.response?.autoUsePicture !== false,
     pictureThreshold: cfg.response?.autoUsePictureThreshold ?? 1200,
-    chatCardAsImage: cfg.response?.render?.chatCardAsImage !== false,
     ttsEnabled: tts.enabled === true,
     ttsAlsoSendText: tts.alsoSendText !== false,
     ttsModel: tts.model || "tts-1",
@@ -349,7 +347,6 @@ export const PersonaTab = {
           "response.defaultMode": draft.responseMode,
           "response.autoUsePicture": draft.pictureAutoEnabled,
           "response.autoUsePictureThreshold": Number(draft.pictureThreshold || 1200),
-          "response.render.chatCardAsImage": draft.chatCardAsImage,
           "response.tts.enabled": draft.ttsEnabled,
           "response.tts.alsoSendText": draft.ttsAlsoSendText,
           "response.tts.model": draft.ttsModel,
@@ -635,7 +632,6 @@ export const PersonaTab = {
                     <div class="section-heading-row"><div><div class="section-title"><Icon name="eye" :size="14" />图片输出</div><p class="muted small">图片卡片和长文本自动转图策略。</p></div><span v-if="draft.responseMode === 'picture'" class="badge on">默认</span></div>
                     <div class="settings-toggle-grid">
                       <div class="settings-toggle-item"><div><strong>长文本自动转图</strong><small>文本超过阈值时改用图片交付。</small></div><Switch :model-value="draft.pictureAutoEnabled" @update:model-value="draft.pictureAutoEnabled = $event" /></div>
-                      <div class="settings-toggle-item"><div><strong>聊天卡片转图片</strong><small>图片模式使用富聊天卡片呈现。</small></div><Switch :model-value="draft.chatCardAsImage" @update:model-value="draft.chatCardAsImage = $event" /></div>
                     </div>
                     <div class="form-grid dense">
                       <Field label="长文本转图阈值" type="number" v-model="draft.pictureThreshold" />
