@@ -17,6 +17,7 @@ import { hostRuntime } from "../../core/runtime/host-runtime.js"
 import { fetchSafeHttp } from "../../core/network/safe-http-client.js"
 import { resolveTrustedResourceRequest, trustedResourceRequest } from "../../core/network/link-safety-policy.js"
 import type { ToolExecutionContext } from "../support/tool-contract.js"
+import { GenerateImageTool } from "./image-generation.js"
 
 interface MediaToolContext extends ToolExecutionContext {
   e?: UnknownRecord
@@ -633,5 +634,5 @@ export class MessageSendTool {
 }
 
 export function createMediaTools(): unknown[] {
-  return [new MessageSendTool()]
+  return [new MessageSendTool(), new GenerateImageTool()]
 }

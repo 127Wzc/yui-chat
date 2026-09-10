@@ -1,17 +1,22 @@
 import { computed, nextTick, onMounted, ref } from "vue"
 import { confirmAction, refreshSlices, request, store, toast } from "../../app/store/store.js"
 import { asRecord, errorMessage, type UnknownRecord } from "../../shared/data.js"
+import { plainTextContent, renderRichContent } from "../../shared/rich-content.js"
 
 interface ChatMessage {
   id: string
   role: string
   text: string
+  content?: unknown
+  raw?: unknown
   at: string
 }
 
 interface StoredMessage {
   role: string
   text?: unknown
+  content?: unknown
+  at?: unknown
 }
 
 interface ChatSession {
@@ -49,6 +54,9 @@ interface ChatResult extends UnknownRecord {
   inputBlocked?: boolean
   inputBlockReason?: string
   text?: string
+  content?: unknown
+  images?: unknown[]
+  media?: unknown
 }
 
 interface ChatResponse extends UnknownRecord {
@@ -63,7 +71,15 @@ function createSessionId() {
 }
 
 function messageFromStored(item: StoredMessage, index: number): ChatMessage {
-  return { id: `${index}-${item.role}-${item.text}`, role: item.role, text: String(item.text || ""), at: "" }
+  const content = item.content !== undefined ? item.content : item.text
+  return {
+    id: `${index}-${item.role}-${plainTextContent(content)}`,
+    role: item.role,
+    text: plainTextContent(content),
+    content,
+    raw: item,
+    at: String(item.at || ""),
+  }
 }
 
 export const ChatTab = {
@@ -137,7 +153,7 @@ export const ChatTab = {
       }
     }
 
-    function addPendingMessage(message: Pick<ChatMessage, "role" | "text">) {
+    function addPendingMessage(message: Pick<ChatMessage, "role" | "text" | "content" | "raw">) {
       messages.value.push({ id: createSessionId(), at: new Date().toISOString(), ...message })
       scrollToBottom()
     }
@@ -170,10 +186,11 @@ export const ChatTab = {
           replaceCurrentSession(response.session)
         } else if (response.result?.inputBlocked) {
           addPendingMessage({ role: "system", text: response.result.inputBlockReason || "消息已被输入过滤器拦截。" })
-        } else if (response.result?.text) {
+        } else if (response.result?.text || response.result?.content || response.result?.images?.length || response.result?.media) {
           // SQLite 降级时服务端没有持久会话可回查：直接用返回的回复文本本地追加，
           // 不再依赖 loadSessions 兜底（空列表会把刚发的消息清掉）。
-          addPendingMessage({ role: "assistant", text: response.result.text })
+          const content = response.result.content ?? response.result.text ?? response.result.images ?? response.result.media
+          addPendingMessage({ role: "assistant", text: plainTextContent(content), content, raw: response.result })
         }
         await refreshSlices(["setupGuide", "conversations"])
       } catch (err) {
@@ -255,7 +272,10 @@ export const ChatTab = {
     return {
       store, messages, sessions, loadingSessions, prompt, channelId, sending, conversationEl, suggestions,
       activeSession, channelOptions, usingMockOnly, send, onComposerKeydown, useSuggestion,
-      newConversation, selectSession, deleteSession, copyMessage, timeText,
+      newConversation, selectSession, deleteSession, copyMessage, timeText, renderRichContent,
+      pretty: (value: unknown) => {
+        try { return JSON.stringify(value, null, 2) || String(value ?? "") } catch { return String(value ?? "") }
+      },
       sessionTime,
     }
   },
@@ -296,7 +316,7 @@ export const ChatTab = {
             <div v-if="!messages.length" class="chat-empty"><span class="chat-empty-icon"><Icon name="message" :size="24" /></span><h3>发送第一条测试消息</h3><p>建议先验证基础回复，再测试人设和指令推荐。</p><div class="chat-suggestions"><button v-for="item in suggestions" :key="item" type="button" @click="useSuggestion(item)">{{ item }}</button></div></div>
             <article v-for="message in messages" :key="message.id" class="chat-message" :class="message.role">
               <div class="chat-message-avatar"><Icon :name="message.role === 'user' ? 'message' : (message.role === 'error' ? 'alert' : (message.role === 'system' ? 'info' : 'sparkles'))" :size="15" /></div>
-              <div class="chat-bubble"><div class="chat-bubble-head"><b>{{ message.role === 'user' ? '你' : (message.role === 'error' ? '发送失败' : (message.role === 'system' ? '系统提示' : 'AI 助手')) }}</b><span>{{ timeText(message.at) }}</span></div><p>{{ message.text }}</p><div v-if="message.role === 'assistant'" class="chat-message-meta"><button class="btn ghost sm" type="button" @click="copyMessage(message.text)"><Icon name="copy" :size="13" />复制</button></div></div>
+              <div class="chat-bubble"><div class="chat-bubble-head"><b>{{ message.role === 'user' ? '你' : (message.role === 'error' ? '发送失败' : (message.role === 'system' ? '系统提示' : 'AI 助手')) }}</b><span>{{ timeText(message.at) }}</span></div><div class="chat-rich-content" v-html="renderRichContent(message.content ?? message.text)"></div><details v-if="store.developerMode && message.raw" class="chat-raw-content"><summary>原始内容</summary><pre>{{ pretty(message.raw) }}</pre></details><div v-if="message.role === 'assistant'" class="chat-message-meta"><button class="btn ghost sm" type="button" @click="copyMessage(message.text)"><Icon name="copy" :size="13" />复制</button></div></div>
             </article>
             <article v-if="sending" class="chat-message assistant"><div class="chat-message-avatar"><Icon name="sparkles" :size="15" /></div><div class="chat-bubble chat-thinking"><span></span><span></span><span></span><em>正在思考</em></div></article>
           </div>

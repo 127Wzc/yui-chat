@@ -14,6 +14,7 @@ const MEMORY_LIMIT = 1000
 const SNAPSHOT_MESSAGES_LIMIT = 256 * 1024
 const SNAPSHOT_TOOLS_LIMIT = 256 * 1024
 const SNAPSHOT_REQUEST_LIMIT = 32 * 1024
+const SNAPSHOT_RESPONSE_MEDIA_LIMIT = 256 * 1024
 const SNAPSHOT_STRING_LIMIT = 12000
 const FLUSH_INTERVAL_MS = 250
 const FLUSH_BATCH_SIZE = 100
@@ -418,6 +419,31 @@ function serializedSnapshotObject(value: unknown, limit: number): { text: string
   return { text: JSON.stringify({ truncated: true, preview: redactText(encoded, Math.max(200, limit - 64)) }) || "{}", truncated: true }
 }
 
+function serializedSnapshotWithResponseMedia(request: unknown, thumbnails: unknown[], totalCount: number): { text: string; truncated: boolean } {
+  const safeRequest = record(snapshotValue(request))
+  delete safeRequest.responseMedia
+  const media = thumbnails.flatMap((value, index) => {
+    const dataUrl = String(value || "").trim()
+    return /^data:image\/(?:jpeg|webp|png);base64,[A-Za-z0-9+/=]+$/i.test(dataUrl)
+      ? [{ type: "image", url: dataUrl, alt: `生成图片 ${index + 1}` }]
+      : []
+  })
+  const selected: UnknownRecord[] = []
+  let text = JSON.stringify({ ...safeRequest, responseMedia: selected, responseMediaCount: Math.max(0, asInt(totalCount)) }) || "{}"
+  let truncated = false
+  for (const item of media) {
+    const candidate = JSON.stringify({ ...safeRequest, responseMedia: [...selected, item], responseMediaCount: Math.max(0, asInt(totalCount)) }) || "{}"
+    if (Buffer.byteLength(candidate) > SNAPSHOT_RESPONSE_MEDIA_LIMIT) {
+      truncated = true
+      break
+    }
+    selected.push(item)
+    text = candidate
+  }
+  if (selected.length < media.length) truncated = true
+  return { text, truncated }
+}
+
 function snapshotTool(tool: unknown): UnknownRecord {
   const source = record(tool)
   if (source.type && typeof source.execute !== "function") return snapshotValue(source) as UnknownRecord
@@ -555,7 +581,9 @@ function estimateRequestInput(meta: UnknownRecord = {}): number {
 
 function estimateResponseOutput(response: UnknownRecord = {}): number {
   const toolCalls = Array.isArray(response.toolCalls) ? response.toolCalls : []
-  return estimateTokens(response.text || "") + toolCalls.reduce((sum: number, item: unknown) => sum + estimateTokens(item), 0)
+  // 旧日志可能仍含 Base64 图片；它们不应被当成模型输出 token 估算。
+  const responseText = String(response.text || "").replace(/data:image\/[\w.+-]+;base64,[A-Za-z0-9+/=_-]+/gi, "[图片]")
+  return estimateTokens(responseText) + toolCalls.reduce((sum: number, item: unknown) => sum + estimateTokens(item), 0)
 }
 
 function normalizeUsage(response: UnknownRecord = {}, meta: UnknownRecord = {}): NormalizedUsage {
@@ -592,9 +620,12 @@ function providerNameOf(channel: ChannelLike = {}): string {
 function protocolForAdapter(value: unknown): string {
   const adapter = String(value || "").trim()
   if (adapter === "openai-responses") return "responses"
+  if (adapter === "openai-images") return "openai-images"
+  if (adapter === "openai-chat-completions") return "openai-chat-completions"
   if (["openai-compatible", "qwen", "chatglm"].includes(adapter)) return "chat-completions"
   if (adapter === "claude") return "claude-messages"
   if (adapter === "gemini") return "gemini-generate-content"
+  if (adapter === "gemini-images") return "gemini-image-generation"
   if (adapter === "mock") return "mock"
   return adapter
 }
@@ -1083,6 +1114,22 @@ class ModelLogStore {
       this.enqueueDetail({ kind: "snapshot", row: snapshot, terminal: true, priority: "high" })
     } catch (error) {
       this.noteError(error, "记录原始模型请求")
+    }
+  }
+
+  /** 缩略图只进入按需读取的模型快照，不混入模型回复摘要。 */
+  captureModelResponseMedia(call: ModelCallRecord | null, thumbnails: unknown[] = [], totalCount = 0): void {
+    if (!call || !this.enabled) return
+    try {
+      const snapshot = call.snapshot || this.memorySnapshots.get(call.id)
+      if (!snapshot) return
+      const serialized = serializedSnapshotWithResponseMedia(parseJson(snapshot.request_json), thumbnails, totalCount)
+      snapshot.request_json = serialized.text
+      snapshot.truncated = Boolean(snapshot.truncated || serialized.truncated)
+      snapshot.updated_at = now()
+      this.enqueueDetail({ kind: "snapshot", row: snapshot, terminal: true, priority: "high" })
+    } catch (error) {
+      this.noteError(error, "记录模型响应缩略图")
     }
   }
 

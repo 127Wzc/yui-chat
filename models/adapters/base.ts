@@ -1,6 +1,6 @@
 import type { ContentPart, JsonValue } from "../../core/message-chain/types.js"
 import { ModelAdapter as ProtocolModelAdapter } from "../protocol/adapter.js"
-import type { EmbeddingRequest, EmbeddingResponse, ModelListRequest, ModelRequest, ModelRequestCapture, ModelResponse, ModelUsage } from "../protocol/types.js"
+import type { EmbeddingRequest, EmbeddingResponse, ImageGenerationRequest, ImageGenerationResponse, ModelListRequest, ModelRequest, ModelRequestCapture, ModelResponse, ModelUsage } from "../protocol/types.js"
 
 type UnknownRecord = Record<string, unknown>
 
@@ -67,6 +67,9 @@ export abstract class ModelAdapter extends ProtocolModelAdapter {
   /** 是否支持 embedding。 */
   override readonly supportsEmbeddings: boolean = false
 
+  /** 是否支持图片生成。 */
+  override readonly supportsImageGeneration: boolean = false
+
   /** 是否支持 Responses 原生工具搜索。 */
   override readonly supportsNativeToolSearch: boolean = false
 
@@ -81,6 +84,11 @@ export abstract class ModelAdapter extends ProtocolModelAdapter {
   /** 执行 embedding；不支持时显式失败，避免把聊天模型误当向量模型。 */
   override async embedTexts(_request: EmbeddingRequest): Promise<EmbeddingResponse> {
     throw new Error(`${this.id} adapter does not support embeddings`)
+  }
+
+  /** 执行图片生成；具体协议适配器按需覆盖。 */
+  override async generateImages(_request: ImageGenerationRequest): Promise<ImageGenerationResponse> {
+    throw new Error(`${this.id} adapter does not support image generation`)
   }
 }
 
@@ -110,11 +118,11 @@ function numeric(value: unknown): number {
 /** 兼容 OpenAI、Claude 和 Gemini 的 usage 字段，并明确标记是否由上游报告。 */
 export function tokenUsage(data: unknown = {}, kind = "openai"): ModelUsage {
   const { value: usage, present } = usageRecord(data, kind)
-  const inputValue = usage.prompt_tokens ?? usage.input_tokens ?? usage.promptTokenCount
-  const outputValue = usage.completion_tokens ?? usage.output_tokens ?? usage.candidatesTokenCount
+  const inputValue = usage.prompt_tokens ?? usage.input_tokens ?? usage.promptTokenCount ?? usage.inputTokenCount
+  const outputValue = usage.completion_tokens ?? usage.output_tokens ?? usage.candidatesTokenCount ?? usage.outputTokenCount
   const input = numeric(inputValue)
   const output = numeric(outputValue)
-  const total = numeric(usage.total_tokens ?? usage.totalTokenCount ?? input + output) || input + output
+  const total = numeric(usage.total_tokens ?? usage.totalTokenCount ?? usage.totalTokens ?? input + output) || input + output
   const promptDetails = isRecord(usage.prompt_tokens_details) ? usage.prompt_tokens_details : isRecord(usage.input_tokens_details) ? usage.input_tokens_details : {}
   const completionDetails = isRecord(usage.completion_tokens_details) ? usage.completion_tokens_details : isRecord(usage.output_tokens_details) ? usage.output_tokens_details : {}
   const cached = numeric(promptDetails.cached_tokens ?? usage.cache_read_input_tokens ?? usage.cachedContentTokenCount)

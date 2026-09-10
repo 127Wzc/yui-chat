@@ -1,4 +1,4 @@
-import { configStore } from "../../../../config/store.js"
+import { configStore, redactConfigSecrets } from "../../../../config/store.js"
 import { customFilterManager } from "../../../../filters/custom/manager.js"
 import { filterRegistry } from "../../../../filters/core/registry.js"
 import { maskToolRuntimeConfig } from "../../../../extensions/runtime-config.js"
@@ -117,7 +117,7 @@ export function registerFilterRoutes(app: RouteApp): void {
         },
       } as typeof config
     }, {}, { reinitTools: false, reinitFilters: false })
-    res.json({ ok: true, filterId: id, config: saved, runtime, ...(await customFilterPayload()) })
+    res.json({ ok: true, filterId: id, config: redactConfigSecrets(saved), runtime, ...(await customFilterPayload()) })
   }, { errorStatus: 400, includeValidation: true }))
   app.post("/api/custom-filters/:id/test", auth, handleRoute(async (req, res) => {
     const details = await customFilterManager.getPackage(req.params.id)

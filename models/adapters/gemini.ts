@@ -5,7 +5,7 @@ import { getToolCommon, modelToolDescription } from "../../tools/support/contrac
 import { ModelAdapter, contentParts, contentToText, normalizeListedModels, notifyModelRequest, parseDataUrl, parseResponseData, safeJson, tokenUsage } from "./base.js"
 import { consumeServerSentEvents } from "./sse.js"
 import type { ContentPart, JsonValue } from "../../core/message-chain/types.js"
-import type { ModelChannel, ModelMessage, ModelRequest, ModelResponse } from "../protocol/types.js"
+import type { GeneratedImage, ImageGenerationRequest, ImageGenerationResponse, ModelChannel, ModelMessage, ModelRequest, ModelResponse } from "../protocol/types.js"
 import type { ToolDefinition } from "../../tools/support/tool-contract.js"
 import { normalizeModelStopReason } from "../protocol/normalize.js"
 
@@ -246,6 +246,53 @@ export async function parseGeminiStreamResponse(response: Response): Promise<Mod
   return parsed
 }
 
+/** 解析 Gemini 图片模型的 streamGenerateContent SSE，并收敛为最终图片数组。 */
+export async function parseGeminiImageStreamResponse(response: Response): Promise<ImageGenerationResponse> {
+  if (!response.ok) {
+    const body = await response.text()
+    let data: unknown = {}
+    try { data = body ? JSON.parse(body) : {} } catch { data = { error: body } }
+    throw responseError(data, response.status)
+  }
+  const images = new Map<string, GeneratedImage>()
+  let text = ""
+  let usage: UnknownRecord = {}
+  let chunks = 0
+  await consumeServerSentEvents(response, ({ data: rawData }) => {
+    const payload = rawData.trim()
+    if (!payload || payload === "[DONE]") return
+    let data: UnknownRecord
+    try {
+      const parsed: unknown = JSON.parse(payload)
+      data = record(parsed)
+    } catch {
+      throw new Error("上游返回了无法解析的 Gemini 图片流")
+    }
+    chunks++
+    if (isRecord(data.usageMetadata)) usage = { ...usage, ...data.usageMetadata }
+    for (const [candidateIndex, rawCandidate] of array(data.candidates).entries()) {
+      const candidate = record(rawCandidate)
+      const candidateKey = Number.isInteger(Number(candidate.index)) ? Number(candidate.index) : candidateIndex
+      const content = record(candidate.content)
+      for (const [partIndex, rawPart] of array(content.parts).entries()) {
+        const part = record(rawPart)
+        if (part.text) text += stringValue(part.text)
+        const inline = record(part.inlineData || part.inline_data)
+        const encoded = stringValue(inline.data)
+        if (!encoded) continue
+        const mimeType = stringValue(inline.mimeType || inline.mime_type || "image/png") || "image/png"
+        images.set(`${candidateKey}:${partIndex}`, { data: `data:${mimeType};base64,${encoded}`, mimeType })
+      }
+    }
+  })
+  return {
+    images: [...images.values()],
+    ...(text ? { text } : {}),
+    usage: tokenUsage({ usageMetadata: usage }, "gemini"),
+    raw: { stream: true, chunks },
+  }
+}
+
 /**
  * Gemini 适配器，统一处理 generateContent、function calling、视觉输入和 embedding。
  *
@@ -253,11 +300,85 @@ export async function parseGeminiStreamResponse(response: Response): Promise<Mod
  */
 export class GeminiAdapter extends ModelAdapter {
   override readonly id: string = "gemini"
-  override readonly protocol = "gemini-generate-content"
-  override readonly supportsTools = true
-  override readonly supportsVision = true
-  override readonly supportsStreaming = true
-  override readonly supportsEmbeddings = true
+  override readonly protocol: string = "gemini-generate-content"
+  override readonly supportsTools: boolean = true
+  override readonly supportsVision: boolean = true
+  override readonly supportsStreaming: boolean = true
+  override readonly supportsEmbeddings: boolean = true
+
+  override async generateImages({ channel, prompt, references = [], count, aspectRatio = "", imageSize = "", stream: requestedStream, timeoutMs: requestedTimeoutMs, signal, onRequest }: ImageGenerationRequest): Promise<ImageGenerationResponse> {
+    if (!channel.apiKey) throw new Error("Gemini channel apiKey is required")
+    const baseURL = (channel.baseURL || "https://generativelanguage.googleapis.com").replace(/\/$/, "")
+    const model = channel.model || "gemini-2.0-flash-preview-image-generation"
+    const image = record(record(channel.modelConfig).image)
+    const configuredAspectRatio = stringValue(image.aspectRatio)
+    const configuredImageSize = stringValue(image.imageSize)
+    const imageConfig = { ...record(channel.params), ...record(image.params) }
+    delete imageConfig.aspectRatio
+    delete imageConfig.imageSize
+    const hasExplicitCount = count !== undefined && count !== null && Number.isFinite(Number(count))
+    const safeCount = hasExplicitCount ? Math.max(1, Math.trunc(Number(count))) : undefined
+    const resolvedAspectRatio = aspectRatio || configuredAspectRatio
+    const resolvedImageSize = imageSize || configuredImageSize
+    const stream = requestedStream === undefined ? channel.stream === true : requestedStream === true
+    const config: UnknownRecord = {
+      ...imageConfig,
+      responseModalities: ["IMAGE"],
+      ...(safeCount !== undefined && safeCount > 1 && imageConfig.candidateCount === undefined ? { candidateCount: safeCount } : {}),
+      ...(resolvedAspectRatio || resolvedImageSize ? { imageConfig: { ...record(imageConfig.imageConfig), ...(resolvedAspectRatio ? { aspectRatio: resolvedAspectRatio } : {}), ...(resolvedImageSize ? { imageSize: resolvedImageSize } : {}) } } : {}),
+    }
+    // 参考图只保留脱敏摘要进入日志；正文仍按 inlineData 交给 Gemini。
+    const parts: UnknownRecord[] = [{ text: prompt }]
+    for (const [index, reference] of references.entries()) {
+      const parsed = parseDataUrl(reference.data)
+      if (!parsed) throw new Error(`参考图 ${index + 1} 不是有效的 data URL`)
+      parts.push({ inlineData: { mimeType: reference.mimeType || parsed.mediaType || "image/png", data: parsed.data } })
+    }
+    const body = {
+      contents: [{ role: "user", parts }],
+      generationConfig: config,
+    }
+    notifyModelRequest(onRequest, "gemini-image-generation", {
+      contents: [{ role: "user", parts: [{ text: prompt }, ...references.map((reference, index) => ({ inlineData: { index, mimeType: reference.mimeType || "image/png", bytes: Math.ceil(String(reference.data || "").length * 0.75) } }))] }],
+      generationConfig: config,
+    })
+    const endpoint = stream ? "streamGenerateContent" : "generateContent"
+    const url = new URL(`${baseURL}/v1beta/models/${model.replace(/^models\//, "")}:${endpoint}`)
+    if (stream) url.searchParams.set("alt", "sse")
+    url.searchParams.set("key", channel.apiKey)
+    for (const [key, value] of Object.entries(record(channel.query))) {
+      if (value !== undefined && value !== null && value !== "") url.searchParams.set(key, String(value))
+    }
+    return fetchWithTimeout(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...stringRecord(channel.headers) },
+      body: JSON.stringify(body),
+      // 图片生成通常比文字请求慢；后台工具会继续等待，只有达到这个总时限才丢弃结果。
+      timeoutMs: Math.max(1000, Number(requestedTimeoutMs || record(record(channel.modelConfig).image).timeoutMs || channel.timeoutMs || 300000)),
+      signal,
+      consume: async response => {
+        const contentType = String(response.headers.get("content-type") || "").toLowerCase()
+        if (stream && contentType.includes("text/event-stream")) return parseGeminiImageStreamResponse(response)
+        const data = await readJsonResponse(response)
+        if (!response.ok) throw responseError(data, response.status)
+        const images: GeneratedImage[] = []
+        const textParts: string[] = []
+        for (const rawCandidate of array(data.candidates)) {
+          const content = record(record(rawCandidate).content)
+          for (const part of array(content.parts).map(record)) {
+            if (part.text) textParts.push(stringValue(part.text))
+            const inline = record(part.inlineData || part.inline_data)
+            const encoded = stringValue(inline.data)
+            if (!encoded) continue
+            const mimeType = stringValue(inline.mimeType || inline.mime_type || "image/png") || "image/png"
+            images.push({ data: `data:${mimeType};base64,${encoded}`, mimeType })
+          }
+        }
+        const text = textParts.join("")
+        return { images, ...(text ? { text } : {}), usage: tokenUsage(data, "gemini"), raw: data }
+      },
+    })
+  }
 
   buildModelsUrl(channel: ModelChannel): URL {
     if (!channel.apiKey) throw new Error("Gemini channel apiKey is required")
@@ -363,6 +484,17 @@ export class GeminiAdapter extends ModelAdapter {
       return { id: value.name, label: value.displayName, description: value.description, methods: value.supportedGenerationMethods || value.supported_generation_methods || [], raw: item }
     }))
   }
+}
+
+/** Gemini 图片专用模型入口，和文本 Gemini 渠道分开出现在任务路由中。 */
+export class GeminiImagesAdapter extends GeminiAdapter {
+  override readonly id = "gemini-images"
+  override readonly protocol = "gemini-image-generation"
+  override readonly supportsTools = false
+  override readonly supportsVision = false
+  override readonly supportsStreaming = true
+  override readonly supportsEmbeddings = false
+  override readonly supportsImageGeneration = true
 }
 
 export type { ContentPart, JsonValue }

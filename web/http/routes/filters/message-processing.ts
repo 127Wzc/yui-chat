@@ -1,7 +1,7 @@
 import { listMessageFilterTemplates } from "../../../../filters/message/message-filter-templates.js"
 import { getMessageFilterStage, listMessageFilterStages, sortMessageFilters } from "../../../../filters/message/message-filter-contract.js"
 import { applyInputFilters, applyOutputFilters } from "../../../../filters/message/message-filter-service.js"
-import { configStore } from "../../../../config/store.js"
+import { configStore, redactConfigSecrets } from "../../../../config/store.js"
 import { filterRegistry } from "../../../../filters/core/registry.js"
 import { requireWebAuth as auth } from "../../auth.js"
 import { handleRoute } from "../../route-handler.js"
@@ -120,7 +120,7 @@ async function availableImplementations(): Promise<UnknownRecord[]> {
 function responsePayload(config: UnknownRecord, implementations: UnknownRecord[], extra: UnknownRecord = {}): UnknownRecord {
   return {
     ok: true,
-    filtering: currentFiltering(config),
+    filtering: currentFiltering(redactConfigSecrets(config) as UnknownRecord),
     templates: templates(),
     stages: listMessageFilterStages(),
     implementations,
@@ -162,7 +162,7 @@ const saveFilters = handleRoute(async (req, res) => {
       },
       } as typeof config
   }, {}, { reinitTools: false, reinitFilters: true })
-  res.json(responsePayload(saved, await availableImplementations(), { config: saved, runtime }))
+  res.json(responsePayload(saved, await availableImplementations(), { config: redactConfigSecrets(saved), runtime }))
 }, { errorStatus: 400, includeValidation: true })
 
 const testFilter = handleRoute(async (req, res) => {

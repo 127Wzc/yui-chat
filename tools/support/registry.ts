@@ -282,13 +282,29 @@ export class ToolRegistry {
         }),
         onComplete: context.execution?.onBackgroundComplete,
       })
+      const configuredBackgroundMessage = record(tool).backgroundMessage
+      const requestedBackgroundMessage = typeof configuredBackgroundMessage === "string" && typeof toolArgs.startMessage === "string"
+        ? toolArgs.startMessage.replace(/\s+/g, " ").trim().slice(0, 80)
+        : ""
+      const backgroundMessage = requestedBackgroundMessage
+        || (typeof configuredBackgroundMessage === "string" ? configuredBackgroundMessage.trim().slice(0, 300) : "")
+      // startMessage 只接收单行、简短的“任务已开始”提示，不得声称任务完成。
+      // 需要最终回复时直接采用该提示，避免模型再生成一条重复确认。
+      const autoSendBackgroundMessage = backgroundMessage && getToolCommon(tool).requiresFinalReply === false
       return {
         status: "accepted",
-        content: `已加入后台任务：${task.id}`,
+        content: backgroundMessage || `已加入后台任务：${task.id}`,
         executedCount: 1,
         dispatched: true,
         retryAllowed: false,
-        metadata: { background: true, taskId: task.id, parentToolId: task.parentToolId },
+        metadata: {
+          background: true,
+          taskId: task.id,
+          parentToolId: task.parentToolId,
+          ...(autoSendBackgroundMessage && typeof record(context.e).reply === "function"
+            ? { messageSendPlan: { parts: [{ type: "text", text: backgroundMessage }] } }
+            : {}),
+        },
       }
     }
     return invoke({

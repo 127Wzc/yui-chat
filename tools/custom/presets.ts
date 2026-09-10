@@ -5,11 +5,11 @@ type AnyRecord = Record<string, any>
 export const toolPresets = {
   core: {
     label: "核心",
-    enabledTools: ["knowledge_manage", "memory_manage", "bilibili_media", "message_send", "query_userinfo", "render_image", "schedule_task", "image_media", "web_search"],
+    enabledTools: ["knowledge_manage", "memory_manage", "bilibili_media", "message_send", "generate_image", "query_userinfo", "render_image", "schedule_task", "image_media", "web_search"],
   },
   media: {
     label: "媒体",
-    enabledTools: ["bilibili_media", "message_send"],
+    enabledTools: ["bilibili_media", "message_send", "generate_image"],
   },
   search: {
     label: "检索",

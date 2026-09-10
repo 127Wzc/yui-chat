@@ -1,6 +1,6 @@
 import fs from "node:fs/promises"
 import path from "node:path"
-import { configStore, pluginRoot } from "../../../../config/store.js"
+import { configStore, pluginRoot, redactConfigSecrets } from "../../../../config/store.js"
 import { createSkillPackage, createSkillTemplate, deleteSkillPackage, getSkillPackage, installRemoteSkill, listSkills, setSkillEnabled, updateRemoteSkill, updateSkillPackage } from "../../../../skills/index.js"
 import { customToolManager } from "../../../../tools/custom/manager.js"
 import { applyToolPreset, toolPresets } from "../../../../tools/custom/presets.js"
@@ -143,7 +143,7 @@ export function registerExtensionRoutes(app: RouteApp): void {
       next.tools = nextTools
       return configValue(next)
     })
-    res.json({ ok: true, presets, config: saved, runtime, tools: await toolRegistry.list() })
+    res.json({ ok: true, presets, config: redactConfigSecrets(saved), runtime, tools: await toolRegistry.list() })
   }, { errorStatus: 400 }))
   app.post("/api/tools/enabled", auth, handleRoute(async (req, res) => {
     const toolName = String(req.body?.tool || req.body?.name || "").trim()
@@ -168,7 +168,7 @@ export function registerExtensionRoutes(app: RouteApp): void {
       restartInitiativeGreeting: false,
       restartScheduleTasks: false,
     })
-    res.json({ ok: true, hotApplied: true, config: saved, runtime, tools: await toolRegistry.list() })
+    res.json({ ok: true, hotApplied: true, config: redactConfigSecrets(saved), runtime, tools: await toolRegistry.list() })
   }, { errorStatus: 400 }))
   app.get("/api/tools/:name/source-preview", auth, handleRoute(async (req, res) => {
     const name = String(req.params.name || "").trim()
@@ -190,7 +190,7 @@ export function registerExtensionRoutes(app: RouteApp): void {
       else delete runtimeVariables[name]
       return configValue({ ...config, tools: { ...configTools, runtimeVariables } })
     })
-    res.json({ ok: true, config: saved, runtime, tools: await toolRegistry.list() })
+    res.json({ ok: true, config: redactConfigSecrets(saved), runtime, tools: await toolRegistry.list() })
   }, { errorStatus: 400 }))
   app.get("/api/custom-tools", auth, handleRoute(async (_req, res) => {
     await customToolManager.listPackages()
@@ -242,7 +242,7 @@ export function registerExtensionRoutes(app: RouteApp): void {
     res.json({ ok: true, result, custom: toolRegistry.customStatus(), tools: await toolRegistry.list() })
   }, { errorStatus: 400 }))
   app.get("/api/mcp", auth, handleRoute(async (_req, res) => {
-    res.json({ ok: true, config: configStore.get().mcp, status: toolRegistry.mcpStatus() })
+    res.json({ ok: true, config: redactConfigSecrets(configStore.get().mcp), status: toolRegistry.mcpStatus() })
   }, { errorStatus: 400 }))
   app.post("/api/mcp/server", auth, handleRoute(async (req, res) => {
     const body = req.body || {}
@@ -285,7 +285,7 @@ export function registerExtensionRoutes(app: RouteApp): void {
         },
       },
     }))
-    res.json({ ok: true, id, server, config: saved.mcp, runtime, status: toolRegistry.mcpStatus() })
+    res.json({ ok: true, id, server: redactConfigSecrets(server), config: redactConfigSecrets(saved.mcp), runtime, status: toolRegistry.mcpStatus() })
   }, { errorStatus: 400 }))
   app.post("/api/mcp/:id/enabled", auth, handleRoute(async (req, res) => {
     const id = sanitizeId(req.params.id)
@@ -306,7 +306,7 @@ export function registerExtensionRoutes(app: RouteApp): void {
         },
       })
     })
-    res.json({ ok: true, id, config: saved.mcp, runtime, status: toolRegistry.mcpStatus() })
+    res.json({ ok: true, id, config: redactConfigSecrets(saved.mcp), runtime, status: toolRegistry.mcpStatus() })
   }, { errorStatus: 400 }))
   app.delete("/api/mcp/:id", auth, handleRoute(async (req, res) => {
     const id = sanitizeId(req.params.id)
@@ -319,7 +319,7 @@ export function registerExtensionRoutes(app: RouteApp): void {
         mcp: { ...mcp, servers },
       })
     })
-    res.json({ ok: true, id, config: saved.mcp, runtime, status: toolRegistry.mcpStatus() })
+    res.json({ ok: true, id, config: redactConfigSecrets(saved.mcp), runtime, status: toolRegistry.mcpStatus() })
   }, { errorStatus: 400 }))
   app.get("/api/skills", auth, handleRoute(async (_req, res) => {
     res.json({ ok: true, skills: await listSkills(), status: toolRegistry.skillStatus(), errors: toolRegistry.skillErrors })
@@ -359,7 +359,7 @@ export function registerExtensionRoutes(app: RouteApp): void {
       else delete runtimeVariables[id]
       return configValue({ ...config, skills: { ...skills, runtimeVariables } })
     })
-    res.json({ ok: true, config: saved, runtime, skills: await listSkills() })
+    res.json({ ok: true, config: redactConfigSecrets(saved), runtime, skills: await listSkills() })
   }, { errorStatus: 400 }))
   app.post("/api/skills/:id/update-remote", auth, handleRoute(async (req, res) => {
     const result = await updateRemoteSkill(req.params.id)

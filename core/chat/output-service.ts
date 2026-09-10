@@ -7,7 +7,7 @@ import { deliverMessageChain } from "../message-chain/delivery.js"
 import type { ForwardNode, MessageChain } from "../message-chain/types.js"
 import type { UnknownRecord } from "../message/types.js"
 import { armConversationContinuation } from "../persona/conversation-continuation.js"
-import { buildReplyPayload, isEmptyResponse } from "./response-pipeline.js"
+import { buildReplyPayload, isEmptyResponse, normalizeResponseText } from "./response-pipeline.js"
 
 type ReplyMethod = (payload: unknown, quote?: unknown, options?: UnknownRecord) => unknown | Promise<unknown>
 type SegmentationOptions = UnknownRecord & {
@@ -183,6 +183,25 @@ function isLlmResult(result: UnknownRecord, source: string): boolean {
   return true
 }
 
+function isAcceptedImageGeneration(result: UnknownRecord): boolean {
+  return (Array.isArray(result.toolChain) ? result.toolChain : []).some(item => {
+    const trace = record(item)
+    return text(trace.name) === "generate_image"
+      && text(trace.status) === "accepted"
+      && record(trace.metadata).background === true
+  })
+}
+
+/** 后台生图只需要一条开始确认；保留工具调用措辞，但不拆成多条消息。 */
+function compactImageGenerationStart(value: unknown, result: UnknownRecord): string {
+  const source = normalizeResponseText(value)
+  if (!isAcceptedImageGeneration(result)) return source
+  if (!source) return "图片生成已开始。"
+  const firstLine = source.split(/\r?\n/u).map(item => item.trim()).find(Boolean) || "图片生成已开始。"
+  const firstSentence = firstLine.match(/^.*?[。！？!?；;]/u)?.[0] || firstLine
+  return firstSentence.slice(0, 80).trim() || "图片生成已开始。"
+}
+
 function rememberDeliveredConversation(event: unknown, result: UnknownRecord, source: string, botText: unknown, options: UnknownRecord): void {
   if (options.armContinuation === false || !isLlmResult(result, source)) return
   const e = record(event)
@@ -296,13 +315,14 @@ export async function sendChatOutput(event: unknown, result: unknown, config: un
   const response = responseConfig(rootConfig)
   const settings = await userSettingsStore.get(event, rootConfig)
   const replyOptions = record(options.replyOptions)
-  if (isEmptyResponse(resultValue.text)) {
+  const outputText = compactImageGenerationStart(resultValue.text, resultValue)
+  if (isEmptyResponse(outputText)) {
     markReplied(event)
     return true
   }
 
   const source = text(options.source || resultValue.source)
-  const processed = await applyOutputFilters(resultValue.text, { event, e: event, config: rootConfig, result: resultValue, source })
+  const processed = await applyOutputFilters(outputText, { event, e: event, config: rootConfig, result: resultValue, source })
   for (const delivery of processed.deliveries) await sendRecordDelivery(event, delivery.data, response.quoteReply, replyOptions)
   const displayText = formatHostedSearchCitations(processed.text, resultValue.hostedSearchSources)
   if (!displayText) {
@@ -349,7 +369,7 @@ export async function sendChatOutput(event: unknown, result: unknown, config: un
   }
 
   const segmentation = record(response.segmentation) as SegmentationOptions
-  if (segmentation.enabled === true && settings.mode === "text" && isLlmResult(resultValue, source)) {
+  if (segmentation.enabled === true && settings.mode === "text" && isLlmResult(resultValue, source) && !isAcceptedImageGeneration(resultValue)) {
     const delivered = await sendConfiguredSplitText(event, payload.text, rootConfig, replyOptions)
     return finishOutputDelivery(event, resultValue, rootConfig, source, displayText, options, delivered)
   }

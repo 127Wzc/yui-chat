@@ -60,6 +60,13 @@ function now(): number {
   return Date.now()
 }
 
+const releasedExecutor: BackgroundTaskExecutor = () => undefined
+
+function releaseCallbacks(task: BackgroundTask): void {
+  task.execute = releasedExecutor
+  task.onComplete = null
+}
+
 function configLimits(config: unknown = {}): BackgroundLimits {
   const root = record(config)
   const chat = record(root.chat)
@@ -127,6 +134,7 @@ export class BackgroundTaskService {
     if (task.controller.signal.aborted) {
       task.status = "canceled"
       task.endedAt = now()
+      releaseCallbacks(task)
       return
     }
     task.status = "running"
@@ -140,10 +148,14 @@ export class BackgroundTaskService {
       hostRuntime.logger?.warn?.(`[yui-chat] 后台工具任务 ${task.name} ${task.status}`, task.error)
     } finally {
       task.endedAt = now()
+      const onComplete = task.onComplete
       try {
-        await task.onComplete?.(this.public(task))
+        await onComplete?.(this.public(task))
       } catch (error) {
         hostRuntime.logger?.warn?.(`[yui-chat] 后台工具任务回调失败：${task.name}`, error)
+      } finally {
+        // 状态仍按保留期可查，但完成后不再持有执行上下文、事件与参考图闭包。
+        releaseCallbacks(task)
       }
       this.prune(limits.retentionMs)
     }
@@ -157,6 +169,7 @@ export class BackgroundTaskService {
       task.status = "canceled"
       task.endedAt = now()
       this.queue = this.queue.filter(item => item.id !== task.id)
+      releaseCallbacks(task)
     }
     return true
   }

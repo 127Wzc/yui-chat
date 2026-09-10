@@ -138,6 +138,48 @@ export interface EmbeddingRequest {
   onRequest?: (capture: ModelRequestCapture) => void
 }
 
+/** 生图请求中的参考图；数据只在适配器边界短暂使用，不写入业务日志。 */
+export interface ImageGenerationReference {
+  data: string
+  mimeType?: string
+  name?: string
+}
+
+/** 供应商无关的图片生成请求。 */
+export interface ImageGenerationRequest {
+  channel: ModelChannel
+  prompt: string
+  references?: ImageGenerationReference[]
+  count?: number
+  size?: string
+  quality?: string
+  aspectRatio?: string
+  imageSize?: string
+  background?: string
+  /** 请求上游以流式方式返回生成事件；结果仍会在协议层收敛为图片数组。 */
+  stream?: boolean
+  /** 当前图片请求的超时；超时后直接丢弃未完成结果。 */
+  timeoutMs?: number
+  signal?: AbortSignal
+  onRequest?: (capture: ModelRequestCapture) => void
+}
+
+/** 供应商返回的单张图片；data 统一为 data URL 或原始 Base64，url 保留远程结果。 */
+export interface GeneratedImage {
+  data?: string
+  url?: string
+  mimeType?: string
+  revisedPrompt?: string
+}
+
+/** 供应商无关的图片生成响应。 */
+export interface ImageGenerationResponse {
+  images: GeneratedImage[]
+  text?: string
+  usage?: ModelUsage
+  raw?: unknown
+}
+
 /** embedding 响应。 */
 export interface EmbeddingResponse {
   vectors: number[][]

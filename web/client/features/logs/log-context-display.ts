@@ -1,5 +1,6 @@
 import { computed, ref, type PropType } from "vue"
 import { asRecord, type UnknownRecord } from "../../shared/data.js"
+import { renderRichContent } from "../../shared/rich-content.js"
 import { compactMediaDataForDisplay, modelMessageImageCount } from "./log-media-display.js"
 
 interface ContextItem extends UnknownRecord {
@@ -82,7 +83,7 @@ export function buildContextDisplay(snapshot: ContextSnapshot | null | undefined
     const body = messageBody(value)
     const chars = Number(item.chars ?? (typeof message.content === "string" ? message.content.length : JSON.stringify(message.content ?? "").length))
     return {
-      index, source, label: contextSourceLabel(item), body,
+      index, source, label: contextSourceLabel(item), body, content: message.content,
       role: String(message.role || "unknown"),
       chars, tokens: Number(item.tokenEstimate ?? Math.ceil(chars / 4)),
       images: modelMessageImageCount(value),
@@ -128,12 +129,16 @@ export function buildContextDisplay(snapshot: ContextSnapshot | null | undefined
 
 export const LogContextView = {
   name: "LogContextView",
-  props: { snapshot: { type: Object as PropType<ContextSnapshot | null>, default: null } },
-  setup(props: { snapshot: ContextSnapshot | null }) {
+  props: {
+    snapshot: { type: Object as PropType<ContextSnapshot | null>, default: null },
+    developerMode: { type: Boolean, default: false },
+  },
+  setup(props: { snapshot: ContextSnapshot | null; developerMode: boolean }) {
     const view = ref("messages")
     const display = computed(() => buildContextDisplay(props.snapshot))
     return {
-      view, display, sourceStyle, displayText,
+      view, display, sourceStyle, displayText, renderRichContent,
+      developerMode: computed(() => props.developerMode),
       number: (value: unknown) => Number(value || 0).toLocaleString("zh-CN"),
       references: (indexes: number[]) => indexes.map(index => `#${index + 1}`).join("、"),
       preview: (body: string) => body.replace(/\s+/g, " ").trim().slice(0, 100),
@@ -159,13 +164,14 @@ export const LogContextView = {
           </summary>
           <div class="logs-prompt-body">
             <div class="logs-prompt-provenance"><span v-if="group.body || group.unavailable">{{ group.indexes.length ? '消息 ' + references(group.indexes) : '未记录关联消息' }}</span><span>来源 · {{ group.source }}</span></div>
-            <pre v-if="group.body">{{ group.body }}</pre>
+            <div v-if="group.body" class="logs-rich-content" v-html="renderRichContent(group.body)"></div>
             <p v-else-if="group.unavailable" class="logs-context-note">此分段未保存独立正文，请切换“按消息顺序”查看关联消息。来源摘要不代表额外发送了一条消息。</p>
             <div v-for="message in group.entries" :key="message.index" class="logs-prompt-message">
               <div class="logs-prompt-provenance"><b>#{{ message.index + 1 }} · {{ message.role }}</b><span v-if="message.images">图片 {{ number(message.images) }} 张</span></div>
-              <pre v-if="message.body">{{ message.body }}</pre>
+              <div v-if="message.body || message.content" class="logs-rich-content" v-html="renderRichContent(message.content ?? message.body)"></div>
               <details v-if="message.toolCalls" class="logs-inline-json"><summary>工具调用结构</summary><pre>{{ displayText(message.toolCalls) }}</pre></details>
-              <p v-if="!message.body && !message.toolCalls" class="logs-context-note">消息正文为空。</p>
+              <details v-if="developerMode" class="logs-inline-json"><summary>原始消息结构</summary><pre>{{ displayText(message.raw) }}</pre></details>
+              <p v-if="!message.body && !message.content && !message.toolCalls" class="logs-context-note">消息正文为空。</p>
             </div>
           </div>
         </details>
@@ -173,7 +179,7 @@ export const LogContextView = {
       <div v-else class="logs-prompt-list">
         <details v-for="message in display.messages" :key="message.index" class="logs-prompt-card" :data-tone="sourceStyle(message.source).tone" open>
           <summary><span class="logs-prompt-icon logs-prompt-number">{{ message.index + 1 }}</span><span class="logs-prompt-heading"><b>{{ message.role }} <span class="muted">· {{ message.label }}</span></b><span class="logs-prompt-preview">{{ preview(message.body) }}</span></span><span class="logs-prompt-meta"><span>{{ number(message.chars) }} 字符<span v-if="message.images"> · {{ message.images }} 张图片</span></span><span>≈ {{ number(message.tokens) }} Token</span></span><Icon name="chevron-down" :size="14" class="logs-prompt-chevron" /></summary>
-          <div class="logs-prompt-body"><pre v-if="message.body">{{ message.body }}</pre><details v-if="message.toolCalls" class="logs-inline-json"><summary>工具调用结构</summary><pre>{{ displayText(message.toolCalls) }}</pre></details><p v-if="!message.body && !message.toolCalls" class="logs-context-note">消息正文为空。</p><details class="logs-inline-json"><summary>完整消息结构</summary><pre>{{ displayText(message.raw) }}</pre></details></div>
+          <div class="logs-prompt-body"><div v-if="message.body || message.content" class="logs-rich-content" v-html="renderRichContent(message.content ?? message.body)"></div><details v-if="message.toolCalls" class="logs-inline-json"><summary>工具调用结构</summary><pre>{{ displayText(message.toolCalls) }}</pre></details><p v-if="!message.body && !message.content && !message.toolCalls" class="logs-context-note">消息正文为空。</p><details v-if="developerMode" class="logs-inline-json"><summary>原始消息结构</summary><pre>{{ displayText(message.raw) }}</pre></details></div>
         </details>
       </div>
       <p v-if="!display.messages.length && !display.groups.length" class="logs-empty compact"><Icon name="message" :size="20" /><span>本次调用没有消息上下文，可能是 embedding 请求。</span></p>

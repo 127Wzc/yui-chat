@@ -417,6 +417,18 @@ function displayAttachment(item: MediaAttachment): string {
   return value
 }
 
+// 视觉模型不需要把聊天平台的原图（尤其是 2MB 以上的引用图）在每一轮
+// 重新塞进请求。准备阶段已经生成了缩略图；只有内联 data URL 过大时才
+// 使用它，远程 URL 和小图仍保持原样。
+const maxInlineVisionChars = 320000
+
+function visionAttachmentUrl(item: MediaAttachment): string {
+  const prepared = text(item.preparedUrl)
+  const thumbnail = text(item.thumbnailDataUrl)
+  if (thumbnail && /^data:image\//i.test(prepared) && prepared.length > maxInlineVisionChars && thumbnail.length < prepared.length) return thumbnail
+  return prepared || thumbnail
+}
+
 export function mediaToMessageContext(media: Partial<ResolvedMediaContext> = {}): MessageContext {
   const base = media.base || { chain: [], text: "", images: [], records: [], videos: [], files: [], mentions: [], replies: [], rawTypes: [] }
   const context: MessageContext = {
@@ -428,7 +440,7 @@ export function mediaToMessageContext(media: Partial<ResolvedMediaContext> = {})
   }
   for (const attachment of media.attachments || []) {
     if (attachment.kind === "image") {
-      const preparedUrl = text(attachment.preparedUrl)
+      const preparedUrl = visionAttachmentUrl(attachment)
       if (attachment.visionEligible !== false && preparedUrl) pushContextAttachment(context, { ...attachment, url: preparedUrl })
     } else pushContextAttachment(context, attachment)
   }
@@ -464,7 +476,7 @@ export function buildMediaUserContent(value: unknown, media: Partial<ResolvedMed
       : attachment.source === "recent-group" ? "群成员之前发送的消息"
       : attachment.source === "at-avatar" ? "被提及用户的头像" : "本次新发消息"
     const label = `图片 ${attachment.imageNumber || imageIndex}：${attachment.fromHistory ? "上轮讨论的" : ""}${source}${sender.name || sender.userId ? `，来自 ${text(sender.name || sender.userId)}` : ""}${attachment.messageId ? `，消息 ID：${text(attachment.messageId)}` : ""}`
-    const url = text(attachment.preparedUrl)
+    const url = visionAttachmentUrl(attachment)
     const provided = allowVision && /^(?:https?:|data:image\/(?:png|jpeg|jpg|webp|gif);base64,)/i.test(url)
     appendText(`${label}（${provided ? "图片内容紧随其后" : attachment.prepareError ? "图片读取失败" : attachment.limitSkipped ? "超过本轮图片数量限制" : "本轮未提供图片内容"}）。`)
     if (provided) content.push({ type: "image_url", image_url: { url } })

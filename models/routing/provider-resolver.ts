@@ -25,6 +25,7 @@ interface ProviderConfig extends UnknownRecord {
 interface ModelConfig extends UnknownRecord {
   name?: string
   adapter?: string
+  purpose?: string
   modelIdentifier?: string
   model?: string
   apiProvider?: string
@@ -47,6 +48,7 @@ interface ModelConfig extends UnknownRecord {
 
 interface ModelTask extends UnknownRecord {
   modelList?: unknown[]
+  purpose?: string
   selectionStrategy?: string
   maxTokens?: unknown
   temperature?: unknown
@@ -56,6 +58,7 @@ interface ChannelConfig extends UnknownRecord {
   id?: string
   name?: string
   type?: string
+  purpose?: string
   enabled?: unknown
   model?: string
   apiProvider?: string
@@ -94,6 +97,7 @@ export interface ResolvedModelChannel extends ModelChannel {
   name: string
   origin: "model" | "channel"
   enabled: boolean
+  purpose?: string
   provider?: ProviderConfig | string
   modelConfig?: Record<string, JsonValue>
 }
@@ -172,11 +176,33 @@ function selectionStrategy(task: ModelTask): string {
 }
 
 function mockModel(): ModelConfig {
-  return { name: "mock", adapter: "mock", modelIdentifier: "mock", apiProvider: "mock" }
+  return { name: "mock", adapter: "mock", purpose: "chat", modelIdentifier: "mock", apiProvider: "mock" }
 }
 
 function capabilities(model: ModelConfig): UnknownRecord {
   return record(model.capabilities)
+}
+
+function channelPurpose(value: unknown, declared?: unknown): "chat" | "image" {
+  const purpose = text(declared).trim().toLowerCase()
+  if (purpose === "image") return "image"
+  if (purpose === "chat") return "chat"
+  const type = text(value).trim().toLowerCase()
+  return ["openai-images", "openai-chat-completions", "gemini-images"].includes(type) ? "image" : "chat"
+}
+
+export function modelPurpose(model: ModelConfig | UnknownRecord = {}): "chat" | "image" | "embedding" {
+  const declared = text(model.purpose).trim().toLowerCase()
+  if (declared === "image" || declared === "embedding" || declared === "chat") return declared
+  const adapter = text(model.adapter).trim().toLowerCase()
+  if (["openai-images", "openai-chat-completions", "gemini-images"].includes(adapter)) return "image"
+  return capabilities(model).embedding === true && capabilities(model).chat === false ? "embedding" : "chat"
+}
+
+function taskPurpose(taskName: string, task: ModelTask): "chat" | "image" | "embedding" {
+  const declared = text(task.purpose).trim().toLowerCase()
+  if (declared === "image" || declared === "embedding" || declared === "chat") return declared
+  return taskName === "imageGeneration" ? "image" : taskName === "embedding" ? "embedding" : "chat"
 }
 
 function embeddingConfig(model: ModelConfig): UnknownRecord {
@@ -198,6 +224,8 @@ function modelPreview(model: ModelConfig, channel: ResolvedModelChannel): Record
     hasApiKey: Boolean(channel.apiKey),
     visual: Boolean(model.visual),
     toolUse: model.toolUse !== false,
+    purpose: modelPurpose(model),
+    imageGeneration: Boolean((channel as UnknownRecord).supportsImageGeneration || ["openai-images", "openai-chat-completions", "gemini-images"].includes(channel.type)),
     chat: capabilities(model).chat !== false,
     embedding: Boolean(capabilities(model).embedding),
     embeddingDimensions: numberValue(embeddingConfig(model).defaultDimensions, 0),
@@ -210,7 +238,7 @@ function modelPreview(model: ModelConfig, channel: ResolvedModelChannel): Record
 
 // 这些适配器都实现了各自协议的上游流式传输；响应仍由统一协议层收敛，
 // 因而工具循环和最终投递行为不依赖供应商事件格式。
-const streamingAdapterIds = new Set(["openai-compatible", "openai-responses", "qwen", "chatglm", "gemini", "claude"])
+const streamingAdapterIds = new Set(["openai-compatible", "openai-responses", "openai-images", "openai-chat-completions", "qwen", "chatglm", "gemini", "gemini-images", "claude"])
 
 /**
  * 模型路由器：只负责把任务配置解析成可执行渠道，不负责发起请求或决定工具权限。
@@ -261,7 +289,12 @@ export class ProviderResolver {
     const view = viewOf(config)
     const provider = view.apiProviders.find(item => text(item.name) === text(model.apiProvider)) || {}
     const reasoning = normalizeReasoningConfig(model.reasoning)
-    const type = firstText(model.adapter, provider.type, "mock")
+    const purpose = modelPurpose(model)
+    let type = firstText(model.adapter, provider.type, "mock")
+    if (purpose === "image") {
+      if (type === "gemini") type = "gemini-images"
+      else if (["openai-compatible", "qwen", "chatglm", "openai-responses", "claude", "openai-chat-completions"].includes(type)) type = "openai-images"
+    }
     const params: UnknownRecord = {
       ...record(provider.params),
       ...record(model.params),
@@ -281,6 +314,7 @@ export class ProviderResolver {
       name: text(model.name),
       origin: "model",
       type,
+      purpose,
       enabled: true,
       model: firstText(model.modelIdentifier, model.model, model.name),
       baseURL: firstText(model.baseURL, provider.baseURL),
@@ -314,7 +348,13 @@ export class ProviderResolver {
       channel.timeoutMs ?? params.timeoutMs ?? view.chat.modelRequestTimeoutMs,
       90000,
     )
-    const type = text(channel.type)
+    const channelType = text(channel.type).trim()
+    const purpose = channelPurpose(channelType, channel.purpose)
+    let type = channelType
+    if (purpose === "image") {
+      if (type === "gemini") type = "gemini-images"
+      else if (["openai-compatible", "qwen", "chatglm", "openai-responses", "claude", "openai-chat-completions"].includes(type)) type = "openai-images"
+    }
     const stream = streamingAdapterIds.has(type) && Boolean(
       channel.stream ?? params.stream ?? view.chat.modelStream ?? false,
     )
@@ -325,6 +365,7 @@ export class ProviderResolver {
       id: text(channel.id),
       name: firstText(channel.name, channel.id),
       type,
+      purpose,
       model: firstText(channel.model, channel.id),
       params,
       timeoutMs: Math.max(1000, Math.min(600000, Number.isFinite(timeoutMs) ? timeoutMs : 90000)),
@@ -345,12 +386,16 @@ export class ProviderResolver {
 
     const name = options.taskName || text(view.chat.defaultTask)
     const task = this.getTask(name, view)
+    const expectedPurpose = taskPurpose(name, task)
     const list = arrayOfStrings(task.modelList)
     const channels = (list.length ? list : ["mock"])
       .map(modelId => view.models.find(model => text(model.name) === modelId))
-      .filter((model): model is ModelConfig => Boolean(model))
+      .filter((model): model is ModelConfig => Boolean(model) && modelPurpose(model) === expectedPurpose)
       .map(model => this.buildChannel(model, view))
-    if (!channels.length && view.models[0]) return [this.buildChannel(view.models[0], view)]
+    if (!channels.length && view.models[0]) {
+      const fallback = view.models.find(model => modelPurpose(model) === expectedPurpose)
+      if (fallback) return [this.buildChannel(fallback, view)]
+    }
     if (!channels.length) return [this.buildChannel(mockModel(), view)]
 
     if (selectionStrategy(task) === "random") {
@@ -393,6 +438,7 @@ export class ProviderResolver {
         name: channel.name,
         origin: channel.origin || "model",
         type: channel.type,
+        purpose: channelPurpose(channel.type, channel.purpose),
         model: channel.model,
         enabled: channel.enabled !== false,
         hasApiKey: Boolean(channel.apiKey),
@@ -400,6 +446,7 @@ export class ProviderResolver {
         provider: firstText(providerLabel(channel.provider), model.apiProvider),
         visual: model.visual,
         toolUse: model.toolUse,
+        imageGeneration: text(channel.purpose).trim().toLowerCase() === "image" || ["openai-images", "openai-chat-completions", "gemini-images"].includes(channel.type),
         chat: modelCapabilities.chat !== false,
         embedding: Boolean(modelCapabilities.embedding),
         embeddingDimensions: numberValue(embedding.defaultDimensions, 0),
@@ -577,9 +624,14 @@ export class ProviderResolver {
 
     for (const [taskName, task] of Object.entries(view.modelTasks)) {
       const list = arrayOfStrings(task.modelList)
+      const expectedPurpose = taskPurpose(taskName, task)
       if (!list.length) issues.push({ level: "warn", area: "modelTasks", id: taskName, message: "任务没有 modelList" })
       for (const modelId of list) {
         if (!modelNames.has(modelId)) issues.push({ level: "error", area: "modelTasks", id: taskName, message: `任务引用了不存在的模型：${modelId}` })
+        else {
+          const model = view.models.find(item => text(item.name) === modelId)
+          if (model && modelPurpose(model) !== expectedPurpose) issues.push({ level: "error", area: "modelTasks", id: taskName, message: `任务 ${taskName} 需要 ${expectedPurpose} 模型：${modelId}` })
+        }
       }
       if (task.selectionStrategy && !["sequential", "random", "fallback"].includes(text(task.selectionStrategy))) {
         issues.push({ level: "warn", area: "modelTasks", id: taskName, message: `未知 selectionStrategy：${text(task.selectionStrategy)}` })

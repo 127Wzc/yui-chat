@@ -4,7 +4,7 @@ import { responsesStateKey, responsesStateMode, responsesUsesUpstreamState } fro
 import type { ModelChannel, ModelHostedToolCall, ModelMessage, ModelSearchSource } from "../../models/protocol/types.js"
 import { explainToolPolicy } from "../../tools/access/policy.js"
 import type { ToolDefinition } from "../../tools/support/tool-contract.js"
-import { getToolCommon, resolveToolExecutionPolicy } from "../../tools/support/contract.js"
+import { getToolCommon, isToolEnabledByConfig, resolveToolExecutionPolicy } from "../../tools/support/contract.js"
 import { toolRegistry, type RegistryExecutionContext } from "../../tools/support/registry.js"
 import { createExecutionRuntime } from "../../tools/support/execution-runtime.js"
 import { buildPersonaMessagesWithContext, buildUserMessage, type PersonaContextSection } from "../persona/persona-chain.js"
@@ -97,10 +97,30 @@ const searchDescriptionPattern = /(?:搜索|检索|查找|查询|推荐|\bsearch
 const mediaSendNegationPattern = /(?:不要|别|无需|不用|暂不|先不).{0,8}(?:发|发送|send)/i
 const imageSearchActionPattern = /(?:搜索|搜(?:一下|一搜|个|些|几|张|两张)?|查找|找(?:一下|个|些|几|张|两张)?|推荐|search|find|look\s*up)/i
 const imageSearchTargetPattern = /(?:图片|图像|照片|表情包|表情图|梗图|壁纸|头像|贴纸|动图|gif|images?|pictures?|photos?|memes?|stickers?)/i
+const imageCreationActionPattern = /(?:画(?!面|风|质)|绘(?:制|画)|生成|创作|制作|设计|生图|draw|generate|create)/i
+const imageEditActionPattern = /(?:改图|修图|编辑|修改|替换|换成|变成|调整|上色|去掉|增加|edit|alter|retouch|replace)/i
+const imageTargetPattern = /(?:图片|图像|照片|截图|画面|图中|图里|图上|[一两三几]?张图|图表|插画|海报|头像|壁纸|图标|logo|猫|人物|背景|image|picture|photo|screenshot)/i
 
 function isImageMediaSearchRequest(prompt: unknown): boolean {
   const value = text(prompt)
   return imageSearchActionPattern.test(value) && imageSearchTargetPattern.test(value)
+}
+
+/** 判断是否是直接生图/改图请求；图片检索仍交给 image_media。 */
+function isImageGenerationRequest(prompt: unknown, media: unknown): boolean {
+  const value = text(prompt)
+  if (!value || isImageMediaSearchRequest(value)) return false
+  const hasReference = Boolean(record(media).quote)
+    || list(record(media).attachments).some(item => record(item).kind === "image")
+  const directCreation = imageCreationActionPattern.test(value) && imageTargetPattern.test(value)
+  return directCreation
+    || (hasReference && imageEditActionPattern.test(value) && imageTargetPattern.test(value))
+}
+
+function isAcceptedBackgroundTrace(trace: UnknownRecord): boolean {
+  return text(trace.status) === "accepted"
+    && record(trace.metadata).background === true
+    && trace.requiresFinalReply !== false
 }
 
 function toolAutoDelivery(name: unknown): UnknownRecord {
@@ -151,7 +171,7 @@ function applyRuntimeToolIntent(toolCalls: UnknownRecord[] = [], prompt: string)
 
 function plannedMessageParts(traces: UnknownRecord[] = []): UnknownRecord[] {
   return traces.flatMap(trace => {
-    if (trace.status !== "ok" || !hasMessageSendPlan(trace)) return []
+    if (!["ok", "accepted"].includes(text(trace.status)) || !hasMessageSendPlan(trace)) return []
     const plan = record(record(trace.metadata).messageSendPlan)
     return Array.isArray(plan.parts) ? plan.parts.map(record).filter(part => Object.keys(part).length) : []
   })
@@ -534,6 +554,12 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
     && toolsConfig.enabled === true
     && adapter.supportsTools
     && modelConfig.toolUse !== false
+  const generateImageTool = toolRegistry.get("generate_image")
+  const imageGenerationRequest = toolUseEnabled
+    && Boolean(generateImageTool)
+    && isToolEnabledByConfig(root, generateImageTool)
+    && localToolAllowed("generate_image", modelConfig, toolContext)
+    && isImageGenerationRequest(prompt, options.media)
   let enabledTools = [] as Awaited<ReturnType<typeof toolRegistry.getAllowedTools>>
   const responsesConfig = record(modelConfig.responses)
   const webSearchRoute = modelToolRoute(modelConfig, "web_search")
@@ -578,6 +604,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
   const nativeToolSearchEnabledForRequest = nativeToolSearchEnabled
     && !preferLocalImageMedia
     && !forceAggregatedWebSearch
+    && !imageGenerationRequest
   const nativeFileSearchEnabled = toolUseEnabled
     && adapter.supportsNativeToolSearch
     && record(responsesConfig.fileSearch).enabled === true
@@ -587,7 +614,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
   const localToolSearchEnabled = localToolSearchAvailable && (toolSearchSource === "local" || (toolSearchSource === "auto" && !nativeToolSearchEnabled))
   const filterModelLocalTools = <T extends { name?: unknown }>(tools: readonly T[]): T[] => filterToolsForModel(tools, modelConfig).filter(tool => {
     if (tool.name === "web_search") return localWebSearchEnabled
-    if (tool.name === "tool_search") return localToolSearchEnabled
+    if (tool.name === "tool_search") return localToolSearchEnabled && !imageGenerationRequest
     return true
   })
   toolContext.toolDiscovery = {
@@ -648,7 +675,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
   } else {
     enabledTools = selectPromptTools(enabledTools, text(prompt), record(toolsConfig.promptSelection))
   }
-  if (toolUseEnabled && localToolSearchEnabled && modelToolAllowed(modelConfig, "tool_search") && !enabledTools.some(tool => tool.name === "tool_search")) {
+  if (toolUseEnabled && localToolSearchEnabled && !imageGenerationRequest && modelToolAllowed(modelConfig, "tool_search") && !enabledTools.some(tool => tool.name === "tool_search")) {
     const discoveryTool = toolRegistry.get("tool_search")
     if (discoveryTool) enabledTools = [discoveryTool, ...enabledTools].slice(0, Math.max(1, number(record(toolsConfig.promptSelection).maxTools, 12)))
   }
@@ -657,6 +684,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
   // 类请求里把发送工具挤掉，导致模型拿到了资源却无工具可用。
   const pinnedToolNames = new Set([
     "message_send",
+    ...(imageGenerationRequest ? ["generate_image"] : []),
     ...(preferLocalImageMedia ? ["image_media"] : []),
     ...(forceAggregatedWebSearch ? ["web_search"] : []),
   ])
@@ -671,8 +699,10 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
   }
   const mediaCorrectionTools = (): typeof enabledTools => currentTools()
   const initialTools = currentTools()
-  const initialToolChoice = preferLocalImageMedia && initialTools.some(tool => tool.name === "image_media")
-    ? { type: "function" as const, name: "image_media" }
+  const initialToolChoice = imageGenerationRequest && initialTools.some(tool => tool.name === "generate_image")
+    ? { type: "function" as const, name: "generate_image" }
+    : preferLocalImageMedia && initialTools.some(tool => tool.name === "image_media")
+      ? { type: "function" as const, name: "image_media" }
     : forceAggregatedWebSearch && initialTools.some(tool => tool.name === "web_search")
       ? { type: "function" as const, name: "web_search" }
     : undefined
@@ -941,6 +971,21 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
       && item.effect !== "read"
       && number(item.remainingCount) > 0
       && record(item.metadata).background !== true)
+    // 后台工具已经把任务交给队列；继续向模型追问只会让它重复提交同一
+    // 个副作用操作。优先采用工具调用里的开始提示，将当前轮直接收束；
+    // 没有提示时才沿用本轮文本，后台完成回调仍会独立投递结果。
+    const acceptedBackgroundTrace = requestedTraces.length === 1
+      && automaticDeliveryTraces.length === 0
+      ? traces.find(isAcceptedBackgroundTrace)
+      : undefined
+    if (acceptedBackgroundTrace) {
+      const startReply = normalizeResponseText(acceptedBackgroundTrace.resultPreview).trim()
+        || normalizeResponseText(response.text).trim()
+        || "后台任务已开始。"
+      agentTurn.requestFinalReply(true)
+      response = { ...response, stopReason: "end_turn", text: startReply, toolCalls: [] }
+      break
+    }
     if (roundResult.stopReason || executionRuntime.shouldFinalize()) {
       toolLimitReached = true
       response = { ...response, text: "", toolCalls: [] }

@@ -4,64 +4,60 @@ import { asRecord, asRecords, errorMessage, type UnknownRecord } from "../../sha
 import { AddChannelForm, ModelEditor, ProviderEditor } from "./provider-editors.js"
 import { ModelRoutingBuilder } from "./provider-routing.js"
 import {
+  INHERIT_BOOL_OPTIONS,
   ProviderFilterSearch,
   requestProviderModels,
   runLocked,
   uniqueModelIds,
 } from "./provider-shared.js"
-
 interface ProviderTemplate extends UnknownRecord {
   id: string
   label?: string
 }
-
 interface RemoteModel extends UnknownRecord {
   id: string
   label?: string
   description?: string
   methods?: string[]
 }
-
 interface ModelConfig extends UnknownRecord {
   name: string
+  purpose?: string
   modelIdentifier?: string
   apiProvider?: string
 }
-
 interface Channel extends UnknownRecord {
   id: string
   provider: string
   model?: string
   modelIdentifier?: string
   type?: string
+  purpose?: string
   origin?: string
   visual?: boolean
   toolUse?: boolean
   embedding?: boolean
   embeddingDimensions?: number
   reasoningLabel?: string
+  imageGeneration?: boolean
 }
-
 interface ApiProvider extends UnknownRecord {
   name: string
   type?: string
   baseURL?: string
   apiKey?: string
 }
-
 interface ProvidersConfig extends UnknownRecord {
   apiProviders?: ApiProvider[]
   models?: ModelConfig[]
   chat?: { defaultChannel?: string; defaultTask?: string }
-  modelTasks?: { replyer?: { modelList?: string[] } }
+  modelTasks?: { replyer?: { modelList?: string[] }; imageGeneration?: { modelList?: string[] } }
 }
-
 interface ProvidersSlice extends UnknownRecord {
   templates?: ProviderTemplate[]
   channels?: Channel[]
   diagnostics?: UnknownRecord
 }
-
 interface ApiResult extends UnknownRecord {
   result?: { channel?: string; operation?: string; dimensions?: number; vectorCount?: number }
   config?: UnknownRecord
@@ -69,17 +65,15 @@ interface ApiResult extends UnknownRecord {
   removedModels?: unknown[]
   fallbackModel?: string
 }
-
 interface ProviderCard extends ApiProvider {
   channelCount: number
   visualCount: number
   toolCount: number
   embeddingCount: number
+  imageCount: number
   defaultCount: number
   items: Channel[]
 }
-
-
 export const ProvidersTab = {
   name: "ProvidersTab",
   components: { AddChannelForm, ProviderEditor, ModelEditor, ModelRoutingBuilder, ProviderFilterSearch },
@@ -90,11 +84,12 @@ export const ProvidersTab = {
     const apiProviders = computed(() => cfg.value.apiProviders || [])
     const channels = computed(() => providerSlice.value.channels || [])
     const modelByName = computed<Record<string, ModelConfig>>(() => Object.fromEntries((cfg.value.models || []).map(model => [model.name, model])))
-    const providerNames = computed(() => apiProviders.value.map(item => item.name).filter(Boolean))
-    const modelNames = computed(() => (cfg.value.models || []).map(model => model.name))
+    const modelNames = computed(() => (cfg.value.models || [])
+      .filter(model => model.purpose !== "image" && model.purpose !== "embedding")
+      .map(model => model.name))
     const defaultReplyChannel = computed(() => cfg.value.chat?.defaultChannel || cfg.value.modelTasks?.replyer?.modelList?.[0] || "")
+    const defaultImageChannel = computed(() => cfg.value.modelTasks?.imageGeneration?.modelList?.[0] || "")
     const defaultModel = computed(() => (cfg.value.models || []).find(model => model.name === defaultReplyChannel.value) || null)
-
     const showAddDrawer = ref(false)
     const activeProviderPane = ref("models")
     const showImportDrawer = ref(false)
@@ -103,6 +98,9 @@ export const ProvidersTab = {
     const providerQuery = ref("")
     const modelQuery = ref("")
     const remoteModelQuery = ref("")
+    const remotePurpose = ref("chat")
+    const remoteImageAdapter = ref("openai-images")
+    const remoteStream = ref("")
     const activeProviderName = ref("")
     const providerSelectionTouched = ref(false)
     const remoteLoading = ref(false)
@@ -112,7 +110,6 @@ export const ProvidersTab = {
     const providerTesting = ref(false)
     const providerDeleting = ref(false)
     const channelBusyMap = reactive<Record<string, boolean>>({})
-
     const providerCards = computed<ProviderCard[]>(() => apiProviders.value.map(provider => {
       const items = channels.value.filter(channel => channel.provider === provider.name)
       return {
@@ -121,7 +118,8 @@ export const ProvidersTab = {
         visualCount: items.filter(item => item.visual).length,
         toolCount: items.filter(item => item.toolUse).length,
         embeddingCount: items.filter(item => item.embedding).length,
-        defaultCount: items.filter(item => item.id === defaultReplyChannel.value).length,
+        imageCount: items.filter(item => item.purpose === "image" || item.imageGeneration === true).length,
+        defaultCount: items.filter(item => item.id === defaultReplyChannel.value || item.id === defaultImageChannel.value).length,
         items,
       }
     }))
@@ -137,7 +135,6 @@ export const ProvidersTab = {
         return haystack.includes(keyword)
       })
     })
-
     watch(providerCards, cards => {
       if (!cards.length) {
         activeProviderName.value = ""
@@ -151,7 +148,6 @@ export const ProvidersTab = {
         activeProviderName.value = preferred?.name || cards[0].name
       }
     }, { immediate: true, deep: true })
-
     const activeProvider = computed(() => apiProviders.value.find(item => item.name === editingProvider.value) || null)
     const activeModel = computed(() => modelByName.value[editingId.value] || null)
     const selectedProvider = computed(() => apiProviders.value.find(item => item.name === activeProviderName.value) || null)
@@ -177,7 +173,6 @@ export const ProvidersTab = {
     const remoteNewCount = computed(() => remoteSelected.value.filter(id => !currentProviderModelIds.value.has(id)).length)
     const remoteExistingCount = computed(() => remoteModels.value.filter(item => currentProviderModelIds.value.has(item.id)).length)
     const remoteAvailableCount = computed(() => remoteModels.value.length - remoteExistingCount.value)
-
     const openModelEditor = (id: string) => { editingId.value = id || "" }
     const openProviderEditor = (name: string) => { editingProvider.value = name || "" }
     const canManage = (ch: Channel) => ch.origin === "model" && !!modelByName.value[ch.id]?.name
@@ -201,8 +196,11 @@ export const ProvidersTab = {
       remoteModelQuery.value = ""
       remoteModels.value = []
       remoteSelected.value = []
+      remotePurpose.value = "chat"
+      remoteStream.value = ""
+      const provider = apiProviders.value.find(item => item.name === name)
+      remoteImageAdapter.value = provider?.type === "gemini" ? "gemini-images" : "openai-images"
     }
-
     async function testChannel(channelId: string | Channel = "") {
       const id = typeof channelId === "string" ? channelId : channelId.id
       if (!id) throw new Error("channelId is required")
@@ -218,7 +216,6 @@ export const ProvidersTab = {
         return result
       })
     }
-
     async function testSelectedProvider() {
       return runLocked(providerTesting, async () => {
         try {
@@ -229,22 +226,18 @@ export const ProvidersTab = {
         toast(errorMessage(err))
       }})
     }
-
     function openImportDrawer() {
       if (!selectedProvider.value) return
       showImportDrawer.value = true
     }
-
     function closeImportDrawer() {
       showImportDrawer.value = false
     }
-
     function selectProviderPane(value: string) {
       if (value === "import") return openImportDrawer()
       activeProviderPane.value = "models"
       closeImportDrawer()
     }
-
     async function removeSelectedProvider(targetProvider: ApiProvider | null = null) {
       return runLocked(providerDeleting, async () => {
         try {
@@ -272,20 +265,19 @@ export const ProvidersTab = {
       if (!provider?.name) return
       const count = channels.value.filter(item => item.provider === provider.name).length
       const accepted = await confirmAction({
-        title: `删除模型服务“${provider.name}”？`,
-        message: `该服务下 ${count} 个模型会一并移除，相关回复方案会自动清理。`,
+        title: `删除渠道“${provider.name}”？`,
+        message: `该渠道下 ${count} 个模型会一并移除，相关回复方案会自动清理。`,
         detail: provider.baseURL || provider.name,
         confirmText: "确认删除服务",
       })
       if (accepted) await removeSelectedProvider(provider)
     }
-
     async function fetchRemoteModelsForSelectedProvider() {
       return runLocked(remoteLoading, async () => {
         try {
         const provider = selectedProvider.value
         if (!provider?.name) throw new Error("请先选择供应商")
-        const result = await requestProviderModels({ providerName: provider.name })
+        const result = await requestProviderModels({ providerName: provider.name, purpose: remotePurpose.value, adapter: remotePurpose.value === "image" ? remoteImageAdapter.value : undefined })
         remoteModels.value = asRecords<RemoteModel>(result.models)
         remoteSelected.value = []
         const available = remoteModels.value.filter(item => !currentProviderModelIds.value.has(item.id)).length
@@ -296,7 +288,6 @@ export const ProvidersTab = {
         toast(errorMessage(err))
       }})
     }
-
     function toggleRemoteModel(id: string, checked: boolean) {
       if (currentProviderModelIds.value.has(id)) return
       const next = new Set(remoteSelected.value)
@@ -304,17 +295,14 @@ export const ProvidersTab = {
       else next.delete(id)
       remoteSelected.value = uniqueModelIds([...next])
     }
-
     function selectAllRemoteModels() {
       remoteSelected.value = uniqueModelIds(filteredRemoteModels.value
         .map(item => item.id)
         .filter(id => !currentProviderModelIds.value.has(id)))
     }
-
     function clearRemoteModels() {
       remoteSelected.value = []
     }
-
     async function importRemoteModels() {
       return runLocked(remoteImporting, async () => {
         try {
@@ -324,7 +312,15 @@ export const ProvidersTab = {
         if (!identifiers.length) throw new Error("请至少勾选一个模型")
         const result = asRecord<ApiResult>(await request(`/api/providers/${encodeURIComponent(provider.name)}/models`, {
           method: "POST",
-          body: JSON.stringify({ modelIdentifiers: identifiers }),
+          body: JSON.stringify({
+            modelIdentifiers: identifiers,
+            purpose: remotePurpose.value,
+            adapter: remotePurpose.value === "image" ? (remoteImageAdapter.value === "gemini-images" ? "gemini-images" : "openai-images") : undefined,
+            image: remotePurpose.value === "image" ? { protocol: remoteImageAdapter.value } : undefined,
+            stream: (remotePurpose.value === "chat" || remotePurpose.value === "image") && remoteStream.value !== ""
+              ? remoteStream.value === "true"
+              : undefined,
+          }),
         }))
         store.config = asRecord(result.config)
         store.providers = { ...asRecord<ProvidersSlice>(store.providers), diagnostics: result.diagnostics }
@@ -335,13 +331,18 @@ export const ProvidersTab = {
         toast(errorMessage(err))
       }})
     }
-
     async function setDefault(ch: Channel) {
       const name = modelByName.value[ch.id]?.name || ch.id
+      const image = ch.purpose === "image" || ch.imageGeneration === true
+      if (ch.purpose === "embedding" || ch.embedding) {
+        toast("向量模型请在知识库或记忆设置中选择")
+        return
+      }
+      const taskName = image ? "imageGeneration" : (cfg.value.chat?.defaultTask || "replyer")
       const currentName = defaultModel.value?.name || defaultReplyChannel.value || "当前默认模型"
       const accepted = await confirmAction({
-        title: `将“${name}”设为默认回复模型？`,
-        message: `新的普通对话会优先使用该模型，替代“${currentName}”。`,
+        title: image ? `将“${name}”设为默认画图模型？` : `将“${name}”设为默认回复模型？`,
+        message: image ? "图片生成工具会优先使用该模型。" : `新的普通对话会优先使用该模型，替代“${currentName}”。`,
         detail: ch.modelIdentifier || ch.model || ch.id,
         confirmText: "确认切换默认模型",
         tone: "warn",
@@ -352,10 +353,10 @@ export const ProvidersTab = {
         try {
         const result = asRecord<ApiResult>(await request(`/api/models/${encodeURIComponent(name)}/default`, {
           method: "POST",
-          body: JSON.stringify({ taskName: cfg.value.chat?.defaultTask || "replyer" }),
+          body: JSON.stringify({ taskName }),
         }))
         store.config = asRecord(result.config)
-        toast(`已将 ${name} 设为默认回复模型`)
+        toast(image ? `已将 ${name} 设为默认画图模型` : `已将 ${name} 设为默认回复模型`)
         await refreshTab("providers")
       } catch (err) {
         toast(errorMessage(err))
@@ -391,12 +392,12 @@ export const ProvidersTab = {
     }
 
     return {
-      cfg, templates, apiProviders, channels, modelByName, providerNames, modelNames,
-      activeProvider, activeModel, defaultReplyChannel, defaultModel,
+      cfg, templates, apiProviders, channels, modelByName, modelNames,
+      activeProvider, activeModel, defaultReplyChannel, defaultImageChannel, defaultModel,
       activeProviderPane, providerPaneItems,
       providerQuery, modelQuery, remoteModelQuery, activeProviderName,
       providerCards, filteredProviders, selectedProvider, selectedProviderCard, selectedProviderChannels, filteredSelectedProviderChannels,
-      remoteLoading, remoteImporting, remoteModels, remoteSelected, filteredRemoteModels, remoteNewCount, remoteExistingCount, remoteAvailableCount, currentProviderModelIds, providerTesting, providerDeleting, channelBusy,
+      remoteLoading, remoteImporting, remoteModels, remoteSelected, remotePurpose, remoteImageAdapter, remoteStream, filteredRemoteModels, remoteNewCount, remoteExistingCount, remoteAvailableCount, currentProviderModelIds, providerTesting, providerDeleting, channelBusy,
       showAddDrawer, showImportDrawer, editingId, editingProvider,
       openModelEditor, openProviderEditor, canManage, selectProvider,
       testChannel, testSelectedProvider, requestRemoveProvider, fetchRemoteModelsForSelectedProvider, toggleRemoteModel, selectAllRemoteModels, clearRemoteModels, importRemoteModels,
@@ -407,13 +408,13 @@ export const ProvidersTab = {
     <div class="stack">
       <SideDrawer
         :open="showAddDrawer"
-        title="新增模型服务"
-        subtitle="填写供应商连接、密钥和模型列表，保存后即可在当前工作区管理。"
+        title="新增渠道"
+        subtitle="先保存渠道连接，再从该渠道导入模型并选择用途。"
         icon="server"
         width="560px"
         @close="showAddDrawer = false"
       >
-        <AddChannelForm :templates="templates" :default-task="cfg.chat?.defaultTask" @added="showAddDrawer = false" />
+        <AddChannelForm :templates="templates" @added="showAddDrawer = false" />
       </SideDrawer>
 
       <SideDrawer
@@ -435,13 +436,13 @@ export const ProvidersTab = {
         width="560px"
         @close="editingId = ''"
       >
-        <ModelEditor v-if="activeModel" :model="activeModel" :providers="providerNames" @saved="editingId = ''" />
+        <ModelEditor v-if="activeModel" :model="activeModel" @saved="editingId = ''" />
       </SideDrawer>
 
       <div class="section-stage provider-page-stage">
       <div class="section-intro provider-page-toolbar">
-        <div><h2>模型服务</h2><p>在同一工作区管理供应商、模型接入和主备回复；高级字段会在编辑抽屉中出现。</p></div>
-        <button class="btn primary small" type="button" @click="showAddDrawer = true"><Icon name="plus" :size="14" />新增模型服务</button>
+        <div><h2>渠道与模型</h2><p>先保存渠道连接，再从渠道导入模型并配置用途与能力。</p></div>
+        <button class="btn primary small" type="button" @click="showAddDrawer = true"><Icon name="plus" :size="14" />新增渠道</button>
       </div>
       <ModelRoutingBuilder :cfg="cfg" :model-names="modelNames" compact />
       <Panel flush>
@@ -508,6 +509,7 @@ export const ProvidersTab = {
                 <span class="badge">{{ selectedProviderCard?.visualCount || 0 }} 个视觉模型</span>
                 <span class="badge">{{ selectedProviderCard?.toolCount || 0 }} 个工具模型</span>
                 <span class="badge accent">{{ selectedProviderCard?.embeddingCount || 0 }} 个向量模型</span>
+                <span v-if="selectedProviderCard?.imageCount" class="badge accent">{{ selectedProviderCard.imageCount }} 个图片模型</span>
               </div>
             </div>
 
@@ -530,8 +532,9 @@ export const ProvidersTab = {
                   <ProviderFilterSearch v-model="modelQuery" placeholder="搜索模型 ID 或渠道名" />
                 </div>
                 <div v-if="filteredSelectedProviderChannels.length" class="provider-model-list">
-                  <div v-for="ch in filteredSelectedProviderChannels" :key="ch.id" class="provider-model-card" :class="{ 'is-default': ch.id === defaultReplyChannel }">
+                  <div v-for="ch in filteredSelectedProviderChannels" :key="ch.id" class="provider-model-card" :class="{ 'is-default': ch.id === defaultReplyChannel || ch.id === defaultImageChannel }">
                     <div v-if="ch.id === defaultReplyChannel" class="default-model-banner"><Icon name="sparkles" :size="13" />当前主回复模型</div>
+                    <div v-else-if="ch.id === defaultImageChannel" class="default-model-banner"><Icon name="image" :size="13" />当前默认画图模型</div>
                     <div class="provider-model-head">
                       <div>
                         <div class="provider-model-name">{{ ch.id }}</div>
@@ -539,7 +542,7 @@ export const ProvidersTab = {
                       </div>
                       <div class="row-actions">
                         <IconButton icon="play" tone="accent" tip="测试该模型" tip-dir="tip-left" :busy="channelBusy('test:' + ch.id)" @click="testChannel(ch)" />
-                        <IconButton v-if="canManage(ch) && ch.id !== defaultReplyChannel" icon="check" tone="good" tip="设为默认回复模型" tip-dir="tip-left" :busy="channelBusy('default:' + ch.id)" @click="setDefault(ch)" />
+                        <IconButton v-if="canManage(ch) && ch.purpose !== 'embedding' && !ch.embedding && ch.id !== ((ch.purpose === 'image' || ch.imageGeneration) ? defaultImageChannel : defaultReplyChannel)" icon="check" tone="good" :tip="(ch.purpose === 'image' || ch.imageGeneration) ? '设为默认画图模型' : '设为默认回复模型'" tip-dir="tip-left" :busy="channelBusy('default:' + ch.id)" @click="setDefault(ch)" />
                         <IconButton v-if="canManage(ch)" icon="pencil" tone="accent" tip="编辑模型参数" tip-dir="tip-left" @click="openModelEditor(ch.id)" />
                         <IconButton v-if="canManage(ch)" icon="trash" tone="danger" tip="删除模型" tip-dir="tip-left" :busy="channelBusy('remove:' + ch.id)" @click="requestRemoveModel(ch)" />
                       </div>
@@ -547,10 +550,14 @@ export const ProvidersTab = {
                     <div class="provider-model-meta">
                       <span class="badge">{{ ch.type }}</span>
                       <span v-if="ch.id === defaultReplyChannel" class="badge accent"><Icon name="sparkles" :size="11" />默认回复</span>
-                      <span v-if="ch.visual" class="badge accent">视觉</span>
-                      <span v-if="ch.toolUse" class="badge">工具</span>
-                      <span v-if="ch.embedding" class="badge accent">向量{{ ch.embeddingDimensions ? ' · ' + ch.embeddingDimensions + ' 维' : '' }}</span>
-                      <span v-if="ch.reasoningLabel" class="badge accent">{{ ch.reasoningLabel }}</span>
+                      <span v-if="ch.id === defaultImageChannel" class="badge accent"><Icon name="image" :size="11" />默认画图</span>
+                      <span v-if="ch.purpose === 'image' || ch.imageGeneration" class="badge">图片</span>
+                      <template v-else-if="ch.purpose !== 'image' && !ch.imageGeneration">
+                        <span v-if="ch.visual" class="badge accent">视觉</span>
+                        <span v-if="ch.toolUse" class="badge">工具</span>
+                        <span v-if="ch.embedding" class="badge accent">向量{{ ch.embeddingDimensions ? ' · ' + ch.embeddingDimensions + ' 维' : '' }}</span>
+                        <span v-if="ch.reasoningLabel" class="badge accent">{{ ch.reasoningLabel }}</span>
+                      </template>
                     </div>
                   </div>
                 </div>
@@ -583,6 +590,11 @@ export const ProvidersTab = {
                       {{ remoteImporting ? "导入中..." : (remoteNewCount ? ("导入 " + remoteNewCount + " 个模型") : "选择模型后导入") }}
                     </button>
                   </div>
+                </div>
+                <div class="form-grid dense">
+                  <Field label="模型用途" type="select" :options="[{ value: 'chat', label: '文本对话' }, { value: 'image', label: '图片生成' }, { value: 'embedding', label: '向量检索' }]" v-model="remotePurpose" tip="导入后模型只会加入对应任务。" />
+                  <Field v-if="remotePurpose === 'image'" label="图片协议" type="select" :options="[{ value: 'openai-images', label: 'OpenAI Images（兼容协议）' }, { value: 'openai-chat-completions', label: 'OpenAI Chat Completions（生图/编辑）' }, { value: 'gemini-images', label: 'Gemini 图片协议' }]" v-model="remoteImageAdapter" tip="按模型实际接口选择协议。" />
+                  <Field v-if="remotePurpose === 'chat' || remotePurpose === 'image'" label="流式响应" type="select" :options="INHERIT_BOOL_OPTIONS" v-model="remoteStream" tip="留空继承全局；图片流需要上游支持。" />
                 </div>
                 <div class="list-filter">
                   <ProviderFilterSearch v-model="remoteModelQuery" placeholder="筛选可导入模型" />
@@ -625,14 +637,13 @@ export const ProvidersTab = {
             <div class="provider-empty-card">
               <Icon name="server" :size="18" />
               <div class="provider-empty-title">还没有可管理的供应商</div>
-              <p class="muted">先新增一个模型服务，之后就可以在这里统一配置、选模型和测试。</p>
-              <button class="btn primary" type="button" @click="showAddDrawer = true"><Icon name="plus" :size="14" />新增模型服务</button>
+              <p class="muted">先新增一个渠道，之后就可以从渠道导入模型并测试。</p>
+              <button class="btn primary" type="button" @click="showAddDrawer = true"><Icon name="plus" :size="14" />新增渠道</button>
             </div>
           </section>
         </div>
       </Panel>
       </div>
-
     </div>
   `,
 }

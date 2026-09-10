@@ -21,7 +21,7 @@ const builtinToolDisplayNamesZh: Record<string, string> = {
   knowledge_manage: "知识库", memory_manage: "记忆与画像", voice_output: "语音输出", text_transform: "文本整理",
   keyword_filter: "关键词过滤", regex_replace: "正则替换", weather: "天气查询", website_fetch: "网页读取", github_api: "GitHub 查询",
   bilibili_media: "B站媒体", image_media: "图片媒体", web_search: "实时网络搜索", render_image: "图片渲染", render_url_screenshot: "网页截图", render_html_screenshot: "HTML 截图",
-  message_send: "消息发送", query_userinfo: "查询用户信息", block_user: "拉黑用户",
+  message_send: "消息发送", generate_image: "图片生成", query_userinfo: "查询用户信息", block_user: "拉黑用户",
   schedule_task: "定时任务", send_dice: "发骰子", send_rps: "猜拳", mute_user: "禁言成员", kick_out: "踢出成员", edit_card: "修改群名片",
   set_title: "设置头衔", emoji_like: "贴表情", group_poke: "戳一戳", message_manage: "群消息管理", dispatch_subagent: "派发子代理",
 }

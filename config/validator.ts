@@ -96,7 +96,8 @@ interface ConfigRecord extends ConfigSection {
   logging?: ConfigSection
 }
 
-const adapterIds = new Set(["mock", "openai-compatible", "openai-responses", "qwen", "gemini", "claude", "chatglm"])
+const adapterIds = new Set(["mock", "openai-compatible", "openai-responses", "openai-images", "openai-chat-completions", "qwen", "gemini", "gemini-images", "claude", "chatglm"])
+const modelPurposes = new Set(["chat", "image", "embedding"])
 const authTypes = new Set(["bearer", "none", "query", "x-api-key", "api-key", "custom-header"])
 const selectionStrategies = new Set(["sequential", "random", "fallback"])
 const boundaryRoles = new Set(["user", "groupAdmin", "groupOwner", "master"])
@@ -116,6 +117,14 @@ function isObject(value: unknown): value is ConfigSection {
 
 function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : []
+}
+
+function modelPurpose(model: ConfigSection): string {
+  const declared = String(model.purpose || "").trim().toLowerCase()
+  if (modelPurposes.has(declared)) return declared
+  const adapter = String(model.adapter || "").trim().toLowerCase()
+  if (["openai-images", "openai-chat-completions", "gemini-images"].includes(adapter)) return "image"
+  return section(model.capabilities).embedding === true && section(model.capabilities).chat === false ? "embedding" : "chat"
 }
 
 /** 从配置边界安全读取嵌套对象；校验器只消费未知输入，不把它当成可信配置类型。 */
@@ -338,6 +347,13 @@ function validateProviders(config: ConfigRecord, issues: ValidationIssue[]): voi
     }
     const provider = asArray(config.apiProviders).map(section).find(item => String(item.name || "") === providerName)
     const adapter = String(model.adapter || provider?.type || "")
+    const purpose = modelPurpose(model)
+    if (model.purpose !== undefined && !modelPurposes.has(String(model.purpose).trim().toLowerCase())) {
+      add(issues, "error", `models.${index}.purpose`, `未知模型用途：${String(model.purpose)}`)
+    }
+    if (purpose === "image" && ["openai-responses", "claude"].includes(adapter)) {
+      add(issues, "warn", `models.${index}.adapter`, `图片模型 ${modelName} 使用 ${adapter}，当前仅支持 OpenAI Images 或 Gemini 图片协议`)
+    }
     if (adapter && !adapterIds.has(adapter)) add(issues, "warn", `models.${index}.adapter`, `未知模型 adapter：${adapter}`)
     if (!model.modelIdentifier && !model.model) {
       add(issues, "warn", `models.${index}.modelIdentifier`, `模型 ${modelName} 未声明 modelIdentifier`)
@@ -417,7 +433,7 @@ function validateProviders(config: ConfigRecord, issues: ValidationIssue[]): voi
       }
     }
     if (model.capabilities !== undefined && !isObject(model.capabilities)) add(issues, "error", `models.${index}.capabilities`, "capabilities 必须是对象")
-    if (model.contextWindowTokens !== undefined) positiveNumber(issues, `models.${index}.contextWindowTokens`, model.contextWindowTokens, { min: 1024, max: 10000000 })
+    if (purpose === "chat" && model.contextWindowTokens !== undefined) positiveNumber(issues, `models.${index}.contextWindowTokens`, model.contextWindowTokens, { min: 1024, max: 10000000 })
     const embedding = model.embedding
     if (embedding !== undefined) {
       if (!isObject(embedding)) add(issues, "error", `models.${index}.embedding`, "embedding 必须是对象")
@@ -431,11 +447,18 @@ function validateProviders(config: ConfigRecord, issues: ValidationIssue[]): voi
         if (embedding.supportsDimensionOverride !== undefined && typeof embedding.supportsDimensionOverride !== "boolean") add(issues, "error", `models.${index}.embedding.supportsDimensionOverride`, "supportsDimensionOverride 必须是布尔值")
       }
     }
+    const image = model.image
+    if (image !== undefined) {
+      if (!isObject(image)) add(issues, "error", `models.${index}.image`, "image 必须是对象")
+      else if (image.protocol !== undefined && !["openai-images", "openai-chat-completions", "gemini-images"].includes(String(image.protocol))) {
+        add(issues, "error", `models.${index}.image.protocol`, `未知图片协议：${String(image.protocol)}`)
+      }
+    }
     const capabilities = section(model.capabilities)
     if (capabilities.embedding === true && !isObject(embedding)) add(issues, "error", `models.${index}.embedding`, "启用 embedding 能力时必须配置 embedding 参数")
     if (model.timeoutMs !== undefined) positiveNumber(issues, `models.${index}.timeoutMs`, model.timeoutMs, { min: 1000, max: 600000 })
     if (model.stream !== undefined && typeof model.stream !== "boolean") add(issues, "error", `models.${index}.stream`, "stream 必须是布尔值")
-    if (model.stream === true && !["openai-compatible", "openai-responses", "qwen", "chatglm", "gemini", "claude"].includes(adapter)) {
+    if (model.stream === true && !["openai-compatible", "openai-responses", "openai-images", "openai-chat-completions", "qwen", "chatglm", "gemini", "gemini-images", "claude"].includes(adapter)) {
       add(issues, "warn", `models.${index}.stream`, `模型 ${modelName} 的 ${adapter || "当前"} 适配器暂不支持流式响应，将按非流式执行`)
     }
     const reasoning = model.reasoning
@@ -457,11 +480,17 @@ function validateProviders(config: ConfigRecord, issues: ValidationIssue[]): voi
       continue
     }
     if (!Array.isArray(task.modelList)) add(issues, "error", `modelTasks.${taskName}.modelList`, "modelList 必须是数组")
+    const declaredPurpose = task.purpose === undefined ? "" : String(task.purpose).trim().toLowerCase()
+    const taskPurpose = declaredPurpose || (taskName === "imageGeneration" ? "image" : taskName === "embedding" ? "embedding" : "chat")
+    if (!modelPurposes.has(taskPurpose)) add(issues, "error", `modelTasks.${taskName}.purpose`, `未知任务用途：${taskPurpose}`)
     for (const modelNameValue of asArray(task.modelList)) {
       const modelName = String(modelNameValue)
       if (!modelNames.has(modelName)) add(issues, "error", `modelTasks.${taskName}.modelList`, `任务 ${taskName} 引用了不存在的模型：${modelName}`)
       const model = asArray(config.models).map(section).find(item => String(item.name || "") === modelName)
-      if (section(model?.capabilities).chat === false) add(issues, "error", `modelTasks.${taskName}.modelList`, `聊天任务不能使用 embedding-only 模型：${modelName}`)
+      if (model) {
+        const purpose = modelPurpose(model)
+        if (purpose !== taskPurpose) add(issues, "error", `modelTasks.${taskName}.modelList`, `任务 ${taskName} 需要 ${taskPurpose} 模型，当前为 ${purpose}：${modelName}`)
+      }
     }
     const selectionStrategy = String(task.selectionStrategy || "")
     if (selectionStrategy && !selectionStrategies.has(selectionStrategy)) {

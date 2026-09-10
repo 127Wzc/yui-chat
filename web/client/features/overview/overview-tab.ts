@@ -22,6 +22,7 @@ interface ProviderData extends UnknownRecord { templates?: ProviderTemplate[] }
 interface ModelConfig extends UnknownRecord {
   name?: string
   adapter?: string
+  apiProvider?: string
   modelIdentifier?: string
   capabilities?: { chat?: boolean }
 }
@@ -88,11 +89,11 @@ export const OverviewTab = {
     const initialConfig = config.value
     const initialRealModels = (initialConfig.models || []).filter(model => model.adapter !== "mock" && model.name !== "mock")
     const wizard = reactive({
-      providerTemplate: "qwen",
-      providerName: "qwen-main",
-      providerBaseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      providerTemplate: "openai_compatible",
+      providerName: "openai-compatible",
+      providerBaseURL: "",
       providerApiKey: "",
-      providerModel: "qwen-plus",
+      providerModel: "gpt-4o-mini",
       mainModel: initialConfig.chat?.defaultChannel && initialConfig.chat.defaultChannel !== "mock" ? initialConfig.chat.defaultChannel : (initialRealModels[0]?.name || ""),
       fallbackModel: "",
       firstPerson: initialConfig.persona?.firstPerson || "埋埋",
@@ -183,7 +184,9 @@ export const OverviewTab = {
       if (!wizard.providerModel.trim()) return toast("请填写模型 ID")
       if (!wizard.providerName.trim()) return toast("请填写渠道名称")
       const template = providerTemplates.value.find(item => item.id === wizard.providerTemplate)
-      const existing = (config.value.apiProviders || []).find(item => item.name === wizard.providerName.trim())
+      const providerName = wizard.providerName.trim()
+      const modelIdentifier = wizard.providerModel.trim()
+      const existing = (config.value.apiProviders || []).find(item => item.name === providerName)
       if (existing && !wizard.providerApiKey.trim() && existing.authType !== "none") {
         toast("这个渠道已经存在；为避免覆盖已保存的密钥，请直接进入下一步，或填写新 Key 后更新")
         return false
@@ -193,19 +196,38 @@ export const OverviewTab = {
         return false
       }
       return runWizardAction(async () => {
-        const result = asRecord<{ model?: { name?: string } }>(await request("/api/providers/quick-add", {
+        const providerPath = `/api/providers/${encodeURIComponent(providerName)}`
+        if (existing) {
+          await request(providerPath, {
+            method: "PATCH",
+            body: JSON.stringify({
+              baseURL: wizard.providerBaseURL,
+              ...(wizard.providerApiKey.trim() ? { apiKey: wizard.providerApiKey.trim() } : {}),
+            }),
+          })
+        } else {
+          await request("/api/providers", {
+            method: "POST",
+            body: JSON.stringify({
+              templateId: wizard.providerTemplate,
+              providerName,
+              baseURL: wizard.providerBaseURL,
+              apiKey: wizard.providerApiKey,
+            }),
+          })
+        }
+        const result = asRecord<{ config?: UnknownRecord }>(await request(`${providerPath}/models`, {
           method: "POST",
-          body: JSON.stringify({
-            templateId: wizard.providerTemplate,
-            providerName: wizard.providerName,
-            baseURL: wizard.providerBaseURL,
-            apiKey: wizard.providerApiKey,
-            modelIdentifiers: [wizard.providerModel],
-          }),
+          body: JSON.stringify({ modelIdentifiers: [modelIdentifier], purpose: "chat" }),
         }))
+        const importedConfig = asRecord(result.config)
+        const importedModel = (Array.isArray(importedConfig.models) ? importedConfig.models : [])
+          .map(item => asRecord<ModelConfig>(item))
+          .find(item => item.apiProvider === providerName && item.modelIdentifier === modelIdentifier)
+        if (!importedModel?.name) throw new Error("模型导入成功但未找到本地模型记录")
         wizard.providerApiKey = ""
-        wizard.mainModel = result.model?.name || wizard.mainModel
-      }, "模型服务已保存，可继续设置回复方案", ["config", "providers", "setupGuide", "diagnostics"])
+        wizard.mainModel = importedModel.name
+      }, "渠道已保存，模型已导入，可继续设置回复方案", ["config", "providers", "setupGuide", "diagnostics"])
     }
 
     async function saveProviderAndTest() {
@@ -446,12 +468,12 @@ export const OverviewTab = {
 
             <div v-else-if="currentGuideId === 'provider-model'" class="wizard-inline-body">
               <div class="form-grid">
-                <Field label="模型服务" type="select" :options="providerTemplateOptions" v-model="wizard.providerTemplate" @update:model-value="applyProviderTemplate" tip="国内用户可先选择通义千问；其他兼容服务选择 OpenAI Compatible。" />
-                <Field label="渠道名称" v-model="wizard.providerName" placeholder="qwen-main" tip="保留默认值即可，用于区分不同服务。" />
+                <Field label="渠道类型" type="select" :options="providerTemplateOptions" v-model="wizard.providerTemplate" @update:model-value="applyProviderTemplate" tip="选择服务协议；具体模型在下一步导入。" />
+                <Field label="渠道名称" v-model="wizard.providerName" placeholder="openai-compatible" tip="用于区分不同服务。" />
                 <Field label="API 地址" v-model="wizard.providerBaseURL" placeholder="https://服务商地址/v1" tip="官方预设会自动填写；中转服务一般填写到 /v1。" />
                 <Field label="API Key" type="password" v-model="wizard.providerApiKey" placeholder="仅保存在本机配置" tip="从模型服务商控制台创建，不会显示在公开页面。" />
               </div>
-              <Field label="模型 ID" v-model="wizard.providerModel" placeholder="qwen-plus" hint="参考值：通义千问 qwen-plus；OpenAI gpt-4o-mini；请以服务商控制台为准。" />
+              <Field label="模型 ID" v-model="wizard.providerModel" placeholder="gpt-4o-mini" hint="填写服务商控制台中的模型 ID。" />
               <div class="wizard-inline-actions">
                 <button class="btn outline" type="button" :disabled="wizardBusy" @click="saveProvider"><Icon name="save" :size="14" />仅保存</button>
                 <button class="btn primary" type="button" :disabled="wizardBusy" @click="saveProviderAndTest"><Icon :name="wizardBusy ? 'activity' : 'play'" :class="{ 'icon-spin': wizardBusy }" :size="14" />保存并测试</button>

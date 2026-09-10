@@ -12,6 +12,8 @@ type MediaAttachment = UnknownRecord & {
   kind?: unknown
   url?: unknown
   source?: unknown
+  /** 引用图等只在本轮使用的媒体可以显式禁用磁盘缓存。 */
+  cacheable?: unknown
 }
 
 type MediaResult = {
@@ -170,6 +172,35 @@ async function thumbnailFromDataUrl(dataUrl: unknown, options: UnknownRecord): P
   }
 }
 
+/** 生成仅用于日志或展示的缩略图；不写入媒体缓存。 */
+export async function createMediaThumbnail(source: unknown, config: unknown = {}): Promise<string> {
+  const cfg = mediaConfig(config)
+  const value = text(source).trim()
+  if (/^data:/i.test(value)) return thumbnailFromDataUrl(value, cfg.thumbnail)
+  if (!/^https?:\/\//i.test(value)) return ""
+  try {
+    const safety = linkSafetyConfig(config)
+    const trustedRequest = resolveTrustedResourceRequest(value, ["qq-media"], config)
+    const allowPrivateHosts = safety.allowPrivateHosts || trustedRequest?.allowPrivateHosts === true
+    const safeUrl = trustedRequest?.url || await assertSafeHttpUrl(value, { allowPrivateHosts })
+    const maxBytes = Math.max(1024, number(cfg.thumbnail.maxSourceBytes, 4 * 1024 * 1024))
+    const response = await fetchSafeHttp(safeUrl, {
+      method: "GET",
+      allowPrivateHosts,
+      maxBytes,
+      timeoutMs: Math.min(5000, Math.max(1000, number(cfg.remoteFetch.timeoutMs, 10000))),
+      headers: { "User-Agent": "Yui-Chat/0.1 image-thumbnail", Accept: "image/*" },
+    })
+    if (!response.ok) return ""
+    const mimeType = text(response.headers.get("content-type")).split(";")[0].trim().toLowerCase()
+    if (!defaultAllowedMime.includes(mimeType)) return ""
+    const bytes = new Uint8Array(await response.arrayBuffer())
+    return await makeThumbnailDataUrl(bytes, cfg.thumbnail)
+  } catch {
+    return ""
+  }
+}
+
 async function fetchRemoteImage(url: string, options: UnknownRecord, config: unknown, useCache = true): Promise<MediaResult> {
   const safety = linkSafetyConfig(config)
   const trustedRequest = resolveTrustedResourceRequest(url, ["qq-media"], config)
@@ -246,7 +277,8 @@ export async function prepareMediaForVision(media: unknown = {}, config: unknown
       delete attachment.preparedUrl
       continue
     }
-    if (attachment.source !== "quote" && attachment.cacheKey && attachment.fromHistory) {
+    const cacheable = attachment.cacheable !== false && attachment.source !== "quote"
+    if (cacheable && attachment.cacheKey && attachment.fromHistory) {
       const cached = await readCachedKey(text(attachment.cacheKey), number(options.cacheTtlMs), number(options.maxBytes))
       if (cached) {
         attachment.preparedUrl = cached.dataUrl
@@ -261,7 +293,6 @@ export async function prepareMediaForVision(media: unknown = {}, config: unknown
     if (!url) continue
     // 引用消息里的 URL 可能是短时签名地址。它必须使用本轮由 getMessage
     // 取得的最新值并即时解码，既不读取旧缓存，也不把正文写回缓存。
-    const cacheable = attachment.source !== "quote"
     if (/^data:/i.test(url)) {
       const parsed = parseDataImageUrl(url)
       if (!parsed || parsed.bytes.length > number(options.maxBytes)) {

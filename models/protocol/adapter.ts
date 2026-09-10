@@ -1,4 +1,4 @@
-import type { EmbeddingRequest, EmbeddingResponse, ModelListRequest, ModelRequest, ModelResponse } from "./types.js"
+import type { EmbeddingRequest, EmbeddingResponse, ImageGenerationRequest, ImageGenerationResponse, ModelListRequest, ModelRequest, ModelResponse } from "./types.js"
 
 /**
  * 模型适配器的 TS 目标基类。
@@ -26,6 +26,9 @@ export abstract class ModelAdapter {
   /** 是否支持 embedding。 */
   readonly supportsEmbeddings: boolean = false
 
+  /** 是否支持图片生成。 */
+  readonly supportsImageGeneration: boolean = false
+
   /** 是否支持 Responses 原生 tool_search/defer_loading。 */
   readonly supportsNativeToolSearch: boolean = false
 
@@ -40,5 +43,10 @@ export abstract class ModelAdapter {
   /** 执行 embedding；不支持时由基类给出明确错误。 */
   async embedTexts(_request: EmbeddingRequest): Promise<EmbeddingResponse> {
     throw new Error(`${this.id} 适配器不支持 embedding`)
+  }
+
+  /** 执行图片生成；不支持时由基类给出明确错误。 */
+  async generateImages(_request: ImageGenerationRequest): Promise<ImageGenerationResponse> {
+    throw new Error(`${this.id} 适配器不支持图片生成`)
   }
 }

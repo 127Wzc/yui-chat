@@ -3,7 +3,7 @@ import { cloneJsonValue } from "../../core/shared/json-values.js"
 
 type UnknownRecord = Record<string, unknown>
 
-/** 管理台快速创建供应商时使用的稳定模板；模板不是运行时渠道本身。 */
+/** 管理台新增渠道时使用的稳定模板；模板不是运行时渠道本身。 */
 export interface ProviderTemplate {
   id: string
   label: string
@@ -20,12 +20,9 @@ export interface ProviderTemplate {
   responses?: Record<string, JsonValue>
 }
 
-export interface ProviderBundle {
+export interface ProviderConfigBundle {
   template: ProviderTemplate
   provider: UnknownRecord
-  model: UnknownRecord
-  models: UnknownRecord[]
-  taskName: string
 }
 
 function text(value: unknown): string {
@@ -38,10 +35,6 @@ function record(value: unknown): UnknownRecord {
 
 function records(value: unknown): UnknownRecord[] {
   return Array.isArray(value) ? value.filter(item => Boolean(item) && typeof item === "object" && !Array.isArray(item)) as UnknownRecord[] : []
-}
-
-function booleanValue(value: unknown, fallback: boolean): boolean {
-  return value === undefined ? fallback : Boolean(value)
 }
 
 export const providerTemplates: Record<string, ProviderTemplate> = {
@@ -94,31 +87,40 @@ export const providerTemplates: Record<string, ProviderTemplate> = {
   },
 }
 
+// 管理台只展示最常用的三类连接。其余名称作为读取旧配置/脚本的别名保留，
+// 不再占用新增渠道表单的选择项。
+const publicProviderTemplateIds = ["openai", "gemini", "openai_compatible"] as const
+
 export function getProviderTemplate(id: unknown = ""): ProviderTemplate {
-  return providerTemplates[text(id)] || providerTemplates.openai_compatible
+  const key = text(id).trim()
+  const aliases: Record<string, string> = {
+    "openai-responses": "openai_responses",
+    "openai-compatible": "openai_compatible",
+    "local-openai": "local_openai",
+    "chat-glm": "chatglm",
+  }
+  return providerTemplates[key] || providerTemplates[aliases[key]] || providerTemplates.openai_compatible
 }
 
 export function listProviderTemplates(): ProviderTemplate[] {
-  return Object.values(providerTemplates).map(item => ({ ...item, params: { ...item.params }, ...(item.responses ? { responses: cloneJsonValue(item.responses) as Record<string, JsonValue> } : {}) }))
+  return publicProviderTemplateIds
+    .map(id => providerTemplates[id])
+    .filter((item): item is ProviderTemplate => Boolean(item))
+    .map(item => ({ ...item, params: { ...item.params }, ...(item.responses ? { responses: cloneJsonValue(item.responses) as Record<string, JsonValue> } : {}) }))
 }
 
 export function sanitizeProviderId(value: unknown = ""): string {
   return text(value || "custom").trim().replace(/[^a-zA-Z0-9_.-]/g, "-").replace(/^-+|-+$/g, "") || "custom"
 }
 
-export function buildProviderBundle(input: UnknownRecord = {}): ProviderBundle {
+/** 仅创建供应商连接；模型必须在供应商创建后从模型列表中导入。 */
+export function buildProviderConfig(input: UnknownRecord = {}): ProviderConfigBundle {
   const template = getProviderTemplate(input.templateId || input.template)
   const providerName = sanitizeProviderId(input.providerName || input.providerId || input.name || template.providerName)
-  const adapter = sanitizeProviderId(input.adapter || input.type || template.adapter)
-  const rawIdentifiers = Array.isArray(input.modelIdentifiers)
-    ? input.modelIdentifiers
-    : text(input.modelIdentifiers || input.models || input.modelIdentifier || input.model || template.modelIdentifier).split(/[\n,，]+/)
-  const identifiers = rawIdentifiers.map(text).map(item => item.trim()).filter(Boolean)
-  if (!identifiers.length) throw new Error("modelIdentifier is required")
-
+  const providerType = sanitizeProviderId(input.providerType || input.providerAdapter || input.type || template.adapter)
   const provider: UnknownRecord = {
     name: providerName,
-    type: adapter,
+    type: providerType,
     baseURL: text(input.baseURL ?? template.baseURL).trim(),
     apiKey: text(input.apiKey).trim(),
     authType: text(input.authType || template.authType),
@@ -126,47 +128,15 @@ export function buildProviderBundle(input: UnknownRecord = {}): ProviderBundle {
     headers: record(input.headers),
     query: record(input.query),
   }
-  const models = identifiers.map((modelIdentifier, index) => ({
-    name: sanitizeProviderId(index === 0 && input.modelName ? input.modelName : `${providerName}-${modelIdentifier}`),
-    modelIdentifier,
-    apiProvider: providerName,
-    adapter,
-    visual: booleanValue(input.visual, template.visual),
-    toolUse: input.toolUse === undefined ? template.toolUse : input.toolUse !== false,
-    priceIn: Number(input.priceIn || 0),
-    priceOut: Number(input.priceOut || 0),
-    params: Object.keys(record(input.params)).length ? record(input.params) : { ...template.params },
-    ...(template.responses ? { responses: cloneJsonValue(template.responses) } : {}),
-  }))
-  return { template, provider, model: models[0], models, taskName: "replyer" }
+  return { template, provider }
 }
 
-export function applyProviderBundle(config: UnknownRecord, bundle: ProviderBundle): UnknownRecord {
+/** 新增供应商不覆盖同名连接，避免误把另一个渠道的模型换到新端点。 */
+export function applyProviderConfig(config: UnknownRecord, bundle: ProviderConfigBundle): UnknownRecord {
   const provider = bundle.provider
-  const models = bundle.models.length ? bundle.models : [bundle.model].filter(Boolean)
-  const modelNames = models.map(model => text(model.name))
-  const firstModel = models[0]
-  const apiProviders = records(config.apiProviders).filter(item => text(item.name) !== text(provider.name))
-  const currentModels = records(config.models).filter(item => !modelNames.includes(text(item.name)))
-  const tasks = record(config.modelTasks)
-  const currentTask = record(tasks[bundle.taskName])
-  const currentList = Array.isArray(currentTask.modelList) ? currentTask.modelList.map(text) : []
-  return {
-    ...config,
-    apiProviders: [...apiProviders, provider],
-    models: [...currentModels, ...models],
-    modelTasks: {
-      ...tasks,
-      [bundle.taskName]: {
-        ...currentTask,
-        modelList: [...new Set([...currentList, ...modelNames])],
-        selectionStrategy: text(currentTask.selectionStrategy) || "sequential",
-      },
-    },
-    chat: {
-      ...record(config.chat),
-      defaultTask: bundle.taskName,
-      defaultChannel: text(firstModel?.name || record(config.chat).defaultChannel),
-    },
-  }
+  const providers = records(config.apiProviders)
+  const name = text(provider.name).trim()
+  if (!name) throw new Error("provider name is required")
+  if (providers.some(item => text(item.name).trim() === name)) throw new Error(`provider already exists: ${name}`)
+  return { ...config, apiProviders: [...providers, provider] }
 }

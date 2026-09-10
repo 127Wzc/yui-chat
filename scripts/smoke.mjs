@@ -872,6 +872,9 @@ async function checkUserExtensionStorage() {
 async function checkToolPolicy() {
   const { configStore } = await import("../output/runtime/config/store.js")
   const { toolRegistry } = await import("../output/runtime/tools/support/registry.js")
+  const { GenerateImageTool } = await import("../output/runtime/tools/builtins/image-generation.js")
+  const { adapterRegistry } = await import("../output/runtime/models/adapters/registry.js")
+  const { providerResolver } = await import("../output/runtime/models/routing/provider-resolver.js")
   const { explainToolPolicy } = await import("../output/runtime/tools/access/policy.js")
   const { getToolCommon, isToolEnabledByConfig, normalizeTool, resolveToolExecutionPolicy } = await import("../output/runtime/tools/support/contract.js")
   const { selectPromptTools } = await import("../output/runtime/core/chat/token-budget.js")
@@ -907,6 +910,31 @@ async function checkToolPolicy() {
   assert(!listedTools.some(tool => ["send_message", "send_message_to_target", "at_user"].includes(tool.name)), "retired delivery tools should no longer be registered")
   assert(listedTools.find(tool => tool.name === "image_media")?.common?.execution?.repeatPolicy === "bounded", "read-only image media search should remain bounded")
   assert(listedTools.find(tool => tool.name === "image_media")?.common?.autoDelivery?.continueConversation === true, "image_media should explicitly request one conversational continuation after automatic delivery")
+  const imageGenerationMeta = listedTools.find(tool => tool.name === "generate_image")
+  const imageGenerationConfig = imageGenerationMeta?.common?.configSchema?.properties || {}
+  assert(imageGenerationConfig.defaultAspectRatio?.default === "1:1" && imageGenerationConfig.defaultImageSize?.default === "1K" && imageGenerationConfig.defaultSize?.default === "1024x1024", "generate_image should expose concise tool-level image defaults")
+  assert(imageGenerationConfig.maxCount?.default === 0 && imageGenerationConfig.multiImageUserIds?.type === "array", "generate_image should separate the hard output cap from the multi-image allowlist")
+  assert(imageGenerationMeta?.common?.parameters?.properties?.startMessage?.maxLength === 80, "generate_image should constrain the model-provided start acknowledgement")
+  const originalImageGeneration = adapterRegistry.generateImages
+  const originalImageCandidates = providerResolver.resolveCandidateChannels
+  const observedImageCounts = []
+  adapterRegistry.generateImages = async request => {
+    observedImageCounts.push(request.count)
+    return { images: [{ data: tinyPngDataUrl }, { data: tinyPngDataUrl }, { data: tinyPngDataUrl }] }
+  }
+  providerResolver.resolveCandidateChannels = () => [{ id: "smoke-image", model: "smoke-image", type: "openai-images", purpose: "image", stream: false, modelConfig: {} }]
+  try {
+    const imageTool = new GenerateImageTool()
+    const ordinaryImage = await imageTool.execute({ prompt: "cat", referenceImages: [], count: 5 }, { config, toolConfig: { maxCount: 2, multiImageUserIds: ["allowed"] }, e: { user_id: "ordinary" } })
+    const allowlistedImage = await imageTool.execute({ prompt: "cat", referenceImages: [], count: 5 }, { config, toolConfig: { maxCount: 2, multiImageUserIds: ["allowed"] }, e: { user_id: "allowed" } })
+    const ownerDefaultImage = await imageTool.execute({ prompt: "cat", referenceImages: [] }, { config, toolConfig: { maxCount: 2 }, e: { user_id: "owner", isMaster: true } })
+    assert(observedImageCounts[0] === 1 && ordinaryImage.metadata?.imageCount === 1, "ordinary users should always request and receive one generated image")
+    assert(observedImageCounts[1] === 2 && allowlistedImage.metadata?.imageCount === 2, "allowlisted users should have their requested count capped by maxCount")
+    assert(observedImageCounts[2] === undefined && ownerDefaultImage.metadata?.imageCount === 2, "maxCount should cap returned images without becoming the upstream count when count is omitted")
+  } finally {
+    adapterRegistry.generateImages = originalImageGeneration
+    providerResolver.resolveCandidateChannels = originalImageCandidates
+  }
   assert(listedTools.find(tool => tool.name === "group_poke")?.common?.execution?.targetFields?.includes("qqs"), "poke should expose a target execution field")
   assert(listedTools.find(tool => tool.name === "group_poke")?.common?.execution?.supportsCount === true && listedTools.find(tool => tool.name === "group_poke")?.common?.execution?.operationFamily === "group_poke", "poke should expose count quota and operation family in the common policy")
   assert(!listedTools.some(tool => tool.name === "media_action"), "retired media_action should no longer be registered")
@@ -1766,35 +1794,49 @@ async function checkNetworkTools() {
 }
 
 async function checkProviderTemplates() {
-  const { applyProviderBundle, buildProviderBundle, listProviderTemplates } = await import("../output/runtime/models/configuration/provider-templates.js")
+  const { applyProviderConfig, buildProviderConfig, getProviderTemplate, listProviderTemplates } = await import("../output/runtime/models/configuration/provider-templates.js")
+  const { addModelsToProvider, updateModelConfig } = await import("../output/runtime/models/configuration/editor.js")
   const { filterToolsForModel, modelToolAllowed, modelToolRoute } = await import("../output/runtime/models/configuration/tool-policy.js")
   const { buildModelToolPolicyOptions, modelToolPolicyDraft, modelToolPolicyPatch } = await import("../output/runtime/web/client/features/providers/provider-tool-policy-editor.js")
   const { responsesModelDraft, responsesModelPatch } = await import("../output/runtime/web/client/features/providers/provider-responses-editor.js")
   const { validateConfig } = await import("../output/runtime/config/validator.js")
   const { configStore } = await import("../output/runtime/config/store.js")
   const templates = listProviderTemplates()
-  assert(templates.some(item => item.id === "qwen"), "provider templates should include qwen")
-  assert(templates.some(item => item.id === "gemini"), "provider templates should include gemini")
-  assert(templates.some(item => item.id === "claude"), "provider templates should include claude")
-  assert(templates.some(item => item.id === "openai_responses"), "provider templates should include OpenAI Responses")
+  assert(templates.length === 3 && ["openai", "gemini", "openai_compatible"].every(id => templates.some(item => item.id === id)), "provider templates should expose only the three public connection types")
   assert(templates.find(item => item.id === "gemini")?.toolUse === true, "gemini template should expose tool use")
-  assert(templates.find(item => item.id === "claude")?.toolUse === true, "claude template should expose tool use")
-  assert(!templates.find(item => item.id === "openai_responses")?.responses?.toolSearch, "OpenAI Responses template should keep capability routing out of protocol-specific settings")
-  const bundle = buildProviderBundle({ templateId: "qwen", apiKey: "test-key" })
-  assert(bundle.provider.type === "qwen", "qwen template should build qwen provider")
-  assert(bundle.model.visual === true && bundle.model.toolUse === true, "qwen template should expose vision and tools")
+  assert(getProviderTemplate("claude").toolUse === true, "legacy claude template alias should remain usable by existing configuration imports")
+  assert(!getProviderTemplate("openai_responses").responses?.toolSearch, "OpenAI Responses alias should keep capability routing out of protocol-specific settings")
   const config = JSON.parse(JSON.stringify(await configStore.load()))
-  const next = applyProviderBundle(config, bundle)
-  assert(next.apiProviders.some(item => item.name === bundle.provider.name), "provider bundle should add provider")
-  assert(next.models.some(item => item.name === bundle.model.name), "provider bundle should add model")
-  assert(next.modelTasks[bundle.taskName].modelList.includes(bundle.model.name), "provider bundle should attach model to task")
+  const qwenProvider = buildProviderConfig({ templateId: "qwen", providerName: "qwen-import", apiKey: "test-key" })
+  assert(qwenProvider.provider.type === "qwen", "qwen template should build qwen provider")
+  const qwenProviderConfig = applyProviderConfig(config, qwenProvider)
+  const qwenConfig = addModelsToProvider(qwenProviderConfig, qwenProvider.provider.name, [qwenProvider.template.modelIdentifier], { purpose: "chat", adapter: qwenProvider.template.adapter })
+  const qwenModel = qwenConfig.models.find(item => item.apiProvider === qwenProvider.provider.name && item.modelIdentifier === qwenProvider.template.modelIdentifier)
+  assert(qwenModel?.visual === true && qwenModel?.toolUse === true, "qwen template should expose vision and tools when importing a model")
+  assert(qwenConfig.modelTasks.replyer.modelList.includes(qwenModel.name), "model import should attach the model to the reply task")
+  assert(qwenModel.name.startsWith(`${qwenProvider.provider.name}-`), "imported model names should carry the provider prefix")
+  const importedImageConfig = addModelsToProvider(qwenProviderConfig, qwenProvider.provider.name, ["smoke-image-import"], { purpose: "image", adapter: "openai-images", image: { protocol: "openai-images" } })
+  const importedImage = importedImageConfig.models.find(item => item.apiProvider === qwenProvider.provider.name && item.modelIdentifier === "smoke-image-import")
+  assert(importedImage?.contextWindowTokens === undefined, "image model imports should not copy chat context window settings")
+  const next = qwenConfig
   assert(validateConfig(next).ok, "provider template config should validate")
-  const responsesBundle = buildProviderBundle({ templateId: "openai_responses", apiKey: "test-key" })
-  const responsesConfig = applyProviderBundle(config, responsesBundle)
+  const providerOnly = buildProviderConfig({ templateId: "openai", providerName: "provider-only", apiKey: "test-key" })
+  const providerOnlyConfig = applyProviderConfig(config, providerOnly)
+  assert(providerOnlyConfig.apiProviders.some(item => item.name === "provider-only") && !providerOnlyConfig.models.some(item => item.apiProvider === "provider-only"), "provider creation should not create an implicit model")
+  let duplicateProviderRejected = false
+  try { applyProviderConfig(providerOnlyConfig, providerOnly) } catch { duplicateProviderRejected = true }
+  assert(duplicateProviderRejected, "provider creation should reject duplicate channel names")
+  let providerSwitchRejected = false
+  try { updateModelConfig(next, qwenModel.name, { apiProvider: "provider-only" }) } catch (error) { providerSwitchRejected = String(error?.message || error).includes("不可修改") }
+  assert(providerSwitchRejected, "model editing should keep the model bound to its original provider")
+  const responsesProvider = buildProviderConfig({ templateId: "openai_responses", providerName: "responses-import", apiKey: "test-key" })
+  const responsesProviderConfig = applyProviderConfig(config, responsesProvider)
+  const responsesConfig = addModelsToProvider(responsesProviderConfig, responsesProvider.provider.name, [responsesProvider.template.modelIdentifier], { purpose: "chat", adapter: responsesProvider.template.adapter })
+  const responsesModel = responsesConfig.models.find(item => item.apiProvider === responsesProvider.provider.name && item.modelIdentifier === responsesProvider.template.modelIdentifier)
   assert(validateConfig(responsesConfig).ok, "OpenAI Responses template config should validate")
   const invalidFileSearch = JSON.parse(JSON.stringify(responsesConfig))
-  const responsesModel = invalidFileSearch.models.find(item => item.name === responsesBundle.model.name)
-  responsesModel.responses.fileSearch = { enabled: true, vectorStoreIds: [] }
+  const invalidResponsesModel = invalidFileSearch.models.find(item => item.name === responsesModel.name)
+  invalidResponsesModel.responses.fileSearch = { enabled: true, vectorStoreIds: [] }
   assert(!validateConfig(invalidFileSearch).ok, "Responses file search should require at least one Vector Store ID")
   const allowlistModel = { toolPolicy: { mode: "allowlist", allow: ["message_send", "web_search"], routes: { web_search: { source: "hosted", strategy: "parallel" }, tool_search: { source: "disabled" } } } }
   assert(filterToolsForModel([{ name: "message_send" }, { name: "web_search" }], allowlistModel).map(item => item.name).join(",") === "message_send,web_search", "model allowlists should govern a stable capability shared by local and hosted implementations")
@@ -1814,13 +1856,13 @@ async function checkProviderTemplates() {
   const consolidatedResponses = responsesModelPatch(responsesModelDraft({}), "smoke-responses")
   assert(!("enabled" in consolidatedResponses.webSearch) && !("toolSearch" in consolidatedResponses), "Responses settings should not duplicate capability routing or enable switches")
   const invalidToolPolicy = JSON.parse(JSON.stringify(responsesConfig))
-  invalidToolPolicy.models.find(item => item.name === responsesBundle.model.name).toolPolicy = { mode: "both", allow: [""], sources: { webSearch: "somewhere" } }
+  invalidToolPolicy.models.find(item => item.name === responsesModel.name).toolPolicy = { mode: "both", allow: [""], sources: { webSearch: "somewhere" } }
   assert(!validateConfig(invalidToolPolicy).ok, "invalid model tool policies should be rejected at the config boundary")
   const invalidImplementationId = JSON.parse(JSON.stringify(responsesConfig))
-  invalidImplementationId.models.find(item => item.name === responsesBundle.model.name).toolPolicy = { mode: "allowlist", allow: ["openai:web_search"], routes: {} }
+  invalidImplementationId.models.find(item => item.name === responsesModel.name).toolPolicy = { mode: "allowlist", allow: ["openai:web_search"], routes: {} }
   assert(!validateConfig(invalidImplementationId).ok, "model tool policy lists should reject implementation-prefixed legacy ids")
   const invalidResponsesState = JSON.parse(JSON.stringify(responsesConfig))
-  invalidResponsesState.models.find(item => item.name === responsesBundle.model.name).responses.stateMode = "proxy_magic"
+  invalidResponsesState.models.find(item => item.name === responsesModel.name).responses.stateMode = "proxy_magic"
   assert(!validateConfig(invalidResponsesState).ok, "unknown Responses state modes should be rejected at the config boundary")
 }
 
@@ -1830,7 +1872,9 @@ async function checkAdapterToolProtocol() {
     messagesToClaudeMessages,
     messagesToGeminiContents,
     parseClaudeToolCalls,
+    parseGeminiImageStreamResponse,
     parseGeminiToolCalls,
+    parseOpenAIImageStreamResponse,
   } = await import("../output/runtime/models/adapters/registry.js")
   const { parseClaudeStreamResponse } = await import("../output/runtime/models/adapters/claude.js")
   const { parseGeminiStreamResponse } = await import("../output/runtime/models/adapters/gemini.js")
@@ -1843,6 +1887,8 @@ async function checkAdapterToolProtocol() {
   assert(adapters.find(item => item.id === "openai-responses")?.supportsStreaming === true, "OpenAI Responses adapter should declare streaming support")
   assert(adapters.find(item => item.id === "gemini")?.supportsStreaming === true, "Gemini adapter should declare streaming support")
   assert(adapters.find(item => item.id === "claude")?.supportsStreaming === true, "Claude adapter should declare streaming support")
+  assert(adapters.find(item => item.id === "openai-images")?.supportsStreaming === true, "OpenAI Images adapter should declare streaming support")
+  assert(adapters.find(item => item.id === "gemini-images")?.supportsStreaming === true, "Gemini Images adapter should declare streaming support")
   assert(adapters.find(item => item.id === "openai-responses")?.supportsNativeToolSearch === true, "OpenAI Responses adapter should declare native tool search support")
   assert(adapters.find(item => item.id === "openai-responses")?.protocol === "responses" && adapters.find(item => item.id === "claude")?.protocol === "claude-messages" && adapters.find(item => item.id === "gemini")?.protocol === "gemini-generate-content", "adapter diagnostics should expose the actual upstream conversation protocol")
   const mockModels = await adapterRegistry.listModels({ id: "mock", type: "mock" })
@@ -2298,6 +2344,74 @@ async function checkAdapterToolProtocol() {
     assert(geminiStreamRequest.url.includes(":streamGenerateContent") && geminiStreamRequest.url.includes("alt=sse"), "Gemini streaming requests should use streamGenerateContent with alt=sse")
     assert(streamedGemini.text === "你好" && streamedGemini.toolCalls[0]?.name === "command_search" && streamedGemini.toolCalls[0]?.arguments?.query === "体力", "Gemini SSE should combine text and function-call chunks")
     assert(streamedGemini.usage.total === 5 && streamedGemini.stopReason === "tool_calls", "Gemini SSE should preserve usage and tool finish reason")
+
+    let openaiImageRequest
+    global.fetch = async (_url, options = {}) => {
+      openaiImageRequest = JSON.parse(String(options.body || "{}"))
+      const source = [
+        'data: {"type":"image_generation.partial_image","partial_image_index":0,"b64_json":"cGFydGlhbA=="}',
+        '',
+        'data: {"type":"image_generation.completed","image_index":0,"b64_json":"ZmluYWw=","revised_prompt":"smoke"}',
+        '',
+        'data: [DONE]',
+        '',
+      ].join("\n")
+      return new Response(source, { status: 200, headers: { "content-type": "text/event-stream" } })
+    }
+    const streamedOpenAIImage = await adapterRegistry.get("openai-images").generateImages({
+      channel: { id: "openai-image-stream", type: "openai-images", model: "gpt-image-1", baseURL: "https://images.example/v1", authType: "none", stream: true, timeoutMs: 5000 },
+      prompt: "画一只猫",
+      count: 1,
+    })
+    assert(openaiImageRequest.stream === true && streamedOpenAIImage.images[0]?.data === "data:image/png;base64,ZmluYWw=" && streamedOpenAIImage.images[0]?.revisedPrompt === "smoke", "OpenAI Images SSE should send stream=true and keep the completed image")
+
+    let chatCompletionsImageRequest
+    global.fetch = async (_url, options = {}) => {
+      chatCompletionsImageRequest = JSON.parse(String(options.body || "{}"))
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: [
+          { type: "text", text: "已生成" },
+          { type: "image_url", image_url: { url: "data:image/png;base64,Y2F0MQ==" } },
+          { type: "image_url", image_url: { url: "data:image/png;base64,Y2F0Mg==" } },
+          { type: "image_url", image_url: { url: "data:image/png;base64,Y2F0Mw==" } },
+          { type: "image_url", image_url: { url: "data:image/png;base64,Y2F0NA==" } },
+        ] } }],
+        usage: { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 },
+      }), { status: 200, headers: { "content-type": "application/json" } })
+    }
+    const chatCompletionsImage = await adapterRegistry.get("openai-images").generateImages({
+      channel: {
+        id: "openai-chat-image", type: "openai-images", model: "image-model", baseURL: "https://chat.example/v1", authType: "none",
+        modelConfig: { image: { protocol: "openai-chat-completions", size: "512x512", quality: "low", background: "opaque" } },
+      },
+      prompt: "画两只猫",
+      count: 9,
+      size: "1024x1536",
+      quality: "high",
+      background: "transparent",
+    })
+    assert(chatCompletionsImageRequest.messages?.[0]?.content?.some(item => item.type === "text") && chatCompletionsImageRequest.n === 9, "Chat Completions image requests should use the multimodal body and preserve an explicit image count")
+    assert(chatCompletionsImageRequest.size === "1024x1536" && chatCompletionsImageRequest.quality === "high" && chatCompletionsImageRequest.background === "transparent", "Chat Completions image requests should let tool parameters override model image defaults")
+    assert(chatCompletionsImage.images.length === 4 && chatCompletionsImage.usage.total === 18, "Chat Completions image responses should preserve every upstream image and usage")
+
+    let geminiImageRequest
+    global.fetch = async (url, options = {}) => {
+      geminiImageRequest = { url: String(url), body: JSON.parse(String(options.body || "{}")) }
+      const source = [
+        'data: {"candidates":[{"index":0,"content":{"parts":[{"inlineData":{"mimeType":"image/png","data":"Z2VtaW5p"}}]}}]}',
+        '',
+      ].join("\n")
+      return new Response(source, { status: 200, headers: { "content-type": "text/event-stream" } })
+    }
+    const streamedGeminiImage = await adapterRegistry.get("gemini-images").generateImages({
+      channel: { id: "gemini-image-stream", type: "gemini-images", model: "gemini-2.0-flash-preview-image-generation", apiKey: "smoke", baseURL: "https://gemini.example", stream: true, timeoutMs: 5000 },
+      prompt: "画一只猫",
+    })
+    assert(geminiImageRequest.url.includes(":streamGenerateContent") && geminiImageRequest.url.includes("alt=sse") && streamedGeminiImage.images[0]?.data === "data:image/png;base64,Z2VtaW5p", "Gemini Images SSE should use streamGenerateContent and collect inline images")
+
+    const parsedOpenAIImage = await parseOpenAIImageStreamResponse(new Response('data: {"b64_json":"c21va2U="}\n\n', { status: 200, headers: { "content-type": "text/event-stream" } }))
+    const parsedGeminiImage = await parseGeminiImageStreamResponse(new Response('data: {"candidates":[{"content":{"parts":[{"inlineData":{"data":"c21va2U="}}]}}]}\n\n', { status: 200, headers: { "content-type": "text/event-stream" } }))
+    assert(parsedOpenAIImage.images.length === 1 && parsedGeminiImage.images.length === 1, "image stream parsers should expose a normalized image array")
   } finally {
     global.fetch = originalFetch
   }
@@ -2536,6 +2650,11 @@ async function checkMedia() {
   assert(prepared.attachments[0].preparedUrl === "data:image/png;base64,AAAA", "data URL should be kept")
   assert(prepared.attachments[0].thumbnailDataUrl === "" || prepared.attachments[0].thumbnailDataUrl.startsWith("data:image/"), "data URL media should expose a safe thumbnail field")
   assert(!summary.includes("AAAA"), "media summary must not leak base64 payload")
+  const oversizedVision = buildMediaUserContent("看图", {
+    attachments: [{ kind: "image", preparedUrl: `data:image/png;base64,${"A".repeat(400000)}`, thumbnailDataUrl: tinyPngDataUrl, visionEligible: true }],
+  }, true)
+  const oversizedVisionParts = Array.isArray(oversizedVision) ? oversizedVision.filter(part => part.type === "image_url") : []
+  assert(oversizedVisionParts.length === 1 && oversizedVisionParts[0].image_url.url === tinyPngDataUrl, "oversized inline vision images should use the prepared thumbnail")
   const content = buildOpenAiUserContent("看图", {
     images: [
       { url: "file:///etc/passwd" },
@@ -2953,6 +3072,19 @@ async function checkOutputSemantics() {
     reply: async msg => toolReplies.push(msg),
   }, { channel: "mock", source: "tool", text: "第一句。第二句！" }, config, { source: "tool" })
   assert(toolReplies.length === 1, "tool results should always stay intact when text segmentation is enabled")
+  const imageStartReplies = []
+  await sendChatOutput({
+    isGroup: true,
+    group_id: "20001",
+    user_id: "990001-image-start",
+    reply: async msg => imageStartReplies.push(msg),
+  }, {
+    channel: "mock",
+    text: "图片生成已开始，完成后会直接发送。\n猫猫安排上啦，生成好后会直接发到群里～",
+    steps: [{ status: "ok" }],
+    toolChain: [{ name: "generate_image", status: "accepted", metadata: { background: true } }],
+  }, config)
+  assert(imageStartReplies.length === 1 && String(imageStartReplies[0]).includes("图片生成已开始") && !String(imageStartReplies[0]).includes("猫猫安排上啦"), "background image generation should send one concise start reply")
   const subagentReplies = []
   await sendChatOutput({
     isGroup: true,
@@ -5066,6 +5198,8 @@ async function checkConversations() {
     await sleep(20)
     const completedBackgroundTask = backgroundTaskService.get(backgroundTask.id)
     assert(completedBackgroundTask?.status === "ok" && completedBackgroundTask.result?.content === "background done", "background task should complete outside the model turn and remain queryable")
+    const retainedBackgroundTask = backgroundTaskService.tasks.get(backgroundTask.id)
+    assert(retainedBackgroundTask?.onComplete === null && await retainedBackgroundTask?.execute() === undefined, "completed background tasks should release captured execution and completion closures")
 
     const runtimeBackgroundName = "smoke_runtime_background"
     let runtimeBackgroundExecutions = 0
@@ -5107,6 +5241,73 @@ async function checkConversations() {
     } finally {
       toolRegistry.tools.delete(runtimeBackgroundName)
       adapterRegistry.adapters.delete(runtimeBackgroundAdapter.id)
+    }
+
+    const backgroundReplyName = "smoke_runtime_background_reply"
+    let backgroundReplyModelCalls = 0
+    const backgroundReplyTool = normalizeTool({
+      name: backgroundReplyName,
+      source: "custom",
+      backgroundMessage: "后台任务已开始。",
+      requiresFinalReply: true,
+      execution: { effect: "non_idempotent", repeatPolicy: "dedupe", background: true, retryPolicy: "no_ambiguous_retry" },
+      async execute() { return "background reply done" },
+    })
+    const backgroundReplyConfig = JSON.parse(JSON.stringify(mockConfig))
+    backgroundReplyConfig.tools.enabledTools = [...new Set([...(backgroundReplyConfig.tools.enabledTools || []), backgroundReplyName])]
+    backgroundReplyConfig.tools.promptSelection.enabled = false
+    const backgroundReplyAdapter = {
+      id: "smoke-runtime-background-reply",
+      supportsTools: true,
+      supportsVision: false,
+      supportsStreaming: false,
+      supportsEmbeddings: false,
+      async sendMessage({ tools = [] }) {
+        backgroundReplyModelCalls++
+        if (!tools.length) throw new Error("background reply should not request a second model turn")
+        return { id: `smoke-runtime-background-reply-${backgroundReplyModelCalls}`, text: "这是一条不应覆盖工具参数的模型前置文本。", usage: { input: 1, output: 1, total: 2, source: "reported" }, toolCalls: [{ id: "smoke-runtime-background-reply-call", name: backgroundReplyName, arguments: { startMessage: "任务已经开始，稍后告诉你结果。" } }] }
+      },
+    }
+    toolRegistry.tools.set(backgroundReplyName, backgroundReplyTool)
+    adapterRegistry.register(backgroundReplyAdapter)
+    try {
+      const backgroundReplyResult = await chatService.runModelStepWithChannel({
+        e: { isGroup: true, isMaster: true, group_id: "20001", user_id: "10001", sender: { role: "owner" } },
+        prompt: "启动后台任务",
+        config: backgroundReplyConfig,
+        history: [],
+        step: { id: "reply", task: "replyer", mode: "final" },
+        channel: { id: "smoke-runtime-background-reply", type: "smoke-runtime-background-reply", model: "smoke", modelConfig: { toolUse: true }, timeoutMs: 1000 },
+      })
+      assert(backgroundReplyModelCalls === 1 && backgroundReplyResult.text === "任务已经开始，稍后告诉你结果。" && backgroundReplyResult.toolRounds === 1, "accepted background tools should prefer the model-provided tool argument and avoid a duplicate acknowledgement")
+    } finally {
+      toolRegistry.tools.delete(backgroundReplyName)
+      adapterRegistry.adapters.delete(backgroundReplyAdapter.id)
+    }
+
+    const plannedBackgroundName = "smoke_runtime_background_plan"
+    const plannedBackgroundTool = normalizeTool({
+      name: plannedBackgroundName,
+      source: "custom",
+      autoDelivery: { via: "message_send", batching: "merge", continueConversation: false },
+      backgroundMessage: "后台图片任务已开始。",
+      requiresFinalReply: false,
+      execution: { effect: "non_idempotent", repeatPolicy: "dedupe", background: true, retryPolicy: "no_ambiguous_retry" },
+      async execute() { return { status: "success", content: "background plan done" } },
+    })
+    const plannedBackgroundConfig = JSON.parse(JSON.stringify(backgroundConfig))
+    plannedBackgroundConfig.tools.enabledTools = [...new Set([...(plannedBackgroundConfig.tools.enabledTools || []), plannedBackgroundName])]
+    toolRegistry.tools.set(plannedBackgroundName, plannedBackgroundTool)
+    try {
+      const plannedBackground = await toolRegistry.execute(plannedBackgroundName, { startMessage: "后台图片任务准备好了，完成后直接发给你。" }, {
+        config: plannedBackgroundConfig,
+        e: { isGroup: true, isMaster: true, group_id: "20001", user_id: "10001", reply: async () => true },
+        execution: { markDispatched() {} },
+      })
+      assert(plannedBackground.status === "accepted" && plannedBackground.metadata?.messageSendPlan?.parts?.[0]?.text === "后台图片任务准备好了，完成后直接发给你。", "background tools should expose a model-provided automatic start-message plan")
+      await sleep(20)
+    } finally {
+      toolRegistry.tools.delete(plannedBackgroundName)
     }
 
     const parallelToolNames = ["smoke_parallel_a", "smoke_parallel_b"]
@@ -5489,6 +5690,7 @@ async function checkUnifiedModelLogs() {
         usage: { input: 2, output: 1, total: 3, cached: 0, reasoning: 0, source: "reported", inputKnown: true, outputKnown: true },
       },
     })
+    modelLogStore.captureModelResponseMedia(call, [tinyPngDataUrl], 2)
     const detail = await modelLogStore.getModelCallDetail(call.id)
     assert(detail?.modelCall?.adapter === "openai-responses" && detail.modelCall.hosted_tool_call_count === 1, "model logs should expose protocol adapter and hosted-tool call summaries")
     assert(detail?.modelCall?.protocol === "responses" && detail.modelCall.stream === true, "model logs should expose the canonical protocol and streaming mode")
@@ -5498,6 +5700,7 @@ async function checkUnifiedModelLogs() {
     assert(detail?.snapshot?.tools?.[0]?.type === "web_search" && detail.snapshot.tools?.[1]?.description === "Search commands.", "model logs should preserve Responses top-level function and built-in tool definitions")
     assert(!JSON.stringify(detail?.snapshot || {}).includes("MUST_NOT_PERSIST"), "model snapshots should redact encrypted Responses reasoning content")
     assert(detail?.snapshot?.request?.rawRequests?.[0]?.protocol === "responses" && !JSON.stringify(detail?.snapshot?.request?.rawRequests || []).includes("MUST_NOT_PERSIST"), "model logs should retain bounded, redacted raw protocol request bodies")
+    assert(detail?.snapshot?.request?.responseMedia?.length === 1 && detail.snapshot.request.responseMediaCount === 2, "model response thumbnails should live in the on-demand model detail snapshot")
 
     const failureCall = modelLogStore.beginModelCall({
       source: "smoke",
@@ -5881,7 +6084,7 @@ async function checkWebAndBoot() {
   assert(!webAppSource.includes("/api/auth/local-temp-token") && webAppSource.includes("/api/auth/quick-login") && !webShellSource.includes("获取临时 Token") && webStoreSource.includes("consumeQuickLogin") && webShellSource.includes("await consumeQuickLogin()"), "Web login should consume owner-issued quick links without exposing a page or localhost token-issuance path")
   assert(!sqliteWorkerSource.includes("backupSqliteDatabase") && !sqliteWorkerSource.includes('case "backup"'), "SQLite state and log storage should not have an automatic backup path")
   assert(webAppSource.includes("app.patch(\"/api/models/:name\"") && webAppSource.includes("/api/models/:name/default") && webAppSource.includes("app.delete(\"/api/models/:name\""), "web app should expose model management API")
-  assert(webAppSource.includes("app.patch(\"/api/providers/:name\"") && webAppSource.includes("app.delete(\"/api/providers/:name\"") && webAppSource.includes("/api/providers/models"), "web app should expose provider CRUD and model listing APIs")
+  assert(webAppSource.includes("app.post(\"/api/providers\"") && !webAppSource.includes("/api/providers/quick-add") && webAppSource.includes("app.patch(\"/api/providers/:name\"") && webAppSource.includes("app.delete(\"/api/providers/:name\"") && webAppSource.includes("/api/providers/models"), "web app should expose separate provider creation, provider CRUD, and model listing APIs without the retired quick-add route")
   assert(!webAppSource.includes("/api/custom-tools/capability-template") && !webAppSource.includes("/api/skills/capability-template"), "web app should not expose retired capability mapping APIs")
   assert(webAppSource.includes("/api/custom-tools/:id/test"), "web app should expose Custom tool test API")
   assert(!webAppSource.includes("app.delete(\"/api/persona/expression/:id\""), "web app should remove the retired persona expression delete API")
@@ -5969,11 +6172,11 @@ async function checkWebAndBoot() {
   assert(webProvidersSource.includes("routing-model-picker") && webProvidersSource.includes("makePrimaryModel") && webProvidersSource.includes("replyerStrategyLabel"), "reply routing should use an explicit primary and fallback model card picker")
   assert(webProvidersSource.includes("modelRequestTimeoutMs") && webProvidersSource.includes("全局请求超时") && webProvidersSource.includes("流式响应") && webProvidersSource.includes("继承全局设置"), "providers page should expose global and per-model transport settings")
   assert(!webProvidersSource.includes("providerSectionItems") && !webProvidersSource.includes("activeSection") && webProvidersSource.includes("activeProviderPane") && webProvidersSource.includes("provider-pane-tabs") && webProvidersSource.includes("查看路由详情"), "providers page should keep one compact service workspace with model and import tabs")
-  assert(webProvidersSource.includes("showImportDrawer") && webProvidersSource.includes("provider-import-drawer") && webProvidersSource.includes("selectProviderPane") && webProvidersSource.includes("model-selection-summary") && webProvidersSource.includes("remoteExistingCount") && webProvidersSource.includes("选择可导入项"), "provider model import should open in a side drawer and distinguish existing models from selectable new models")
+  assert(webProvidersSource.includes("showImportDrawer") && webProvidersSource.includes("provider-import-drawer") && webProvidersSource.includes("selectProviderPane") && webProvidersSource.includes("model-selection-summary") && webProvidersSource.includes("remoteExistingCount") && webProvidersSource.includes("remoteStream") && webProvidersSource.includes("选择可导入项"), "provider model import should open in a side drawer, distinguish existing models from selectable new models, and configure streaming per imported purpose")
   assert(webProvidersSource.includes("is-default") && webProvidersSource.includes("has-default") && webProvidersSource.includes("当前主回复模型"), "default models and their providers should expose consistent special states")
   assert(!/\.persona-preview\s*\{/s.test(webCssSource) && !/\.persona-scenarios\s*\{/s.test(webCssSource) && !webCssSource.includes(".persona-preview-chat") && !webCssSource.includes(".persona-preview-message"), "persona preview styles should be removed together with the preview section")
   assert(webProvidersSource.includes("v-if=\"store.developerMode\"") && webProvidersSource.includes("SubAgentConfig"), "experimental sub-agent controls should stay behind developer mode")
-  assert(webProvidersSource.includes("fetchModels") && webProvidersSource.includes("/api/providers/models"), "providers page should support fetching model lists from a provider")
+  assert(webProvidersSource.includes("fetchModels") && webProvidersSource.includes("/api/providers/models") && !webProvidersSource.includes('label="所属渠道"') && !webProvidersSource.includes("模型编辑时固定") && !webProvidersSource.includes('label="Provider" type="select"'), "providers page should fetch models without exposing provider ownership configuration")
   assert(webProvidersSource.includes("embeddingCapability") && webProvidersSource.includes("向量模型参数") && webProvidersSource.includes("套用 BGE-M3 预设") && webProvidersSource.includes("provider-console-compact"), "providers page should expose compact unified embedding model setup")
   assert(webKnowledgeSource.includes("knowledge-index-progress-card") && webKnowledgeSource.includes("jobProgress") && webKnowledgeSource.includes("setInterval(() => refreshIndexJobsOnly"), "knowledge page should display and poll vector index progress")
   assert(webProvidersSource.includes("推理 / 思考强度") && webProvidersSource.includes("reasoningEffort"), "providers page should expose unified reasoning controls")
@@ -6411,6 +6614,42 @@ async function checkWebAndBoot() {
     assert(updatedModel.reasoning?.target === "deepseek" && updatedModel.reasoning?.effort === "high", "model update helper should update unified reasoning config")
     assert(updatedModel.timeoutMs === 180000 && updatedModel.stream === true, "model update helper should update transport overrides")
     assert(updatedModel.params.temperature === 0.1, "model update helper should update params")
+    const imageModelConfig = {
+      ...defaulted,
+      models: [
+        ...(defaulted.models || []),
+        {
+          name: "smoke-image-admin",
+          modelIdentifier: "smoke-image",
+          apiProvider: original.apiProviders[0].name,
+          adapter: "openai-images",
+          purpose: "image",
+          contextWindowTokens: 32000,
+          params: {},
+        },
+      ],
+    }
+    const imageUpdated = updateModelConfig(imageModelConfig, "smoke-image-admin", { purpose: "image", adapter: "openai-images" }).models.find(item => item.name === "smoke-image-admin")
+    assert(imageUpdated.contextWindowTokens === undefined, "image model updates should discard chat-only context window settings")
+    const embeddingModelConfig = {
+      ...defaulted,
+      models: [
+        ...(defaulted.models || []),
+        {
+          name: "smoke-embedding-admin",
+          modelIdentifier: "smoke-embedding",
+          apiProvider: original.apiProviders[0].name,
+          adapter: "openai-compatible",
+          purpose: "embedding",
+          contextWindowTokens: 32000,
+          capabilities: { chat: false, embedding: true },
+          embedding: { protocol: "openai-compatible", defaultDimensions: 1024, batchSize: 16, timeoutMs: 30000 },
+          params: {},
+        },
+      ],
+    }
+    const embeddingUpdated = updateModelConfig(embeddingModelConfig, "smoke-embedding-admin", { purpose: "embedding" }).models.find(item => item.name === "smoke-embedding-admin")
+    assert(embeddingUpdated.contextWindowTokens === undefined, "embedding model updates should discard chat-only context window settings")
     const inheritedTransport = updateModelConfig(updatedModelConfig, "smoke-model-admin", { timeoutMs: null, stream: null }).models.find(item => item.name === "smoke-model-admin")
     assert(inheritedTransport.timeoutMs === undefined && inheritedTransport.stream === undefined, "model transport overrides should support returning to global inheritance")
     let invalidModelProviderBlocked = false
@@ -6709,6 +6948,26 @@ async function checkPluginIsolation() {
   }
 }
 
+async function checkWebRichContent() {
+  const { renderRichContent, plainTextContent } = await import("../output/runtime/web/client/shared/rich-content.js")
+  const html = renderRichContent("# 标题\n\n**加粗**\n\n![图片](data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==)")
+  assert(/<h1>标题<\/h1>/.test(html), "web content renderer should parse headings and emphasis")
+  assert(/class=\"yui-rich-image\"/.test(html), "web content renderer should turn Markdown data images into img elements")
+  assert(!/<script/i.test(html), "web content renderer should escape raw HTML")
+  assert(plainTextContent({ type: "image_url", image_url: { url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==" } }) === "[图片]", "web content renderer should summarize structured images for copy")
+  const extended = renderRichContent("Setext 标题\n============\n\n- [x] 完成\n- [ ] 待办\n\n直接链接 https://example.com/docs。\n\n`\\[x\\]`\n\n```text\n\\[not a formula]\n```")
+  assert(/<h1>Setext 标题<\/h1>/.test(extended) && /yui-rich-task/.test(extended) && /href=\"https:\/\/example.com\/docs\"/.test(extended), "web content renderer should cover Setext headings, task lists, and linkified URLs")
+  assert(extended.includes("\\[not a formula]"), "web content renderer should preserve formula-like text inside code fences")
+  const jsonImage = renderRichContent(JSON.stringify({ data: [{ b64_json: "iVBORw0KGgoAAAANSUhEUg==" }] }))
+  assert(/class=\"yui-rich-image\"/.test(jsonImage) && plainTextContent(JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { mimeType: "image/png", data: "iVBORw0KGgoAAAANSUhEUg==" } }] } }] })) === "[图片]", "web content renderer should decode JSON image payloads")
+  const mixed = renderRichContent([{ type: "text", text: "说明" }, { type: "image_url", image_url: { url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==" } }])
+  assert(mixed.includes("说明") && (mixed.match(/yui-rich-image/g) || []).length === 1, "web content renderer should keep text and images in the same content array")
+  const htmlImage = renderRichContent('<p>HTML 图片</p><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==" alt="示例">')
+  assert((htmlImage.match(/yui-rich-image/g) || []).length === 1 && !/<script/i.test(htmlImage), "web content renderer should extract safe HTML image tags without enabling raw HTML")
+  const remoteImage = renderRichContent({ type: "image_url", image_url: { url: "https://example.com/image.png" } })
+  assert(/class="yui-rich-image-link"/.test(remoteImage) && /target="_blank"/.test(remoteImage) && /referrerpolicy="no-referrer"/.test(remoteImage), "remote images should render automatically and open an isolated preview when clicked")
+}
+
 async function exists(target) {
   try {
     await fs.stat(target)
@@ -6812,6 +7071,7 @@ async function main() {
     ["web-and-boot", checkWebAndBoot],
     ["capabilities", checkCapabilities],
     ["diagnostics", checkDiagnostics],
+    ["web-rich-content", checkWebRichContent],
     ["plugin-isolation", checkPluginIsolation],
   ]
   const selected = new Set(String(process.env.YUI_CHAT_SMOKE_CHECKS || "").split(",").map(item => item.trim()).filter(Boolean))

@@ -174,6 +174,7 @@ export const defaults = {
       visual: false,
       toolUse: true,
       capabilities: { chat: true, embedding: false },
+      purpose: "chat",
       contextWindowTokens: 200000,
       embedding: {
         protocol: "openai-compatible",
@@ -197,6 +198,11 @@ export const defaults = {
       temperature: 0.7,
       slowThreshold: 15,
     },
+    imageGeneration: {
+      purpose: "image",
+      modelList: [],
+      selectionStrategy: "fallback",
+    },
   },
   channels: [
     {
@@ -213,7 +219,7 @@ export const defaults = {
   ],
   tools: {
     enabled: true,
-    enabledTools: ["knowledge_manage", "memory_manage", "bilibili_media", "message_send", "query_userinfo", "render_image", "schedule_task", "image_media", "web_search", "file_search", "tool_search", "dispatch_subagent"],
+    enabledTools: ["knowledge_manage", "memory_manage", "bilibili_media", "message_send", "generate_image", "query_userinfo", "render_image", "schedule_task", "image_media", "web_search", "file_search", "tool_search", "dispatch_subagent"],
     customToolPackages: [],
     runtimeVariables: {},
     activePresets: ["core"],

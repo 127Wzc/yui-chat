@@ -7,7 +7,8 @@ export function sanitizeIdentifier(value: unknown = "", maxLength = 80, fallback
     .slice(0, maxLength) || fallback
 }
 
-function shortHash(value: unknown): string {
+/** 短、稳定的 ASCII 哈希，用于显示标识去重而不是安全用途。 */
+export function shortHash(value: unknown): string {
   let hash = 5381
   for (const char of String(value)) hash = ((hash * 33) ^ (char.codePointAt(0) || 0)) >>> 0
   return hash.toString(36).slice(0, 6)

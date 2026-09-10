@@ -13,6 +13,8 @@ interface RoutingModel extends UnknownRecord {
   name: string
   modelIdentifier?: string
   adapter?: string
+  purpose?: string
+  capabilities?: { chat?: boolean; embedding?: boolean }
   visual?: boolean
   toolUse?: boolean
 }
@@ -180,12 +182,22 @@ export const ModelRoutingBuilder = {
   components: { SubAgentConfig },
   props: { cfg: Object, modelNames: Array, compact: Boolean },
   setup(props: { cfg: RoutingConfig; modelNames: string[]; compact: boolean }) {
+    const chatModels = computed(() => (props.cfg.models || []).filter(model => {
+      const purpose = String(model.purpose || "").toLowerCase()
+      if (purpose === "image" || purpose === "embedding") return false
+      return model.capabilities?.chat !== false
+    }))
     const modelOptions = computed(() => [
       { value: "", label: "自动选择" },
-      ...(props.modelNames || []).map(name => ({ value: name, label: name })),
+      ...(chatModels.value.length ? chatModels.value.map(model => ({ value: model.name, label: model.name })) : (props.modelNames || []).map(name => ({ value: name, label: name }))),
     ])
+    const configuredReplyerModels = props.cfg.modelTasks?.replyer?.modelList || []
+    const availableChatNames = chatModels.value.map(model => model.name)
+    const initialReplyerModels = configuredReplyerModels.length
+      ? configuredReplyerModels.filter(name => availableChatNames.includes(name))
+      : (availableChatNames.length ? availableChatNames : props.modelNames)
     const draft = reactive({
-      replyerModels: (props.cfg.modelTasks?.replyer?.modelList || props.modelNames).join(", "),
+      replyerModels: initialReplyerModels.join(", "),
       replyerStrategy: props.cfg.modelTasks?.replyer?.selectionStrategy || "sequential",
       recognitionModel: props.cfg.mediaRecognition?.recognitionModel || "",
       modelRequestTimeoutMs: props.cfg.chat?.modelRequestTimeoutMs ?? 90000,
@@ -194,7 +206,7 @@ export const ModelRoutingBuilder = {
 
     const replyerModelList = computed(() => splitNames(draft.replyerModels))
     const replyerStrategyLabel = computed(() => strategyLabel(draft.replyerStrategy))
-    const replyerModelCards = computed(() => (props.cfg.models || []).map(model => ({
+    const replyerModelCards = computed(() => chatModels.value.map(model => ({
       ...model,
       selected: replyerModelList.value.includes(model.name),
       primary: replyerModelList.value[0] === model.name,
@@ -363,7 +375,7 @@ export const ModelRoutingBuilder = {
           <p class="muted tiny">点击卡片加入或移除。带高亮光环的是主模型，其余已选模型会在主模型失败时作为备用。</p>
           <Field label="选择策略" type="select" :options="STRATEGY_OPTIONS" v-model="draft.replyerStrategy" tip="推荐“失败回退”：先用主模型，失败时再自动切到后备模型。" />
           <div class="form-grid dense">
-            <Field label="全局请求超时（毫秒）" type="number" v-model="draft.modelRequestTimeoutMs" tip="所有模型默认使用；单个模型可以在“模型服务 → 编辑模型”中覆盖。范围 1000–600000。" />
+            <Field label="全局请求超时（毫秒）" type="number" v-model="draft.modelRequestTimeoutMs" tip="所有模型默认使用；单个模型可以在“渠道与模型 → 编辑模型”中覆盖。范围 1000–600000。" />
           <Field label="默认流式响应" type="select" :options="BOOL_OFF_OPTIONS" v-model="draft.modelStream" tip="OpenAI Compatible、Responses、Qwen、ChatGLM、Gemini、Claude 会使用各自的 SSE；具体模型仍以供应商能力为准。" />
           </div>
           <Field label="媒体识别增强模型" type="select" :options="modelOptions" v-model="draft.recognitionModel" tip="主模型不识图时，recognize_media 工具优先使用这个模型；留空则自动选择视觉模型或回复模型" />

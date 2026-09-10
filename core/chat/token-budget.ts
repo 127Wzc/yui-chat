@@ -140,6 +140,12 @@ function scoreTool(tool: unknown, prompt = ""): number {
   if (source.name === "memory_manage" && /记住|记下|忘记|称呼|偏好|喜欢|讨厌|上次|之前|还记得/.test(promptText)) score += 100
   if (source.name === "knowledge_manage" && /指令|命令|怎么|如何|帮助|help|知识库|文档/.test(promptText)) score += 100
   if (/图片|图像|照片|视频|语音/.test(promptText) && (tags.includes("media") || /图片|图像|照片|图床|表情包/.test(haystack))) score += 50
+  // 图片搜索和图片生成都带有“图片”字样，单靠通用媒体分数会让两者
+  // 发生词义抢占。按动作词给出一个明确的首选，避免“搜一张”误触发生成。
+  const imageCreationIntent = /(?:画(?!面|风|质)|绘(?:制|画)|生成|创作|制作|设计|改图|修图|生图|draw|generate|create|edit)/i.test(promptText)
+  const imageSearchIntent = /(?:搜(?:图|一张|图片|图像|照片)|搜索(?:图片|图像|照片|表情包)|找(?:一张|图片|图像|照片)|图库|图片搜索|image\s*search|find (?:an? )?(?:image|picture|photo))/i.test(promptText)
+  if (source.name === "generate_image" && imageCreationIntent) score += 120
+  if (source.name === "image_media" && imageSearchIntent && !imageCreationIntent) score += 120
   // 明确要求联网或时效信息时，实时搜索应在首轮直接可用。否则它的参数
   // Schema 较大，容易在定义预算中排到后面，迫使模型先走一次 tool_search。
   // 这里只匹配强时效/网络信号，避免“搜张图片”等媒体意图被网页搜索抢走。

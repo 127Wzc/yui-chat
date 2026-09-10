@@ -211,29 +211,70 @@ function parseLocalConfigDocument(value: unknown): { backend: ConfigBackend; ove
 function normalizeModelRoutingDefaults(config: Config): Config {
   recordProperty(config, "chat")
   const modelTasks = recordProperty(config, "modelTasks")
+  // 图片生成的开关、数量与超时已收束到 generate_image 工具运行变量；
+  // 启动时直接清理旧的 response 配置，避免两套设置产生歧义。
+  if (isObject(config.response)) delete config.response.imageGeneration
+  if (isObject(modelTasks.imageGeneration)) delete modelTasks.imageGeneration.maxCount
   delete recordProperty(config, "chat").defaultWorkflow
   delete config.workflows
   const defaultTasks: ConfigRecord = isObject(defaults.modelTasks) ? defaults.modelTasks : {}
   if (!isObject(modelTasks.replyer)) modelTasks.replyer = clone(defaultTasks.replyer || {})
+  if (!isObject(modelTasks.imageGeneration)) modelTasks.imageGeneration = clone(defaultTasks.imageGeneration || { purpose: "image", modelList: [], selectionStrategy: "fallback" })
+  if (isObject(modelTasks.imageGeneration) && !String(modelTasks.imageGeneration.purpose || "").trim()) modelTasks.imageGeneration.purpose = "image"
   delete modelTasks.commandHelper
   delete modelTasks.vision_caption
   const models = Array.isArray(config.models) ? config.models : []
   for (const value of models) {
     if (!isObject(value)) continue
     const capabilities = isObject(value.capabilities) ? value.capabilities : {}
-    value.capabilities = { chat: capabilities.chat !== false, embedding: Boolean(capabilities.embedding) }
-    if (value.embedding !== undefined && !isObject(value.embedding)) delete value.embedding
+    const declaredPurpose = String(value.purpose || "").trim().toLowerCase()
+    const adapter = String(value.adapter || "").trim().toLowerCase()
+    const purpose = ["chat", "image", "embedding"].includes(declaredPurpose)
+      ? declaredPurpose
+      : ["openai-images", "openai-chat-completions", "gemini-images"].includes(adapter)
+        ? "image"
+        : capabilities.embedding && capabilities.chat === false ? "embedding" : "chat"
+    value.purpose = purpose
+    value.capabilities = purpose === "image"
+      ? { chat: false, embedding: false }
+      : purpose === "embedding"
+        ? { chat: false, embedding: true }
+        : { chat: true, embedding: false }
+    // 上下文窗口只参与文本对话预算；图片和向量请求是独立调用，不保留无效配置。
+    if (purpose !== "chat") delete value.contextWindowTokens
+    if (purpose !== "embedding") delete value.embedding
+    else if (value.embedding !== undefined && !isObject(value.embedding)) delete value.embedding
+    if (purpose !== "image") delete value.image
   }
+  const imageModels = new Set(models
+    .filter(value => isObject(value) && String(value.purpose || "") === "image")
+    .map(value => isObject(value) ? String(value.name || "") : "")
+    .filter(Boolean))
   const embeddingOnly = new Set(models
     .filter(value => isObject(value) && isObject(value.capabilities) && value.capabilities.embedding && value.capabilities.chat === false)
     .map(value => isObject(value) ? String(value.name || "") : "")
     .filter(Boolean))
   const defaultReplyer = isObject(defaultTasks.replyer) ? defaultTasks.replyer : {}
-  const defaultReplyerModelList = Array.isArray(defaultReplyer.modelList) ? defaultReplyer.modelList : []
+  const defaultReplyerModelList = Array.isArray(defaultReplyer.modelList)
+    ? defaultReplyer.modelList.filter(name => {
+      const modelName = String(name)
+      return models.some(value => isObject(value) && String(value.name || "") === modelName)
+        && !imageModels.has(modelName)
+        && !embeddingOnly.has(modelName)
+    })
+    : []
   for (const [taskName, taskValue] of Object.entries(modelTasks)) {
     if (!isObject(taskValue) || !Array.isArray(taskValue.modelList)) continue
     const modelList = taskValue.modelList
-    const filteredModelList = modelList.filter(name => !embeddingOnly.has(String(name)))
+    const declaredTaskPurpose = String(taskValue.purpose || "").trim().toLowerCase()
+    const taskPurpose = declaredTaskPurpose === "image" || declaredTaskPurpose === "embedding"
+      ? declaredTaskPurpose
+      : taskName === "imageGeneration" ? "image" : taskName === "embedding" ? "embedding" : "chat"
+    const filteredModelList = modelList.filter(name => taskPurpose === "image"
+      ? imageModels.has(String(name))
+      : taskPurpose === "embedding"
+        ? embeddingOnly.has(String(name))
+        : !embeddingOnly.has(String(name)) && !imageModels.has(String(name)))
     taskValue.modelList = filteredModelList
     if (!filteredModelList.length && taskName === "replyer" && defaultReplyerModelList.length) {
       taskValue.modelList = [...defaultReplyerModelList]
@@ -419,6 +460,26 @@ export function redactConfigSecrets(value: unknown, key = ""): unknown {
   }
   if (typeof value === "string" && isSecretKey(key) && value) return "********"
   return value
+}
+
+const redactedSecretValue = /^(?:\*{3,}|<redacted>)$/i
+
+/** 把管理台回传的遮罩密钥还原为当前运行值；显式空字符串仍表示清除密钥。 */
+export function mergeRedactedConfigSecrets(candidate: unknown, current: unknown, key = ""): unknown {
+  if (typeof candidate === "string" && isSecretKey(key) && redactedSecretValue.test(candidate.trim())) {
+    return typeof current === "string" && current ? current : candidate
+  }
+  if (Array.isArray(candidate)) {
+    const previous = Array.isArray(current) ? current : []
+    return candidate.map((item, index) => mergeRedactedConfigSecrets(item, previous[index], key))
+  }
+  if (isObject(candidate)) {
+    const previous = isObject(current) ? current : {}
+    const out: ConfigRecord = {}
+    for (const [childKey, childValue] of Object.entries(candidate)) out[childKey] = mergeRedactedConfigSecrets(childValue, previous[childKey], childKey)
+    return out
+  }
+  return candidate === undefined ? undefined : clone(candidate)
 }
 
 function prepareConfig(value: unknown): Config {
