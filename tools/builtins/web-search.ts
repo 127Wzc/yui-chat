@@ -6,6 +6,21 @@ import type { ToolExecutionContext } from "../support/tool-contract.js"
 const webSearchSourceIds = ["baidu-ai", "tavily"] as const
 type WebSearchSourceId = (typeof webSearchSourceIds)[number]
 
+/** 无模型的直接调用只使用本地渠道；仅返回配置问题，不暴露凭据或发起请求。 */
+export function directWebSearchSetupIssues(config: unknown, toolConfig: unknown, args: UnknownRecord = {}): string[] {
+  const cfg = { ...record(record(record(record(config).tools).builtin).webSearch), ...record(toolConfig) }
+  const enabled = (Array.isArray(cfg.enabledSources) ? cfg.enabledSources : webSearchSourceIds)
+    .map(text).filter(value => webSearchSourceIds.includes(value as WebSearchSourceId))
+  if (!enabled.length) return ["尚未启用百度 AI 搜索或 Tavily。动作直接调用工具，无法使用仅在模型对话中运行的 OpenAI 原生搜索；请到「渠道与变量」启用本地搜索渠道。"]
+  const requested = text(args.source || "auto").toLowerCase()
+  if (requested !== "auto" && !enabled.includes(requested)) return [`所选搜索渠道 ${requested} 尚未启用，请更换参数或到「渠道与变量」启用。`]
+  const selected = requested === "auto" ? enabled : [requested]
+  return selected.flatMap(source => {
+    const key = source === "baidu-ai" ? "baiduApiKey" : "tavilyApiKey"
+    return text(cfg[key]).trim() ? [] : [`${source === "baidu-ai" ? "百度 AI 搜索" : "Tavily"} 已启用，但尚未填写 API Key。请到「渠道与变量」配置。`]
+  })
+}
+
 interface WebSearchContext extends ToolExecutionContext {
   toolConfig?: UnknownRecord
   config?: UnknownRecord

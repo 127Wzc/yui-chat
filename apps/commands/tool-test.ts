@@ -1,3 +1,4 @@
+import { executeDirectTool } from "../../tools/support/direct-execution.js"
 import { configStore } from "../../config/store.js"
 import {
   formatExecutionParameterGuide,
@@ -65,7 +66,10 @@ export async function runToolTestCommand({ e, reply }: CommandOptions): Promise<
       schema: record(getToolCommon(tool)).parameters,
       args: payload.args,
       context: { e, config, source: "command-test" },
-      execute: context => toolRegistry.execute(text(tool.name), payload.args, context),
+      execute: async context => {
+        const result = await executeDirectTool(text(tool.name), payload.args, context)
+        return { status: result.status, result: result.value ?? result.content }
+      },
     })
     return reply(`工具 ${payload.name} 测试结果（${tested.durationMs}ms）：\n${tested.serialized}`, true)
   } catch (err) {

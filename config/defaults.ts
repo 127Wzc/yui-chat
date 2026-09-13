@@ -13,6 +13,11 @@ export const defaultPersonaRuntimePrompt = [
 
 export const defaults = {
   version: "0.1.0",
+  actions: {
+    enabled: true,
+    categories: [{ id: "images", name: "图片创作" }, { id: "lookup", name: "信息查询" }, { id: "content", name: "内容处理" }, { id: "group", name: "群管理" }],
+    items: {},
+  },
   web: {
     enabled: true,
     mountPath: "/yui-chat",
@@ -515,7 +520,6 @@ export const defaults = {
     recognitionModel: "",
     useAtAvatar: true,
     preferNativeVision: true,
-    includeQuotedMedia: true,
     remoteFetch: {
       enabled: true,
       maxBytes: 4194304,

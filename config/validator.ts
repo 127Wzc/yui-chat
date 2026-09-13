@@ -1,3 +1,4 @@
+import { parseActions } from "../core/actions/contract.js"
 import { isLogLevel } from "./logging.js"
 import { isToolDeliveryMode, isToolExecutionEffect, isToolRepeatPolicy, isToolRetryPolicy, isToolRiskLevel } from "../tools/support/contract.js"
 import type { UnknownRecord } from "../core/message/types.js"
@@ -1089,6 +1090,7 @@ export function validateConfig(config: unknown): ValidationResult {
   validateWeb(root, issues)
   validateSystem(root, issues)
   validateLinkSafety(root, issues)
+  try { parseActions(root.actions) } catch (error) { add(issues, "error", "actions", error instanceof Error ? error.message : String(error)) }
   validateSkills(root, issues)
   validateChatAccess(root, issues)
   validateProviders(root, issues)

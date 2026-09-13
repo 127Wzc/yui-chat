@@ -194,7 +194,7 @@ export async function sendConversation(
   const mediaEnabled = mediaRecognition.enabled !== false
   try {
     // 文字引用属于消息语义，不依赖媒体开关；所有普通对话入口使用相同规则。
-    media = await resolveMediaContext(event, prompt, config, { quoteAsCurrent: options.includeQuotedContext !== false })
+    media = await resolveMediaContext(event, prompt, config, { quoteAsCurrent: true })
     if (media.quote?.text) {
       if (!skipInputFilters) {
         const quotedInput = await applyInputFilters(media.quote.text, { event, e: event, config, source, inputKind: "quote" })

@@ -190,7 +190,7 @@ export async function executeToolRound(options: {
                   result: taskText,
                   resultChars: taskText.length,
                   error: background.error || "",
-                  metadata: { background: true, taskId: text(background.id), parentToolId: text(call.id) },
+                  metadata: { background: true, taskId: text(background.id), backgroundStatus: text(background.status), parentToolId: text(call.id) },
                 })
               },
             }
@@ -233,6 +233,9 @@ export async function executeToolRound(options: {
     const rawResultText = runtime.formatToolContent(executionRecord.content ?? result.value ?? result)
     const resultText = runtime.formatToolResult({ ...executionRecord, content: rawResultText, status })
     const outputMetadata = record(executionRecord.metadata)
+    const backgroundStatus = text(outputMetadata.backgroundStatus)
+    // 后台工具仍向模型返回 accepted，但日志直接展示排队/进行中状态。
+    const logStatus = backgroundStatus || status
     const requiresFinalReply = ["success", "accepted"].includes(internalStatus) ? common.requiresFinalReply !== false : true
     const ended = Date.now()
     const durationMs = ended - started
@@ -243,7 +246,7 @@ export async function executeToolRound(options: {
     conversationLog.toolCompleted(toolContext.config, {
       round,
       name,
-      status,
+      status: logStatus,
       error,
       durationMs,
       resultChars: rawResultText.length,
@@ -264,6 +267,7 @@ export async function executeToolRound(options: {
       completedCount: number(executionRecord.completedCount),
       remainingCount: number(executionRecord.remainingCount),
       retryAllowed: executionRecord.retryAllowed !== false,
+      backgroundStatus,
       parentToolId: text(record(toolContext.observability).toolCallId),
       outputKind: text(outputMetadata.outputKind),
       contentTypes: Array.isArray(outputMetadata.contentTypes) ? outputMetadata.contentTypes : [],
@@ -279,7 +283,7 @@ export async function executeToolRound(options: {
       toolName: name,
       source: text(common.source),
       category: text(common.category),
-      status,
+      status: logStatus,
       startedAt: started,
       endedAt: ended,
       durationMs,

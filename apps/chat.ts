@@ -1,3 +1,4 @@
+import { actionHelp } from "./actions.js"
 import { chatService } from "../core/chat/chat-service.js"
 import { commandObserver } from "../knowledge/command-observer.js"
 import { configStore } from "../config/store.js"
@@ -119,6 +120,8 @@ function targetUserIds(e: HostEvent = {}) {
 
 /** 公开入口和 Master 入口共用处理器；权限只在各自入口的 rule 中声明。 */
 export class YuiChatCommandHandlers extends hostRuntime.Plugin {
+
+  async actionsHelp() { return this.reply(actionHelp(this.e), true) }
 
   async chat() {
     const prompt = stripPluginCommand(this.e.msg, "chat")
@@ -526,6 +529,7 @@ export class YuiChat extends YuiChatCommandHandlers {
       event: "message",
       priority: 1139,
       rule: [
+        { reg: pluginCommandRule("(?:快捷指令|指令说明)(?:\\s+[\\s\\S]*)?"), fnc: "actionsHelp" },
         { reg: pluginCommandRule("chat([\\s\\S]*)"), fnc: "chat" },
         { reg: pluginCommandRule("help([\\s\\S]*)"), fnc: "help" },
         { reg: pluginCommandRule("(?:我的)?定时任务(?:列表)?"), fnc: "scheduleTaskList" },

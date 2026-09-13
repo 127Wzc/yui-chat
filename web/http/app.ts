@@ -1,3 +1,4 @@
+import { registerActionRoutes } from "./routes/actions.js"
 import express from "express"
 import crypto from "node:crypto"
 import { registerConfigRoutes } from "./routes/configuration.js"
@@ -59,6 +60,7 @@ export function createWebApp(): WebApp {
     }).type("html").send(renderWebShell({ nonce }))
   })
   registerRuntimeRoutes(app)
+  registerActionRoutes(app)
   registerConfigRoutes(app)
   registerExtensionRoutes(app)
   registerExtensionAuthoringRoutes(app)

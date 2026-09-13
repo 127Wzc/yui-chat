@@ -1,7 +1,7 @@
 import fs from "node:fs/promises"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
-import { pluginRoot } from "../../config/store.js"
+import { pluginRoot, configStore } from "../../config/store.js"
 import { createUserExtensionStorage, type UserExtensionStorage } from "../../extensions/storage.js"
 import { getToolCommon, normalizeTool, type NormalizedTool } from "../support/contract.js"
 import { validateExtensionManifest, type ExtensionValidation } from "../../extensions/validator.js"
@@ -9,7 +9,8 @@ import { createFrameworkResourceAccess, type FrameworkResourceAccess } from "../
 import { deriveExtensionId, sanitizeIdentifier } from "../../core/shared/identifiers.js"
 import { hostRuntime } from "../../core/runtime/host-runtime.js"
 import { cloneJsonValue } from "../../core/shared/json-values.js"
-import { resolveToolRuntimeConfig } from "../../extensions/runtime-config.js"
+import { runExecutionTest } from "../../extensions/testing/execution-runtime.js"
+import type { RuntimeConfigObject } from "../../config/types.js"
 
 type UnknownRecord = Record<string, unknown>
 type DynamicDisposer = () => Promise<unknown> | unknown
@@ -230,16 +231,30 @@ export class CustomToolManager {
       const tool = loaded.tools.find(entry => entry.name === toolName)
       if (!tool) throw new Error(`工具 ${toolName} 不存在，可选：${loaded.tools.map(entry => entry.name).join("、") || "无"}`)
       const timeoutMs = Math.max(1000, Math.min(30000, Number(context.timeoutMs || 15000)))
-      let timer: ReturnType<typeof setTimeout> | undefined
-      const result = await Promise.race([
-        tool.execute(args, {
-          ...context,
-          source: "web-custom-test",
-          dryRun: true,
-          toolConfig: { ...resolveToolRuntimeConfig(tool, context.config || {}), ...record(context.runtimeConfig) },
-        }),
-        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`测试超过 ${timeoutMs}ms`)), timeoutMs) }),
-      ]).finally(() => { if (timer) clearTimeout(timer) })
+      // 开发者试跑使用独立 Registry，不把未启用包注入正式工具目录。
+      const [{ ToolRegistry }, { executeDirectTool }] = await Promise.all([
+        import("../support/registry.js"), import("../support/direct-execution.js"),
+      ])
+      const registry = new ToolRegistry()
+      registry.register(tool)
+      const config = cloneJsonValue(context.config || await configStore.load()) as RuntimeConfigObject
+      const tools = record(config.tools)
+      config.tools = { ...tools, runtimeVariables: { ...record(tools.runtimeVariables), [tool.name]: { ...record(record(tools.runtimeVariables)[tool.name]), ...record(context.runtimeConfig) } } } as RuntimeConfigObject["tools"]
+      const event = record(context.e || { isMaster: true, isGroup: false, user_id: "web-custom-test" })
+      if (event.isMaster !== true) throw new Error("开发者工具试跑需要主人权限")
+      const tested = await runExecutionTest({
+        schema: getToolCommon(tool).parameters, args, timeoutMs,
+        context: { signal: context.signal instanceof AbortSignal ? context.signal : undefined },
+        execute: async runtime => {
+          const execution = await executeDirectTool(tool.name, args, {
+            ...context, e: event, config, source: "web-custom-test", dryRun: true,
+            allowDisabledTool: true, signal: runtime.signal, execution: { background: false },
+          }, registry)
+          if (["failed", "denied", "ambiguous", "canceled", "blocked"].includes(execution.status)) throw new Error(String(execution.content || "工具测试失败"))
+          return execution.value
+        },
+      })
+      const result = tested.result
       return {
         packageId: item.id,
         tool: tool.name,

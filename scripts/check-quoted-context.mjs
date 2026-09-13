@@ -88,8 +88,8 @@ export async function checkQuotedContext(image) {
   }
 
   const imageEvent = { ...event, reply_id: "quoted", source: { ...quote, message: [{ type: "image", url: image }] }, img: [image] }
-  const disabled = await resolveMediaContext(imageEvent, "埋埋看看这个", { mediaRecognition: { includeQuotedMedia: false } }, options)
-  assert(disabled.attachments.every(item => item.visionEligible === false), "宿主重复展开不能绕过引用媒体开关")
+  const disabled = await resolveMediaContext(imageEvent, "埋埋看看这个", { mediaRecognition: {} }, options)
+  assert.equal(disabled.attachments.filter(item => item.visionEligible).length, 1, "引用图片始终按默认规则进入当前请求")
   const avatar = await resolveMediaContext({ ...textEvent, message: [{ type: "at", qq: "another-user" }] }, "埋埋看看这个", config, options)
   assert(!avatar.attachments.some(item => item.source === "at-avatar"), "引用文字不能自动切到被提及者头像")
   const automatic = await resolveMediaContext(imageEvent, "埋埋觉得呢", config, options)

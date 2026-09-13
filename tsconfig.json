@@ -21,6 +21,7 @@
     "web/http/app.ts",
     "web/http/websocket.ts",
     "runtime-entry.ts",
+    "core/actions/**/*.ts",
     "core/message-chain/**/*.ts",
     "core/chat/token-budget.ts",
     "core/chat/access-control.ts",

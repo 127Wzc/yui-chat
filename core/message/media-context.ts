@@ -318,11 +318,9 @@ export async function resolveMediaContext(event: unknown = {}, prompt: unknown =
   const attachments = attachmentsFromContext(base, "current", currentMeta)
   if (Array.isArray(e.img)) for (const url of e.img) pushAttachment(attachments, { kind: "image", url: text(url), source: "yunzai-img", ...currentMeta })
 
-  // 引用正文和引用媒体是两个独立开关：即使管理员关闭引用媒体，对话仍
-  // 应该能看到被引用的文字；关闭时只是不把图片等附件加入模型输入。
   const quotedValue = await getQuotedMessage(e)
   const quote = quotedValue ? buildQuoteContext(quotedValue) : null
-  if (quote && mediaRecognition.includeQuotedMedia !== false) {
+  if (quote) {
     for (const attachment of quote.attachments) pushAttachment(attachments, attachment)
   }
 
@@ -340,6 +338,7 @@ export async function resolveMediaContext(event: unknown = {}, prompt: unknown =
     .filter(Boolean))
   const hasQuotedImage = quotedImageUrls.size > 0
   const hasUniqueCurrentImage = attachments.some(item => item.kind === "image" && item.source !== "quote" && !quotedImageUrls.has(text(item.url)))
+  // 引用媒体始终参与解析；只有对话入口显式把引用正文提升为当前 user message。
   const quoteAsCurrent = options.quoteAsCurrent === true
   const quoteTargeted = hasQuotedImage
     && visionMode !== "none"
@@ -357,7 +356,7 @@ export async function resolveMediaContext(event: unknown = {}, prompt: unknown =
     }
     const isQuote = attachment.source === "quote"
     const duplicatesQuote = !isQuote && quotedImageUrls.has(text(attachment.url))
-    attachment.visionEligible = duplicatesQuote || (attachment.source === "yunzai-img" && quote?.status === "unavailable") || (isQuote && mediaRecognition.includeQuotedMedia === false)
+    attachment.visionEligible = duplicatesQuote || (attachment.source === "yunzai-img" && quote?.status === "unavailable")
       ? false
       : currentTargeted ? !isQuote
       : quoteAsCurrent && quote ? (isQuote || (!onlyQuote && (compareImages || !quoteTargeted)))

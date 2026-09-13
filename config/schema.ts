@@ -15,6 +15,14 @@ interface SchemaGroup {
 
 export const schema: SchemaGroup[] = [
   {
+    group: "Actions",
+    fields: [
+      { path: "actions.enabled", label: "启用动作中心", type: "boolean" },
+      { path: "actions.categories", label: "动作分类", type: "json" },
+      { path: "actions.items", label: "动作预设", type: "json" },
+    ],
+  },
+  {
     group: "Logging",
     fields: [
       { path: "logging.level", label: "对话日志等级", type: "string", advanced: true },
@@ -133,7 +141,6 @@ export const schema: SchemaGroup[] = [
       { path: "mediaRecognition.recognitionModel", label: "媒体识别增强模型", type: "string" },
       { path: "mediaRecognition.useAtAvatar", label: "无图片时允许解析 @ 用户头像", type: "boolean" },
       { path: "mediaRecognition.preferNativeVision", label: "优先使用模型原生多模态", type: "boolean" },
-      { path: "mediaRecognition.includeQuotedMedia", label: "包含引用消息媒体", type: "boolean" },
       { path: "mediaRecognition.remoteFetch", label: "远程媒体下载与缓存策略", type: "json" },
     ],
   },

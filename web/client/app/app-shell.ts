@@ -54,6 +54,7 @@ const navGroups = [
   {
     label: "管理",
     tabs: [
+      { id: "actions", label: "动作中心", icon: "sparkles", description: "将指令与能力连接，一键执行你的自定义动作" },
       { id: "tools", label: "AI 能力", icon: "wrench", description: "管理可供模型调用的工具、Skill 与 MCP 服务" },
       { id: "filters", label: "代码过滤器", icon: "filter", description: "按顺序处理输入和输出正文" },
       { id: "tool-permissions", label: "使用权限", icon: "key", description: "设置不同角色可使用的能力范围" },
@@ -70,6 +71,7 @@ const nameMap = {
   logs: "LogsTab",
   providers: "ProvidersTab",
   persona: "PersonaTab",
+  actions: "ActionsTab",
   tools: "ToolsTab",
   filters: "FiltersTab",
   "tool-permissions": "ToolsTab",
@@ -135,6 +137,7 @@ export const AppShell = {
 
     function diagnosticTarget(issue: UnknownRecord = {}) {
       const text = `${issue.area || ""} ${issue.message || ""}`.toLowerCase()
+      if (/actions|动作/.test(text)) return "actions"
       if (/model|provider|channel|模型|渠道/.test(text)) return "providers"
       if (/persona|output|response|人格|回复|输出/.test(text)) return "persona"
       if (/tool|mcp|skill|render|工具|权限|渲染/.test(text)) return "tools"

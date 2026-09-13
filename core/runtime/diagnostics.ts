@@ -1,3 +1,5 @@
+import { actionCommandStatus } from "./host-command-registry.js"
+import { parseActions } from "../actions/contract.js"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { adapterRegistry } from "../../models/adapters/registry.js"
@@ -224,7 +226,9 @@ export async function buildDiagnostics(): Promise<UnknownRecord> {
     issues.push({ level: "warn", area: "custom-filters", message: item.error || item.message || JSON.stringify(item) })
   }
 
+  if (actionCommandStatus.error) issues.push({ level: "warn", area: "actions", message: actionCommandStatus.error })
   return {
+    actions: { ...actionCommandStatus, configured: Object.keys(parseActions(configValue.actions).items).length },
     ok: !issues.some(item => item.level === "error"),
     generatedAt: new Date().toISOString(),
     summary: {

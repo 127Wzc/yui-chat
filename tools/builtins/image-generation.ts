@@ -7,10 +7,11 @@ import { MessageChainBuilder } from "../../core/message-chain/builder.js"
 import type { ResourceRef } from "../../core/message-chain/types.js"
 import { adapterRegistry } from "../../models/adapters/registry.js"
 import { providerResolver } from "../../models/routing/provider-resolver.js"
-import type { ImageGenerationReference } from "../../models/protocol/types.js"
+import type { ImageGenerationReference, ModelChannel } from "../../models/protocol/types.js"
 import type { ToolExecutionContext } from "../support/tool-contract.js"
 import { hostRuntime } from "../../core/runtime/host-runtime.js"
 import { resolveBoundaryRole } from "../access/roles.js"
+import { resolveToolRuntimeConfig } from "../../extensions/runtime-config.js"
 
 type ToolArgs = UnknownRecord
 
@@ -96,6 +97,26 @@ function allowsMultipleImages(context: ImageToolContext, imageRuntime: UnknownRe
     ? imageRuntime.multiImageUserIds.slice(0, 200).map(value => text(value).trim()).filter(Boolean)
     : []
   return allowed.includes(userId)
+}
+
+function bounded(value: unknown, fallback: number, min: number, max: number): number {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? Math.max(min, Math.min(max, Math.trunc(parsed))) : fallback
+}
+
+function resolveImageChannel(config: UnknownRecord, channelId = ""): ModelChannel | null {
+  if (channelId) {
+    const configured = providerResolver.resolveCandidateChannels({ channelId, config })[0]
+    if (configured) return configured
+  }
+  const channels = providerResolver.resolveCandidateChannels({ taskName: "imageGeneration", config })
+  return channels.find(item => item.purpose === "image" || ["openai-images", "openai-chat-completions", "gemini-images"].includes(item.type)) || null
+}
+
+function imageQueueKey(channel: ModelChannel | null): string {
+  if (!channel) return "generate_image:unresolved"
+  const raw = text(channel.id || channel.name || `${text(channel.type)}:${text(channel.model)}`).trim() || "unresolved"
+  return `generate_image:${raw}`.slice(0, 120)
 }
 
 /** 后台完成后仍经统一 message_send 入口投递，避免复制宿主消息发送逻辑。 */
@@ -190,7 +211,7 @@ export class GenerateImageTool {
     repeatPolicy: "dedupe",
     operationFields: ["prompt", "referenceImages", "count", "size", "quality", "aspectRatio", "imageSize", "background"],
     retryPolicy: "no_ambiguous_retry",
-    dispatchMarking: "immediate",
+    dispatchMarking: "deferred",
     maxAttempts: 1,
     background: true,
   }
@@ -199,6 +220,8 @@ export class GenerateImageTool {
     type: "object",
     properties: {
       enabled: { type: "boolean", default: true, title: "启用图片生成", description: "关闭后工具不会发起生图请求。" },
+      maxConcurrent: { type: "integer", minimum: 1, maximum: 32, default: 1, title: "同时生成数量", description: "同一图片模型同时执行的任务数。" },
+      maxQueue: { type: "integer", minimum: 0, maximum: 1000, default: 3, title: "等待队列上限", description: "只计算等待中的任务；达到上限时直接拒绝新任务。" },
       maxCount: { type: "integer", minimum: 0, default: 0, title: "图片输出上限", description: "最终发送的硬上限。0 表示主人和名单用户不限制；普通用户始终最多 1 张。" },
       multiImageUserIds: { type: "array", maxItems: 200, default: [], title: "多图生成名单", description: "名单中的用户可请求多张图片；主人始终允许。填写用户 ID 数组。", items: { type: "string" } },
       maxReferences: { type: "integer", minimum: 0, maximum: 3, default: 3, title: "最多参考图", description: "参考图只在当前请求中使用，不写入缓存。" },
@@ -207,6 +230,30 @@ export class GenerateImageTool {
       defaultSize: { type: "string", default: "1024x1024", title: "默认分辨率", description: "调用未指定时使用；OpenAI 示例：1024x1024、1024x1536。" },
       timeoutMs: { type: "integer", minimum: 1000, maximum: 600000, default: 300000, title: "请求超时（毫秒）", description: "超时后丢弃本次请求结果。" },
     },
+  }
+
+  /** 为后台调度声明图片模型独立队列；限额由工具运行变量统一控制。 */
+  backgroundQueue = (_args: ToolArgs = {}, context: ImageToolContext = {}): UnknownRecord => {
+    const config = record(context.config || configStore.get())
+    const channel = resolveImageChannel(config)
+    const runtime = Object.keys(record(context.toolConfig)).length
+      ? record(context.toolConfig)
+      : record(resolveToolRuntimeConfig(this, config))
+    return {
+      queueKey: imageQueueKey(channel),
+      ...(channel?.id ? { channelId: channel.id } : {}),
+      maxConcurrent: bounded(runtime.maxConcurrent, 1, 1, 32),
+      maxQueue: bounded(runtime.maxQueue, 3, 0, 1000),
+      // 新任务提交或管理台刷新时读取最新快照，已在队列中的任务不需要重建。
+      limitsProvider: () => {
+        const latestConfig = record(configStore.get())
+        const latestRuntime = record(resolveToolRuntimeConfig(this, latestConfig))
+        return {
+          maxConcurrent: bounded(latestRuntime.maxConcurrent, 1, 1, 32),
+          maxQueue: bounded(latestRuntime.maxQueue, 3, 0, 1000),
+        }
+      },
+    }
   }
   description = "Generate or edit images with the configured image model. Omit referenceImages for text-to-image; include one or more image URLs/data URLs to edit them. When size, aspectRatio, or imageSize is omitted, the tool applies its configured defaults before the model settings. Generation runs in the background and sends all returned images to the current chat when ready. You may include startMessage for a brief natural acknowledgement that drawing has started; do not claim completion before the images arrive."
   parameters = {
@@ -233,8 +280,7 @@ export class GenerateImageTool {
       const prompt = text(args.prompt).trim()
       if (!prompt) throw new Error("请提供图片描述")
       const taskName = "imageGeneration"
-      const channels = providerResolver.resolveCandidateChannels({ taskName, config })
-      const channel = channels.find(item => item.purpose === "image" || ["openai-images", "openai-chat-completions", "gemini-images"].includes(item.type))
+      const channel = resolveImageChannel(config, text(context.backgroundChannelId).trim())
       if (!channel) throw new Error("尚未配置可用的图片模型，请先在模型服务中添加用途为“图片生成”的模型")
       const modelImage = record(record(channel.modelConfig).image)
       const modelImageParams = record(modelImage.params)
@@ -313,6 +359,7 @@ export class GenerateImageTool {
       const imageCount = chain.filter(part => part.type === "image").length
       return {
         status: "success",
+        ...(delivery.status === "generated" ? { chain } : {}),
         content: delivery.status === "generated"
           ? `图片生成完成（${imageCount} 张，当前没有可投递的会话）。`
           : `图片生成完成并已发送（${imageCount} 张）。`,

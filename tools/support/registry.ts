@@ -20,7 +20,7 @@ import { assertToolAllowed, explainToolPolicy, type ToolAccessContext } from "..
 import { buildToolAccessMatrix, type AccessMatrixOptions } from "../access/matrix.js"
 import { hostRuntime } from "../../core/runtime/host-runtime.js"
 import { applyToolRuntimeConfigUpdate, maskToolRuntimeConfig, resolveToolRuntimeConfig } from "../../extensions/runtime-config.js"
-import { backgroundTaskService, type PublicBackgroundTask } from "../../core/scheduling/background-task-service.js"
+import { backgroundTaskService, type BackgroundTaskLimitsProvider, type PublicBackgroundTask } from "../../core/scheduling/background-task-service.js"
 import { normalizeEventScope } from "../../core/message/event-scope.js"
 import type { ToolExecutionContext } from "./tool-contract.js"
 
@@ -68,6 +68,35 @@ function traceId(context: RegistryExecutionContext): string {
 
 function catalogItems(value: unknown): UnknownRecord[] {
   return Array.isArray(value) ? value.map(record) : []
+}
+
+interface BackgroundQueueDescriptor {
+  queueKey?: unknown
+  channelId?: unknown
+  maxConcurrent?: unknown
+  maxQueue?: unknown
+  retentionMs?: unknown
+  limitsProvider?: BackgroundTaskLimitsProvider | null
+}
+
+function resolveBackgroundQueue(tool: NormalizedTool, args: UnknownRecord, context: RegistryExecutionContext, config: RuntimeConfigObject, toolConfig: Readonly<UnknownRecord>): BackgroundQueueDescriptor {
+  const resolver = (tool as UnknownRecord).backgroundQueue
+  if (typeof resolver !== "function") return {}
+  try {
+    const value = (resolver as (toolArgs: UnknownRecord, resolverContext: UnknownRecord) => unknown).call(tool, args, { ...context, config, toolConfig })
+    const source = record(value)
+    return {
+      queueKey: source.queueKey,
+      channelId: source.channelId,
+      maxConcurrent: source.maxConcurrent,
+      maxQueue: source.maxQueue,
+      retentionMs: source.retentionMs,
+      limitsProvider: typeof source.limitsProvider === "function" ? source.limitsProvider as BackgroundTaskLimitsProvider : null,
+    }
+  } catch (error) {
+    hostRuntime.logger?.warn?.(`[yui-chat] 工具 ${tool.name} 后台队列配置读取失败`, error)
+    return {}
+  }
 }
 
 /** 所有工具来源共用的注册表；只保存已归一化工具，不暴露原始动态对象。 */
@@ -254,6 +283,8 @@ export class ToolRegistry {
       context.execution?.markDispatched?.()
     }
     const invoke = async (runContext: RegistryExecutionContext = context): Promise<unknown> => {
+      await runContext.execution?.beforeInvoke?.()
+      if (runContext.execution?.beforeInvoke) assertToolAllowed(tool, { ...runContext, config: configStore.get() })
       const runObservation = record(runContext.observability)
       const runTrace = runObservation.trace || observation.trace || null
       return tool.execute(toolArgs, {
@@ -269,19 +300,27 @@ export class ToolRegistry {
       })
     }
     if (execution.background && context.execution?.background !== false) {
+      const queue = resolveBackgroundQueue(tool, toolArgs, context, config, toolConfig)
       const task = backgroundTaskService.submit({
         name,
         runId: traceId(context),
         parentToolId: text(observation.toolCallId),
         config,
+        queueKey: queue.queueKey,
+        maxConcurrent: queue.maxConcurrent,
+        maxQueue: queue.maxQueue,
+        retentionMs: queue.retentionMs,
+        limitsProvider: queue.limitsProvider,
         execute: signal => invoke({
           ...context,
+          ...(queue.channelId ? { backgroundChannelId: text(queue.channelId) } : {}),
           agent: { ...record(context.agent), signal },
           signal,
           execution: { ...context.execution, background: false },
         }),
         onComplete: context.execution?.onBackgroundComplete,
       })
+      if (execution.dispatchMarking === "deferred") context.execution?.markDispatched?.()
       const configuredBackgroundMessage = record(tool).backgroundMessage
       const requestedBackgroundMessage = typeof configuredBackgroundMessage === "string" && typeof toolArgs.startMessage === "string"
         ? toolArgs.startMessage.replace(/\s+/g, " ").trim().slice(0, 80)
@@ -300,6 +339,7 @@ export class ToolRegistry {
         metadata: {
           background: true,
           taskId: task.id,
+          backgroundStatus: task.status,
           parentToolId: task.parentToolId,
           ...(autoSendBackgroundMessage && typeof record(context.e).reply === "function"
             ? { messageSendPlan: { parts: [{ type: "text", text: backgroundMessage }] } }

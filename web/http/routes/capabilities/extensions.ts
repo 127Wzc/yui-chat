@@ -190,6 +190,8 @@ export function registerExtensionRoutes(app: RouteApp): void {
       else delete runtimeVariables[name]
       return configValue({ ...config, tools: { ...configTools, runtimeVariables } })
     })
+    // 工具限额属于运行态；保存后立即唤醒等待队列，让新配置生效。
+    backgroundTaskService.refresh()
     res.json({ ok: true, config: redactConfigSecrets(saved), runtime, tools: await toolRegistry.list() })
   }, { errorStatus: 400 }))
   app.get("/api/custom-tools", auth, handleRoute(async (_req, res) => {

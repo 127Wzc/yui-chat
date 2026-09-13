@@ -65,6 +65,8 @@ interface LogToolCall extends UnknownRecord {
   requires_final_reply?: boolean
   dispatched?: boolean
   retryAllowed?: boolean
+  backgroundStatus?: string
+  taskId?: string
   decision?: string
   remainingCount?: number
   deduplicated?: boolean

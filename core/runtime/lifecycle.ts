@@ -1,3 +1,5 @@
+import { applyActionCommands } from "../../apps/actions.js"
+import { actionCommandStatus } from "./host-command-registry.js"
 import { chatService } from "../chat/chat-service.js"
 import { recentContextStore } from "../chat/recent-context.js"
 import { clearResponseState, responseStateStats } from "../chat/response-pipeline.js"
@@ -45,6 +47,7 @@ export type RuntimeStats = UnknownRecord
 
 export function runtimeStats(): RuntimeStats {
   return {
+    actions: { ...actionCommandStatus },
     chat: chatService.stats(),
     recentContext: recentContextStore.stats(),
     response: responseStateStats(),
@@ -90,6 +93,7 @@ export async function applyRuntimeConfig(config: UnknownRecord = {}, opts: Runti
     groupCaptureStore.startScanner()
     result.groupCapture = true
   }
+  result.actions = await applyActionCommands(config as import("../../config/types.js").RuntimeConfigObject)
   return result
 }
 
@@ -113,6 +117,7 @@ export async function endAllConversationsRuntime(opts: RuntimeLifecycleOptions =
   if (opts.shutdown) await groupCaptureStore.stop({ flush: true })
   else if (opts.flushMemory) await groupCaptureStore.flush()
   if (opts.shutdown) {
+    await applyActionCommands({ actions: { enabled: false } })
     await modelLogStore.stop({ flush: true, timeoutMs: 1500 })
     await filterRegistry.destroy()
     await toolRegistry.destroy()

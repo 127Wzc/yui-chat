@@ -1,3 +1,4 @@
+import { applyHostActionEntries, type HostCommandEntry, type actionCommandStatus } from "./host-command-registry.js"
 /** 宿主事件的最小静态边界；具体 Yunzai 字段仍必须在业务边界自行收窄。 */
 export interface HostEvent extends Record<string, unknown> {
   msg?: string
@@ -43,6 +44,7 @@ export interface HostQuotedMessageResult<T> {
 export type HostQuotedMessageSelector<T> = (value: unknown) => HostQuotedMessageSelection<T>
 
 export interface HostRuntime {
+  applyActionEntries(root: string, entries: HostCommandEntry[]): Promise<typeof actionCommandStatus>
   readonly bot?: YuiChatHostBot
   readonly logger?: YuiChatHostLogger
   readonly segment?: YuiChatHostSegmentFactory
@@ -132,6 +134,7 @@ async function readQuotedMessage<T>(event: unknown, sequence: unknown, select: H
 
 /** 宿主适配层：领域模块通过这里读取 Yunzai 全局对象，避免新增直接全局引用。 */
 export const hostRuntime: HostRuntime = Object.freeze({
+  applyActionEntries: applyHostActionEntries,
   get bot() {
     return globalThis.Bot
   },

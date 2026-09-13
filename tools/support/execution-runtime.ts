@@ -91,7 +91,7 @@ interface NormalizedToolResult {
   metadata: unknown
 }
 
-interface ToolExecutionResult extends NormalizedToolResult {
+export interface ToolExecutionResult extends NormalizedToolResult {
   value?: unknown
   attempt: number
   timedOut?: boolean
@@ -341,7 +341,7 @@ function defaultScope(input: { scope?: unknown; event?: unknown } = {}): string 
   return `p:${text(user || "unknown")}:${text(message || "turn")}`
 }
 
-function normalizeToolResult(value: unknown): NormalizedToolResult {
+export function normalizeToolResult(value: unknown): NormalizedToolResult {
   const source = record(value)
   if (["observation", "delivery", "action", "error"].includes(text(source.kind)) && Array.isArray(source.chain)) {
     const output = source as unknown as ToolOutput

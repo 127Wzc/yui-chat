@@ -1,3 +1,4 @@
+import { YuiActionBootstrap } from "./apps/actions.js"
 import { configStore } from "./config/store.js"
 import { createWebApp, registerWebSocket } from "./web/http/app.js"
 import { toolRegistry } from "./tools/support/registry.js"
@@ -84,6 +85,7 @@ async function boot(): Promise<void> {
 await boot()
 
 export const apps = {
+  YuiActionBootstrap,
   YuiChat,
   YuiChatMaster,
   YuiChatGroupPoke,

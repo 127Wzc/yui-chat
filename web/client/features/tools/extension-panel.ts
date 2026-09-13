@@ -1,5 +1,6 @@
+import { FrameworkResourcePicker } from "../../ui/framework-resource-picker.js"
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue"
-import { confirmAction, store, request, toast, refreshTab } from "../../app/store/store.js"
+import { confirmAction, store, request, toast, refreshTab, setTab } from "../../app/store/store.js"
 import { splitTokens, parseJsonText, toJson } from "../../shared/format.js"
 import { asRecord, asRecords, errorMessage, type UnknownRecord } from "../../shared/data.js"
 import { CUSTOM_BUILDER_STEPS, CUSTOM_FIELD_TYPES, applyCustomBuilder, customBuilderFromManifest, customCommandArguments, customTestDraft } from "./custom-builder.js"
@@ -96,7 +97,7 @@ interface ExtensionResponse extends UnknownRecord {
 // 扩展管理（Custom / Skill）：列表、编辑抽屉和创建入口的状态与动作都在这里组合。
 export const ExtensionPanel = {
   name: "ExtensionPanel",
-  components: { ExtensionCreateDrawer, ExtensionEditorDrawer, ExtensionLibraryPanel, ToolDetailModal },
+  components: { FrameworkResourcePicker, ExtensionCreateDrawer, ExtensionEditorDrawer, ExtensionLibraryPanel, ToolDetailModal },
   setup() {
     const customCatalog = computed<ExtensionItem[]>(() => asRecords<ExtensionItem>(asRecord<{ custom?: { catalog?: ExtensionItem[] } }>(store.tools).custom?.catalog))
     const skillCatalog = computed<ExtensionItem[]>(() => asRecords<ExtensionItem>(asRecord<{ skills?: { catalog?: ExtensionItem[] } }>(store.tools).skills?.catalog))
@@ -508,7 +509,34 @@ export const ExtensionPanel = {
     function toggleLibraryItem(item: ExtensionItem & { extensionType?: string }) {
       return item.extensionType === "skill" ? toggleSkill(item.id, !item.enabled) : toggleCustom(item.id, !item.enabled)
     }
+    async function createActionFromTest() {
+      try {
+        const args = parseJsonText(customTest.args || "{}", "测试参数", {})
+        store.actionSeed = { tool: customTest.tool, args }
+        setTab("actions")
+      } catch (error) { toast(errorMessage(error)) }
+    }
+
+    const resourcePickerOpen = ref(false)
+    const resourcePickerIndex = ref(-1)
+    function browseActionResource(index = -1) { resourcePickerIndex.value = index; resourcePickerOpen.value = true }
+    function selectActionResource(item: UnknownRecord) {
+      let row = customBuilder.resources[resourcePickerIndex.value]
+      if (!row) { row = { alias: "", reference: "" }; customBuilder.resources.push(row) }
+      row.reference = String(item.reference || "")
+      if (!row.alias) {
+        const base = String(item.name || "resource").replace(/\.[^.]+$/, "").replace(/[^a-zA-Z0-9_-]+/g, "-") || "resource"
+        const used = new Set(customBuilder.resources.map(resource => resource.alias))
+        let alias = base, suffix = 2
+        while (used.has(alias)) alias = `${base}-${suffix++}`
+        row.alias = alias
+      }
+      resourcePickerOpen.value = false
+    }
+
     return {
+      resourcePickerOpen, browseActionResource, selectActionResource,
+      createActionFromTest,
       customCatalog,
       skillCatalog,
       extensionLibraryRows,
@@ -565,6 +593,7 @@ export const ExtensionPanel = {
         @create="openCreate" @close="closeCreateDrawer" @install-remote="installRemoteSkill"
       />
       <ToolDetailModal :open="showToolDetail" :tool="toolDetail" @close="showToolDetail = false" />
+      <FrameworkResourcePicker :open="resourcePickerOpen" @close="resourcePickerOpen = false" @select="selectActionResource" />
       <ExtensionEditorDrawer
         :open="showEditor"
         :editor-title="editorTitle"
@@ -584,6 +613,8 @@ export const ExtensionPanel = {
         @test="testCustomTool"
         @seed-test="seedCustomTestDraft"
         @copy-command="copyCustomCommand"
+        @create-action="createActionFromTest"
+        @browse-resource="browseActionResource"
       />
       <ExtensionLibraryPanel
         :rows="extensionLibraryRows"

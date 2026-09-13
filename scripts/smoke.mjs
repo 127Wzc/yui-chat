@@ -913,6 +913,7 @@ async function checkToolPolicy() {
   const imageGenerationMeta = listedTools.find(tool => tool.name === "generate_image")
   const imageGenerationConfig = imageGenerationMeta?.common?.configSchema?.properties || {}
   assert(imageGenerationConfig.defaultAspectRatio?.default === "1:1" && imageGenerationConfig.defaultImageSize?.default === "1K" && imageGenerationConfig.defaultSize?.default === "1024x1024", "generate_image should expose concise tool-level image defaults")
+  assert(imageGenerationConfig.maxConcurrent?.default === 1 && imageGenerationConfig.maxQueue?.default === 3, "generate_image should own its background concurrency and queue defaults")
   assert(imageGenerationConfig.maxCount?.default === 0 && imageGenerationConfig.multiImageUserIds?.type === "array", "generate_image should separate the hard output cap from the multi-image allowlist")
   assert(imageGenerationMeta?.common?.parameters?.properties?.startMessage?.maxLength === 80, "generate_image should constrain the model-provided start acknowledgement")
   const originalImageGeneration = adapterRegistry.generateImages
@@ -2695,16 +2696,16 @@ async function checkMedia() {
       && recentImageRecallModeForPrompt("撤回刚才那张图片") === "none",
     "recent image recall should distinguish explicit lookback, adjacent contextual reference, ordinary chat, and management messages",
   )
-  const managementMedia = await resolveMediaContext(quotedEvent, "撤回这条消息", { mediaRecognition: { includeQuotedMedia: true, useAtAvatar: false } })
+  const managementMedia = await resolveMediaContext(quotedEvent, "撤回这条消息", { mediaRecognition: { useAtAvatar: false } })
   assert(managementMedia.quote?.messageId === "8416071" && managementMedia.attachments.length === 2 && managementMedia.attachments.every(item => item.visionEligible === false), "message management should keep the quoted message id without enabling duplicated host images")
   assert(!summarizeMediaContext(managementMedia).includes(quotedImageUrl), "message management summaries should not include skipped media URLs")
   const preparedManagementMedia = await prepareMediaForVision(managementMedia, { mediaRecognition: { remoteFetch: { enabled: true } } })
   assert(preparedManagementMedia.attachments.every(item => item.visionSkipped === true && !item.prepareError), "message management should skip all duplicated image downloads entirely")
   const managementContent = buildMediaUserContent("撤回这条消息", preparedManagementMedia, true)
   assert(!Array.isArray(managementContent) && !String(managementContent).includes(quotedImageUrl), "message management should not send quoted image URLs to the model")
-  const visualMedia = await resolveMediaContext(quotedEvent, "看看这张图", { mediaRecognition: { includeQuotedMedia: true, useAtAvatar: false } })
+  const visualMedia = await resolveMediaContext(quotedEvent, "看看这张图", { mediaRecognition: { useAtAvatar: false } })
   assert(visualMedia.attachments.filter(item => item.visionEligible === true).length === 1 && visualMedia.attachments.find(item => item.visionEligible)?.source === "quote", "an explicitly referenced quote should select the quoted image once instead of duplicating a host-flattened current image")
-  const ellipticalQuotedMedia = await resolveMediaContext(quotedEvent, "玉玉那这个呢", { mediaRecognition: { includeQuotedMedia: true, useAtAvatar: false } })
+  const ellipticalQuotedMedia = await resolveMediaContext(quotedEvent, "玉玉那这个呢", { mediaRecognition: { useAtAvatar: false } })
   assert(ellipticalQuotedMedia.attachments.filter(item => item.visionEligible === true).length === 1 && ellipticalQuotedMedia.attachments.find(item => item.visionEligible)?.source === "quote", "elliptical visual follow-ups should read only the explicitly quoted image without recalling unrelated history")
   const inlineSourceQuotedMedia = await resolveMediaContext({
     isGroup: true,
@@ -2715,7 +2716,7 @@ async function checkMedia() {
       message: [{ type: "image", data: { url: "data:image/png;base64,AAAA" } }],
     },
     message: [{ type: "reply", data: { id: "841607-inline" } }],
-  }, "评价一下", { mediaRecognition: { includeQuotedMedia: true, useAtAvatar: false } })
+  }, "评价一下", { mediaRecognition: { useAtAvatar: false } })
   assert(inlineSourceQuotedMedia.quote?.messageId === "841607-inline" && inlineSourceQuotedMedia.attachments.some(item => item.source === "quote" && item.visionEligible === true), "Yunzai inline source media should be used directly for intent-based quoted-image evaluation")
   const directAndQuotedMedia = await resolveMediaContext({
     ...quotedEvent,
@@ -2723,7 +2724,7 @@ async function checkMedia() {
       { type: "reply", data: { id: "8416071" } },
       { type: "image", data: { url: "data:image/png;base64,BBBB" } },
     ],
-  }, "评价一下", { mediaRecognition: { includeQuotedMedia: true, useAtAvatar: false } })
+  }, "评价一下", { mediaRecognition: { useAtAvatar: false } })
   assert(directAndQuotedMedia.attachments.filter(item => item.visionEligible).length === 1 && directAndQuotedMedia.attachments.find(item => item.visionEligible)?.source !== "quote", "a newly attached image should outrank an older quoted image for an unqualified evaluation")
   const comparedMedia = await resolveMediaContext({
     ...quotedEvent,
@@ -2731,7 +2732,7 @@ async function checkMedia() {
       { type: "reply", data: { id: "8416071" } },
       { type: "image", data: { url: "data:image/png;base64,BBBB" } },
     ],
-  }, "对比这两张", { mediaRecognition: { includeQuotedMedia: true, useAtAvatar: false } })
+  }, "对比这两张", { mediaRecognition: { useAtAvatar: false } })
   assert(comparedMedia.attachments.filter(item => item.visionEligible).length === 2, "comparison intent should include the unique current image and quoted image without duplicating host-flattened URLs")
   const quotedOnlyEvent = {
     ...quotedEvent,
@@ -2743,14 +2744,14 @@ async function checkMedia() {
     }),
   }
   for (const prompt of ["看看这个", "怎么看这个", "这个怎么看", "这个是什么", "这个呢", "说说你的看法"]) {
-    const quotedVisual = await resolveMediaContext(quotedOnlyEvent, prompt, { mediaRecognition: { includeQuotedMedia: true, useAtAvatar: false } })
+    const quotedVisual = await resolveMediaContext(quotedOnlyEvent, prompt, { mediaRecognition: { useAtAvatar: false } })
     assert(quotedVisual.attachments.some(item => item.source === "quote" && item.visionEligible === true), `quoted image should be eligible for visual prompt: ${prompt}`)
     const preparedQuotedVisual = await prepareMediaForVision(quotedVisual, { mediaRecognition: { remoteFetch: { enabled: true } } })
     const quotedContent = buildMediaUserContent(prompt, preparedQuotedVisual, true)
     const quotedParts = Array.isArray(quotedContent) ? quotedContent.filter(part => part.type === "image_url") : []
     assert(quotedParts.length === 1 && quotedParts[0].image_url.url === "data:image/png;base64,AAAA", `quoted image should enter multimodal content: ${prompt}`)
   }
-  const quotedFirstPerson = await resolveMediaContext(quotedOnlyEvent, "埋埋帮我看看", { mediaRecognition: { includeQuotedMedia: true, useAtAvatar: false } }, { quoteAsCurrent: true })
+  const quotedFirstPerson = await resolveMediaContext(quotedOnlyEvent, "埋埋帮我看看", { mediaRecognition: { useAtAvatar: false } }, { quoteAsCurrent: true })
   const preparedQuotedFirstPerson = await prepareMediaForVision(quotedFirstPerson, { mediaRecognition: { remoteFetch: { enabled: true } } })
   const quotedFirstPersonMessage = buildUserMessage(quotedOnlyEvent, "埋埋帮我看看", {}, { media: preparedQuotedFirstPerson, vision: true })
   const quotedFirstPersonText = contentToText(quotedFirstPersonMessage.content)
@@ -2763,7 +2764,7 @@ async function checkMedia() {
       message: [{ type: "text", text: "这是被引用的正文" }],
     }),
   }
-  const quotedTextMedia = await resolveMediaContext(quotedTextEvent, "埋埋帮我看看", { mediaRecognition: { includeQuotedMedia: true, useAtAvatar: false } }, { quoteAsCurrent: true })
+  const quotedTextMedia = await resolveMediaContext(quotedTextEvent, "埋埋帮我看看", { mediaRecognition: { useAtAvatar: false } }, { quoteAsCurrent: true })
   const quotedTextMessage = buildUserMessage(quotedTextEvent, "埋埋帮我看看", {}, { media: quotedTextMedia, vision: false })
   assert(contentToText(quotedTextMessage.content).includes("这是被引用的正文"), "first-person quoted requests should include quoted text in the current user message")
   const replySegmentEvent = {
@@ -2773,7 +2774,7 @@ async function checkMedia() {
       getChatHistory: async () => [{ message_id: "8416072", raw_message: "[CQ:image,file=data:image/png;base64,AAAA]" }],
     },
   }
-  const segmentQuotedVisual = await resolveMediaContext(replySegmentEvent, "怎么看这个", { mediaRecognition: { includeQuotedMedia: true, useAtAvatar: false } })
+  const segmentQuotedVisual = await resolveMediaContext(replySegmentEvent, "怎么看这个", { mediaRecognition: { useAtAvatar: false } })
   const preparedSegmentQuotedVisual = await prepareMediaForVision(segmentQuotedVisual, { mediaRecognition: { remoteFetch: { enabled: true } } })
   const segmentQuotedContent = buildMediaUserContent("怎么看这个", preparedSegmentQuotedVisual, true)
   assert(Array.isArray(segmentQuotedContent) && segmentQuotedContent.some(part => part.type === "image_url"), "reply segments and CQ quoted media should reach multimodal content")
@@ -3621,6 +3622,7 @@ async function checkCommandRules() {
   assert(methodNames.has("testFilterCommand"), "testFilterCommand handler should exist")
   assert(methodNames.has("filterParameterCommand"), "filterParameterCommand handler should exist")
   const originalAllowedTools = toolRegistry.getAllowedTools
+  const originalToolGet = toolRegistry.get
   const originalExecute = toolRegistry.execute
   const originalFilterList = filterRegistry.list
   const originalFilterGet = filterRegistry.get
@@ -3633,6 +3635,7 @@ async function checkCommandRules() {
       name: "demo_echo",
       parameters: { type: "object", properties: { city: { type: "string", description: "城市" }, days: { type: "integer", description: "天数" } }, required: ["city"] },
     }]
+    toolRegistry.get = name => name === "demo_echo" ? { name, parameters: { type: "object", properties: { city: { type: "string" }, days: { type: "integer" } }, required: ["city"] } } : originalToolGet.call(toolRegistry, name)
     toolRegistry.execute = async (name, args) => {
       receivedArgs = { name, args }
       return { ok: true }
@@ -3668,6 +3671,7 @@ async function checkCommandRules() {
     await masterApp.filterParameterCommand()
     assert(replies.at(-1).includes("正文会自动作为 text 上下文传入") && !replies.at(-1).includes("text（string"), "filter parameter command should hide automatic text input and explain the context")
   } finally {
+    toolRegistry.get = originalToolGet
     toolRegistry.getAllowedTools = originalAllowedTools
     toolRegistry.execute = originalExecute
     filterRegistry.list = originalFilterList
@@ -5200,6 +5204,43 @@ async function checkConversations() {
     assert(completedBackgroundTask?.status === "ok" && completedBackgroundTask.result?.content === "background done", "background task should complete outside the model turn and remain queryable")
     const retainedBackgroundTask = backgroundTaskService.tasks.get(backgroundTask.id)
     assert(retainedBackgroundTask?.onComplete === null && await retainedBackgroundTask?.execute() === undefined, "completed background tasks should release captured execution and completion closures")
+
+    let releaseImageQueueTask
+    const imageQueueGate = new Promise(resolve => { releaseImageQueueTask = resolve })
+    const runningImageTask = backgroundTaskService.submit({
+      name: "smoke_image_queue_running",
+      queueKey: "smoke-image-model",
+      maxConcurrent: 1,
+      maxQueue: 1,
+      config: backgroundConfig,
+      execute: async () => { await imageQueueGate; return "image-running" },
+    })
+    const queuedImageTask = backgroundTaskService.submit({
+      name: "smoke_image_queue_waiting",
+      queueKey: "smoke-image-model",
+      maxConcurrent: 1,
+      maxQueue: 1,
+      config: backgroundConfig,
+      execute: async () => "image-waiting",
+    })
+    assert(runningImageTask.status === "running" && queuedImageTask.status === "queued", "image queues should expose running and queued states")
+    let queueRejected = false
+    try {
+      backgroundTaskService.submit({
+        name: "smoke_image_queue_rejected",
+        queueKey: "smoke-image-model",
+        maxConcurrent: 1,
+        maxQueue: 1,
+        config: backgroundConfig,
+        execute: async () => "image-rejected",
+      })
+    } catch (error) {
+      queueRejected = /队列已满/.test(String(error?.message || error))
+    }
+    assert(queueRejected, "image queues should reject tasks when the waiting limit is reached")
+    releaseImageQueueTask()
+    await sleep(20)
+    assert(backgroundTaskService.get(queuedImageTask.id)?.status === "ok", "queued image tasks should start after the active task completes")
 
     const runtimeBackgroundName = "smoke_runtime_background"
     let runtimeBackgroundExecutions = 0

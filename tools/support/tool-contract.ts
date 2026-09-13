@@ -101,6 +101,7 @@ export interface ToolExecutionContext {
     [key: string]: unknown
   }
   execution?: {
+    beforeInvoke?: () => unknown | Promise<unknown>
     markDispatched?: () => unknown
     background?: boolean
     operationId?: string

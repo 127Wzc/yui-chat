@@ -2008,7 +2008,7 @@ class ModelLogStore {
     }
     const metadata = record(result.metadata)
     result.deduplicated = metadata.deduplicated === true
-    for (const key of ["operationId", "operationFamily", "effect", "repeatPolicy", "retryPolicy", "dispatched", "decision", "guardCode", "attempt", "requestedCount", "executedCount", "completedCount", "remainingCount", "retryAllowed", "resultFingerprint"]) {
+    for (const key of ["operationId", "operationFamily", "effect", "repeatPolicy", "retryPolicy", "dispatched", "decision", "guardCode", "attempt", "requestedCount", "executedCount", "completedCount", "remainingCount", "retryAllowed", "resultFingerprint", "backgroundStatus", "taskId"]) {
       const value = metadata[key]
       if (value !== undefined) result[key] = value
     }

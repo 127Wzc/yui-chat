@@ -56,6 +56,7 @@ export const conversationLog = Object.freeze({
       `remaining=${number(options.remainingCount)}`,
       `attempt=${number(options.attempt)}`,
       `retry=${options.retryAllowed === false ? "no" : "yes"}`,
+      options.backgroundStatus ? `background=${text(options.backgroundStatus)}` : "",
     ].filter(Boolean).join(" ")
     const chain = Array.isArray(options.contentTypes) && options.contentTypes.length ? ` chain=${options.contentTypes.map(text).join(",")} media=${number(options.mediaPartCount)}` : ""
     const receipt = options.receiptStatus ? ` receipt=${text(options.receiptStatus)}` : ""

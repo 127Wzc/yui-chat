@@ -1,5 +1,5 @@
 import { computed, nextTick, reactive, ref, watch } from "vue"
-import { request, toast } from "../../app/store/store.js"
+import { request, toast, store, setTab } from "../../app/store/store.js"
 import { asRecord, errorMessage, type UnknownRecord } from "../../shared/data.js"
 import { ToolConfigurationPanel } from "./tool-configuration-panel.js"
 import { RenderPanel } from "./render-panel.js"
@@ -154,7 +154,14 @@ export const ToolDetailModal = {
       if (props.open) resetScroll()
     }, { immediate: true, deep: true })
 
+    function createAction() {
+      store.actionSeed = { tool: asRecord(toolDetail.value).name, args: {} }
+      emit("close")
+      setTab("actions")
+    }
+
     return {
+      createAction,
       toolDetail,
       modalRoot,
       configurationPanel,
@@ -232,6 +239,7 @@ export const ToolDetailModal = {
         </section>
       </div>
       <template #actions>
+        <button class="btn outline" type="button" @click="createAction"><Icon name="sparkles" :size="14" />创建动作</button>
         <button v-if="activeTab === 'configuration' && hasConfig" class="btn primary" type="button" @click="saveConfiguration"><Icon name="save" :size="14" />保存配置</button>
         <button class="btn outline" type="button" @click="$emit('close')"><Icon name="x" :size="14" />关闭</button>
       </template>

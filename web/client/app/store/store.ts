@@ -4,9 +4,9 @@ import { createApiClient } from "./api.js"
 export type UnknownRecord = Record<string, unknown>
 export type DataSlice = UnknownRecord | null
 
-const validTabs = ["overview", "chat", "logs", "providers", "persona", "tools", "filters", "tool-permissions", "knowledge", "memory", "advanced"] as const
+const validTabs = ["overview", "chat", "logs", "providers", "persona", "actions", "tools", "filters", "tool-permissions", "knowledge", "memory", "advanced"] as const
 type TabName = typeof validTabs[number]
-type SliceName = "config" | "health" | "providers" | "tools" | "filters" | "skills" | "output" | "mcp" | "diagnostics" | "conversations" | "subAgentRuns" | "capabilities" | "setupGuide" | "logsSummary" | "memory" | "render" | "knowledge"
+type SliceName = "actions" | "config" | "health" | "providers" | "tools" | "filters" | "skills" | "output" | "mcp" | "diagnostics" | "conversations" | "subAgentRuns" | "capabilities" | "setupGuide" | "logsSummary" | "memory" | "render" | "knowledge"
 
 interface ClientStore {
   token: string
@@ -28,6 +28,9 @@ interface ClientStore {
   configBackups: UnknownRecord[]
   health: DataSlice
   providers: DataSlice
+  actions: DataSlice
+  actionSeed: UnknownRecord | null
+  toolDetailSeed: UnknownRecord | null
   tools: DataSlice
   filters: DataSlice
   skills: DataSlice
@@ -78,6 +81,9 @@ export const store = reactive<ClientStore>({
   configBackups: [],
   health: null,
   providers: null,
+  actions: null,
+  actionSeed: null,
+  toolDetailSeed: null,
   tools: null,
   filters: null,
   skills: null,
@@ -175,6 +181,7 @@ const refreshers: Record<SliceName, () => Promise<void>> = {
   },
   health: async () => { store.health = await request("/api/health") },
   providers: async () => { store.providers = await request("/api/providers") },
+  actions: async () => { store.actions = await request("/api/actions") },
   tools: async () => { store.tools = await request("/api/tools") },
   filters: async () => {
     const filtering = await request("/api/message-filters")
@@ -206,6 +213,7 @@ export const tabSlices: Record<TabName, SliceName[]> = {
   logs: ["config"],
   providers: ["config", "providers", "tools", "diagnostics", "subAgentRuns"],
   persona: ["config", "output", "diagnostics"],
+  actions: ["actions"],
   tools: ["config", "tools", "skills", "mcp", "render", "diagnostics"],
   filters: ["filters", "config"],
   "tool-permissions": ["config", "tools", "skills", "mcp", "render", "diagnostics"],

@@ -9,6 +9,7 @@ import { OverviewTab } from "./features/overview/overview-tab.js"
 import { ChatTab } from "./features/chat/chat-tab.js"
 import { ProvidersTab } from "./features/providers/providers-tab.js"
 import { PersonaTab } from "./features/persona/persona-tab.js"
+import { ActionsTab } from "./features/actions/actions-tab.js"
 import { ToolsTab } from "./features/tools/tools-tab.js"
 import { FiltersTab } from "./features/filters/filters-tab.js"
 import { KnowledgeTab } from "./features/knowledge/knowledge-tab.js"
@@ -24,7 +25,7 @@ for (const [name, component] of Object.entries(components)) {
 }
 
 // 全局注册页面组件，供 AppShell 动态 <component :is> 切换。
-for (const tab of [OverviewTab, ChatTab, LogsTab, ProvidersTab, PersonaTab, ToolsTab, FiltersTab, KnowledgeTab, MemoryTab, AdvancedTab]) {
+for (const tab of [ActionsTab, OverviewTab, ChatTab, LogsTab, ProvidersTab, PersonaTab, ToolsTab, FiltersTab, KnowledgeTab, MemoryTab, AdvancedTab]) {
   const name = typeof tab.name === "string" ? tab.name : ""
   if (name) app.component(name, tab as Parameters<typeof app.component>[1])
 }

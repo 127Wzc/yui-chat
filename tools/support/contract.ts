@@ -167,6 +167,11 @@ export function isToolEnabledByConfig(config: unknown = {}, tool: unknown = {}):
   const tools = record(root.tools)
   const common = getToolCommon(tool)
   const toolRecord = record(tool)
+  if (typeof toolRecord.actionSourceId === "string") {
+    const actions = record(root.actions)
+    const action = record(record(actions.items)[toolRecord.actionSourceId])
+    return actions.enabled !== false && action.enabled === true && action.kind === "source" && text(action.tool) === text(toolRecord.name)
+  }
   if (text(common.source) === "mcp") {
     const provenance = record(common.provenance)
     const mcp = record(root.mcp)

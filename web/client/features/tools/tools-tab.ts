@@ -1,4 +1,4 @@
-import { ref, computed, nextTick } from "vue"
+import { ref, computed, nextTick, onMounted } from "vue"
 import { store } from "../../app/store/store.js"
 import { asRecord, asRecords } from "../../shared/data.js"
 import { ExtensionPanel } from "./extension-panel.js"
@@ -51,6 +51,10 @@ export const ToolsTab = {
       }
       window.dispatchEvent(new CustomEvent("yui-chat:open-tool-detail", { detail: payload }))
     }
+    onMounted(() => {
+      const target = store.toolDetailSeed
+      if (target) { store.toolDetailSeed = null; void openToolDetail(target) }
+    })
     return {
       isPermissionPage,
       activeCapabilityView,
