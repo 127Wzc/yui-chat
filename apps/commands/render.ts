@@ -59,7 +59,7 @@ export async function runRenderImageCommand({ e, reply }: CommandOptions): Promi
   const input = parseRenderPayload(e?.msg)
   if (input.type === "帮助菜单" || input.type === "菜单") {
     const lines = String(input.content || input.body || "").split("\n").map(line => line.trim()).filter(Boolean)
-    const menu = buildNextHelpMenu(renderConfig)
+    const menu = buildNextHelpMenu(renderConfig, e)
     const image = await renderHelpMenu({
       ...menu,
       title: input.title || "Yui Chat 帮助菜单",

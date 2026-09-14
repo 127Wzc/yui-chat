@@ -284,13 +284,15 @@ export class ToolRegistry {
     }
     const invoke = async (runContext: RegistryExecutionContext = context): Promise<unknown> => {
       await runContext.execution?.beforeInvoke?.()
-      if (runContext.execution?.beforeInvoke) assertToolAllowed(tool, { ...runContext, config: configStore.get() })
+      const activeConfig = runContext.execution?.beforeInvoke ? configStore.get() : config
+      const activeToolConfig = runContext.execution?.beforeInvoke ? resolveToolRuntimeConfig(tool, activeConfig) : toolConfig
+      if (runContext.execution?.beforeInvoke) assertToolAllowed(tool, { ...runContext, config: activeConfig })
       const runObservation = record(runContext.observability)
       const runTrace = runObservation.trace || observation.trace || null
       return tool.execute(toolArgs, {
         ...runContext,
-        config,
-        toolConfig,
+        config: activeConfig,
+        toolConfig: activeToolConfig,
         observability: {
           ...runObservation,
           trace: runTrace,

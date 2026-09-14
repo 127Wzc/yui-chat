@@ -163,7 +163,7 @@ export class YuiChatCommandHandlers extends hostRuntime.Plugin {
     return runFilterParameterCommand({ e: this.e, reply: (...args: unknown[]) => this.reply(...args) })
   }
 
-  async mentionMemoryCommand() { const message = await runMentionMemoryCommand(this.e); return message ? this.reply(message, true) : false }
+  async mentionMemoryCommand() { const message = await runMentionMemoryCommand(this.e); return message === false ? false : message ? this.reply(message, true) : true }
 
   async memoryCommand() { const message = await runMemoryCommand(this.e); return message ? this.reply(message, true) : true }
 

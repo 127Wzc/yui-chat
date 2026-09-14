@@ -160,8 +160,8 @@ export function parseActions(value: unknown): ActionsConfig {
     const item = parseAction(value, id)
     if (item.categoryId && !ids.has(item.categoryId)) fail(`动作“${item.name}”的分类不存在`)
     for (const alias of new Set([item.command, ...item.aliases])) {
-      const key = `${item.stage}:${item.priority}:${alias}`
-      if (item.enabled && claims.has(key)) fail(`指令“${alias}”存在相同阶段和优先级的动作`)
+      const key = alias
+      if (item.enabled && claims.has(key)) fail(`指令“${alias}”已被其他启用动作使用，请修改指令或别名`)
       if (item.enabled) claims.add(key)
     }
     items[id] = item

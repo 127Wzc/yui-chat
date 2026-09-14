@@ -397,6 +397,7 @@ function normalizeConfig(config: Config): Config {
   }
   // 链接安全授权已经统一到 security.linkSafety；旧功能级字段直接退役，不迁移旧值。
   const mediaRecognition = isObject(config.mediaRecognition) ? config.mediaRecognition : null
+  // 引用图片默认参与输入；移除已退役的独立开关。
   if (mediaRecognition) delete mediaRecognition.includeQuotedMedia
   if (mediaRecognition && isObject(mediaRecognition.remoteFetch)) delete mediaRecognition.remoteFetch.allowPrivateHosts
   if (response && isObject(response.render)) {

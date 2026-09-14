@@ -199,8 +199,10 @@ export function createFrameworkResourceAccess(input: unknown = {}, options: Unkn
 
   async function importModule(alias: string): Promise<UnknownRecord> {
     if (get(alias).type !== "module") throw new Error(`资源 ${alias} 不是 module`)
-    const { realTarget } = await assertFile(get(alias))
-    return await import(`${pathToFileURL(realTarget).href}?custom_resource=${Date.now()}`) as UnknownRecord
+    const { realTarget, stat } = await assertFile(get(alias))
+    // 相同文件版本复用 Node 模块缓存；每次仍校验真实路径，防止符号链接越界。
+    const version = `${stat.mtimeMs}-${stat.size}`
+    return await import(`${pathToFileURL(realTarget).href}?custom_resource=${version}`) as UnknownRecord
   }
 
   async function pickExport(alias: string, exportName = "default"): Promise<unknown> {

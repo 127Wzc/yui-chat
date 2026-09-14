@@ -3333,7 +3333,8 @@ async function checkRenderService() {
     }],
   }, config)
   assert(helpMenu.buffer.subarray(0, 8).toString("hex") === "89504e470d0a1a0a", "renderHelpMenu should return PNG")
-  const builtMenu = buildNextHelpMenu(config)
+  const builtMenu = buildNextHelpMenu(config, {isMaster:true})
+  assert(buildNextHelpMenu(config).groups.length === 1, "ordinary help hides master commands")
   assert(builtMenu.groups.map(group=>group.title).join("|") === "普通用户|主人专用", "help must contain two permission sections")
   assert(builtMenu.groups[0].commands.every(command=>command.permission!=="master"), "ordinary section must not include master commands")
   assert(builtMenu.groups[1].commands.every(command=>command.permission==="master"), "master section must label every command")

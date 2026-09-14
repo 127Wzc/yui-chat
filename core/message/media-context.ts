@@ -338,7 +338,7 @@ export async function resolveMediaContext(event: unknown = {}, prompt: unknown =
     .filter(Boolean))
   const hasQuotedImage = quotedImageUrls.size > 0
   const hasUniqueCurrentImage = attachments.some(item => item.kind === "image" && item.source !== "quote" && !quotedImageUrls.has(text(item.url)))
-  // 引用媒体始终参与解析；只有对话入口显式把引用正文提升为当前 user message。
+  // 引用媒体默认参与解析，对话入口可将引用正文提升为当前消息。
   const quoteAsCurrent = options.quoteAsCurrent === true
   const quoteTargeted = hasQuotedImage
     && visionMode !== "none"

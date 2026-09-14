@@ -59,7 +59,7 @@ async function actionImages(action: ActionDefinition, e: ActionRecord, config: R
   // 固定媒体选择语义，不让附加提示词中的“头像”等字样扩大输入来源。
   const media = await resolveMediaContext(e, "参考图片", config, { quoteAsCurrent: true })
   const quoted = media.attachments.filter(item => item.kind === "image" && item.source === "quote")
-  const quoteUrls = new Set(quoted.map(item => String(item.url || "")))
+  const quoteUrls = new Set((media.quote?.attachments || []).filter(item => item.kind === "image").map(item => String(item.url || "")))
   const current = media.attachments.filter(item => item.kind === "image" && item.source !== "quote" && !String(item.source).includes("avatar") && !quoteUrls.has(String(item.url || "")) && !(item.source === "yunzai-img" && media.quote?.status === "unavailable"))
   const chosen = action.input.images === "quote" ? quoted : action.input.images === "current" ? current : current.length ? current : quoted
   const images = [...new Set(chosen.map(item => String(item.url || "")).filter(Boolean))].slice(0, 3)

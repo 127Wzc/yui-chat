@@ -172,8 +172,13 @@ try {
     assert.throws(() => parseAction({ ...base, textTemplate: "{{process.env}}" }), /变量/)
     assert.throws(() => parseAction({ ...base, input: [] }), /输入/)
     assert.throws(() => parseAction({ ...base, overridable: ["text"] }), /覆盖/)
-    assert.throws(() => parseActions({ categories: [{id:"lookup",name:"查询"}], items: { echo: base, dupe: { ...base, id: "dupe" } } }), /相同阶段/)
-    assert.doesNotThrow(() => parseActions({ categories: [{id:"lookup",name:"查询"}], items: { echo: base, dupe: { ...base, id: "dupe", priority: 100 } } }))
+    assert.throws(() => parseActions({ categories: [{id:"lookup",name:"查询"}], items: { echo: base, dupe: { ...base, id: "dupe" } } }), /已被其他/)
+    assert.throws(() => parseActions({ categories: [{id:"lookup",name:"查询"}], items: { echo: base, dupe: { ...base, id: "dupe", priority: 100, stage: "accept" } } }), /已被其他/)
+    const aliasConflict = { ...base, id: "dupe", command: "另一入口", aliases: [base.command], priority: 100 }
+    assert.throws(() => parseActions({ categories: [{id:"lookup",name:"查询"}], items: { echo: base, dupe: aliasConflict } }), /已被其他/)
+    assert.doesNotThrow(() => parseActions({ categories: [{id:"lookup",name:"查询"}], items: { echo: base, dupe: {...aliasConflict, enabled:false} } }))
+    const rejectedDuplicate = await api("/api/actions", "POST", {action:aliasConflict})
+    assert.equal(rejectedDuplicate.status, 400, "save rejects aliases owned by another active action")
     const copy = parseAction({ ...base, id: "copy", command: "回声二" })
     copy.defaults.count = 2
     assert.equal(base.defaults.count, 1)
@@ -225,6 +230,8 @@ try {
     const current = "https://example.com/current.png", quoted = "https://example.com/quote.png"
     await runAction(figurineAction(), "", { ...event, message: [{type:"image",url:current}], source: { message_id: "quoted" }, getMsg: async () => ({message_id:"quoted", message:[{type:"image",url:quoted}]}) })
     assert.deepEqual(lastArgs.referenceImages, [current])
+    await runAction(figurineAction(), "", { ...event, img: [quoted], source: { message_id: "quoted" }, getMsg: async () => ({message_id:"quoted", message:[{type:"image",url:quoted}]}) })
+    assert.deepEqual(lastArgs.referenceImages, [quoted], "quoted image is used by default without host duplicates")
     let replies = []
     const entries = createActionEntries(configStore.get())
     const entry = entries.find(row => row.name.includes("回声"))
@@ -297,6 +304,32 @@ try {
     assert(backgroundReplies.includes("hold"), "background tool output is delivered without an extra model call")
     assert(backgroundReplies.some(value=>value.includes("动作或工具权限已变化")), "queued permission denial is reported")
     assert.equal((await api(`/api/actions/echo/tasks/${queued.taskId}`)).status,400)
+    await configStore.update(config => { config.actions.items.background.enabled = true })
+    let releaseSnapshot
+    const snapshotWait = new Promise(resolve => { releaseSnapshot = resolve })
+    let observedSnapshot
+    toolRegistry.tools.delete("action_background")
+    toolRegistry.register({ ...echo, name: "action_background", execution: { effect: "read", background: true },
+      configSchema: { type: "object", properties: { prefix: { type: "string", default: "old" } } },
+      backgroundQueue: () => ({ queueKey: "snapshot-test", maxConcurrent: 1, maxQueue: 1 }),
+      execute: async (args, context) => {
+        if (args.text === "hold") await snapshotWait
+        else observedSnapshot = { privateHosts: context.config.security.linkSafety.allowPrivateHosts, prefix: context.toolConfig.prefix }
+        return args.text
+      },
+    })
+    await runAction(background, "hold", backgroundEvent)
+    const snapshotQueued = await runAction(background, "snapshot", backgroundEvent)
+    await configStore.update(config => {
+      config.security.linkSafety.allowPrivateHosts = false
+      config.tools.runtimeVariables.action_background = { prefix: "new" }
+    })
+    releaseSnapshot()
+    for (let i = 0; i < 100 && ["queued", "running"].includes(backgroundTaskService.get(snapshotQueued.taskId)?.status); i++) await new Promise(resolve => setTimeout(resolve, 10))
+    assert.equal(backgroundTaskService.get(snapshotQueued.taskId).status, "ok")
+    assert.deepEqual(observedSnapshot, { privateHosts: false, prefix: "new" }, "queued action executes with the config it reauthorized")
+    await configStore.update(config => { config.mediaRecognition.includeQuotedMedia = false })
+    assert.equal(configStore.get().mediaRecognition.includeQuotedMedia, undefined, "normalization removes the retired quote toggle")
     const reply = (value, options = {}) => formatActionReply({...normalizeToolResult(value),value}, {mode:"auto",path:"",template:"",...options})
     assert.equal(reply("普通文本").message,"普通文本")
     assert.equal(reply("https://example.com/page").message,"https://example.com/page")
@@ -328,6 +361,13 @@ try {
     assert.equal(globalThis.__actionSourceLoads,undefined,"preview does not import code")
     const sourceOutput = await runAction(savedSource,"源码内容",event)
     assert.equal(sourceOutput.message,"你好 小明：源码内容")
+    const loads = globalThis.__actionSourceLoads
+    await new Promise(resolve => setTimeout(resolve, 5))
+    await runAction(savedSource,"再次调用",event)
+    assert.equal(globalThis.__actionSourceLoads, loads, "unchanged source reuses its module instance")
+    await fs.appendFile(path.join(sourceFixture,"source.mjs"), "\n// changed version")
+    await runAction(savedSource,"修改后调用",event)
+    assert.equal(globalThis.__actionSourceLoads, loads + 1, "changed source reloads once")
     const badReply = await runAction({...savedSource,reply:{mode:"text",path:"data.missing",template:""}},"",event)
     assert.equal(badReply.status,"success")
     assert(badReply.message.includes("动作已执行，但回复设置需要调整"))
