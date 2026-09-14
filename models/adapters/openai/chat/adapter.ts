@@ -299,7 +299,8 @@ export class OpenAICompatibleAdapter extends ModelAdapter {
   }
 }
 
-function imageBytes(value: string): { bytes: Uint8Array; mimeType: string } | null {
+// 保留 from() 创建的 ArrayBuffer 类型，避免宽化为 Blob 不接受的 ArrayBufferLike。
+function imageBytes(value: string): { bytes: ReturnType<typeof Uint8Array.from>; mimeType: string } | null {
   const parsed = parseDataUrl(value)
   if (!parsed) return null
   try {
