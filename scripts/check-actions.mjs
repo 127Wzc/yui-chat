@@ -22,7 +22,7 @@ let server, sqliteClient, modelLogStore, sourceFixture
 try {
   const { configStore } = await import("../output/runtime/config/store.js")
   const { parseAction, parseActions, figurineAction, matchAction, actionRule } = await import("../output/runtime/core/actions/contract.js")
-  const { bindActionArguments, runAction, actionAccess } = await import("../output/runtime/core/actions/execution.js")
+  const { bindActionArguments, runAction, actionAccess, defaultActionRole } = await import("../output/runtime/core/actions/execution.js")
   const { formatActionReply, extractActionResult } = await import("../output/runtime/core/actions/reply.js")
   const { normalizeToolResult } = await import("../output/runtime/tools/support/execution-runtime.js")
   const { WebSearchTool, directWebSearchSetupIssues } = await import("../output/runtime/tools/builtins/web-search.js")
@@ -46,6 +46,7 @@ try {
   const echo = { name: "action_echo", source: "builtin", category: "utility", risk: "low", tags: ["test"], policy: {}, parameters: { type: "object", properties: { text: { type: "string" }, count: { type: "integer", minimum: 1, maximum: 3 } }, required: ["text"] }, execution: { effect: "read" }, execute: async args => { calls++; lastArgs = args; return `收到：${args.text}` } }
   toolRegistry.register(echo)
   toolRegistry.register(new WebSearchTool())
+  toolRegistry.register({ ...echo, name: "model_only", policy: { requiresModelContext: true } })
   toolRegistry.register({ ...echo, name: "generate_image", category: "media", parameters: { type: "object", properties: { prompt: { type: "string" }, count: { type: "integer" }, aspectRatio: { type: "string" }, referenceImages: { type: "array", items: { type: "string" } } }, required: ["prompt"] }, execute: async args => { calls++; lastArgs = args; return "模拟图片完成" } })
   toolRegistry.register({ ...echo, name: "action_master", policy: { requiresMaster: true } })
   let releaseBackground
@@ -86,17 +87,31 @@ try {
     assert.equal(listing.body.examples.length, 2)
     assert.deepEqual(listing.body.examples.map(item=>item.kind), ["tool", "source"])
     assert(listing.body.examples.every(item=>item.enabled === false))
-    const exampleDraft = listing.body.examples[1]
+    const exampleDraft = listing.body.examples[0]
     const savedExample = await api("/api/actions", "POST", {action:exampleDraft})
     assert.equal(savedExample.status,200)
     const savedExampleItem = (await api("/api/actions")).body.items.find(item=>item.id===savedExample.body.id)
     assert.equal(savedExampleItem.enabled,false,"saving a prefilled example does not enable it")
     await assert.rejects(runAction(savedExampleItem,"",{user_id:"example",isGroup:false,isMaster:true}),/停用/)
-    await configStore.update(config=>{config.actions.items[savedExample.body.id].enabled=true})
-    const enabledExample = parseActions(configStore.get().actions).items[savedExample.body.id]
-    const greeting = await runAction(enabledExample,"",{user_id:"example",isGroup:false,isMaster:true,sender:{nickname:"小明"}})
-    assert.equal(greeting.message,"你好，小明！","bundled source example runs through the registry and extracts its JSON reply")
     await configStore.update(config=>{delete config.actions.items[savedExample.body.id]})
+    const helpDraft = listing.body.examples[1]
+    assert.equal(helpDraft.source.exportName,"sendPluginHelp")
+    const savedHelp = await api("/api/actions","POST",{action:helpDraft})
+    assert.equal(savedHelp.status,200)
+    assert.equal(configStore.get().actions.items[savedHelp.body.id].enabled,false)
+    const responseBefore = structuredClone(configStore.get().response)
+    await configStore.update(config=>{config.actions.items[savedHelp.body.id].enabled=true;config.response.render.system.engine="svg"})
+    const helpReplies=[]
+    const helpResult=await runAction(configStore.get().actions.items[savedHelp.body.id],"",{user_id:"help-user",isGroup:false,reply:async value=>helpReplies.push(value)})
+    assert.equal(helpReplies.length,1,"source help sends exactly one reply")
+    assert.equal(helpReplies[0].type,"image","source help renders a real image")
+    assert.equal(helpResult.message,"","source reply must not be sent twice")
+    const { buildHelpMenuHtml } = await import("../output/runtime/core/rendering/render-html-service.js")
+    const html=buildHelpMenuHtml({title:"<script>bad</script>",groups:[{title:"聊天",commands:[{command:"#yuichat",description:"hello"}]},{title:"管理",commands:[{command:"#yui面板",permission:"master"}]}]})
+    assert(!html.includes("<script>"),"help text is escaped")
+    assert.equal((html.match(/<section>/g)||[]).length,2)
+    assert(html.includes("主人"))
+    await configStore.update(config=>{delete config.actions.items[savedHelp.body.id];config.response=responseBefore})
     assert.equal(base.minRole, "user")
     const parameterSchema = { type:"object", properties:{ query:{type:"string"}, tags:{type:"array",items:{type:"string"}}, options:{type:"object"}, count:{type:"integer",enum:[1,2],default:1,minimum:1,maximum:2}, active:{type:"boolean"} }, required:["query","tags"] }
     const editorAction = {...base,textParam:"query",textTemplate:"{{text}}"}
@@ -170,6 +185,28 @@ try {
     }
     assert.equal(actionAccess({ ...base, minRole: "groupAdmin" }, { ...event, isGroup: false, group_id: undefined, sender: { role: "owner" } }, configStore.get()).allowed, false)
     assert.equal(actionAccess({ ...base, tool: "action_master" }, event, configStore.get()).allowed, false)
+    const { explainToolPolicy } = await import("../output/runtime/tools/access/policy.js")
+    assert(!listing.body.tools.some(tool => tool.name === "model_only"))
+    assert.equal((await api("/api/actions", "POST", {action:{...base,command:"模型专用",tool:"model_only"}})).status,400)
+    assert.equal(defaultActionRole(toolRegistry.get("action_master")),"master")
+    const inheritedAction = await api("/api/actions", "POST", {action:{...base,command:"继承权限",tool:"action_master",minRole:undefined}})
+    assert.equal(inheritedAction.status,200)
+    assert.equal(configStore.get().actions.items[inheritedAction.body.id].minRole,"master")
+    await configStore.update(config=>{delete config.actions.items[inheritedAction.body.id]})
+    const toolsBefore = structuredClone(configStore.get().tools)
+    await configStore.update(config=>{config.tools.enabled=false;config.tools.enabledTools=[]})
+    assert.equal(explainToolPolicy(toolRegistry.get(base.tool),{e:event}).allowed,false)
+    assert.equal(actionAccess(base,event,configStore.get()).allowed,true)
+    assert.match((await runAction(base,"独立启停",event)).message,/独立启停/)
+    assert.equal(explainToolPolicy(toolRegistry.get(base.tool),{e:event,actionId:"missing"}).allowed,false)
+    await configStore.update(config=>{config.tools=toolsBefore;config.actions.items.echo={...base,tool:"action_master"}})
+    const independent = configStore.get().actions.items.echo
+    assert.equal(actionAccess(independent,event,configStore.get()).allowed,true)
+    assert.match((await runAction(independent,"独立权限",event)).message,/独立权限/)
+    assert.equal(event.isMaster,undefined,"action authorization does not forge caller identity")
+    await configStore.update(config=>{config.actions.items.echo={...base,enabled:false}})
+    assert.equal(explainToolPolicy(toolRegistry.get(base.tool),{e:event,actionId:base.id}).allowed,false)
+    await configStore.update(config=>{config.actions.items.echo=base})
     const bound = bindActionArguments(base, "{{userId}}", event)
     assert.equal(bound.text, "你好 小明：{{userId}}", "user text is substituted only once")
     assert.equal(bindActionArguments({...base,textTemplate:"固定提示词"}, "补充", event).text, "固定提示词\n补充")
@@ -313,7 +350,7 @@ try {
     assert.equal((await runAction(mapped,"新消息",event)).message,"你好 小明：新消息")
     let delivered
     toolRegistry.register({...echo,name:"message_send",parameters:{type:"object",properties:{parts:{type:"array",items:{type:"object"}}},required:["parts"]},execute:async args=>{delivered=args;return {kind:"delivery",chain:[],receipt:{status:"sent"},isError:false,issues:[]}}})
-    await configStore.update(config=>{config.tools.enabledTools.push("message_send")})
+    assert.equal(explainToolPolicy(toolRegistry.get("message_send"),{e:event}).allowed,false,"message tool remains disabled outside the action")
     const imageHandler = {...mapped,reply:{mode:"image",path:"text",template:""},textTemplate:""}
     await configStore.update(config=>{config.actions.items.mapped=imageHandler})
     const imageResult = await runAction(imageHandler,"https://example.com/generated.png",event)

@@ -10,6 +10,9 @@ export interface ToolAccessContext {
   config?: unknown
   e?: unknown
   allowDisabledTool?: boolean
+  /** 仅由动作入口传入；每次决策都读取当前已保存动作，不接受参数中的角色覆盖。 */
+  actionId?: string
+  actionDelivery?: boolean
 }
 
 export interface ToolAccessDecision {
@@ -187,12 +190,31 @@ export function explainToolPolicy(tool: unknown, context: ToolAccessContext = {}
   const roles = eventRoles(event)
   const name = toolName(tool)
 
-  if (tools.enabled !== true) return { allowed: false, reason: "工具调用已被全局关闭。", roles, groups: [] }
-  if (!context.allowDisabledTool && !hasEnabledTool(config, tool)) {
+  let actionAuthorized = false
+  if (context.actionId) {
+    const actions = record(record(config).actions)
+    const action = record(record(actions.items)[context.actionId])
+    const actionRole = resolveBoundaryRole(event)
+    const targetMatches = action.tool === name || (context.actionDelivery === true && name === "message_send")
+    if (actions.enabled === false || action.enabled !== true || !targetMatches) {
+      return { allowed: false, reason: "动作已停用、删除或执行目标已变化。", roles, groups: [] }
+    }
+    const scopeMatches = !(action.scope === "group" && !isGroupEvent(event)) && !(action.scope === "private" && isGroupEvent(event))
+    if (!roleAtLeast(actionRole, action.minRole) || !scopeMatches) {
+      return { allowed: false, reason: "当前角色或会话没有此动作的使用权限。", roles, groups: [] }
+    }
+    if (policy.requiresModelContext === true) {
+      return { allowed: false, reason: "此工具需要模型会话，不能作为动作直接执行。", roles, groups: [] }
+    }
+    actionAuthorized = true
+  }
+
+  if (!actionAuthorized && tools.enabled !== true) return { allowed: false, reason: "工具调用已被全局关闭。", roles, groups: [] }
+  if (!actionAuthorized && !context.allowDisabledTool && !hasEnabledTool(config, tool)) {
     return { allowed: false, reason: `工具 ${name} 未启用。`, roles, groups: [] }
   }
 
-  const groupDecision = boundaryDecision(config, tool, context)
+  const groupDecision = actionAuthorized ? null : boundaryDecision(config, tool, context)
   if (groupDecision && !groupDecision.allowed) return { ...groupDecision, roles }
   const groups = groupDecision?.groups || []
   const source = text(common.source)
@@ -207,16 +229,16 @@ export function explainToolPolicy(tool: unknown, context: ToolAccessContext = {}
     return { allowed: false, reason: `工具 ${name} 需要外部网络访问，但策略未允许。`, roles, groups }
   }
   const boundary = record(tools.boundaryAccess)
-  if (boundary.enabled !== true && (policy.highRisk === true || common.risk === "high") && policyConfig.highRiskRequiresMaster === true && record(event).isMaster !== true) {
+  if (!actionAuthorized && boundary.enabled !== true && (policy.highRisk === true || common.risk === "high") && policyConfig.highRiskRequiresMaster === true && record(event).isMaster !== true) {
     return { allowed: false, reason: `高风险工具 ${name} 需要主人权限。`, roles, groups }
   }
-  if (policy.requiresMaster === true && record(event).isMaster !== true) {
+  if (!actionAuthorized && policy.requiresMaster === true && record(event).isMaster !== true) {
     return { allowed: false, reason: `工具 ${name} 需要主人权限。`, roles, groups }
   }
   if (policy.requiresGroup === true && !isGroupEvent(event)) {
     return { allowed: false, reason: `工具 ${name} 只能在群聊中使用。`, roles, groups }
   }
-  if (policy.requiresGroupAdmin === true && !isAdminEvent(event)) {
+  if (!actionAuthorized && policy.requiresGroupAdmin === true && !isAdminEvent(event)) {
     return { allowed: false, reason: `工具 ${name} 需要主人或群管理员权限。`, roles, groups }
   }
   return { allowed: true, reason: "allowed", roles, groups }

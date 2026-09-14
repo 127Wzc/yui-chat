@@ -12,6 +12,7 @@ interface DiscoveryContext extends ToolExecutionContext {
 /** 工具渐进式披露入口：只返回候选摘要，并把模型选择的工具装载到下一轮。 */
 export class ToolSearchTool {
   name = "tool_search"
+  policy = { requiresModelContext: true }
   source = "builtin"
   execution = { effect: "read", repeatPolicy: "bounded", polling: false, maxAttempts: 1 }
   description = "Search available tools by capability and load matching tools for the next round. Use this when the required tool is not currently visible."

@@ -129,12 +129,18 @@ Chromium 请求拦截不能把 DNS 解析结果固定到实际连接。当前通
 
 ## 动作中心
 
-`actions` 运行配置存储分类和按 ID 组织的预设，源码默认列表为空，手办化与源码问候通过 `actionExamples()` 作为默认停用的管理台草稿模板提供，不自动写入用户配置。源码问候引用 `core/actions/example.ts` 的运行产物，示范函数入参与 JSON 字段提取。`core/actions/contract.ts` 负责配置、模板变量、统一前缀规则与冲突校验，`core/actions/execution.ts` 负责权限、输入绑定、当前/引用图片选择及工具输出。工具动作引用现有工具名称；源码动作在 `source.frameworkResources.target` 显式声明单个资源，经 `source-tool.ts` 按导出函数、插件方法或文本/JSON 资源执行。源码包装进入独立 ToolRegistry，以已保存动作的启用状态判定可用，继续走 Custom 策略与四级权限，不进入 AI 工具目录。保存和预览不导入模块。复制时独立复制参数和绑定，共享源文件，不复制实现或凭据。
+`actions` 运行配置存储分类和按 ID 组织的预设，源码默认列表为空，内置生图工具的手办化示例通过 `actionExamples()` 作为默认停用的管理台草稿模板提供，不自动写入用户配置。`core/actions/contract.ts` 负责配置、模板变量、统一前缀规则与冲突校验，`core/actions/execution.ts` 负责权限、输入绑定、当前/引用图片选择及工具输出。工具动作引用现有工具名称；源码动作在 `source.frameworkResources.target` 显式声明单个资源，经 `source-tool.ts` 按导出函数、插件方法或文本/JSON 资源执行。源码包装进入独立 ToolRegistry，以已保存动作的启用状态判定可用，继续走 Custom 策略与四级权限，不进入 AI 工具目录。保存和预览不导入模块。复制时独立复制参数和绑定，共享源文件，不复制实现或凭据。
 
 `apps/actions.ts` 构造按动作划分的轻量宿主条目，`YuiActionBootstrap.init()` 在宿主加载或重新加载时重建这些条目。配置热应用复用同一入口。`hostRuntime.applyActionEntries()` 经 `core/runtime/host-command-registry.ts` 替换带所有权标记的条目，按宿主的升序优先级排序并保留其他条目。同阶段的普通规则与 `accept` 分别遵循宿主语义，前置触发先于普通规则。动态注册失败保留旧条目并在动作列表和 diagnostics 中显示未应用状态。
 
-入口经 `response-pipeline.preflight()` 使用现有访问控制、限流和锁，保留闭嘴与黑名单的静默行为，并检查最新动作与工具权限。`tools/support/direct-execution.ts` 为无模型入口复用工具执行 guard、超时、Registry 和后台队列，不伪造模型调用日志。后台任务执行前通过 `execution.beforeInvoke` 重新校验动作启停及权限；完成后回传工具结果，媒体投递计划通过 `message_send` 执行，生图工具完成后的投递仍由原工具负责。
+入口经 `response-pipeline.preflight()` 使用现有访问控制、限流和锁，保留闭嘴与黑名单的静默行为，并检查最新动作授权与工具执行条件。`tools/support/direct-execution.ts` 为无模型入口复用工具执行 guard、超时、Registry 和后台队列，不伪造模型调用日志。后台任务执行前通过 `execution.beforeInvoke` 重新校验动作启停及权限；完成后回传工具结果，媒体投递计划通过 `message_send` 执行，生图工具完成后的投递仍由原工具负责。
 
 `web/http/routes/actions.ts` 提供鉴权后的列表、预览、版本冲突检查、CRUD、分类、导入导出及实际测试。预览不加载 Custom 包、不读取图片或运行工具，角色模拟仅限预览。实际测试使用服务端管理身份，后台结果按动作来源标记查询。管理台 `features/actions/actions-tab.ts` 使用独立 `actions` 切片及现有 dirty state、确认弹窗、主题和抽屉；编辑器复用 Custom 扩展的导航样式，分为指令、执行方式、参数、回复和测试五步，切换步骤保留草稿。
 
-Custom 开发者试跑通过独立 `ToolRegistry` 执行，不把停用工具注入正式目录；保留主人专用试跑未启用包的边界及 `dryRun` 提示语义，仍检查其余工具策略。Custom 编辑器的资源选择器复用受控框架文件浏览 API，只添加资源声明，不导入或执行选中的模块。`core/actions/reply.ts` 为样例预览、同步结果及后台完成共用纯转换：支持自有属性路径提取、文本模板、JSON、图片和标准消息体，媒体仍经 message_send 权限与投递边界；已投递结果不重复发送。当前版本不引入 Skill 执行类型或自然语言路由。
+Custom 开发者试跑通过独立 `ToolRegistry` 执行，不把停用工具注入正式目录；保留主人专用试跑未启用包的边界及 `dryRun` 提示语义，仍检查其余工具策略。Custom 编辑器的资源选择器复用受控框架文件浏览 API，只添加资源声明，不导入或执行选中的模块。`core/actions/reply.ts` 为样例预览、同步结果及后台完成共用纯转换：支持自有属性路径提取、文本模板、JSON、图片和标准消息体，媒体仍经 message_send 权限与投递边界；已投递结果不重复发送。
+
+动作独立控制启停与最低角色，不受工具页启停和角色分配影响。新建时复制工具当前最低角色，之后可单独修改。执行、后台启动和消息回传重新读取保存的动作授权；实际用户身份、工具内部检查及网络策略不变。标记 `requiresModelContext` 的工具不提供动作入口；扩展必须已加载，MCP 必须已连接。
+
+`#yui帮助` 与无参数 `#yuihelp` 共用 `apps/help-menu.ts:sendPluginHelp`，源码动作示例也绑定此函数。帮助按区域使用统一 HTML 渲染主题及缓存生命周期，HTML 不可用时回退 SVG，图片渲染关闭时回复文字；模板文本必须转义。
+
+记忆命令由 `apps/commands/memory.ts` 解析，通过现有 memoryStore 管理 user 范围的长期记忆。`#yui记忆` 固定发送者身份；`#yui管理记忆 用户ID` 在主人入口注册并再次检查 isMaster。增删改按 ownerId 与记忆 ID 双重定位，不使用群聊召回范围，不调用模型。

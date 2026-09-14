@@ -591,30 +591,8 @@ function normalizeHelpGroups(input: RenderInput = {}): TextSection[] {
   }
   if (Array.isArray(input.sections)) return input.sections as TextSection[]
   return [
-    {
-      title: "聊天入口",
-      lines: [
-        "#yuichat + 内容 - 与 Yui Chat 对话",
-        "#yuihelp + 需求 - 检索 Yunzai 指令知识库",
-        "#yui结束对话 - 结束当前会话",
-      ],
-    },
-    {
-      title: "管理入口",
-      lines: [
-        "#yui面板 - 获取一次性 Web 管理端快捷登录链接",
-        "#yui诊断 - 查看模型、工具、知识库和运行状态",
-        "#yui对话列表 - 查看当前活跃会话",
-      ],
-    },
-    {
-      title: "统一渲染",
-      lines: [
-        "render_image({ template, data }) - 模型工具统一入口",
-        "#yui图片模式 - 聊天输出自动转为图片卡片",
-        "#yui渲染帮助菜单 - 发送默认帮助菜单图",
-      ],
-    },
+    {title: "聊天入口", lines: ["#yuichat + 内容 - 与 Yui Chat 对话", "#yuihelp + 需求 - 检索指令知识库", "#yui结束对话 - 结束当前会话"]},
+    {title: "管理入口", lines: ["#yui面板 - 获取管理端快捷链接", "#yui诊断 - 查看运行状态", "#yui对话列表 - 查看活跃会话"]},
   ]
 }
 
@@ -622,6 +600,17 @@ export async function renderHelpMenu(input: RenderInput = {}, config: unknown = 
   const title = compactText(input.title || "Yui Chat 帮助菜单", 80)
   const subtitle = compactText(input.subtitle || "常用命令、管理入口和统一模板渲染", 140)
   const sections = normalizeHelpGroups(input)
+  if (renderConfig(config).enabled === false) throw new Error("图片渲染服务未启用。")
+  if (resolveRenderEngine("help-menu", "", config) === "html") {
+    try {
+      const { renderHelpMenuHtml } = await import("./render-html-service.js")
+      const groups = sections.map(section => ({title:section.title,commands:(Array.isArray(section.lines)?section.lines:[]).map(line=>({command:line}))}))
+      return await renderHelpMenuHtml({...input,title,subtitle,groups:Array.isArray(input.groups)?input.groups:groups}, config)
+    } catch (error) {
+      hostRuntime.logger?.warn?.("[yui-chat] 帮助菜单 HTML 渲染失败，回退 SVG", error)
+      config = withRenderEngine(config, "svg", {fallbackFrom:"html"})
+    }
+  }
   return renderTextCard({
     title,
     subtitle,

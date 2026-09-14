@@ -2,7 +2,8 @@ import { configStore } from "../../config/store.js"
 import type { RuntimeConfigObject } from "../../config/types.js"
 import { actionRecord, parseActions, type ActionDefinition, type ActionRecord } from "./contract.js"
 import { cloneJsonValue } from "../shared/json-values.js"
-import { resolveBoundaryRole, roleAtLeast } from "../../tools/access/roles.js"
+import { boundaryRoles, resolveBoundaryRole, roleAtLeast } from "../../tools/access/roles.js"
+import { previewToolEvent } from "../../tools/access/matrix.js"
 import { explainToolPolicy } from "../../tools/access/policy.js"
 import { ToolRegistry, toolRegistry } from "../../tools/support/registry.js"
 import { validateToolArguments } from "../../tools/support/contract.js"
@@ -18,13 +19,18 @@ import { checkAccess } from "../chat/access-control.js"
 
 export function resolveActionTool(action: ActionDefinition) { return action.kind === "source" ? actionSourceTool(action) : toolRegistry.get(action.tool) }
 
+export function defaultActionRole(tool: unknown, config = configStore.get()) {
+  const enabledConfig = { ...config, tools: { ...actionRecord(config.tools), enabled: true } }
+  return boundaryRoles.find(role => explainToolPolicy(tool, { e: previewToolEvent(role), config: enabledConfig, allowDisabledTool: true }).allowed) || "master"
+}
+
 export function actionAccess(action: ActionDefinition, e: ActionRecord, config: RuntimeConfigObject): { allowed: boolean; reason: string } {
   if (!action.enabled || actionRecord(config.actions).enabled === false) return { allowed: false, reason: "动作已停用" }
   if ((action.scope === "group" && !isGroupEvent(e)) || (action.scope === "private" && isGroupEvent(e))) return { allowed: false, reason: "动作不适用于当前会话" }
   if (!roleAtLeast(resolveBoundaryRole(e), action.minRole)) return { allowed: false, reason: "当前角色没有此动作的使用权限" }
   const tool = resolveActionTool(action)
   if (!tool) return { allowed: false, reason: "关联工具不存在，请检查扩展是否已加载" }
-  return explainToolPolicy(tool, { e, config })
+  return explainToolPolicy(tool, { e, config, actionId: action.id })
 }
 
 export function bindActionArguments(action: ActionDefinition, text: string, e: ActionRecord, images?: string[]): ActionRecord {
@@ -74,7 +80,7 @@ async function actionOutput(action: ActionDefinition, result: Pick<ToolExecution
   catch (error) { return { message: `动作已执行，但回复设置需要调整：${error instanceof Error ? error.message : String(error)}`, parts: [], note: "结果转换失败", delivery: null } }
   let delivery: unknown = null
   if (!web && preview.parts.length && !preview.parts.every(part => actionRecord(part).type === "text")) {
-    delivery = await executeDirectTool("message_send", { parts: preview.parts }, { e, config: configStore.get(), source: "action-delivery" })
+    delivery = await executeDirectTool("message_send", { parts: preview.parts }, { e, config: configStore.get(), source: "action-delivery", actionId: action.id, actionDelivery: true })
   }
   return { ...preview, delivery }
 }
@@ -99,7 +105,7 @@ export async function runAction(action: ActionDefinition, text: string, e: Actio
     const registry = action.kind === "source" ? new ToolRegistry() : toolRegistry
     if (action.kind === "source") registry.register(actionSourceTool(action))
     const result = await executeDirectTool(action.tool, args, {
-      e: executionEvent, config, observability: { toolCallId: `action:${action.id}` }, source: options.web ? "action-web-test" : "action-command",
+      e: executionEvent, config, actionId: action.id, observability: { toolCallId: `action:${action.id}` }, source: options.web ? "action-web-test" : "action-command",
       execution: {
         onBackgroundComplete: options.web ? undefined : async task => {
           if (typeof e.reply !== "function") return

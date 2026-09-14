@@ -62,6 +62,39 @@ try {
   await sqliteClient.init(defaults)
   await configStore.attachRuntimeConfigRepository(new SqliteRuntimeConfigRepository(sqliteClient))
   await configStore.update(config => { config.memory.groupCapture.enabled = true })
+  const {runMemoryCommand,runMentionMemoryCommand} = await import("../output/runtime/apps/commands/memory.js")
+  const {memoryStore: commandMemoryStore} = await import("../output/runtime/memory/store.js")
+  const commandEvent = {user_id:"command-self",isGroup:true,group_id:"command-group"}
+  const memoryCommand = (msg,event=commandEvent,master=false)=>runMemoryCommand({...event,msg},master)
+  assert.match(await memoryCommand("#yui记忆 添加 喜欢喝茶"),/已添加/)
+  const ownMemory = (await commandMemoryStore.getManagedScope("user","command-self")).items[0]
+  const foreignMemory = await commandMemoryStore.saveManagedMemory({scopeType:"user",ownerId:"command-other",text:"喜欢爬山"})
+  await commandMemoryStore.saveManagedMemory({scopeType:"group",ownerId:"command-group",text:"群活动是周六"})
+  const ownListing = await memoryCommand("#yui记忆")
+  assert(ownListing.includes("喜欢喝茶"))
+  assert(!ownListing.includes("喜欢爬山") && !ownListing.includes("群活动是周六"))
+  assert.match(await memoryCommand(`#yui记忆 修改 ${foreignMemory.id} 篡改`),/未找到/)
+  assert.match(await memoryCommand(`#yui记忆 删除 ${foreignMemory.id}`),/未找到/)
+  assert.match(await memoryCommand("#yui管理记忆 command-other",commandEvent,true),/只有主人/)
+  assert.match(await memoryCommand(`#yui记忆 修改 ${ownMemory.id} 喜欢红茶`),/已修改/)
+  const masterEvent = {...commandEvent,isMaster:true}
+  assert.match(await memoryCommand("#yui管理记忆 command-other",masterEvent,true),/喜欢爬山/)
+  const mentionEvent={...masterEvent,msg:"@小呆 他的记忆",message:[{type:"at",qq:"command-other"},{type:"text",text:" 他的记忆"}]}
+  assert.match(await runMentionMemoryCommand(mentionEvent),/喜欢爬山/)
+  assert.match(await runMentionMemoryCommand({...mentionEvent,isMaster:false}),/只有主人/)
+  assert.equal(await runMentionMemoryCommand({...masterEvent,msg:"@小呆 他的记忆",message:[{type:"text",text:"@小呆 他的记忆"}]}),false)
+  assert.match(await runMentionMemoryCommand({...mentionEvent,message:[...mentionEvent.message,{type:"at",qq:"second"}]}),/只 @ 一位/)
+  assert.equal(await runMentionMemoryCommand({...mentionEvent,message:[{type:"at",qq:"command-other"},{type:"text",text:"请解释他的记忆"}]}),false)
+  assert.match(await runMemoryCommand({...masterEvent,msg:"#yui管理记忆 @小呆",message:[{type:"text",text:"#yui管理记忆 "},{type:"at",qq:"command-other"}]},true),/喜欢爬山/)
+
+  assert.match(await memoryCommand(`#yui管理记忆 command-other 修改 ${foreignMemory.id} 喜欢徒步`,masterEvent,true),/已修改/)
+  assert.match(await memoryCommand(`#yui管理记忆 command-other 删除 ${foreignMemory.id}`,masterEvent,true),/已删除/)
+  assert.match(await memoryCommand(`#yui记忆 删除 ${ownMemory.id}`),/已删除/)
+  assert.match(await memoryCommand("#yui记忆 修改"),/记忆 修改 记忆ID/)
+  assert.match(await memoryCommand("#yui记忆 9999"),/页码超出/)
+  assert.match(await memoryCommand("#yui记忆 添加 "+"字".repeat(501)),/500/)
+  await commandMemoryStore.deleteManagedMemory("group","command-group",(await commandMemoryStore.getManagedScope("group","command-group")).items[0].id)
+
   await sqliteClient.run(
     "INSERT INTO group_memory_extraction_jobs(id, group_id, window_start, window_end, content_hash, extractor_version, status, result_json, created_at, updated_at) VALUES('oversized-result', 'result-group', 1, 2, 'hash', 'test', 'completed', ?, 1, 1)",
     [oversized],

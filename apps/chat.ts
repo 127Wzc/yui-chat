@@ -1,3 +1,4 @@
+import { runMemoryCommand, runMentionMemoryCommand } from "./commands/memory.js"
 import { actionHelp } from "./actions.js"
 import { chatService } from "../core/chat/chat-service.js"
 import { commandObserver } from "../knowledge/command-observer.js"
@@ -14,10 +15,9 @@ import { buildWebAddresses, issueQuickLogin } from "../web/http/auth.js"
 import {
   renderCommandHelp,
   renderConversationList,
-  renderHelpMenu,
   withRenderScope,
 } from "../core/rendering/render-service.js"
-import { buildNextHelpMenu } from "./help-menu.js"
+import { sendPluginHelp } from "./help-menu.js"
 import { deliverRenderedImage } from "../core/rendering/render-delivery.js"
 import { listMutedScopes, muteScope, parseDuration, unmuteScope } from "../core/chat/access-control.js"
 import { sendInitiativeGreeting } from "../core/persona/initiative-greeting.js"
@@ -163,25 +163,19 @@ export class YuiChatCommandHandlers extends hostRuntime.Plugin {
     return runFilterParameterCommand({ e: this.e, reply: (...args: unknown[]) => this.reply(...args) })
   }
 
+  async mentionMemoryCommand() { const message = await runMentionMemoryCommand(this.e); return message ? this.reply(message, true) : false }
+
+  async memoryCommand() { const message = await runMemoryCommand(this.e); return message ? this.reply(message, true) : true }
+
+  async manageMemoryCommand() { const message = await runMemoryCommand(this.e, true); return message ? this.reply(message, true) : true }
+
+  async pluginHelp() { return sendPluginHelp({}, { e: this.e }) }
+
   async help() {
     const query = stripPluginCommand(this.e.msg, "help")
     const config = appConfig(await configStore.load())
     const renderConfigValue = systemRenderConfig(config)
-    if (!query) {
-      const stats = commandObserver.stats()
-      if (renderConfig(renderConfigValue).enabled !== false) {
-        try {
-          const image = await renderHelpMenu(buildNextHelpMenu(renderConfigValue), renderConfigValue)
-          return deliverRenderedImage(image, { e: this.e, config: renderConfigValue }, { label: "帮助菜单图片" })
-        } catch (err) {
-          hostRuntime.logger?.warn?.("[yui-chat] 指令帮助图片渲染失败，回退文本", err)
-        }
-      }
-      return this.reply(
-        `Yui Chat 可用命令：\n${pluginCommand("chat")} + 内容\n${pluginCommand("help")} + 你想做的事\n${pluginCommand("定时任务")}\n${pluginCommand("结束对话")}\n${pluginCommand("面板")}\n\n指令知识库：${stats.commands} 条指令，${stats.events} 条触发记录`,
-        true,
-      )
-    }
+    if (!query) return sendPluginHelp({}, { e: this.e })
     const recommendation = record(commandObserver.recommendCommands(query, { limit: 8 }))
     const matches = records(recommendation.results)
     if (!matches.length) return this.reply("没有找到匹配指令。可以换一种说法，或稍后等知识库完成扫描。", true)
@@ -529,6 +523,8 @@ export class YuiChat extends YuiChatCommandHandlers {
       event: "message",
       priority: 1139,
       rule: [
+        { reg: pluginCommandRule("记忆(?:\\s+[\\s\\S]*)?"), fnc: "memoryCommand" },
+        { reg: pluginCommandRule("帮助"), fnc: "pluginHelp" },
         { reg: pluginCommandRule("(?:快捷指令|指令说明)(?:\\s+[\\s\\S]*)?"), fnc: "actionsHelp" },
         { reg: pluginCommandRule("chat([\\s\\S]*)"), fnc: "chat" },
         { reg: pluginCommandRule("help([\\s\\S]*)"), fnc: "help" },

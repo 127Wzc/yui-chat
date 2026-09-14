@@ -3334,7 +3334,9 @@ async function checkRenderService() {
   }, config)
   assert(helpMenu.buffer.subarray(0, 8).toString("hex") === "89504e470d0a1a0a", "renderHelpMenu should return PNG")
   const builtMenu = buildNextHelpMenu(config)
-  assert(builtMenu.groups.length >= 3 && builtMenu.groups.some(group => group.title === "统一渲染" && group.commands.some(command => command.command.includes("render_image"))), "built-in help menu data should expose the unified render entry")
+  assert(builtMenu.groups.map(group=>group.title).join("|") === "普通用户|主人专用", "help must contain two permission sections")
+  assert(builtMenu.groups[0].commands.every(command=>command.permission!=="master"), "ordinary section must not include master commands")
+  assert(builtMenu.groups[1].commands.every(command=>command.permission==="master"), "master section must label every command")
   const sent = []
   const mockEvent = {
     isGroup: true,
@@ -3554,7 +3556,9 @@ async function checkCommandRules() {
   const explicitMatch = text => rules.some(rule => rule.fnc !== "firstPersonCall" && new RegExp(rule.reg).test(text))
   const methodNames = new Set(rules.map(rule => rule.fnc))
   const webLoginRule = rules.find(rule => rule.fnc === "webLogin")
-  const explicitRules = rules.filter(rule => rule.fnc !== "firstPersonCall")
+  const explicitRules = rules.filter(rule => !["firstPersonCall", "mentionMemoryCommand"].includes(rule.fnc))
+  const mentionRule = masterRules.find(rule=>rule.fnc === "mentionMemoryCommand")
+  assert(mentionRule?.permission === "master" && new RegExp(mentionRule.reg).test("@小呆 他的记忆"), "explicitly requested mention shortcut must stay master-only")
   assert(PLUGIN_COMMAND_PREFIX === "#yui" && pluginCommand("chat") === "#yuichat", "plugin commands should derive display text from the single prefix regexp")
   assert(explicitRules.every(rule => String(rule.reg).startsWith(PLUGIN_COMMAND_PREFIX_PATTERN.source)), "every explicit command rule should derive from the single plugin prefix regexp")
   assert(masterRules.length > 0 && masterRules.every(rule => rule.permission === "master"), "the dedicated master command entry should enforce master permission on every rule")

@@ -648,3 +648,27 @@ export const renderHtmlService = {
   renderUrlToPng,
   fetchHtmlForRender,
 }
+
+/** 内置帮助模板只插入转义文本，复用工具的 HTML 后端、主题和缓存。 */
+export function buildHelpMenuHtml(input: UnknownRecord): string {
+  const groups = Array.isArray(input.groups) ? input.groups : []
+  const blocks = groups.map(value => {
+    const group = record(value)
+    const commands = Array.isArray(group.commands) ? group.commands : Array.isArray(group.lines) ? group.lines : []
+    return `<section><h2>${escapeHtml(text(group.title || group.name || "帮助分组"))}</h2><div class="commands">${commands.map(value => {
+      const item = typeof value === "string" ? {command:value} : record(value)
+      return `<article><b>${escapeHtml(text(item.command || item.cmd || item.example))}</b><p>${escapeHtml(text(item.description || item.desc || item.label))}${item.permission === "master" && group.permission !== "master" ? ' · 主人' : ''}</p></article>`
+    }).join("")}</div></section>`
+  }).join("")
+  return `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><style>${htmlRenderBaseCss}
+  body{margin:0;padding:24px;background:${renderTheme.page};color:${renderTheme.ink};font-family:Arial,"Microsoft YaHei",sans-serif;width:1048px;box-sizing:border-box}
+  header{padding:0 4px 16px}h1{font-size:30px;margin:0 0 6px}header p,footer{color:${renderTheme.muted};font-size:14px;margin:0}
+  main{display:grid;gap:14px}section{background:${renderTheme.card};border:1px solid ${renderTheme.cardLine};border-radius:16px;padding:16px 20px;break-inside:avoid}
+  h2{font-size:20px;margin:0 0 8px;color:${renderTheme.accentStrong}}.commands{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);column-gap:26px}
+  article{padding:9px 0;border-top:1px solid ${renderTheme.cardLine};min-width:0}b{display:block;font-size:17px;line-height:1.4;overflow-wrap:anywhere}article p{font-size:14px;line-height:1.4;margin:3px 0 0;color:${renderTheme.muted}}footer{padding:14px 4px 0;text-align:right}
+  </style><header><h1>${escapeHtml(text(input.title))}</h1><p>${escapeHtml(text(input.subtitle))}</p></header><main>${blocks}</main><footer>${escapeHtml(renderFooter("html"))}</footer></html>`
+}
+
+export async function renderHelpMenuHtml(input: UnknownRecord, config: unknown = {}): Promise<UnknownRecord> {
+  return renderHtmlDocumentToPng(buildHelpMenuHtml(input), {name:"help-menu",viewport:{width:1048,height:800},fullPage:true}, config, false)
+}

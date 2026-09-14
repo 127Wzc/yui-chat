@@ -74,7 +74,7 @@ function param(value: unknown, label: string, fallback = ""): string {
   return result
 }
 // 固定入口保留其原有权限和行为；这里只保留后缀，前缀始终由中央模块派生。
-const reserved = /^(?:chat|help|面板|登录|登陆|诊断|测试|工具|过滤器|渲染|截图|结束|新开|摧毁|毁灭|完结|文本模式|图片模式|语音模式|清理|第一人称|设置|打招呼|定时任务|我的定时任务|全部|所有|对话列表|闭嘴|张嘴|关机|开机|休眠|下班|上班|本群|全局|群\d+|查看|快捷指令|指令说明|动作中心)/i
+const reserved = /^(?:chat|help|帮助|记忆|管理记忆|面板|登录|登陆|诊断|测试|工具|过滤器|渲染|截图|结束|新开|摧毁|毁灭|完结|文本模式|图片模式|语音模式|清理|第一人称|设置|打招呼|定时任务|我的定时任务|全部|所有|对话列表|闭嘴|张嘴|关机|开机|休眠|下班|上班|本群|全局|群\d+|查看|快捷指令|指令说明|动作中心)/i
 function command(value: unknown): string {
   const result = boundedText(value, "指令", 40)
   if (!result || /[\s#/$@]/.test(result)) fail("指令请填写不带前缀和空格的名称")
@@ -190,10 +190,8 @@ export function figurineAction(id = "figurine"): ActionDefinition {
 export function actionExamples(): ActionDefinition[] {
   return [
     { ...figurineAction(), enabled: false },
-    parseAction({ id: "source-greeting", name: "源码问候", description: "调用项目函数，传入默认参数，从 JSON 中提取文字回复。", command: "源码问候", enabled: false,
-      kind: "source", categoryId: "lookup", source: { frameworkResources: { target: "plugin:yui-chat/output/runtime/core/actions/example.js" }, exportName: "greet", callStyle: "function", risk: "low" },
-      defaults: { prefix: "你好" }, textParam: "text", textTemplate: "{{userName}}",
-      reply: { mode: "text", path: "data.text" },
-    }),
+    parseAction({id:"plugin-help",name:"项目帮助",description:"调用项目帮助源码，按区域渲染指令图片并回复。",command:"功能菜单",enabled:false,kind:"source",
+      source:{frameworkResources:{target:"plugin:yui-chat/output/runtime/apps/help-menu.js"},exportName:"sendPluginHelp",callStyle:"function",risk:"low"},
+      defaults:{title:"Yui Chat 指令帮助"},textParam:"",reply:{mode:"auto"}}),
   ]
 }

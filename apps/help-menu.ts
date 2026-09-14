@@ -1,5 +1,8 @@
-import { commandObserver } from "../knowledge/command-observer.js"
-import { renderKindCatalog } from "../core/rendering/render-service.js"
+import { configStore } from "../config/store.js"
+import { deliverRenderedImage } from "../core/rendering/render-delivery.js"
+import { hostRuntime } from "../core/runtime/host-runtime.js"
+import { checkAccess } from "../core/chat/access-control.js"
+import { renderHelpMenu, withRenderScope } from "../core/rendering/render-service.js"
 import type { UnknownRecord } from "../core/message/types.js"
 import { pluginCommand } from "../core/message/command-prefixes.js"
 
@@ -7,56 +10,60 @@ function record(value: unknown): UnknownRecord {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value) ? value as UnknownRecord : {}
 }
 
-function enabledLabel(value: unknown): string {
-  return value === false ? "关闭" : "开启"
-}
-
-export function buildNextHelpMenu(config: unknown = {}): UnknownRecord {
-  const stats = commandObserver.stats()
-  const rendererCount = renderKindCatalog.length
-  const tools = record(record(config).tools)
+export function buildNextHelpMenu(_config: unknown = {}): UnknownRecord {
+  const command = (suffix: string, description: string, permission = "all") => ({command:pluginCommand(suffix),description,permission})
   return {
-    title: "Yui Chat 帮助菜单",
-    subtitle: `指令知识库 ${stats.commands || 0} 条 / 渲染模板 ${rendererCount} 类 / 工具调用 ${enabledLabel(tools.enabled)}`,
+    title: "Yui Chat 指令帮助",
+    subtitle: "日常使用与主人管理 · 按权限查找",
     groups: [
-      {
-        title: "聊天入口",
-        commands: [
-          { command: `${pluginCommand("chat")} 你好`, description: "使用默认模型任务对话" },
-          { command: `${pluginCommand("help")} 怎么查体力`, description: "检索 Yunzai 指令知识库并推荐命令" },
-          { command: pluginCommand("结束对话"), description: "结束当前用户对话上下文" },
-          { command: pluginCommand("定时任务"), description: "查看自己的待执行提醒" },
-          { command: `${pluginCommand("文本模式")} / ${pluginCommand("图片模式")} / ${pluginCommand("语音模式")}`, description: "切换当前用户输出模式" },
-        ],
-      },
-      {
-        title: "管理入口",
-        commands: [
-          { command: pluginCommand("面板"), description: "获取一次性 Web 管理端快捷登录链接", permission: "master" },
-          { command: pluginCommand("诊断"), description: "查看模型、工具、缓存和安全开关", permission: "master" },
-          { command: pluginCommand("对话列表"), description: "查看当前活跃会话", permission: "master" },
-          { command: pluginCommand("全部定时任务"), description: "查看所有用户的待执行提醒", permission: "master" },
-          { command: `${pluginCommand("清理缓存")} / ${pluginCommand("清理全部缓存")}`, description: "清理插件内媒体缓存", permission: "master" },
-        ],
-      },
-      {
-        title: "统一渲染",
-        commands: [
-          { command: "render_image({ template, data })", description: "模型工具统一入口，模板按需选择", permission: "tool" },
-          { command: pluginCommand("图片模式"), description: "聊天输出自动使用统一渲染服务", permission: "all" },
-          { command: pluginCommand("渲染帮助菜单"), description: "发送默认帮助菜单图", permission: "master" },
-        ],
-      },
-      {
-        title: "第一人称",
-        commands: [
-          { command: pluginCommand("第一人称"), description: "查看第一人称、别名和触发状态", permission: "master" },
-          { command: pluginCommand("设置AI第一人称埋埋"), description: "设置 AI 自称和别名", permission: "master" },
-          { command: `${pluginCommand("第一人称随机开启")} / ${pluginCommand("第一人称随机关闭")}`, description: "开关群聊普通消息旁路参与", permission: "master" },
-        ],
-      },
+      {title:"普通用户",permission:"all",commands:[
+        command("chat 你好", "与默认模型对话"),
+        command("help 怎么查体力", "按需求推荐机器人指令"),
+        command("帮助", "查看指令菜单"),
+        command("结束对话", "清空当前对话上下文"),
+        command("快捷指令", "查看可用动作"),
+        command("指令说明 动作名", "查看动作输入要求"),
+        command("记忆", "查看、添加、修改或删除自己的记忆"),
+        command("定时任务", "查看自己的提醒"),
+        {command:["文本模式","图片模式","语音模式"].map(value=>pluginCommand(value)).join(" / "),description:"切换回复形式",permission:"all"},
+      ]},
+      {title:"主人专用",permission:"master",commands:[
+        command("管理记忆 @成员", "查看或修改成员记忆；也可 @成员 他的记忆", "master"),
+        command("面板", "打开管理台", "master"),
+        command("诊断", "查看运行与配置状态", "master"),
+        command("工具参数 工具名", "查看工具参数及示例", "master"),
+        command("测试工具 工具名 参数=值", "直接试跑工具", "master"),
+        command("对话列表", "查看活跃会话", "master"),
+        command("全部定时任务", "查看所有人的提醒", "master"),
+        command("清理缓存", "清理过期媒体缓存", "master"),
+        command("清理全部缓存", "清理全部媒体缓存", "master"),
+        command("第一人称", "查看称谓与触发设置", "master"),
+        command("设置AI第一人称埋埋", "修改 AI 称谓", "master"),
+        command("第一人称随机开启", "开启群聊随机参与", "master"),
+        command("第一人称随机关闭", "关闭群聊随机参与", "master"),
+        command("渲染帮助菜单", "生成帮助菜单图片", "master"),
+      ]},
     ],
   }
 }
 
 export default buildNextHelpMenu
+
+/** 普通帮助命令与源码动作共用的真实入口；不调用模型。 */
+export async function sendPluginHelp(args: UnknownRecord = {}, context: UnknownRecord = {}): Promise<unknown> {
+  const e = record(context.e)
+  const config = withRenderScope(configStore.get(), "system")
+  if (!checkAccess(e, config).ok) return {kind:"delivery",receipt:{status:"sent"}}
+  const menu = buildNextHelpMenu(config)
+  if (typeof args.title === "string" && args.title.trim()) menu.title = args.title.trim().slice(0,80)
+  try {
+    const image = await renderHelpMenu(menu, config)
+    return await deliverRenderedImage(image, {e,config}, {label:"项目帮助"})
+  } catch (error) {
+    hostRuntime.logger?.warn?.("[yui-chat] 帮助图片不可用，回复文字菜单", error)
+    const groups = Array.isArray(menu.groups) ? menu.groups : []
+    const message = [menu.title,...groups.map(value=>{const group=record(value);return `${group.title}\n${(Array.isArray(group.commands)?group.commands:[]).map(value=>{const item=record(value);return `${item.command} · ${item.description}${item.permission==='master' && group.permission!=='master'?'（主人）':''}`}).join('\n')}`})].join('\n\n')
+    if (typeof e.reply === "function") await e.reply(message)
+    return message
+  }
+}

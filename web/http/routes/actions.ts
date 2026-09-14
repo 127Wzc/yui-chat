@@ -3,7 +3,7 @@ import crypto from "node:crypto"
 import { configStore, redactConfigSecrets } from "../../../config/store.js"
 import type { JsonValue } from "../../../core/message-chain/types.js"
 import { actionRecord as record, actionCommand, figurineAction, actionExamples, matchAction, parseAction, parseActions, type ActionDefinition } from "../../../core/actions/contract.js"
-import { actionAccess, bindActionArguments, runAction, validateActionArguments, resolveActionTool } from "../../../core/actions/execution.js"
+import { actionAccess, bindActionArguments, runAction, validateActionArguments, resolveActionTool, defaultActionRole } from "../../../core/actions/execution.js"
 import { formatActionReply } from "../../../core/actions/reply.js"
 import { normalizeToolResult } from "../../../tools/support/execution-runtime.js"
 import { resolveToolRuntimeConfig } from "../../../extensions/runtime-config.js"
@@ -36,6 +36,7 @@ function checkDefinition(action: ActionDefinition): void {
   if (!tool) { if (action.enabled) throw new Error("关联工具不存在，请先安装工具或保存为停用动作"); return }
   if (action.kind === "source") return
   const common = getToolCommon(tool)
+  if (record(common.policy).requiresModelContext === true) throw new Error("此工具需要模型会话，不能绑定动作")
   const schema = record(common.parameters)
   const defaultsValidation = validateToolArguments({ ...tool, common: { ...common, parameters: { ...schema, required: [] } } }, action.defaults)
   if (!defaultsValidation.ok) throw new Error(`默认参数无效：${defaultsValidation.issues.join("；")}`)
@@ -58,10 +59,10 @@ export function actionCatalog() {
 
 export function registerActionRoutes(app: RouteApp): void {
   app.get("/api/actions", auth, handleRoute(async (_req, res) => {
-    const tools = (await toolRegistry.list()).map(item => {
+    const tools = (await toolRegistry.list()).filter(item => record(getToolCommon(item).policy).requiresModelContext !== true).map(item => {
       const common = getToolCommon(item)
       return { name: item.name, label: common.displayNameZh || item.name, description: common.descriptionZh || common.description, source: common.source,
-        parameters: common.parameters, setupIssues: setupIssues(String(item.name)), enabled: item.enabled, packageId: record(item).packageId || record(common).packageId || "" }
+        parameters: common.parameters, minRole: defaultActionRole(item), setupIssues: setupIssues(String(item.name)), packageId: record(item).packageId || record(common).packageId || "" }
     })
     res.json({ ok: true, ...actionCatalog(), tools })
   }))
@@ -147,7 +148,9 @@ export function registerActionRoutes(app: RouteApp): void {
     res.json({ ok: true, runtime: result.runtime })
   }, { errorStatus: 400 }))
   app.post("/api/actions", auth, handleRoute(async (req, res) => {
-    const item = parseAction(req.body.action, newId())
+    const raw = record(req.body.action)
+    const tool = toolRegistry.get(String(raw.tool || ""))
+    const item = parseAction({ ...raw, minRole: raw.minRole ?? (tool ? defaultActionRole(tool) : "user") }, newId())
     checkDefinition(item)
     const result = await updateConfigAndApply(config => {
       const actions = parseActions(config.actions)
