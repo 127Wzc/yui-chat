@@ -1,8 +1,9 @@
 import { fetchWithTimeout } from "../../../../core/network/fetch-timeout.js"
-import { notifyModelRequest } from "../../base.js"
+import { notifyModelRequest, tokenUsage } from "../../base.js"
 import type { ModelChannel, ModelRequest, ModelResponse } from "../../../protocol/types.js"
 import { OpenAICompatibleAdapter } from "../chat/adapter.js"
 import { parseResponsesResponse, parseResponsesStreamResponse } from "./response-adapter.js"
+import { messagesForResponses } from "./request-adapter.js"
 import { ResponsesConversationStateMachine } from "./state-machine.js"
 
 type UnknownRecord = Record<string, unknown>
@@ -44,6 +45,27 @@ export class OpenAIResponsesAdapter extends OpenAICompatibleAdapter {
     }
     if (channel.authType === "query" && channel.apiKey) url.searchParams.set(String(channel.authQueryName || "api_key"), channel.apiKey)
     return url
+  }
+
+  /** 压缩旧历史；返回的所有 output items 必须原样回放，不能提取成普通摘要。 */
+  async compact(request: ModelRequest): Promise<ModelResponse> {
+    const { channel, signal } = request
+    const url = this.buildUrl(channel)
+    url.pathname += "/compact"
+    const body = { model: channel.model, input: messagesForResponses(request.messages) }
+    notifyModelRequest(request.onRequest, this.protocol, body, "compact")
+    return fetchWithTimeout(url, {
+      method: "POST", headers: this.buildHeaders(channel), body: JSON.stringify(body),
+      timeoutMs: Math.min(channel.timeoutMs || 30000, 30000), signal,
+      consume: async response => {
+        const data = await readJson(response)
+        if (!response.ok) throw responseError(data, response.status)
+        if (!Array.isArray(data.output) || !data.output.some(item => record(item).type === "compaction" && typeof record(item).encrypted_content === "string" && record(item).encrypted_content)) {
+          throw new Error("COMPACT_INVALID_OUTPUT")
+        }
+        return { id: String(data.id || ""), text: "", toolCalls: [], stopReason: "end_turn", usage: tokenUsage(data), protocol: { kind: "responses", outputItems: data.output } }
+      },
+    })
   }
 
   override async sendMessage(request: ModelRequest): Promise<ModelResponse> {

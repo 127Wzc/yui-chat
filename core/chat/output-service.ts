@@ -1,3 +1,4 @@
+import { recentContextStore } from "./recent-context.js"
 import { applyOutputFilters } from "../../filters/message/message-filter-service.js"
 import { userSettingsStore } from "../../user/settings.js"
 import { stripForSpeech, synthesizeSpeech } from "../media/tts-service.js"
@@ -299,6 +300,7 @@ async function deliverHostedSearchSources(event: unknown, result: UnknownRecord,
 async function finishOutputDelivery(event: unknown, result: UnknownRecord, config: unknown, source: string, botText: unknown, options: UnknownRecord, delivered: unknown): Promise<unknown> {
   await deliverHostedSearchSources(event, result, config)
   rememberDeliveredConversation(event, result, source, botText, options)
+  if (delivered !== false) recentContextStore.recordAssistant(event, botText, delivered)
   return delivered
 }
 

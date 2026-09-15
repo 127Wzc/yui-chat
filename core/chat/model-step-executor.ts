@@ -1,3 +1,5 @@
+import { isGroupEvent } from "../message/event-scope.js"
+import { recentContextStore } from "./recent-context.js"
 import { adapterRegistry } from "../../models/adapters/registry.js"
 import { filterToolsForModel, hostedToolIds, modelToolAllowed, modelToolRoute } from "../../models/configuration/tool-policy.js"
 import { responsesStateKey, responsesStateMode, responsesUsesUpstreamState } from "../../models/configuration/responses-state.js"
@@ -15,7 +17,7 @@ import { hostRuntime } from "../runtime/host-runtime.js"
 import { modelLogStore } from "../observability/model-log.js"
 import { conversationLog } from "./conversation-log.js"
 import { createAgentTurnState } from "./agent-turn-state.js"
-import { enforcePromptBudgetDetailed, estimateTokens, messageTokens, selectPromptTools } from "./token-budget.js"
+import { compactPromptHistory, enforcePromptBudgetDetailed, estimateTokens, messageTokens, selectPromptTools } from "./token-budget.js"
 import { executeToolRound } from "./tool-round-executor.js"
 import { normalizeResponseText } from "./response-pipeline.js"
 import {
@@ -303,10 +305,12 @@ function contextMetadata(messages: readonly UnknownRecord[], phase: string, hint
   const systemIndex = items.find(item => item.source === "system-context")?.index
   const sections: UnknownRecord[] = []
   for (const section of personaSections) {
+    const sectionIndex = section.source === "recent-reference" ? items.find(item => item.source === "current")?.index : systemIndex
+    if (section.source === "recent-reference" && !messages.some(message => contentToText(message.content).includes(section.content))) continue
     sections.push({
       source: section.source,
       label: section.label,
-      messageIndexes: systemIndex === undefined ? [] : [systemIndex],
+      messageIndexes: sectionIndex === undefined ? [] : [sectionIndex],
       count: 1,
       chars: section.content.length,
       tokenEstimate: estimateTokens(section.content),
@@ -456,13 +460,26 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
   const configuredResponsesStateMode = responsesStateMode(modelConfig)
   const responseStateKey = responsesStateKey(channel)
   const previousResponseState = record(record(record(options.protocolState).responses)[responseStateKey])
-  const previousResponseId = responsesUsesUpstreamState(configuredResponsesStateMode) ? text(previousResponseState.previousResponseId).trim() : ""
+  // 群窗口是本轮临时资料：新回合不链接上轮输入；轮内 Function Output 续接保持不变。
+  const previousResponseId = !isGroupEvent(options.e) && responsesUsesUpstreamState(configuredResponsesStateMode) ? text(previousResponseState.previousResponseId).trim() : ""
   const source = text(options.source)
   const purpose = text(options.purpose || (source === "subagent" ? "subagent" : "chat"))
   const agentContext = record(options.agentContext)
   const hasAgentContext = Boolean(options.agentContext)
   const prior = Array.isArray(options.prior) ? options.prior : []
-  const history = Array.isArray(options.history) ? options.history.map(record) : []
+  const history = Array.isArray(options.history) ? options.history.map(record).map(item => {
+    // 旧历史可能带上一版生成的身份头；只移除可验证的同一请求者包装。
+    if (item.role !== "user" || typeof item.content !== "string") return item
+    const match = item.content.match(/^【本轮身份】\n(\{[^\n]*\})\n\n(?=【本轮发言】)/)
+    if (!match) return item
+    try {
+      const identity = record(JSON.parse(match[1]))
+      if (identity.historyOwner === text(record(options.e).user_id) && record(identity.requester).userId === identity.historyOwner) return { ...item, content: item.content.slice(match[0].length) }
+    } catch {
+      // 用户原文或旧记录不是合法的程序身份头时原样保留。
+    }
+    return item
+  }) : []
   const prompt = options.prompt
   const adapter = adapterRegistry.get(text(channel.type))
   const stepInstruction = step.mode === "draft"
@@ -476,10 +493,15 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
   const personaBuild = await buildPersonaMessagesWithContext(options.e, prompt, root, { media: options.media, source, extraSystemPrompt: options.extraSystemPrompt })
   const stepMessage: UnknownRecord = { role: "system", content: stepInstruction }
   const vision = adapter.supportsVision && record(channel.modelConfig).visual !== false && mediaRecognition.preferNativeVision !== false
-  const currentMessage = buildUserMessage(options.e, prompt, root, {
+  const historyMessage = buildUserMessage(options.e, prompt, root, {
     vision,
     media: options.media,
+    history: true,
   })
+  await recentContextStore.buildPromptWithHistory(options.e)
+  const referenceBudget = Math.max(0, Math.min(1200, Math.floor(number(chat.inputTokenBudget, 6000) * 0.2)))
+  const groupReference = recentContextStore.buildReference(options.e, prompt, { history, maxTokens: referenceBudget })
+  const currentMessage = buildUserMessage(options.e, prompt, root, { vision, media: options.media, groupReference })
   const contextHints = new WeakMap<object, ContextHint>()
   const markContext = (items: readonly unknown[], hint: ContextHint): void => {
     for (const item of items) if (item && typeof item === "object" && !Array.isArray(item)) contextHints.set(item as object, hint)
@@ -488,6 +510,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
   markContext([stepMessage], { source: "step-instruction", label: contextSourceLabels["step-instruction"] })
   markContext(priorMessages, { source: "workflow", label: contextSourceLabels.workflow })
   markContext(history, { source: "history", label: contextSourceLabels.history })
+  markContext([historyMessage], { source: "current", label: contextSourceLabels.current })
   markContext([currentMessage], { source: "current", label: contextSourceLabels.current })
   const commonMessages: UnknownRecord[] = [
     ...personaBuild.messages,
@@ -499,7 +522,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
     ...(previousResponseId ? [] : history),
     currentMessage,
   ]
-  let recoveryMessages: UnknownRecord[] = configuredResponsesStateMode === "auto" && previousResponseId
+  let recoveryMessages: UnknownRecord[] = previousResponseId
     ? [...commonMessages, ...history, currentMessage]
     : messages
 
@@ -650,7 +673,28 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
   // 只有整个会话超出窗口才会压缩；压缩一旦发生就必须在链路里留下痕迹，
   // 否则"模型好像忘了前面说过什么"这类问题无从排查。
   // 预算目标优先用当前渠道模型声明的上下文窗口，未声明时回落全局聊天预算。
-  const budgeted = (input: UnknownRecord[], phase: string): UnknownRecord[] => {
+  const usage = emptyUsage()
+  const modelCalls: UnknownRecord[] = []
+  let compactAttempted = false
+  const budgeted = async (input: UnknownRecord[], phase: string): Promise<UnknownRecord[]> => {
+    if (!compactAttempted && adapter.compact && !text(record(channel.responsesRuntime).previousResponseId)) {
+      const compacted = await compactPromptHistory(input, root, { channel, maxTokens, preserveFrom: currentMessage }, async history => {
+        compactAttempted = true
+        const signal = agentContext.signal instanceof AbortSignal ? agentContext.signal : undefined
+        try {
+          const result = await adapterRegistry.sendMessage({ channel: modelChannel(channel), messages: modelMessages(history), operation: "compact", signal, event: options.e, source, purpose, taskName: text(step.task), trace })
+          addUsage(usage, result.usage)
+          modelCalls.push({ operation: "compact", usage: result.usage, channel: channel.id })
+          return { role: "assistant", content: "", protocol: result.protocol }
+        } catch (error) {
+          if (signal?.aborted) throw error
+          // 不记录供应商原始错误，避免错误正文泄露输入或鉴权信息。
+          hostRuntime.logger?.warn?.("[yui-chat] compact 不可用，回退本地上下文裁剪")
+          return null
+        }
+      })
+      if (compacted) return compacted
+    }
     const outcome = enforcePromptBudgetDetailed(input, root, { channel, maxTokens })
     if (outcome.compressed) {
       conversationLog.promptCompressed(root, {
@@ -665,10 +709,14 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
     }
     return outcome.messages
   }
+  if (previousResponseId && enforcePromptBudgetDetailed(recoveryMessages, root, { channel, maxTokens }).compressed) {
+    messages = recoveryMessages
+    channel.responsesRuntime = { ...record(channel.responsesRuntime), previousResponseId: "" }
+  }
   const hasSeparateRecoveryContext = recoveryMessages !== messages
-  messages = budgeted(messages, "initial")
+  messages = await budgeted(messages, "initial")
   recoveryMessages = hasSeparateRecoveryContext
-    ? budgeted(recoveryMessages, "responses-recovery-checkpoint")
+    ? await budgeted(recoveryMessages, "responses-recovery-checkpoint")
     : messages
   if (nativeToolSearchEnabledForRequest) {
     enabledTools = enabledTools.filter(tool => tool.name !== "tool_search" && (!nativeWebSearchEnabled || tool.name !== "web_search"))
@@ -725,7 +773,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
       },
       snapshotMetadata: {
         route,
-        context: contextMetadata(input, phase, contextHints, personaBuild.sections, true),
+        context: contextMetadata(input, phase, contextHints, [...personaBuild.sections, ...(groupReference ? [{ source: "recent-reference", label: "群聊参考资料", content: groupReference }] : [])], true),
         responsesState: { mode: configuredResponsesStateMode, linked: Boolean(text(record(channel.responsesRuntime).previousResponseId)) },
       },
     }
@@ -758,8 +806,6 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
   let toolRounds = 0
   const toolsUsed: string[] = []
   const toolChain: UnknownRecord[] = []
-  const usage = emptyUsage()
-  const modelCalls: UnknownRecord[] = []
   const hostedSearchSources = new Map<string, ModelSearchSource>()
   let toolLimitReached = false
   let toolFinalizationAttempted = false
@@ -1038,14 +1084,14 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
       : agentTurn.state.finalReplyRequired
         ? buildAgentLoopContinuationMessages(workingMessages)
         : workingMessages
-    const boundedMessages = budgeted(nextMessages, phase)
+    const boundedMessages = await budgeted(nextMessages, phase)
     const recoveryNextMessages = searchDeliveryRequired
       ? buildSearchDeliveryMessages(workingRecoveryMessages)
       : agentTurn.state.finalReplyRequired
         ? buildAgentLoopContinuationMessages(workingRecoveryMessages)
         : workingRecoveryMessages
     const boundedRecoveryMessages = configuredResponsesStateMode === "auto"
-      ? budgeted(recoveryNextMessages, `responses-recovery-${phase}`)
+      ? await budgeted(recoveryNextMessages, `responses-recovery-${phase}`)
       : boundedMessages
     await executionRuntime.waitForNextRound(agentContext.signal instanceof AbortSignal ? agentContext.signal : undefined)
     const availableAfterTools = currentTools()
@@ -1150,11 +1196,11 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
     mediaCorrectionAttempted = true
     const correctionTools = mediaCorrectionTools()
     const correctionBaseMessages = workingMessages
-    const correctionMessages = budgeted(directMediaCodes.length
+    const correctionMessages = await budgeted(directMediaCodes.length
       ? buildMediaDeliveryCorrectionMessages(correctionBaseMessages, responseText, directMediaCodes)
       : buildMediaSelectionCorrectionMessages(correctionBaseMessages, responseText), "media-correction")
     const correctionRecoveryMessages = configuredResponsesStateMode === "auto"
-      ? budgeted(directMediaCodes.length
+      ? await budgeted(directMediaCodes.length
         ? buildMediaDeliveryCorrectionMessages(workingRecoveryMessages, responseText, directMediaCodes)
         : buildMediaSelectionCorrectionMessages(workingRecoveryMessages, responseText), "responses-recovery-media-correction")
       : correctionMessages
@@ -1255,7 +1301,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
     if (agentTurn.state.phase !== "finalizing") beginFinalization(text(executionRuntime.state.finalizationReason) || "EMPTY_TOOL_RESPONSE")
     const automaticDeliveryContinuation = agentTurn.state.finalReplyRequired === true
       || text(executionRuntime.state.finalizationReason) === "AUTOMATIC_MEDIA_DELIVERY_COMPLETED"
-    const finalizationMessages = budgeted(
+    const finalizationMessages = await budgeted(
       automaticDeliveryContinuation
         ? buildAutomaticDeliveryContinuationMessages(workingMessages)
         : buildToolLimitFinalizationMessages(
@@ -1265,7 +1311,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
       "finalization",
     )
     const finalizationRecoveryMessages = configuredResponsesStateMode === "auto"
-      ? budgeted(
+      ? await budgeted(
         automaticDeliveryContinuation
           ? buildAutomaticDeliveryContinuationMessages(workingRecoveryMessages)
           : buildToolLimitFinalizationMessages(
@@ -1313,7 +1359,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
   const summary = executionRuntime.summary()
   return {
     id: response.id,
-    historyUserContent: contentToText(currentMessage.content),
+    historyUserContent: contentToText(historyMessage.content),
     imageReferences: vision && Array.isArray(record(options.media).attachments)
       ? (record(options.media).attachments as unknown[]).map(record)
         // 引用图片使用触发瞬间的最新资源，不写入会话缓存；只允许本轮的

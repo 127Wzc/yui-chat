@@ -1657,6 +1657,76 @@ async function checkExtensionCreateFlow() {
   }
 }
 
+async function checkMusicPlay() {
+  const { default: assert } = await import("node:assert/strict")
+  const { defaults } = await import("../output/runtime/config/defaults.js")
+  assert(defaults.tools.enabledTools.includes("music_play") && defaults.tools.enabledTools.includes("message_send"), "music playback and delivery should be enabled by default")
+  const { toolRegistry } = await import("../output/runtime/tools/support/registry.js")
+  const { createBuiltinTools } = await import("../output/runtime/tools/builtins/index.js")
+  const { configStore } = await import("../output/runtime/config/store.js")
+  for (const tool of createBuiltinTools()) if (!toolRegistry.tools.has(tool.name)) toolRegistry.register(tool)
+  const config = await configStore.load()
+  config.tools.enabled = true
+  config.tools.enabledTools = [...new Set([...config.tools.enabledTools, "music_play", "message_send"])]
+  config.tools.policy.allowExternalNetwork = true
+  config.tools.boundaryAccess.enabled = false
+  const originalFetch = global.fetch
+  const sent = []
+  let failAt = 0
+  let payload = { code: 0, search: { code: 0, data: { body: { song: { list: [
+    { mid: "firstMID", title: "<em>第一首</em>", singer: [{name:"歌手"}], album: {mid:"albumMID"} },
+    { mid: "secondMID", title: "第二首" },
+  ] } } } } }
+  const context = { config, e: {user_id:"123",self_id:"456",isGroup:false,reply:async value => {
+    if (failAt === sent.length + 1) throw new Error("模拟投递失败")
+    sent.push(value)
+    return { message_id: String(sent.length) }
+  }} }
+  global.fetch = async (url, options) => {
+    assert.equal(String(url), "https://u.y.qq.com/cgi-bin/musicu.fcg")
+    const request = JSON.parse(options.body)
+    assert.equal(request.search.param.query, "歌曲 歌手")
+    assert.equal(request.search.param.num_per_page, 1)
+    assert.equal(request.comm.ct, 11)
+    assert(options.signal instanceof AbortSignal)
+    return new Response(JSON.stringify(payload), {status:200})
+  }
+  try {
+    let result = await toolRegistry.execute("music_play", {keyword:"歌曲 歌手"}, context)
+    assert.equal(result.status, "success")
+    assert.equal(sent.length, 2, "card and audio must use two separate host sends")
+    assert(JSON.stringify(sent[0]).includes('"type":"music"') && JSON.stringify(sent[0]).includes("第一首"))
+    assert(!JSON.stringify(sent[0]).includes("secondMID") && !JSON.stringify(sent[0]).includes('"type":"record"'))
+    assert(JSON.stringify(sent[1]).includes("record") && JSON.stringify(sent[1]).includes("firstMID") && !JSON.stringify(sent[1]).includes('"type":"music"'))
+    sent.length = 0
+    failAt = 2
+    result = await toolRegistry.execute("music_play", {keyword:"歌曲 歌手"}, context)
+    assert.equal(result.isError, true)
+    assert.equal(result.sentCount, 1)
+    assert.equal(sent.length, 1)
+    assert.equal(result.retryAllowed, false)
+    sent.length = 0
+    failAt = 1
+    result = await toolRegistry.execute("music_play", {keyword:"歌曲 歌手"}, context)
+    assert.equal(result.sentCount, 0)
+    assert.equal(sent.length, 0)
+    failAt = 0
+    payload = {code:0,search:{data:{body:{item_song:[]}}}}
+    result = await toolRegistry.execute("music_play", {keyword:"歌曲 歌手"}, context)
+    assert.equal(result.isError, true)
+    assert.equal(sent.length, 0)
+    payload = {code:0,search:{code:1}}
+    await assert.rejects(toolRegistry.execute("music_play", {keyword:"歌曲 歌手"}, context), /搜索服务返回错误/)
+    const abort = new AbortController()
+    abort.abort()
+    await assert.rejects(toolRegistry.execute("music_play", {keyword:"歌曲 歌手"}, {...context,agent:{signal:abort.signal}}))
+    config.tools.enabledTools = config.tools.enabledTools.filter(name => name !== "music_play")
+    await assert.rejects(toolRegistry.execute("music_play", {keyword:"歌曲 歌手"}, context), /未启用/)
+  } finally {
+    global.fetch = originalFetch
+  }
+}
+
 async function checkNetworkTools() {
   const { fetchSafeHttp } = await import("../output/runtime/core/network/safe-http-client.js")
   const { errorDetails, errorSummary } = await import("../output/runtime/core/shared/error-details.js")
@@ -3557,9 +3627,11 @@ async function checkCommandRules() {
   const explicitMatch = text => rules.some(rule => rule.fnc !== "firstPersonCall" && new RegExp(rule.reg).test(text))
   const methodNames = new Set(rules.map(rule => rule.fnc))
   const webLoginRule = rules.find(rule => rule.fnc === "webLogin")
-  const explicitRules = rules.filter(rule => !["firstPersonCall", "mentionMemoryCommand"].includes(rule.fnc))
+  const explicitRules = rules.filter(rule => rule.fnc !== "firstPersonCall")
   const mentionRule = masterRules.find(rule=>rule.fnc === "mentionMemoryCommand")
-  assert(mentionRule?.permission === "master" && new RegExp(mentionRule.reg).test("@小呆 他的记忆"), "explicitly requested mention shortcut must stay master-only")
+  assert(mentionRule?.permission === "master" && new RegExp(mentionRule.reg).test("#yui他的记忆 @小呆"), "explicitly requested mention shortcut must stay master-only")
+  assert(explicitMatch("#yui我的记忆") && !explicitMatch("#yui记忆"), "self memory command should state whose memory is requested")
+  assert(explicitMatch("#yui他的记忆 123456") && explicitMatch("#yui她的记忆 @小呆") && !explicitMatch("@小呆 他的记忆"), "other memory shortcuts must require the shared prefix")
   assert(PLUGIN_COMMAND_PREFIX === "#yui" && pluginCommand("chat") === "#yuichat", "plugin commands should derive display text from the single prefix regexp")
   assert(explicitRules.every(rule => String(rule.reg).startsWith(PLUGIN_COMMAND_PREFIX_PATTERN.source)), "every explicit command rule should derive from the single plugin prefix regexp")
   assert(masterRules.length > 0 && masterRules.every(rule => rule.permission === "master"), "the dedicated master command entry should enforce master permission on every rule")
@@ -4073,6 +4145,10 @@ async function checkConversations() {
     await configStore.save(mockConfig)
     const { checkQuotedContext } = await import("./check-quoted-context.mjs")
     await checkQuotedContext(tinyPngDataUrl)
+    const { checkGroupContext } = await import("./check-group-context.mjs")
+    await checkGroupContext(tinyPngDataUrl)
+    const { checkCompact } = await import("./check-compact.mjs")
+    await checkCompact()
     recentContextStore.clear()
     const recentImageEvent = {
       isGroup: true,
@@ -4106,6 +4182,7 @@ async function checkConversations() {
       msg: "玉玉小呆毛刚才发的是什么",
       raw_message: "玉玉小呆毛刚才发的是什么",
       sender: { user_id: "10001", nickname: "Smoke User" },
+      getMessage: async messageId => ({ message_id: messageId, user_id: "10002", group_id: "20001", message: [{ type: "image", url: tinyPngDataUrl }] }),
     }, "玉玉小呆毛刚才发的是什么")
     assert(namedRecentImageResult.media?.images === 1 && namedRecentImageResult.media?.thumbnails?.[0]?.source === "recent-group", "named-member visual intent should attach that member's image instead of the current speaker's older image")
     const ordinaryResult = await chatService.send({
@@ -4124,6 +4201,7 @@ async function checkConversations() {
       group_id: "20001",
       user_id: "10001",
       message_id: "conversation-adjacent-question",
+      getMessage: async messageId => ({ message_id: messageId, user_id: "10001", group_id: "20001", message: [{ type: "image", url: tinyPngDataUrl }] }),
       msg: "看看这个图",
       raw_message: "看看这个图",
       sender: { user_id: "10001", nickname: "Smoke User" },
@@ -4218,7 +4296,7 @@ async function checkConversations() {
       const hostedOnlyConfig = JSON.parse(JSON.stringify(mockConfig))
       hostedOnlyConfig.tools.builtin.webSearch.enabledSources = []
       const hostedResult = await chatService.runModelStepWithChannel({
-        e: { isGroup: true, isMaster: true, group_id: "20001", user_id: "10001", sender: { role: "owner" } },
+        e: { isGroup: false, isMaster: true, user_id: "10001", sender: { role: "owner" } },
         prompt: "查今日黄金价格",
         config: hostedOnlyConfig,
         history: [{ role: "user", content: "旧问题" }, { role: "assistant", content: "旧回答" }],
@@ -7100,6 +7178,7 @@ async function main() {
     ["extensions", checkExtensions],
     ["extension-validation", checkExtensionValidation],
     ["network-tools", checkNetworkTools],
+    ["music", checkMusicPlay],
     ["memory-profile", checkMemoryProfile],
     ["sqlite-storage", checkSqliteStorage],
     ["media", checkMedia],

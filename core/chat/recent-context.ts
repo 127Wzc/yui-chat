@@ -1,3 +1,4 @@
+import { estimateTokens } from "./token-budget.js"
 import { configStore, registerConfigPublishHook } from "../../config/store.js"
 import { isCommandMessage } from "../message/command-prefixes.js"
 import { extractMessageContext } from "../message/message-context.js"
@@ -21,10 +22,12 @@ interface ContextRow {
     text: string
     images: number
   }
+  respondingToUserId?: string
   time: number
 }
 
 export interface RecentImageReference {
+  imageIndex?: number
   url: string
   messageId: string
   userId: string
@@ -260,11 +263,104 @@ export class RecentContextStore {
       ...(reply?.target ? { replyTo: reply.target } : {}),
       time: Date.now(),
     }
+    if (text(e.user_id) === text(e.self_id) && e.self_id && reply?.target) {
+      const targetId = reply.target.userId || rows.find(item => item.messageId === reply.target?.messageId)?.userId
+      if (targetId) row.respondingToUserId = targetId
+    }
     const duplicateIndex = row.messageId ? rows.findIndex(item => item.messageId === row.messageId) : -1
     if (duplicateIndex >= 0) rows.splice(duplicateIndex, 1)
     rows.push(row)
     buffers.set(key, rows.slice(-configuredMessageCount(config)))
     return true
+  }
+
+  /** 只记录已送达的助手回答，并保留实际请求者；不推断其他机器人发言的对象。 */
+  recordAssistant(event: unknown, answer: unknown, receipt: unknown = {}): void {
+    const e = record(event)
+    const value = text(answer).trim()
+    if (!value || value === "<EMPTY>" || !e.self_id) return
+    const replyId = messageId(e)
+    const sentId = text(record(receipt).message_id || record(receipt).messageId)
+    const syntheticId = sentId || `assistant:${replyId || Date.now()}:${text(e.user_id)}`
+    if (!this.record({ ...e, user_id: e.self_id, sender: { nickname: "助手" }, message_id: syntheticId,
+      msg: value, raw_message: value, message: [{ type: "text", text: value }], img: [],
+      source: undefined, quoted_message: undefined, quotedMessage: undefined, quote: undefined,
+      reply: { message_id: replyId, user_id: e.user_id, sender: e.sender }, reply_id: undefined })) return
+    const row = (buffers.get(scopeKey(e)) || []).find(item => item.messageId === syntheticId)
+    if (row) row.respondingToUserId = text(e.user_id)
+  }
+
+  /** 点名只绑定当前窗口中可证实的身份；同名多用户保留歧义。 */
+  referencedUsers(event: unknown, prompt: unknown): string[] {
+    const e = record(event)
+    const rows = buffers.get(scopeKey(e)) || []
+    const context = extractMessageContext(e, text(prompt))
+    const botIds = new Set([text(e.self_id), text(record(e.bot).uin)].filter(Boolean))
+    const ids = new Set(context.mentions.map(item => item.qq).filter(id => id && id !== "all" && !botIds.has(id)))
+    if (ids.size) return [...ids]
+    const matched = rows.flatMap(row => row.aliases.filter(alias => aliasMentioned(referenceText(prompt), alias)).map(alias => ({ id: row.userId, alias: referenceText(alias) })))
+    for (const item of matched) {
+      if (botIds.has(item.id) || matched.some(other => other.alias.length > item.alias.length && other.alias.includes(item.alias))) continue
+      ids.add(item.id)
+    }
+    return [...ids]
+  }
+
+  /** JSON 资料保留作者和回复关系；优先保留点名/引用资料，整条裁剪而非截断 JSON。 */
+  buildReference(event: unknown, prompt: unknown, options: { history?: unknown[]; maxTokens?: number } = {}): string {
+    const e = record(event)
+    this.prune()
+    if (!isGroupEvent(e)) return ""
+    const history = (options.history || []).map(record)
+    const represented = new Set(history.map(item => text(record(item.metadata).messageId)).filter(Boolean))
+    const currentId = messageId(e)
+    const targetIds = this.referencedUsers(event, prompt)
+    const targets = new Set(targetIds)
+    const quoteIds = new Set(extractMessageContext(e).replies.map(item => item.id))
+    const rows = (buffers.get(scopeKey(e)) || []).filter(row => (!currentId || row.messageId !== currentId) && !represented.has(row.messageId)
+      && !(row.respondingToUserId === text(e.user_id) && history.some(item => item.role === "assistant" && text(item.content) === row.text)))
+    const needsGroupBackground = targets.size > 0 || quoteIds.size > 0 || /刚才|刚刚|之前|群里|大家|聊了|说了|上下文|刚发/.test(text(prompt))
+    const selectedIds = new Set(rows.filter(row => targets.has(row.userId) || targets.has(row.respondingToUserId || "") || quoteIds.has(row.messageId)).map(row => row.messageId))
+    const candidates = rows.map((row, index) => ({
+      index,
+      priority: selectedIds.has(row.messageId) || selectedIds.has(row.replyTo?.messageId || "") ? 2 : row.userId === text(e.user_id) || row.respondingToUserId === text(e.user_id) ? 1 : 0,
+      value: {
+        messageId: row.messageId, speaker: { userId: row.userId, name: row.name },
+        text: row.text, attachments: row.attachments,
+        ...(row.replyTo ? { replyTo: row.replyTo } : {}),
+        ...(row.respondingToUserId ? { respondingToUserId: row.respondingToUserId } : {}),
+        relation: row.userId === text(e.user_id) ? "当前请求者的群发言" : row.respondingToUserId === text(e.user_id) ? "助手对当前请求者的回答" : row.respondingToUserId ? "助手对其他成员的回答" : "其他群成员发言；回复关系以 replyTo 为准",
+      },
+    }))
+    // 以回复链为单位保留问答；预算不足时整组省略，不能只留下“是的”等孤立回答。
+    const byId = new Map(rows.filter(row => row.messageId).map(row => [row.messageId, row]))
+    const groups = new Map<string, typeof candidates>()
+    for (const item of candidates) {
+      let root = rows[item.index]
+      const visited = new Set<string>()
+      while (root.replyTo?.messageId && byId.has(root.replyTo.messageId) && !visited.has(root.replyTo.messageId)) {
+        visited.add(root.messageId)
+        root = byId.get(root.replyTo.messageId)!
+      }
+      const key = root.messageId || `row:${item.index}`
+      const group = groups.get(key) || []
+      group.push(item); groups.set(key, group)
+    }
+    const kept: typeof candidates = []
+    const maxTokens = Math.max(0, options.maxTokens ?? 1200)
+    let used = 100
+    const ranked = [...groups.values()].filter(group => needsGroupBackground || group.some(item => item.priority > 0))
+      .sort((a, b) => Math.max(...b.map(item => item.priority)) - Math.max(...a.map(item => item.priority)) || b.at(-1)!.index - a.at(-1)!.index)
+    for (const group of ranked) {
+      const cost = estimateTokens(group.map(item => item.value))
+      if (used + cost > maxTokens) continue
+      kept.push(...group); used += cost
+    }
+    if (!kept.length) return needsGroupBackground
+      ? JSON.stringify({ referenceOnly: true, requestedUserIds: targetIds, messages: [], unavailable: "当前群窗口没有可提供的完整相关问答，或资料超出预算；请明确引用，不能猜测内容。" })
+      : ""
+    return JSON.stringify({ referenceOnly: true, requestedUserIds: targetIds, omittedMessages: rows.length - kept.length,
+      messages: kept.sort((a, b) => a.index - b.index).map(item => item.value) })
   }
 
   buildPrompt(event: unknown = {}): string {
@@ -341,6 +437,7 @@ export class RecentContextStore {
         const rowText = extractMessageContext(row, sourceText).text || text(sourceText)
         this.record({
           ...row,
+          self_id: e.self_id,
           isGroup: true,
           isPrivate: false,
           message_type: "group",
@@ -356,6 +453,57 @@ export class RecentContextStore {
       hydratedScopes.add(key)
       hydrationInFlight.delete(key)
     }
+  }
+
+  selectRecentImages(event: unknown, prompt: unknown, maxImages = 4): { images: RecentImageReference[]; diagnostic: string } {
+    this.prune()
+    const e = record(event)
+    const value = compact(prompt)
+    const targets = this.referencedUsers(e, prompt)
+    const rows = (buffers.get(scopeKey(e)) || []).filter(row => !messageId(e) || row.messageId !== messageId(e))
+    const comparison = /比较|对比|区别|一起看/.test(value)
+    const mentions = extractMessageContext(e, value).mentions.filter(item => item.qq !== text(e.self_id) && item.qq !== "all")
+    const aliases = new Map<string, Set<string>>()
+    if (!mentions.length) for (const row of rows) for (const alias of row.aliases) {
+      if (!aliasMentioned(referenceText(value), alias)) continue
+      const key = referenceText(alias)
+      const ids = aliases.get(key) || new Set<string>()
+      ids.add(row.userId); aliases.set(key, ids)
+    }
+    const ambiguous = [...aliases].some(([alias, ids]) => ids.size > 1 && ![...aliases.keys()].some(other => other.length > alias.length && other.includes(alias)))
+    if (ambiguous || targets.length > 1 && !comparison) return { images: [], diagnostic: "图片对象不唯一，请用户用真实 @ 或明确引用指定成员和图片。" }
+    let authorPhrase = value
+    const persona = record(record(configStore.get()).persona)
+    for (const name of [persona.firstPerson, ...(Array.isArray(persona.aliases) ? persona.aliases : [])].map(text).filter(Boolean)) {
+      if (authorPhrase.startsWith(name)) authorPhrase = authorPhrase.slice(name.length).trim()
+    }
+    authorPhrase = authorPhrase.replace(/^(?:(?:请|帮我|再|看看|看一下|看下|看|识别|分析|描述|解读)\s*)+/, "")
+    const namedAuthor = (authorPhrase.match(/^(.*?)(?:发|贴|传|晒|分享)(?:的|了)/)?.[1] || "").replace(/(?:刚才|刚刚|之前|最近|刚)$/, "").trim()
+    const explicitOther = Boolean(namedAuthor) || /(?:看|识别|分析|描述|解读|比较|对比).{0,30}(?:发的|的)(?:图片|图|照片|截图|表情包)/.test(value)
+    if (!targets.length && explicitOther && !selfImageReferencePattern.test(value)) return { images: [], diagnostic: "未在当前群窗口确认被点名的图片作者，请用户 @ 成员或引用原图。" }
+    if (comparison && /我(?:的|发)|和我|与我/.test(value) && !targets.includes(text(e.user_id))) targets.push(text(e.user_id))
+    if (!targets.length) {
+      const image = this.findRecentImage(e, { prompt })
+      return { images: image ? [image] : [], diagnostic: image ? "" : "当前群窗口没有可用的目标图片，请引用原图。" }
+    }
+    const selected: RecentImageReference[] = []
+    const plural = /几张|多张|这些|所有|全部/.test(value)
+    let omitted = false
+    for (const [targetIndex, id] of targets.entries()) {
+      const owned = rows.filter(row => row.userId === id && row.imageUrls.length)
+      const chosen = plural ? owned.slice(-maxImages).reverse() : owned.slice(-1)
+      if (!chosen.length) return { images: [], diagnostic: "被点名成员在当前群窗口没有可用图片，请引用原图；不能采用其他成员的图片。" }
+      const quota = comparison ? Math.max(1, Math.floor(maxImages / targets.length) + (targetIndex < maxImages % targets.length ? 1 : 0)) : maxImages
+      let count = 0
+      for (const row of chosen) for (const url of row.imageUrls) {
+        if (count >= quota) { omitted = true; continue }
+        count++
+        selected.push({ url, imageIndex: row.imageUrls.indexOf(url), messageId: row.messageId, userId: row.userId, name: row.name, source: row.userId === text(e.user_id) ? "recent-self" : "recent-group", time: row.time })
+      }
+    }
+    const images = selected.slice(0, maxImages)
+    if (!comparison) images.sort((a, b) => rows.findIndex(row => row.messageId === a.messageId) - rows.findIndex(row => row.messageId === b.messageId) || (a.imageIndex || 0) - (b.imageIndex || 0))
+    return { images, diagnostic: omitted || selected.length > maxImages ? `本轮只提供最近的 ${images.length} 张目标图片，其余未加载。` : "" }
   }
 
   /** 按回复语境、点名对象和人称指代选择最近图片；无明确对象时使用时间上最近的一张。 */
@@ -385,7 +533,7 @@ export class RecentContextStore {
         if (!row || !predicate(row)) continue
         const url = row.imageUrls.at(-1)
         if (url) return {
-          url, messageId: row.messageId, userId: row.userId, name: row.name,
+          url, imageIndex: row.imageUrls.length - 1, messageId: row.messageId, userId: row.userId, name: row.name,
           source: row.userId === currentUserId ? "recent-self" : "recent-group",
           time: row.time,
         }
@@ -393,27 +541,9 @@ export class RecentContextStore {
       return null
     }
 
-    const prompt = referenceText(options.prompt ?? e.msg ?? e.raw_message ?? "")
-    const context = extractMessageContext(e, e.msg || e.raw_message || "")
-    const bot = record(e.bot)
-    const botIds = new Set([text(e.self_id), text(bot.uin)].filter(Boolean))
-    const mentionedUserIds = new Set(context.mentions.map(item => item.qq).filter(id => id && id !== "all" && !botIds.has(id)))
-    const targetUserIds = new Set(mentionedUserIds)
-    let longestAlias = 0
-    if (!mentionedUserIds.size) {
-      for (const row of rows) {
-        for (const alias of Array.isArray(row.aliases) ? row.aliases : [row.name]) {
-          const aliasLength = referenceText(alias).length
-          if (!aliasMentioned(prompt, alias) || aliasLength < longestAlias) continue
-          if (aliasLength > longestAlias) {
-            targetUserIds.clear()
-            longestAlias = aliasLength
-          }
-          targetUserIds.add(row.userId)
-        }
-      }
-    }
-    // 一旦用户明确点名，即使该对象在短期窗口里没有图片，也不能错误回退到提问者自己的旧图。
+    const targetUserIds = new Set(this.referencedUsers(e, options.prompt ?? e.msg ?? e.raw_message ?? ""))
+    // 同名或同时点名多个人，单图接口不任意选择其中一人。
+    if (targetUserIds.size > 1) return null
     if (targetUserIds.size) return find(row => targetUserIds.has(row.userId))
 
     const rawPrompt = compact(options.prompt ?? e.msg ?? e.raw_message ?? "")

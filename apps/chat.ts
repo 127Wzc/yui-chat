@@ -523,7 +523,7 @@ export class YuiChat extends YuiChatCommandHandlers {
       event: "message",
       priority: 1139,
       rule: [
-        { reg: pluginCommandRule("记忆(?:\\s+[\\s\\S]*)?"), fnc: "memoryCommand" },
+        { reg: pluginCommandRule("我的记忆(?:\\s+[\\s\\S]*)?"), fnc: "memoryCommand" },
         { reg: pluginCommandRule("帮助"), fnc: "pluginHelp" },
         { reg: pluginCommandRule("(?:快捷指令|指令说明)(?:\\s+[\\s\\S]*)?"), fnc: "actionsHelp" },
         { reg: pluginCommandRule("chat([\\s\\S]*)"), fnc: "chat" },

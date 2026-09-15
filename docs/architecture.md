@@ -1,148 +1,84 @@
-# 后端架构
+# 架构与数据流
 
-## 启动与运行边界
+## 运行与模块
 
-`index.js` 是唯一的源码 JS 宿主入口，只校验并加载 `output/runtime/runtime-entry.js`；构建后的运行入口再依次加载配置、SQLite Worker、内置知识库和个人能力规则、工具注册表、指令观察器、第一人称监听、主动问候/定时提醒和过期缓存。Web 启用时再挂载 Express 子应用与 WebSocket。构建入口通过 `YUI_CHAT_PLUGIN_ROOT` 保持源码资源根和宿主数据根稳定。
+`index.js` 接入 Yunzai，加载构建产物 `output/runtime/`。业务源码使用 TypeScript，宿主能力统一经 `hostRuntime` 访问。命令前缀由 `core/message/command-prefixes.ts` 定义，默认 `#yui`；第一人称呼叫独立配置。
 
-插件身份统一为 `yui-chat`。除第一人称自然呼叫外，命令注册和服务端解析都从 `core/message/command-prefixes.ts` 的唯一前缀正则派生；默认前缀是 `#yui`，默认第一人称是“埋埋”。旧插件名、目录、路由、数据路径和命令不设兼容层。
-
-运行文件不混放：权威默认值和 Schema 在 `config/defaults.ts`、`config/schema.ts`，忽略提交的 `config/config.json` 只保存 SQLite 启动参数与 Web Token，其余用户配置保存在 `state.sqlite3/runtime_config`；手动配置包位于 `data/yui-chat/backups/`。长期数据在 `data/yui-chat/`，缓存只在插件 `cache/`。`config/store.ts` 是配置合并与读写的唯一入口。测试或显式隔离运行可在加载前设置 `YUI_CHAT_RUNTIME_ROOT`；`npm run smoke` 会自动创建并清理隔离根，也可用 `YUI_CHAT_SMOKE_RUNTIME_ROOT` 保留现场，生产默认路径不变。
-
-`web.publicBaseUrl` 是 SQLite 中的运行配置，不进入极简启动 JSON。它表示外部服务器地址前缀，可包含自定义域名、端口和反向代理路径，但不包含查询参数或锚点。主人执行 `#yui面板` 时，Web 鉴权模块在该前缀后统一拼接 `web.mountPath` 与单次快捷码；显式前缀会替代自动发现的公开地址，留空才读取 Yunzai 已知服务地址，并始终生成 localhost 后备地址。管理台只预览拼接形态，不签发真实快捷码。
-
-## 目录规范
-
-源码按职责而非文件历史存放：`apps/chat.ts` 只注册普通用户入口，`apps/master.ts` 集中注册全部主人管理指令并统一附加宿主 Master 权限，`apps/commands/` 放命令辅助实现；`core/` 分为 `chat`、`message`、`message-chain`、`persona`、`media`、`rendering`、`runtime`、`storage`、`network`、`shared` 和 `scheduling`；`models/` 分为 `adapters`、`protocol`、`configuration`、`routing`；用户扩展共用能力在 `extensions/`，模型工具在 `tools/{access,builtins,custom,integrations,support}/`，过滤器在 `filters/{authoring,builtins,core,custom,message}/`。Web 后端在 `web/http/`，管理台源码在 `web/client/`，由 TypeScript 编译为不打包的浏览器 ESM。源码只保留根目录 `index.js` 作为 Yunzai 宿主加载器；兼容转发文件不再是代码落点。
-
-OpenAI 的两套对话协议按协议而不是按 Agent 复制实现：
-
-```text
-core/chat/                         # 共用 Agent Loop、Conversation、工具执行与保护
-tools/                             # 共用 Registry、契约、权限与具体工具
-models/
-├── protocol/                      # 供应商无关的请求/响应
-└── adapters/openai/
-    ├── chat/                      # Chat Completions 请求、响应、流式入口
-    └── responses/                 # Responses 请求、响应、会话状态机与 Function/Built-in Tool 转换
-```
-
-适配器的 `stream` 只控制上游传输：OpenAI Chat Completions、Responses、Qwen、ChatGLM、Gemini 和 Claude 分别解析各自的 SSE/语义事件流；OpenAI Images 与 Gemini 图片协议也支持流式生成事件，并在协议层收敛为完整图片数组。当前 Agent Loop 和图片工具仍以完整响应驱动工具轮次与最终投递，因此流式不会改变工具权限、重试和最终投递语义；未开启或供应商忽略流式时继续兼容完整 JSON。
-
-`models/adapters/openai-compatible.ts` 是既有 Chat 适配器的兼容边界；新代码和文档使用 `models/adapters/openai/chat/` 或 `models/adapters/openai/responses/` 的规范入口。不要在两个协议目录复制 Agent Loop、工具执行器或权限判断。
-
-新增的 TypeScript 领域模块遵循“类型 → 归一化 → 组合/序列化 → 宿主适配”的单向依赖：`core/message-chain` 不读取宿主和网络；`models/protocol` 不感知具体供应商；`core/storage/contracts.ts` 只描述 Worker RPC；`types/host-runtime.d.ts` 是唯一的宿主全局类型声明入口。迁移期间 JS 入口可以调用这些协议，但不得在 JS 中重新定义一套相同的消息链或模型结果结构。
-
-配置仓库使用单写事务队列。启动分两段：先读取极简 JSON 打开 SQLite Worker，再挂载 `runtime_config` 单行仓库并发布完整配置。`load()` 返回合并后的可编辑副本，`get()` 提供深度冻结的完整运行快照，读改写通过 `update()` 基于队列中的最新版本执行。每次提交归一化并校验完整候选值，再拆分启动项和其余稀疏覆盖；前者原子写入 JSON，后者写入 SQLite，全部成功后才更新内存快照与 revision，SQLite 失败时回滚 JSON。源码更新只影响没有被用户覆盖的字段。外部文件已标记 SQLite 主配置但数据库不可用或主配置行缺失时停止加载，避免以默认值启动。正常提交和恢复都不自动备份，管理员只能显式创建手动配置包。配置包同时保存逻辑运行配置覆盖与 SQLite 配置白名单（能力权限、知识库设置/授权）；不导出日志、用量、预算流水、聊天、记忆、知识正文和索引数据。普通配置请求只读取备份文件名、时间和大小，进入备份管理页后才按需检查包内安全元数据。配置包仅在同时超过 `system.backups.maxFiles` 的保护数量与 `system.backups.maxAgeDays` 的保护时间时自动清理，默认至少保留 3 份且 30 天内不清理；管理员也可明确删除单个配置包，非法配置隔离文件不参与自动清理策略。
-
-小型整文件 JSON 仍使用 `core/storage/atomic-json-repository.ts`。权威交互数据由 `core/storage/sqlite/` 的 Worker RPC 管理：`state.sqlite3` 保存会话、记忆、知识、授权、任务、审计、模型调用和工具链日志；`vectors.sqlite3` 保存可重建的 embedding/`sqlite-vec` 索引。两库从 `001-baseline.sql` 建立，状态库再通过 `002-tool-call-events.sql`、`003-model-call-snapshots.sql` 和 `004-conversation-state.sql` 补充工具事件、群记忆召回、工具链父子关系、模型请求详情与协议会话状态；检测到无法识别的历史迁移记录或旧表会拒绝启动，迁移只在 Worker 内事务执行，不为状态库生成整库自动备份。手动配置包通过显式字段查询导出 SQLite 配置，恢复也只对这些白名单表执行参数化事务，避免日志或正文混入。主库损坏时保留现场并回退，向量库损坏可隔离重建。模型日志只在对话、生成或 embedding 请求进入适配器时启动，`ai_runs` 作为一轮或多轮模型请求的内部归组；本地执行工具和 Responses 上游真正发生的 hosted 调用都写入 `tool_call_events` 并关联对应模型调用，后者以 `openai-hosted` 标记且不经过本地 Tool Executor；`model_call_snapshots` 保存脱敏且有大小上限的最终上下文、模型可见工具定义与请求元数据，`parent_run_id` 和 `parent_tool_id` 用于串起子代理、工具派生模型请求和后台完成事件，日志详情页将这些事件合并成按轮次排列的运行链路。工具运行时负责统一结果语义、参数校验、超时、重试和副作用保护；`tool_search` 提供权限过滤后的按需工具发现，下一轮才扩展工具定义。同轮仅并行纯读工具，后台副作用任务进入受限队列并保留任务状态；生图工具按图片模型建立独立队列，并在工具运行配置中控制同时执行数和等待上限。知识库重建共用一条 `knowledge-index-rebuild` 运行记录，每个实际 embedding 批次写入独立模型明细。普通启动扫描、无模型运行不采集详情。日志费用只接受 CNY，详情与汇总分别按当前配置的保留天数清理；策略变更会触发一次合并的异步范围清理。Embedding 预算在本地预检后预留，失败时按已完成批次结算，并通过独立日表持久化。指令扫描的原有分文件索引暂作为兼容投影，`builtin-commands` 是 SQLite 中受保护的授权知识库。全表关系见 [sqlite-baseline-er.md](sqlite-baseline-er.md)。
-
-所有运行配置和长期数据都采用单实例单写者模型。进程内队列只防止同一 Node.js 进程的并发覆盖，不提供跨进程文件锁；不得让多个 Yunzai 实例或容器共享写入同一配置和数据目录。
-
-宿主能力集中经过 `core/runtime/host-runtime.ts`。业务代码不直接读取 `Bot`、`logger`、`segment` 或宿主 `plugin`，从而把 Yunzai 运行时依赖限制在一个适配边界内。
-
-## 对话链路
-
-```text
-#yuichat / 第一人称 / Web 测试
-  → response-pipeline：访问控制、限流、锁、输出策略
-  → chat-service：历史、上下文、工具循环、记忆写回
-  → provider-resolver：任务模型列表、顺序/随机/fallback 选择
-  → models/protocol + models/adapters/registry.ts：统一协议，分派 Chat Completions 或 Responses 适配器
-  → output-service / render-delivery：发送文本、语音或图片
-```
-
-模型配置只认三层：
-
-1. `apiProviders`：凭据、地址和公共请求参数。
-2. `models`：模型标识、适配器、视觉/工具能力、推理设置，以及可覆盖全局值的请求超时和流式模式。`toolPolicy` 为每个模型统一提供继承、白名单或黑名单范围；名单只存 `web_search` 等稳定能力 ID，`toolPolicy.routes` 再选择 Web/Tool Search 使用 OpenAI 托管实现、本地实现、自动选择或禁用，并为 Web Search 选择首选、失败换源或并行聚合。`adapter: openai-responses` 时，`responses` 分支只保留 File Search 数据参数、原生工具高级参数、`auto`/`local`/`previous_response_id` 状态模式和上游存储设置，不再重复保存 Web/Tool Search 开关。三种模式都保留本地可见历史与审计；自动模式正常只发送增量输入，遇到已知断链错误时最多执行一次有界无状态重放并保存新 ID，严格上游模式则直接交给渠道 fallback。
-3. `modelTasks`：业务任务到模型列表，支持 `sequential`、`random`、`fallback`。
-
-`channels` 仅是显式覆盖兼容层。`workflows` 和 `chat.defaultWorkflow` 会被配置归一化移除，不应新增依赖。
-
-## 关键子系统
-
-| 子系统 | 入口 | 约束 |
-| --- | --- | --- |
-| 第一人称 | `first-person-service`、`persona-trigger`、`conversation-continuation`、`persona-chain`、`prompt-composer` | `persona.characterPrompt` 与 `persona.runtimePrompt` 分层注入，每轮再注入北京时间简写；系统运行规则可由主人编辑并恢复源码默认值，实际工具权限与网络安全仍由程序策略强制执行；直呼/@、旁路和 poke 复用同一服务。显式对话回复成功送达后为同一用户开启一次 5 秒续聊机会，仅在承接词、追问、关键词重合、回答机器人问题或按要求补发媒体时自动进入对话；命中立即消费，自动续答不再续开，避免无限接管。`<EMPTY>` 不发出也不入库 |
-| AI 能力 | `toolRegistry`、`contract`、`agent-turn-state`、`execution-runtime`、`policy` | Builtin、Custom、MCP 才是本地执行工具；Skill 只被按需注入指令。一次用户请求由单个 `AgentTurnState` 在 `model_decision → tool_execution → completed/finalizing` 间循环，供应商结束原因归一为 `tool_calls`、`end_turn`、`max_tokens` 等结构化状态；正常最终文本直接复用，不为每轮工具生成总结。Chat Completions 使用嵌套 `function` 定义；Responses 使用顶层 Function Tool，并可组合 OpenAI 执行的 `web_search`、`file_search`、`tool_search`。配置名单只保存稳定能力 ID，`openai:*`、`local:*` 只标识运行实现；原生工具按“能力启停 → 角色权限 → 模型名单 → 实现路由 → 协议支持”求交集，工具管理处关闭能力时托管与本地实现都会被移除。`web_search` 门面支持首选、失败换源和多渠道并行；后两者可通过独立 Responses 工作请求组合托管搜索与本地渠道，工作请求不推进主会话 Response ID。Responses 的本地 function call 仍进入同一个 `execution-runtime`，继续受调用上限、重复保护、重试、副作用账本和权限控制；工具搜索只能从已授权候选池按需装载，缺少权限上下文时关闭。明确搜索图片或表情包且 `image_media` 可用时，Responses 首轮固定选择该专用工具并暂不暴露原生 Web Search，避免同一媒体意图被通用网页搜索重复消费。OpenAI 托管调用不进入本地 Tool Executor，但真实 `*_call` 会作为 `openai:*`、来源 `openai-hosted` 的只读远程事件进入统一工具链、模型日志和会话审计；工具事件保存上游实际返回的 output item，并按日志规则脱敏和限长，模型调用元数据只保留摘要；托管调用和本地 Function Call 同时出现时，本地结果必须回传模型生成最终说明。原生 Web Search 来源会在正文之后用合并转发回显。工具公共契约用 `deferLoading` 表示 Responses 的 `defer_loading`，高频核心工具直接加载，Custom、MCP 和低频 Builtin 默认延期。显式 `count` 等次数参数可跨模型轮次递进完成，副作用超时按不确定结果处理而不自动重试。通用搜索类工具保留原始文本/JSON 观察，由模型选择 `message_send`，以同一消息链维持文字说明与媒体的对应关系；统一投递边界保持连续图文合并，遇到视频时按原顺序拆成独立 OneBot 消息，有封面则封面继续作为前置图片参与图文消息；`forward` 片段转换成 Yunzai/OneBot 合并转发节点，`web_search` 的来源计划会追加到模型整理正文之后。公共契约的 `autoDelivery` 默认为空；同轮计划按原调用顺序合并，任一计划设置 `continueConversation: true` 时锁存 Turn 级最终回复需求而不提前结束工具循环，最终为空或 `<EMPTY>` 才进行最多一次无工具人格收束；全部关闭且其它工具允许静默时才静默。`message_send` 只负责投递。内置 `bilibili_media` 与 `image_media` 默认发送且开启续答；`image_media` 的发送计划仅包含图片资源，不附带标题或来源文字。B 站媒体先准备为受管本地缓存，旧工具名不兼容。|
-| 代码过滤器 | `filterRegistry`、`message-filter-service` | Builtin、Custom Filter 在输入模型前或回复发送前确定性处理正文；不进入模型工具定义 |
-| 子代理 | `dispatch_subagent`、`chatService.runSubAgent` | 默认关闭；限制派发数、深度、全局并发、总时长、工具调用和模型输出；取消信号向模型请求与安全 HTTP 读取传递 |
-| 知识库 | `knowledge/{store,repository,access,chunking,index-jobs,vector-index,retrieval}` | 普通库与 `builtin-commands` 的 CRUD、deny-first 群域授权、FTS/单库隔离向量召回；新向量空间完整写入后才原子切换，失败时保留旧空间并降级 FTS |
-| 记忆 | `memory/{store,repository,group-capture,vector-recall,scopes,write-policy,decay,retrieval,prompt}` | 门面保持旧接口；显式事实、群聊提炼记忆与指定群原文采集分开存储。群采集按群号和消息 ID 去重，系统设置维护各群继承的默认值；策略可按字段继承或覆盖保留期、单日子窗口 Token 上限、专用提炼模型（留空跟随默认对话模型）、提示词、输出 Token 上限和置信度阈值。主人可按单次上限调用宿主群历史接口补录原文：默认从最新消息向前，也可指定起始消息 ID 或从已存最旧一条继续向前分页递进，按群号＋消息 ID 去重；原文只可在采集详情中分页搜索和核对，不参与召回。提炼以自然日为审计与入队边界：每天仅自动处理前一天及更早的关闭日期，日内按 Token 上限顺序切分并在相邻子窗口回携上下文重叠，单条超限原文不截断而标记跳过；提示词携带回复与 @ 指向标注，模型返回不可解析 JSON 时计入失败并走既有重试；管理员可选择任意时间段，系统自动按日拆分重提炼队列，每轮扫描处理窗口数由 `consolidation.maxWindowsPerScan` 控制。补录改变已完成日时只标记需重提炼而不静默重复调用，失败日可直接定位重跑。每个日任务仍保存原文范围、进度、Token 预估、结果和证据；每个群日任务可一次提炼多名成员，模型输出原子事实键和值，SQLite 在本地判定新增、强化、修正、撤回（retract → superseded 归档，管理员维护的记忆不受影响）或忽略，置信度低于 `consolidation.minConfidence` 的候选服务端丢弃，避免额外模型去重调用；采集消息的 QQ 昵称与群名片以 platform-metadata 来源直接结构化写入 `identity.qq_nickname`（user 作用域）与 `identity.group_card`（user_group 作用域）单值槽位，改名自动 supersede，不经模型。模型日志仅为明确开启的群记忆提炼保存脱敏输入，普通对话不因此保存请求正文。SQLite 模式不再写入旧式“用户问题＋机器人回答”原文 episode 与短期消息（读路径已收敛，短期上下文由 recent-context 承担）；检索使用中文 unigram+bigram 词元化 FTS，普通群聊先检索当前发言人和本群，只有问题明确涉及个人偏好、身份、经历、关系或个性化建议时，才根据非机器人 @ 或群内唯一昵称、群名片、自述别名切换到目标成员作用域；询问他人时不混入提问者个人记忆，比较双方时才同时保留。配置 `memory.retrieval.embeddingModel` 后经 `vector-recall` 叠加语义向量召回（意图与 FTS 缺口双重门控、低相似度过滤、空作用域短路、查询缓存、每日预算熔断，embedding 调用以 memory-recall/memory-vector-index 计入统一模型日志），注入行按作用域标注来源 |
-| 媒体与渲染 | `media-cache`、`image-channels`、`render-service`、`render-html-service`、`render-engine`、`image-renderer-registry`、`render-delivery` | `image_media` 在一个工具内按配置选择 Bing、百度、SERP 或 Pixiv，默认直接发送选中结果的原始 URL；管理员可为防盗链渠道开启已选图片本地缓存，并始终保留作品与页序号映射。R18 是管理员硬门禁。`render_image` 统一分流所有图片模板，工具图片与系统图片分别使用 `response.render.engine` 和 `response.render.system.engine`，两套策略互不影响，默认 HTML，渲染异常回退 SVG；Markdown/KaTeX/Mermaid、Markmap、任意 HTML/URL 截图仍复用受控页面和安全边界。HTML 路径与旧插件一致复用 Yunzai renderer loader 提供的 Puppeteer 单例，但仍对每个页面执行 Yui Chat 请求拦截。任意 HTML 与 URL 截图后端默认关闭。渲染图片按请求即时生成，不落盘渲染缓存；媒体读取缓存仍由 `media-cache` 独立管理。 |
-| 定时任务 | `schedule-task-service` | 仅发送提醒，不通过模型；按用户和 cron 限额控制；一次性任务失败有限重试，最终失败保留可查可取消 |
-
-## 管理台
-
-`web/http/app.ts` 只创建 Express Router、挂载静态文件并组合领域路由：
-
-- `web/http/routes/runtime.ts`：健康、诊断、会话、渲染与安全聊天测试。
-- `web/http/routes/configuration.ts`：配置、供应商、模型和任务路由。
-- `web/http/routes/capabilities/extensions.ts`：Builtin、Custom、Skill 与 MCP。
-- `web/http/routes/knowledge.ts` 与 `routes/knowledge/{bases,indexing,access}.ts`：指令兼容投影、多知识库、索引、知识授权、记忆、人设概览与主动问候。
-- `web/http/routes/filters/message-processing.ts`：过滤规则链、试跑和 Custom Filter 包。
-- `web/http/routes/capabilities/authoring.ts`：受限项目文件浏览与隔离的 Custom Filter AI 草稿生成。
-
-`web/http/auth.ts` 管理三类凭证：可选的静态 `web.authToken`、仅由主人 `#yui面板` 命令签发且单次消费的一次性快捷码，以及登录后使用的短期 Web 会话。静态 Token 留空时静态入口禁用；非空 Token 只从 `yui-chat-token` 或标准 Bearer 请求头读取。快捷码默认 3 分钟有效，Web 页面和本机 HTTP 接口都不能主动签发，消费后换取 HttpOnly、SameSite=Strict 会话 Cookie 并立即从地址栏移除。管理台和 WebSocket 复用短会话，Cookie 修改请求需满足同源约束。普通公开配置输出继续递归遮蔽常见 token、key、secret、password、credential、Authorization 和 Cookie 字段；仅已鉴权的专用凭证接口允许管理员显式查看、修改或清空 `web.authToken`。
-
-`web/http/websocket.ts` 独立管理 WebSocket，`web/http/route-handler.ts` 统一异步错误响应，`web/http/runtime-config.ts` 串行执行“事务更新/完整保存并热应用”，防止旧请求覆盖较新的运行态。供应商和模型的纯配置变换位于 `models/configuration/editor.ts`，不耦合 HTTP 或配置仓库。
-
-前端是无打包 Vue 3 ESM：`web/client/app/store/` 负责 API、切片加载、草稿和确认状态，`web/client/ui/components.ts` 是公共组件，`web/client/features/` 按页面领域组织。工具页由 `features/tools/tools-tab.ts` 组合，扩展、MCP、角色权限和共享展示规则位于同一目录；模型页由 `features/providers/providers-tab.ts` 组合，供应商/模型编辑、回复路由和共享逻辑位于同一目录，并加载实时工具目录供可搜索多选白名单/黑名单使用。构建阶段会为生产 ESM 的相对导入统一追加版本号，避免只刷新入口而复用旧子模块。共享格式化、样式和第三方前端资产分别在 `shared/`、`styles/`、`vendor/`。
-
-后端是权限、配置和缓存路径的可信边界。前端本地开发者模式只改变展示，不能提升权限。保存、恢复、导入和运行态配置变更必须经过配置校验并热应用工具、主动问候和定时服务。工具预设是显式执行的一次性批量启用操作，`activePresets` 只记录已应用项，不会在后续配置归一化时重新开启被管理员单独停用的工具。单工具启停只更新 `enabledTools` 策略，Registry 无需重建，下一次模型工具解析立即读取新快照；扩展安装、修改和显式目录刷新才重新初始化 Registry 与相关外部连接。
-
-## 扩展选择
-
-| 目标 | 采用方式 |
+| 模块 | 职责 |
 | --- | --- |
-| 内置且供模型调用的能力 | `tools/builtins/<domain>.ts` |
-| 本地可编辑执行能力 | `data/yui-chat/extensions/tools/<id>/tool.json` + `index.js` |
-| 外部工具服务 | MCP |
-| 可复用的提示/流程 | `data/yui-chat/extensions/skills/<id>/SKILL.md` |
-| 确定性正文处理 | `filters/builtins/` 或 `data/yui-chat/extensions/filters/<id>/filter.json` + `index.js` |
+| `apps/` | 命令解析、权限检查与回复；普通入口和主人入口分开注册 |
+| `core/chat/` | 会话、上下文预算、工具循环和输出流程 |
+| `core/message/`、`core/persona/`、`core/media/` | 消息引用、人格提示和媒体准备 |
+| `core/rendering/` | 图片渲染、缓存与投递 |
+| `models/` | 任务选模、供应商协议与调用观测 |
+| `tools/`、`extensions/`、`filters/`、`skills/` | 工具注册执行、用户扩展、消息过滤和提示词能力 |
+| `memory/`、`knowledge/` | 长期记忆、知识检索和机器人指令知识 |
+| `config/`、`core/storage/` | 配置事务、SQLite 与文件持久化 |
+| `web/` | 管理台、鉴权 API 和 WebSocket |
 
-Custom AI Tool 和 Custom Filter 都要声明 `frameworkResources` 后才能读取宿主或其他插件资源。普通复用逻辑应放在共享 JavaScript 模块中，再由各自的 Tool/Filter 包装器调用；不把 Filter 注册成隐藏 Tool。远程 Skill 安装只接受无内嵌凭证的 HTTPS 或 Git SSH 地址，并执行受控 `git clone`；仍应只安装可信仓库。
+## 对话与上下文
 
-可编辑扩展统一通过 `extensions/storage.ts` 定位到 Yunzai 的长期数据目录，源码 `examples/` 中的示例包只在缺失时复制一次，插件源码更新不会覆盖用户代码；不再迁移旧源码目录中的扩展。源码中不再保留同名 `.js` 导入桥；用户扩展包自身的 `index.js` 仍属于动态代码边界。
+```text
+聊天命令 / 第一人称 / Web 测试
+  → 访问控制、限流与会话锁
+  → 任务选模、组装上下文
+  → 模型请求 ↔ 工具执行
+  → 文本、语音或图片投递
+  → 保存个人问答与调用记录
+```
 
-## 日志详情与会话审计
+模型配置分为 `apiProviders → models → modelTasks`，分别管理供应商、模型能力和任务选模。工具权限与执行流程由各协议共用。流式响应在适配器内聚合，再交给工具循环和输出流程。
 
-日志详情的上下文支持“按来源”和“按消息顺序”两种互斥视图。来源视图以图标、侧边色标和折叠正文区分角色、运行规则、时间、Skill、记忆、知识、媒体与指代等注入，当前提问默认展开；消息视图保留原始顺序及完整消息结构。分段引用同一条系统消息时不重复展开整条正文；缺失独立正文时明确提示并保留消息核对入口，不推断旧日志的来源。Token 标为估算值，Base64 仅在展示时压缩。原始请求诊断集中在“请求与回复”，日志采集、接口和工具执行行为不变。
+群聊请求按以下顺序构建：
 
-模型日志只在请求真正进入适配器时记录；`model_call_events` 保留主链路和用量元数据，`model_call_snapshots` 通过 `003-model-call-snapshots.sql` 独立保存经过凭证脱敏和大小约束的最终上下文、模型可见工具定义与请求元数据。日志页先加载精简运行链路，切换到模型请求详情或会话工作台时再发起独立查询，避免列表和普通链路渲染被长上下文拖慢。会话工作台按 `ai_runs.conversation_key` 汇总全部保留的顶层对话轮次，列表使用作用域、来源和提问摘要定位，不默认暴露内部会话键；选中轮次后单独加载该轮模型请求和工具事件，并按模型请求、工具轮次、实际调用展开。模型详情的上下文同时保留消息顺序和来源分组（人格、Skill、记忆、知识库、历史、当前提问、工具返回等），使“模型实际看到了什么”和“这一轮实际执行了什么”可以分别核对。Responses 的 Response ID 仅在会话 `state_json` 中持久化，模型日志只记录是否已链接和缩略响应标识；远程内置工具则以 `openai-hosted` 事件显示。旧日志没有提问正文或上下文分组时会明确标记不可用或回退到消息级信息；子代理仍通过父运行关系展示，不混入顶层会话轮次。
+1. **System**：人格、运行规则，以及按当前问题匹配的 Skill、记忆、知识与媒体说明。
+2. **个人主线**：按渠道、群号和请求者隔离的本地问答历史。
+3. **当前消息**：请求者身份、群窗口参考资料、当前发言及实际提供的图片。
 
-## 安全默认值
+群窗口按作者、消息 ID 和回复关系组织，优先选择点名或引用相关的完整问答，按预算整组取舍。普通闲聊不填入无关群消息；参考资料不改变请求者身份，也不写入个人历史。
 
-- Web 管理接口和 WebSocket 始终鉴权；主人 `#yui面板` 可签发单次快捷登录码，页面不能主动获取；可选静态 Token 只通过请求头进入短期 HttpOnly 会话，留空时静态入口关闭。
-- Cookie 修改请求检查同源信息；管理 API 返回 `no-store`，页面启用 CSP，并禁止跨站嵌入和 MIME 类型嗅探。
-- 用户可控的网页文本和远程媒体由 `safe-http-client` 读取：URL 凭证始终禁止，每次重定向重新校验并限制总时长和响应体；私网、localhost 与保留地址是否放行由 `security.linkSafety` 配置。
-- 第一人称与 `#yuichat` 共用引用处理：引用正文经过输入过滤与有界截取后进入最后一条 user message，保留原作者、消息 ID、正文换行及读取完整性；当前发言人的身份、权限和回复目标不变。读取引用时先按消息 ID/序号调用宿主 `getMessage`/`getMsg` 取得最新消息，再检查可比较的定位信息并合并元数据；失败时保留不可用状态，不以其他消息替代。引用消息媒体默认自动解析，支持视觉输入的模型按现有多模态能力检查接收引用图片（消息管理操作仍不发送视觉内容），不提供独立引用媒体开关；对话入口会把引用正文提升到当前 user message，宿主重复展开的引用图片同样去重。模型输入逐图标注引用、本次新图、近期消息或头像来源，用户要求置于最后；明确只看新图/引用图时缩小范围，比较时为两侧优先分配图片名额。文字引用、未能读取的引用均阻止无关近期图片和头像补入；头像只在明确询问头像时准备。语音、视频和文件仅保留存在性提示，不解析其内容。正常回复自然承接内容，不复述来源标记和内部处理过程。群聊短期上下文由 `recent-context` 按发送者顺序注入，并额外保留一层 `replyTo` 关系、引用者和完整正文；不另设单条消息字符上限，总量仍由最近消息条数和模型输入预算控制。被动消息不下载引用媒体，用户后续直接引用该消息时仍按消息 ID 读取，避免把引用图片误归为当前发送者的图片或扩大上下文。
-- 本地会话历史保留实际用户输入的文字投影，包括引用正文、图片来源和提供状态；引用图片按请求级资源处理，使用最新地址即时下载/组装，不读取或写入媒体缓存，也不生成后续回看的图片引用键；普通图片正文留在现有媒体缓存，历史仅保留受管缓存键、原始编号和来源。明确“第二张、再仔细看看”等承接上一轮的视觉追问可从同一会话的上一轮普通图片缓存恢复；缓存失效时说明不可用，不回退到无关群图片。新引用和当前附件优先于会话回看。没有引用时，“刚发的图/上一张表情包”等按明确点名、人称或时间顺序选择近期图片；“这个呢/看看这个图”等省略式指代只绑定紧邻的上一条图片，中间出现其他消息时不猜测。普通对话不下载历史图片。撤回、精华管理等消息操作不读取媒体；视觉预处理失败不得把宿主原始 URL 回退为模型 `image_url`。具体渠道仍受视觉能力、模型 visual 与 preferNativeVision 限制，不能读取时只提供明确的未读取状态。
-- DNS、私网 IP、URL 协议/凭证、域名模式与可信资源目标统一由 `link-safety-policy` 管理，运行授权只从 `security.linkSafety` 读取。QQ 入站媒体登记 `qq.com.cn` 及其子域名，Bilibili 页面与 CDN 资源也在此登记；默认放行私网和可信资源私网 DNS，管理员可统一关闭。
-- URL 截图功能默认关闭且仅限主人。启用时读取 `security.linkSafety.screenshotAllowedHosts`；默认 `*` 允许全部 HTTP(S) 域名，也可收紧为精确域名或子域通配。初始页面、跳转和网络资源仍经过请求拦截，不与普通 HTTP 读取混用。
-- HTML/URL 截图、子代理、MCP、定时主动问候默认关闭或不自动启用。
-- 跨目标发图默认关闭；工具受全局策略、角色边界和工具级 policy 共同限制。
+群聊每个新回合重新组装，不续接上轮 Responses ID；同轮工具回传可以续接。执行“结束对话”会清除个人历史及协议状态，保留群窗口、长期记忆和知识库。超预算时优先 compact，失败再本地裁剪，具体规则见 [Responses 与上下文压缩](responses-api.md)。
 
-改动这些边界时同步 `validator`、Web、diagnostics 与测试，并运行 `npm run check`。`check:structure` 会检查静态导入环、Web 路由与鉴权、宿主全局引用、配置/小型 JSON 原子写、安全 HTTP 调用点、空异常处理和重复 JSON 克隆。
+引用与点名图片按真实提及或唯一昵称定位，读取时校验消息、群和作者并刷新媒体地址。多图优先选最近内容，比较请求兼顾双方；对象不明或读取失败时不借用其他人的图片。无视觉需求不下载群图片，语音、视频和文件按当前媒体能力提供说明。
 
-Chromium 请求拦截不能把 DNS 解析结果固定到实际连接。当前通过功能默认关闭、主人权限、可配置域名策略和逐请求拦截控制风险；使用默认全域策略处理不可信站点时，应在浏览器进程所在容器或系统层限制网络出口。
+## 配置与存储
 
-## 动作中心
+| 数据 | 位置 |
+| --- | --- |
+| 默认配置 | `config/defaults.ts` |
+| SQLite 启动参数、可选 Web Token | `config/config.json` |
+| 运行配置、会话、记忆、知识、任务与审计 | `data/yui-chat/storage/state.sqlite3` |
+| 可重建向量索引 | `data/yui-chat/storage/vectors.sqlite3` |
+| Custom Tool、Filter、Skill | `data/yui-chat/extensions/` |
+| 手动配置包 | `data/yui-chat/backups/` |
+| 临时媒体和渲染文件 | 插件 `cache/` |
 
-`actions` 运行配置存储分类和按 ID 组织的预设，源码默认列表为空，内置生图工具的手办化示例通过 `actionExamples()` 作为默认停用的管理台草稿模板提供，不自动写入用户配置。`core/actions/contract.ts` 负责配置、模板变量、统一前缀规则与冲突校验，`core/actions/execution.ts` 负责权限、输入绑定、当前/引用图片选择及工具输出。工具动作引用现有工具名称；源码动作在 `source.frameworkResources.target` 显式声明单个资源，经 `source-tool.ts` 按导出函数、插件方法或文本/JSON 资源执行。源码包装进入独立 ToolRegistry，以已保存动作的启用状态判定可用，继续走 Custom 策略与四级权限，不进入 AI 工具目录。保存和预览不导入模块。复制时独立复制参数和绑定，共享源文件，不复制实现或凭据。
+配置由单写队列提交：连接 SQLite、合并默认值、迁移与校验、写入启动项和运行覆盖，成功后发布冻结快照。`get()` 只读，修改通过 `update()`；SQLite 提交失败回滚启动 JSON，已使用 SQLite 主配置时不静默降级到默认值。
 
-`apps/actions.ts` 构造按动作划分的轻量宿主条目，`YuiActionBootstrap.init()` 在宿主加载或重新加载时重建这些条目。配置热应用复用同一入口。`hostRuntime.applyActionEntries()` 经 `core/runtime/host-command-registry.ts` 替换带所有权标记的条目，按宿主的升序优先级排序并保留其他条目。同阶段的普通规则与 `accept` 分别遵循宿主语义，前置触发先于普通规则。动态注册失败保留旧条目并在动作列表和 diagnostics 中显示未应用状态。
+配置包只导出运行配置及白名单表，不含聊天、记忆、知识正文和日志；仅管理员显式操作创建。SQLite 表结构见 [数据库文档](sqlite-baseline-er.md)。测试用 `YUI_CHAT_RUNTIME_ROOT` 隔离数据，smoke 自动创建和清理测试目录。
 
-入口经 `response-pipeline.preflight()` 使用现有访问控制、限流和锁，保留闭嘴与黑名单的静默行为，并检查最新动作授权与工具执行条件。`tools/support/direct-execution.ts` 为无模型入口复用工具执行 guard、超时、Registry 和后台队列，不伪造模型调用日志。后台任务执行前通过 `execution.beforeInvoke` 重新校验动作启停及权限；完成后回传工具结果，媒体投递计划通过 `message_send` 执行，生图工具完成后的投递仍由原工具负责。
+## 记忆与知识
 
-`web/http/routes/actions.ts` 提供鉴权后的列表、预览、版本冲突检查、CRUD、分类、导入导出及实际测试。预览不加载 Custom 包、不读取图片或运行工具，角色模拟仅限预览。实际测试使用服务端管理身份，后台结果按动作来源标记查询。管理台 `features/actions/actions-tab.ts` 使用独立 `actions` 切片及现有 dirty state、确认弹窗、主题和抽屉；编辑器复用 Custom 扩展的导航样式，分为指令、执行方式、参数、回复和测试五步，切换步骤保留草稿。
+个人记忆区分全局与本群作用域。普通召回以当前发言人为准，明确询问他人时才切换目标；召回内容标注来源。群原文采集与记忆提炼分开，原文用于核对，不直接参与记忆召回。提炼按日期、预算和置信度处理，向量索引可重建，embedding 受独立预算约束。
 
-Custom 开发者试跑通过独立 `ToolRegistry` 执行，不把停用工具注入正式目录；保留主人专用试跑未启用包的边界及 `dryRun` 提示语义，仍检查其余工具策略。Custom 编辑器的资源选择器复用受控框架文件浏览 API，只添加资源声明，不导入或执行选中的模块。`core/actions/reply.ts` 为样例预览、同步结果及后台完成共用纯转换：支持自有属性路径提取、文本模板、JSON、图片和标准消息体，媒体仍经 message_send 权限与投递边界；已投递结果不重复发送。
+记忆快捷指令不调用模型。查看自己固定使用发送者身份；查看或管理他人只允许主人，以真实提及或 QQ 号定位。列表序号绑定调用者、目标与会话，并在修改前校验。
 
-动作独立控制启停与最低角色，不受工具页启停和角色分配影响。新建时复制工具当前最低角色，之后可单独修改。执行、后台启动和消息回传重新读取保存的动作授权；实际用户身份、工具内部检查及网络策略不变。标记 `requiresModelContext` 的工具不提供动作入口；扩展必须已加载，MCP 必须已连接。
+## 工具、动作与扩展
 
-`#yui帮助` 与无参数 `#yuihelp` 共用 `apps/help-menu.ts:sendPluginHelp`，源码动作示例也绑定此函数。帮助按调用者权限过滤：普通用户只显示普通区域，主人同时显示管理区域；参数用方括号标注，第一人称填入当前值。帮助按区域使用统一 HTML 渲染主题及缓存生命周期，HTML 不可用时回退 SVG，图片渲染关闭时回复文字；模板文本必须转义。
+工具统一经过 Registry 的授权、参数校验、执行限制、去重与投递检查。工具调用和结果保持配对；失败后的重试遵循工具副作用策略。内置功能集中见 [内置工具](builtin-tools.md)，契约与开发方式见 [工具开发指南](tool-authoring-guide.md)。
 
-记忆命令由 `apps/commands/memory.ts` 解析，通过现有 memoryStore 管理 user 范围的长期记忆。`#yui记忆` 固定发送者身份；`#yui管理记忆 用户ID` 在主人入口注册并再次检查 isMaster。列表按个人本群（user_group）和个人全局（user）分块合并转发，每节点最多 10 条，每范围最多 200 条。序号绑定调用者、目标用户和会话的最近列表，15 分钟过期，修改前核对原条目内容；旧 ID 指令仍可用。增删改按 ownerId、groupId 与记忆 ID 定位，不暴露其他人的全局记忆，不调用模型。
+动作将现有工具或已声明的项目资源绑定为快捷指令，支持参数、回复模板、预览与测试。动作保存后独立控制启停和最低角色；预览不执行，实际运行及后台投递重新校验授权。模型上下文专用工具不能绑定动作，示例默认停用。
 
-动作主指令与别名在启用时统一查重，不因阶段或优先级不同而允许重复；停用草稿可保留，启用前须解决冲突。源码资源按文件版本复用模块，文件变化时重新加载；后台动作实际执行前使用最新配置重新授权并读取运行参数。
+Custom Tool/Filter 读取宿主或跨插件资源必须声明 `frameworkResources`，见 [框架资源文档](custom-framework-resources.md)。Skill 只注入提示词，不注册为可执行工具。用户扩展与源码分开，更新插件不覆盖用户代码。
+
+## 管理台与安全
+
+管理台默认挂载 `/yui-chat`，API 和 WebSocket 自行鉴权。主人通过 `#yui面板` 获取一次性登录链接；浏览器使用 HttpOnly、SameSite=Strict 会话，修改请求校验同源。管理 Token 不进入 URL、浏览器存储或日志；一次性登录码与长期 Token 分开处理。
+
+用户 URL 和媒体读取统一经过安全网络边界，逐跳校验地址、DNS、超时及大小。私网访问和截图域名由 `security.linkSafety` 控制，截图保留全请求拦截。子代理、主动问候和截图等功能各自受独立开关约束。
+
+模型日志记录实际进入适配器的请求、用量及工具链，详情支持按来源或消息顺序核对上下文；凭证脱敏，正文与媒体快照有大小上限。普通工具执行不伪造模型调用，`<EMPTY>` 静默结果不写入历史或记忆。
+
+## 维护
+
+运行 `npm run check` 检查类型、构建、结构、存储与行为。具体修改约束见 [AGENTS.md](../AGENTS.md)。

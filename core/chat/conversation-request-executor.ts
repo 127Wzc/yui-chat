@@ -2,7 +2,7 @@ import crypto from "node:crypto"
 import { configStore } from "../../config/store.js"
 import { providerResolver } from "../../models/routing/provider-resolver.js"
 import { prepareMediaForVision } from "../media/media-cache.js"
-import { conversationImageFollowup, recentImageRecallMode, resolveMediaContext, type ResolvedMediaContext } from "../message/media-context.js"
+import { conversationImageFollowup, recentImageRecallMode, resolveMediaContext, refreshRecentImage, type ResolvedMediaContext } from "../message/media-context.js"
 import { truncateTextToTokens } from "./token-budget.js"
 import { recentContextStore } from "./recent-context.js"
 import { isEmptyResponse, normalizeResponseText } from "./response-pipeline.js"
@@ -242,6 +242,7 @@ export async function sendConversation(
       return failTrace(error)
     }
 
+    await recentContextStore.buildPromptWithHistory(event)
     if (media && mediaEnabled) {
       // 明确引用/本次附件始终优先；跟进本轮图片时先读取会话里的受管缓存引用。
       const canRecall = !media.quote && !media.attachments.some(item => item.kind === "image" && item.visionEligible !== false)
@@ -251,7 +252,7 @@ export async function sendConversation(
       const previousImages = list(record(previousUser?.metadata).imageReferences)
         .map(record)
         .filter(item => item.source !== "quote")
-      if (canRecall && conversationImageFollowup(prompt) && previousImages.length) {
+      if (canRecall && !recentContextStore.referencedUsers(event, prompt).length && conversationImageFollowup(prompt) && previousImages.length) {
         media.attachments.push(...previousImages.filter(item => /^[a-f0-9]{64}$/.test(text(item.cacheKey))).map(item => ({
           kind: "image" as const, cacheKey: text(item.cacheKey), source: text(item.source),
           messageId: item.messageId, sender: record(item.sender), imageNumber: item.imageNumber, fromHistory: true, visionEligible: true,
@@ -259,11 +260,21 @@ export async function sendConversation(
       }
       const recallMode = recentImageRecallMode(media, prompt)
       if (recallMode !== "none") {
-        const recentImage = recentContextStore.findRecentImage(event, { ...(recallMode === "adjacent" ? { maxRowsBack: 1 } : {}), prompt })
-        if (recentImage) media.attachments.push({
-          kind: "image", url: recentImage.url, source: recentImage.source, messageId: recentImage.messageId,
-          sender: { userId: recentImage.userId, name: recentImage.name }, visionEligible: true,
-        })
+        const selection = recallMode === "adjacent"
+          ? { images: [recentContextStore.findRecentImage(event, { maxRowsBack: 1, prompt })].filter((item): item is NonNullable<typeof item> => Boolean(item)), diagnostic: "" }
+          : recentContextStore.selectRecentImages(event, prompt)
+        if (selection.diagnostic) media.diagnostics.push(selection.diagnostic)
+        for (const recentImage of selection.images) {
+          const refreshed = await refreshRecentImage(event, recentImage)
+          if (!refreshed) {
+            media.diagnostics.push(`未能重新读取 ${recentImage.name} 的目标图片，请引用或重发原图；不采用其他图片。`)
+            continue
+          }
+          media.attachments.push({
+            kind: "image", url: refreshed, source: recentImage.source, messageId: recentImage.messageId,
+            sender: { userId: recentImage.userId, name: recentImage.name }, visionEligible: true,
+          })
+        }
       }
       media = await prepareMediaForVision(media, config) as ResolvedMediaContext
     } else if (media) {
@@ -404,7 +415,7 @@ export async function sendConversation(
         const baseHistory = Array.isArray(previousValue) ? previousValue : list(previous.history)
         const nextHistory = [
           ...baseHistory,
-          { role: "user", content: text(final.historyUserContent) || prompt, metadata: { imageReferences: list(final.imageReferences) } },
+          { role: "user", content: text(final.historyUserContent) || prompt, metadata: { messageId: text(record(event).message_id), requesterId: text(record(event).user_id), imageReferences: list(final.imageReferences) } },
           { role: "assistant", content: finalText },
         ].slice(-maxHistoryMessages)
         const turns = [...list(previous.turns), turn].slice(-Math.max(1, Math.floor(maxHistoryMessages / 2)))

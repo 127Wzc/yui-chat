@@ -66,21 +66,28 @@ try {
   const {memoryStore: commandMemoryStore} = await import("../output/runtime/memory/store.js")
   const commandEvent = {user_id:"command-self",isGroup:true,group_id:"command-group"}
   const memoryCommand = (msg,event=commandEvent,master=false)=>runMemoryCommand({...event,msg},master)
-  assert.match(await memoryCommand("#yui记忆 添加 喜欢喝茶"),/已添加/)
+  assert.match(await memoryCommand("#yui我的记忆 添加 喜欢喝茶"),/已添加/)
   const ownMemory = (await commandMemoryStore.getManagedScope("user","command-self")).items[0]
   const foreignMemory = await commandMemoryStore.saveManagedMemory({scopeType:"user",ownerId:"command-other",text:"喜欢爬山"})
   await commandMemoryStore.saveManagedMemory({scopeType:"group",ownerId:"command-group",text:"群活动是周六"})
-  const ownListing = await memoryCommand("#yui记忆")
+  const ownListing = await memoryCommand("#yui我的记忆")
   assert(ownListing.includes("喜欢喝茶"))
   assert(!ownListing.includes("喜欢爬山") && !ownListing.includes("群活动是周六"))
-  assert.match(await memoryCommand(`#yui记忆 修改 ${foreignMemory.id} 篡改`),/未找到/)
-  assert.match(await memoryCommand(`#yui记忆 删除 ${foreignMemory.id}`),/未找到/)
+  assert.match(await memoryCommand(`#yui我的记忆 修改 ${foreignMemory.id} 篡改`),/未找到/)
+  assert.match(await memoryCommand(`#yui我的记忆 删除 ${foreignMemory.id}`),/未找到/)
   assert.match(await memoryCommand("#yui管理记忆 command-other",commandEvent,true),/只有主人/)
-  assert.match(await memoryCommand(`#yui记忆 修改 ${ownMemory.id} 喜欢红茶`),/已修改/)
+  assert.match(await memoryCommand(`#yui我的记忆 修改 ${ownMemory.id} 喜欢红茶`),/已修改/)
   const masterEvent = {...commandEvent,isMaster:true}
   assert.match(await memoryCommand("#yui管理记忆 command-other",masterEvent,true),/喜欢爬山/)
-  const mentionEvent={...masterEvent,msg:"@小呆 他的记忆",message:[{type:"at",qq:"command-other"},{type:"text",text:" 他的记忆"}]}
+  const mentionEvent={...masterEvent,msg:"#yui他的记忆 @小呆",message:[{type:"text",text:"#yui他的记忆 "},{type:"at",qq:"command-other"}]}
   assert.match(await runMentionMemoryCommand(mentionEvent),/喜欢爬山/)
+  await commandMemoryStore.saveManagedMemory({scopeType:"user",ownerId:"123456",text:"数字目标记忆"})
+  assert.match(await runMentionMemoryCommand({...masterEvent,msg:"#yui他的记忆 123456"}),/数字目标记忆/)
+  assert.match(await runMentionMemoryCommand({...masterEvent,msg:"#yui她的记忆 123456"}),/数字目标记忆/)
+  assert.match(await runMentionMemoryCommand({...masterEvent,msg:"#yui他的记忆 123456",isMaster:false}),/只有主人/)
+  assert.match(await runMentionMemoryCommand({...masterEvent,msg:"#yui他的记忆 123456 删除 1"}),/请只指定/)
+  assert.equal(await runMentionMemoryCommand({...masterEvent,msg:"他的记忆",message:[{type:"at",qq:"123456"},{type:"text",text:"他的记忆"}]}),false)
+
   assert.match(await runMentionMemoryCommand({...mentionEvent,isMaster:false}),/只有主人/)
   assert.equal(await runMentionMemoryCommand({...masterEvent,msg:"@小呆 他的记忆",message:[{type:"text",text:"@小呆 他的记忆"}]}),false)
   assert.match(await runMentionMemoryCommand({...mentionEvent,message:[...mentionEvent.message,{type:"at",qq:"second"}]}),/只 @ 一位/)
@@ -89,34 +96,34 @@ try {
 
   assert.match(await memoryCommand(`#yui管理记忆 command-other 修改 ${foreignMemory.id} 喜欢徒步`,masterEvent,true),/已修改/)
   assert.match(await memoryCommand(`#yui管理记忆 command-other 删除 ${foreignMemory.id}`,masterEvent,true),/已删除/)
-  assert.match(await memoryCommand(`#yui记忆 删除 ${ownMemory.id}`),/已删除/)
-  assert.match(await memoryCommand("#yui记忆 修改"),/记忆 修改 \[序号\]/)
-  assert.match(await memoryCommand("#yui记忆 9999"),/页码超出/)
-  assert.match(await memoryCommand("#yui记忆 添加 "+"字".repeat(501)),/500/)
+  assert.match(await memoryCommand(`#yui我的记忆 删除 ${ownMemory.id}`),/已删除/)
+  assert.match(await memoryCommand("#yui我的记忆 修改"),/记忆 修改 \[序号\]/)
+  assert.match(await memoryCommand("#yui我的记忆 9999"),/页码超出/)
+  assert.match(await memoryCommand("#yui我的记忆 添加 "+"字".repeat(501)),/500/)
   await commandMemoryStore.deleteManagedMemory("group","command-group",(await commandMemoryStore.getManagedScope("group","command-group")).items[0].id)
 
   const numberedEvent = {...commandEvent, user_id:"numbered-user"}
-  await memoryCommand("#yui记忆 添加 全局测试", numberedEvent)
-  await memoryCommand("#yui记忆 个人 添加 本群测试", numberedEvent)
-  for (let index = 0; index < 11; index++) await memoryCommand(`#yui记忆 添加 列表测试${index}`, numberedEvent)
+  await memoryCommand("#yui我的记忆 添加 全局测试", numberedEvent)
+  await memoryCommand("#yui我的记忆 个人 添加 本群测试", numberedEvent)
+  for (let index = 0; index < 11; index++) await memoryCommand(`#yui我的记忆 添加 列表测试${index}`, numberedEvent)
   let forwarded
   const forwardingEvent = {...numberedEvent,
     group: {makeForwardMsg: nodes => { forwarded = nodes; return {type:"node",data:nodes} }},
     reply: async () => ({message_id:"forwarded"}),
   }
-  assert.equal(await memoryCommand("#yui记忆",forwardingEvent), "")
+  assert.equal(await memoryCommand("#yui我的记忆",forwardingEvent), "")
   assert(forwarded.some(node => String(node.message).includes("个人记忆 · 本群")))
   assert(forwarded.some(node => String(node.message).includes("全局记忆 · 跨群")))
   assert(forwarded.every(node => (String(node.message).match(/^\[\d+\]/gm) || []).length <= 10), "each forward node holds at most ten memories")
   assert(!JSON.stringify(forwarded).includes("command-other"))
-  assert.match(await memoryCommand("#yui记忆 修改 1 本群已更新",numberedEvent), /已修改/)
-  assert.match(await memoryCommand("#yui记忆 删除 1",numberedEvent), /序号已过期/)
-  assert.match(await memoryCommand("#yui记忆",numberedEvent), /本群已更新/)
-  assert.match(await memoryCommand("#yui记忆 删除 1",numberedEvent), /已删除/)
+  assert.match(await memoryCommand("#yui我的记忆 修改 1 本群已更新",numberedEvent), /已修改/)
+  assert.match(await memoryCommand("#yui我的记忆 删除 1",numberedEvent), /序号已过期/)
+  assert.match(await memoryCommand("#yui我的记忆",numberedEvent), /本群已更新/)
+  assert.match(await memoryCommand("#yui我的记忆 删除 1",numberedEvent), /已删除/)
   const otherGroup = {...numberedEvent,group_id:"different-group"}
-  assert(!String(await memoryCommand("#yui记忆",otherGroup)).includes("本群已更新"))
-  assert.match(await memoryCommand("#yui记忆",otherGroup), /全局测试/)
-  assert.match(await memoryCommand("#yui记忆 个人 添加 不允许", {...numberedEvent,isGroup:false,group_id:undefined}), /请在对应群聊/)
+  assert(!String(await memoryCommand("#yui我的记忆",otherGroup)).includes("本群已更新"))
+  assert.match(await memoryCommand("#yui我的记忆",otherGroup), /全局测试/)
+  assert.match(await memoryCommand("#yui我的记忆 个人 添加 不允许", {...numberedEvent,isGroup:false,group_id:undefined}), /请在对应群聊/)
   const {buildNextHelpMenu} = await import("../output/runtime/apps/help-menu.js")
   const publicHelp = buildNextHelpMenu(configStore.get(),commandEvent)
   assert.equal(publicHelp.groups.length,1)

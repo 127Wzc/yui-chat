@@ -36,6 +36,8 @@ const sources: Record<string, { label: string; icon: string; tone: string }> = {
   "command-knowledge": { label: "内置指令知识", icon: "book", tone: "knowledge" },
   media: { label: "媒体与消息附加内容", icon: "file", tone: "media" },
   "message-reference": { label: "本轮指代", icon: "message", tone: "media" },
+  "recent-reference": { label: "群聊参考资料", icon: "clock", tone: "history" },
+  "conversation-roles": { label: "对话关系规则", icon: "user", tone: "system" },
   recent: { label: "最近消息上下文", icon: "clock", tone: "history" },
   history: { label: "会话历史", icon: "message", tone: "history" },
   current: { label: "当前提问", icon: "message", tone: "current" },

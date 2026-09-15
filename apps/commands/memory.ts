@@ -4,7 +4,7 @@ import { extractMessageContext } from "../../core/message/message-context.js"
 import { memoryStore } from "../../memory/store.js"
 import { configStore } from "../../config/store.js"
 import { checkAccess } from "../../core/chat/access-control.js"
-import { pluginCommand, stripPluginCommand } from "../../core/message/command-prefixes.js"
+import { matchPluginCommand, pluginCommand, stripPluginCommand } from "../../core/message/command-prefixes.js"
 import type { UnknownRecord } from "../../core/message/types.js"
 
 function memoryMessageContext(e: UnknownRecord) {
@@ -26,7 +26,7 @@ function remember(key: string, rows: IndexedMemory[]): void {
   indexes.set(key, { expires: Date.now() + 15 * 60_000, rows })
 }
 function usage(master: boolean): string {
-  const prefix = pluginCommand(master ? "管理记忆 [@成员或QQ号]" : "记忆")
+  const prefix = pluginCommand(master ? "管理记忆 [@成员或QQ号]" : "我的记忆")
   return [prefix, `${prefix} 添加 [内容]`, `${prefix} 个人 添加 [本群内容]`, `${prefix} 修改 [序号] [新内容]`, `${prefix} 删除 [序号]`, "方括号不用输入；默认添加到全局，序号以最近一次列表为准（15 分钟有效）。"].join("\n")
 }
 async function memoryRows(e: UnknownRecord, ownerId: string): Promise<IndexedMemory[]> {
@@ -53,7 +53,7 @@ export async function runMemoryCommand(e: UnknownRecord, master = false): Promis
   if (master && e.isMaster !== true) return "只有主人可以管理他人的记忆。"
   if (!checkAccess(e, configStore.get()).ok) return ""
   let ownerId = String(e.user_id || "").trim()
-  let body = stripPluginCommand(e.msg, master ? "管理记忆" : "记忆")
+  let body = stripPluginCommand(e.msg, master ? "管理记忆" : "我的记忆")
   if (master) {
     const context = memoryMessageContext(e)
     const targets = [...new Set(context.mentions.map(item=>String(item.qq)))]
@@ -146,11 +146,17 @@ export async function runMemoryCommand(e: UnknownRecord, master = false): Promis
   }
 }
 
-/** 用户明确要求的 @ 快捷查看入口；只接受真实提及消息，不按昵称猜测身份。 */
+/** 带统一前缀的只读快捷入口，真实提及或明确 QQ 号确定目标。 */
 export async function runMentionMemoryCommand(e: UnknownRecord): Promise<string | false> {
   const context = memoryMessageContext(e)
-  if (!/^(?:他的|她的|TA的)记忆$/i.test(context.text.trim()) || !context.mentions.length) return false
+  const match = matchPluginCommand(context.text.trim(), "(?:他的|她的|TA的|ta的)记忆(?:\\s+([\\s\\S]*))?")
+  if (!match) return false
   if (e.isMaster !== true) return "只有主人可以查看他人的记忆。"
-  const message = context.mentions.map(item=>({type:"at",qq:item.qq}))
-  return runMemoryCommand({...e,msg:pluginCommand("管理记忆"),message:[{type:"text",text:pluginCommand("管理记忆")},...message]},true)
+  const target = (match[1] || "").trim()
+  if (context.mentions.length ? Boolean(target) : !/^\d{1,20}$/.test(target)) {
+    return pluginCommand("他的记忆 [@成员或QQ号]") + "（她的记忆、TA的记忆也可；请只指定一位成员）"
+  }
+  const command = pluginCommand("管理记忆") + (target ? " " + target : "")
+  const message = context.mentions.map(item => ({ type: "at", qq: item.qq }))
+  return runMemoryCommand({ ...e, msg: command, message: [{ type: "text", text: command }, ...message] }, true)
 }

@@ -1,3 +1,4 @@
+import { MusicPlayTool } from "./music.js"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { configStore } from "../../config/store.js"
@@ -634,5 +635,5 @@ export class MessageSendTool {
 }
 
 export function createMediaTools(): unknown[] {
-  return [new MessageSendTool(), new GenerateImageTool()]
+  return [new MessageSendTool(), new GenerateImageTool(), new MusicPlayTool()]
 }

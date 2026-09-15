@@ -283,3 +283,25 @@ export function promptBudgetReport(messages: readonly UnknownRecord[] = [], tool
     tools: tools.reduce((sum, item) => sum + estimateTokens({ name: item.name, description: item.description, parameters: item.parameters }), 0),
   }
 }
+
+/** 仅压缩最后一轮以前的完整单元；本轮群资料和工具链留在原位。 */
+export async function compactPromptHistory(
+  messages: UnknownRecord[],
+  config: unknown,
+  options: PromptBudgetOptions & { preserveFrom?: UnknownRecord },
+  compact: (history: UnknownRecord[]) => Promise<UnknownRecord | null>,
+): Promise<UnknownRecord[] | null> {
+  const limit = inputTokenLimit(config, options)
+  if (messages.reduce((sum, item) => sum + messageTokens(item), 0) <= limit) return null
+  const units = groupAtomicUnits(messages)
+  const anchor = options.preserveFrom ? units.findIndex(unit => unit.includes(options.preserveFrom!)) : -1
+  const lastUser = anchor >= 0 ? anchor : units.map(unit => unit.some(item => item.role === "user")).lastIndexOf(true)
+  if (lastUser <= 0) return null
+  const history = units.slice(0, lastUser).filter(unit => !unit.some(item => item.role === "system")).flat()
+  if (!history.length) return null
+  const result = await compact(history)
+  if (!result) return null
+  const candidate = [...units.slice(0, lastUser).filter(unit => unit.some(item => item.role === "system")).flat(), result, ...units.slice(lastUser).flat()]
+  // 加密内容不做字符串截断；结果仍超预算时回到原始明文的本地裁剪。
+  return candidate.reduce((sum, item) => sum + messageTokens(item), 0) <= limit ? candidate : null
+}
