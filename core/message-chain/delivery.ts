@@ -185,7 +185,7 @@ async function resolveSender(context: MessageChainDeliveryContext): Promise<Reso
   const reply = event.reply as (payload: unknown, quote?: boolean) => unknown
   return {
     label: event.isGroup ? `群 ${text(event.group_id)}` : `用户 ${text(event.user_id || record(event.sender).user_id)}`,
-    send: (payload, quote) => reply(payload, quote),
+    send: (payload, quote) => reply.call(event, payload, quote),
   }
 }
 
@@ -218,8 +218,8 @@ export async function deliverMessageChain(chain: MessageChain, context: MessageC
       } else if (outbound.type === "text" && chain[index - 1]?.type === "mention" && !/^\s/.test(outbound.text)) {
         prepared.push({ index, payload: ` ${outbound.text}`, standalone: false, forward: false })
       } else {
-        // OneBot 普通复合消息只可靠支持图文链；视频必须单独作为一条消息发送。
-        prepared.push({ index, payload: segmentFor(outbound, value), standalone: outbound.type === "video", forward: false })
+        // 视频、音乐卡片和语音独立发送，避免宿主将它们作为图文链处理。
+        prepared.push({ index, payload: segmentFor(outbound, value), standalone: ["video", "music", "audio"].includes(outbound.type), forward: false })
       }
       parts.push({ index, type: partType(part), status: "sent" })
     } catch (error) {
@@ -250,7 +250,8 @@ export async function deliverMessageChain(chain: MessageChain, context: MessageC
   for (const batch of batches) {
     try {
       const payloads = batch.items.map(item => item.payload)
-      const result = await sender.send(payloads.length === 1 ? payloads[0] : payloads, batch.forward ? false : quotePending)
+      const result = await sender.send(payloads.length === 1 ? payloads[0] : payloads, batch.forward || batch.items.some(item => ["music", "record", "audio"].includes(text(record(item.payload).type))) ? false : quotePending)
+      if (result === false || record(result).error || record(result).status === "failed") throw new Error("宿主消息投递失败。")
       quotePending = false
       const messageId = messageIdFrom(result)
       if (messageId) messageIds.push(messageId)

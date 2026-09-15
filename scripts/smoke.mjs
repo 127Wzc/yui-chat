@@ -1677,8 +1677,10 @@ async function checkMusicPlay() {
     { mid: "firstMID", title: "<em>第一首</em>", singer: [{name:"歌手"}], album: {mid:"albumMID"} },
     { mid: "secondMID", title: "第二首" },
   ] } } } } }
-  const context = { config, e: {user_id:"123",self_id:"456",isGroup:false,reply:async value => {
+  const context = { config, e: {user_id:"123",self_id:"456",isGroup:false,reply:async (value, quote) => {
+    assert.equal(quote, false, "music card and audio must not be wrapped in a quoted message")
     if (failAt === sent.length + 1) throw new Error("模拟投递失败")
+    if (failAt === -1) return {error:["宿主发送失败"]}
     sent.push(value)
     return { message_id: String(sent.length) }
   }} }
@@ -1698,6 +1700,23 @@ async function checkMusicPlay() {
     assert(JSON.stringify(sent[0]).includes('"type":"music"') && JSON.stringify(sent[0]).includes("第一首"))
     assert(!JSON.stringify(sent[0]).includes("secondMID") && !JSON.stringify(sent[0]).includes('"type":"record"'))
     assert(JSON.stringify(sent[1]).includes("record") && JSON.stringify(sent[1]).includes("firstMID") && !JSON.stringify(sent[1]).includes('"type":"music"'))
+    const { chatService } = await import("../output/runtime/core/chat/chat-service.js")
+    const { adapterRegistry } = await import("../output/runtime/models/adapters/registry.js")
+    const mock = adapterRegistry.get("mock")
+    const originalSend = mock.sendMessage
+    let modelCalls = 0
+    try {
+      sent.length = 0
+      mock.sendMessage = async () => {
+        modelCalls++
+        return {id:"music-loop",text:"",toolCalls:[{id:"music-call",name:"music_play",arguments:{keyword:"歌曲 歌手"}}],stopReason:"tool_calls",usage:{input:1,output:1,total:2,source:"reported"}}
+      }
+      const played = await chatService.runModelStepWithChannel({e:context.e,prompt:"来首歌",config,history:[],step:{id:"reply",task:"replyer",mode:"final"},channel:{id:"mock",type:"mock",model:"mock",modelConfig:{toolUse:true}}})
+      assert.equal(modelCalls,1,"completed playback must not trigger further model delivery rounds")
+      assert.equal(sent.length,2)
+      assert.equal(played.searchDeliveryRequired,false)
+      assert.equal(played.requiresFinalReply,false)
+    } finally { mock.sendMessage = originalSend }
     sent.length = 0
     failAt = 2
     result = await toolRegistry.execute("music_play", {keyword:"歌曲 歌手"}, context)
@@ -1710,6 +1729,10 @@ async function checkMusicPlay() {
     result = await toolRegistry.execute("music_play", {keyword:"歌曲 歌手"}, context)
     assert.equal(result.sentCount, 0)
     assert.equal(sent.length, 0)
+    failAt = -1
+    result = await toolRegistry.execute("music_play", {keyword:"歌曲 歌手"}, context)
+    assert.equal(result.isError, true)
+    assert.equal(result.sentCount, 0)
     failAt = 0
     payload = {code:0,search:{data:{body:{item_song:[]}}}}
     result = await toolRegistry.execute("music_play", {keyword:"歌曲 歌手"}, context)

@@ -140,7 +140,7 @@ function normalizedToolName(value: unknown): string {
 
 function isSearchToolTrace(trace: UnknownRecord, prompt: string): boolean {
   const name = text(trace.name).trim()
-  if (!name || name === "tool_search") return false
+  if (!name || name === "tool_search" || hasSuccessfulMediaDelivery([trace])) return false
   if (usesAutomaticMessageSend(name) && text(record(trace.arguments).action).toLowerCase() === "search") return false
   const tool = toolRegistry.get(name)
   if (!tool) return searchToolNamePattern.test(normalizedToolName(name))
