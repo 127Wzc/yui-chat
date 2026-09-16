@@ -3910,8 +3910,7 @@ async function checkPersonaTrigger() {
   assert(defaultPersonaPrompt.includes("可靠、自然、简洁") && defaultPersonaPrompt.includes("不编造") && defaultPersonaPrompt.includes("使用工具搜索") && defaultPersonaPrompt.includes("<EMPTY>"), "default composed prompt should include the character setting and default runtime rules")
   assert(defaultPersonaPrompt.includes("使用可用的消息投递能力") && defaultPersonaPrompt.includes("只声称看到了本轮实际提供给模型的图片") && !defaultPersonaPrompt.includes("[CQ:at"), "default system prompt should match current delivery and intent-driven image context behavior")
   const timedPersona = await buildPersonaMessagesWithContext({ isGroup: false, user_id: "time-user", sender: { nickname: "Time" } }, "现在几点", defaultConfig)
-  const timeSection = timedPersona.sections.find(item => item.source === "runtime-time")
-  assert(timeSection?.label === "当前时间" && /当前北京时间：\d{4}-\d{2}-\d{2} \d{2}:\d{2}（星期[一二三四五六日]）/.test(timeSection.content) && defaultPersonaMessages[0]?.content.includes("当前北京时间："), "every persona request should inject a separately auditable Beijing-time reference")
+  assert(!timedPersona.sections.some(item => item.source === "runtime-time") && !defaultPersonaMessages[0]?.content.includes("当前北京时间："), "dynamic time must not change the system prefix")
   const customRuntimeConfig = JSON.parse(JSON.stringify(config))
   customRuntimeConfig.persona.runtimePrompt = "Smoke 运行规则：使用[first_person]的当前自定义规则。"
   const personaMessages = await buildPersonaMessages(event, "请告诉我这个指令怎么用", customRuntimeConfig, { source: "firstPerson" })

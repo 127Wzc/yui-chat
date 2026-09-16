@@ -306,11 +306,12 @@ export class RecentContextStore {
     return [...ids]
   }
 
-  /** JSON 资料保留作者和回复关系；优先保留点名/引用资料，整条裁剪而非截断 JSON。 */
+  /** 每轮提供群窗口；点名/引用仅影响预算优先级，按回复链整组裁剪。 */
   buildReference(event: unknown, prompt: unknown, options: { history?: unknown[]; maxTokens?: number } = {}): string {
     const e = record(event)
-    this.prune()
-    if (!isGroupEvent(e)) return ""
+    const config = configStore.get()
+    this.prune(config)
+    if (!isGroupEvent(e) || !configuredMessageCount(config) || contextConfig(config).captureGroups === false) return ""
     const history = (options.history || []).map(record)
     const represented = new Set(history.map(item => text(record(item.metadata).messageId)).filter(Boolean))
     const currentId = messageId(e)
@@ -319,11 +320,10 @@ export class RecentContextStore {
     const quoteIds = new Set(extractMessageContext(e).replies.map(item => item.id))
     const rows = (buffers.get(scopeKey(e)) || []).filter(row => (!currentId || row.messageId !== currentId) && !represented.has(row.messageId)
       && !(row.respondingToUserId === text(e.user_id) && history.some(item => item.role === "assistant" && text(item.content) === row.text)))
-    const needsGroupBackground = targets.size > 0 || quoteIds.size > 0 || /刚才|刚刚|之前|群里|大家|聊了|说了|上下文|刚发/.test(text(prompt))
     const selectedIds = new Set(rows.filter(row => targets.has(row.userId) || targets.has(row.respondingToUserId || "") || quoteIds.has(row.messageId)).map(row => row.messageId))
     const candidates = rows.map((row, index) => ({
       index,
-      priority: selectedIds.has(row.messageId) || selectedIds.has(row.replyTo?.messageId || "") ? 2 : row.userId === text(e.user_id) || row.respondingToUserId === text(e.user_id) ? 1 : 0,
+      priority: selectedIds.has(row.messageId) || selectedIds.has(row.replyTo?.messageId || "") ? 1 : 0,
       value: {
         messageId: row.messageId, speaker: { userId: row.userId, name: row.name },
         text: row.text, attachments: row.attachments,
@@ -349,17 +349,20 @@ export class RecentContextStore {
     const kept: typeof candidates = []
     const maxTokens = Math.max(0, options.maxTokens ?? 1200)
     let used = 100
-    const ranked = [...groups.values()].filter(group => needsGroupBackground || group.some(item => item.priority > 0))
+    const ranked = [...groups.values()]
       .sort((a, b) => Math.max(...b.map(item => item.priority)) - Math.max(...a.map(item => item.priority)) || b.at(-1)!.index - a.at(-1)!.index)
     for (const group of ranked) {
       const cost = estimateTokens(group.map(item => item.value))
       if (used + cost > maxTokens) continue
       kept.push(...group); used += cost
     }
-    if (!kept.length) return needsGroupBackground
-      ? JSON.stringify({ referenceOnly: true, requestedUserIds: targetIds, messages: [], unavailable: "当前群窗口没有可提供的完整相关问答，或资料超出预算；请明确引用，不能猜测内容。" })
-      : ""
-    return JSON.stringify({ referenceOnly: true, requestedUserIds: targetIds, omittedMessages: rows.length - kept.length,
+    return JSON.stringify({ referenceOnly: true, requestedUserIds: targetIds,
+      windowMessages: (buffers.get(scopeKey(e)) || []).length,
+      eligibleMessages: rows.length, includedMessages: kept.length, omittedMessages: rows.length - kept.length,
+      ...(rows.length > kept.length ? { omissionReason: "参考资料超出本轮预算，按完整回复链裁剪。" } : {}),
+      ...(!kept.length ? { unavailable: rows.length
+        ? "群窗口资料超出本轮预算；不能猜测未提供的内容。"
+        : "当前群窗口没有额外可提供的消息；当前发言和个人历史另行提供，不能猜测未提供的内容。" } : {}),
       messages: kept.sort((a, b) => a.index - b.index).map(item => item.value) })
   }
 

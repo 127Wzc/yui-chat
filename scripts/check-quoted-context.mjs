@@ -6,7 +6,23 @@ import fs from "node:fs/promises"
 export async function checkQuotedContext(image) {
   const { resolveMediaContext, recentImageRecallMode, conversationImageFollowup, buildMediaUserContent } = await import("../output/runtime/core/message/media-context.js")
   const { mediaCacheDir, prepareMediaForVision } = await import("../output/runtime/core/media/media-cache.js")
-  const { buildUserMessage } = await import("../output/runtime/core/persona/persona-chain.js")
+  const { buildUserMessage, buildPersonaMessages } = await import("../output/runtime/core/persona/persona-chain.js")
+  const quoteEvent = { user_id:"reference-user", self_id:"reference-bot", msg:"解释这句话" }
+  const quoteMedia = { base:{text:"解释这句话",images:[],records:[],videos:[],files:[],mentions:[],replies:[],rawTypes:[]}, quote:{messageId:"quote-regression-id",text:"引用正文仅供分析",attachments:[],sender:{name:"引用作者"}}, attachments:[], diagnostics:["引用读取测试说明"] }
+  const quoteSystem = await buildPersonaMessages(quoteEvent,quoteEvent.msg,{}, {media:quoteMedia})
+  assert(!JSON.stringify(quoteSystem).includes("当前北京时间："))
+  const plainUser = buildUserMessage(quoteEvent,quoteEvent.msg,{}).content
+  assert(plainUser.includes("当前北京时间："))
+  assert(plainUser.indexOf("当前北京时间：") < plainUser.indexOf("【本轮发言】"))
+  assert(!JSON.stringify(buildUserMessage(quoteEvent,quoteEvent.msg,{}, {history:true})).includes("当前北京时间："))
+  const extraSystem = await buildPersonaMessages(quoteEvent,quoteEvent.msg,{}, {extraSystemPrompt:"动态提示测试"})
+  assert(extraSystem[0].content.indexOf("‘这个、这条、这张’") < extraSystem[0].content.indexOf("动态提示测试"))
+  assert(!JSON.stringify(quoteSystem).includes("引用正文仅供分析"))
+  assert(!JSON.stringify(quoteSystem).includes("quote-regression-id"))
+  assert(!JSON.stringify(quoteSystem).includes("引用读取测试说明"))
+  const quoteUser = JSON.stringify(buildUserMessage(quoteEvent,quoteEvent.msg,{}, {media:quoteMedia}))
+  assert(quoteUser.includes("引用正文仅供分析") && quoteUser.includes("quote-regression-id") && quoteUser.includes("引用读取测试说明"))
+
   const { contentToText, extractMessageContext } = await import("../output/runtime/core/message/message-context.js")
   const { messagesForResponses } = await import("../output/runtime/models/adapters/openai/responses/request-adapter.js")
   const { configStore } = await import("../output/runtime/config/store.js")

@@ -237,7 +237,7 @@ export const schema: SchemaGroup[] = [
   {
     group: "Context",
     fields: [
-      { path: "context.recentMessageCount", label: "最近消息条数（同时拉取并注入）", type: "number" },
+      { path: "context.recentMessageCount", label: "最近消息条数（群聊每轮参考上限）", type: "number" },
       { path: "context.captureGroups", label: "记录群聊最近消息", type: "boolean" },
       { path: "context.capturePrivate", label: "记录私聊最近消息", type: "boolean" },
       { path: "context.ignoreCommands", label: "忽略指令消息", type: "boolean" },

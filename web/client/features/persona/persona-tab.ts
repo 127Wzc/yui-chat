@@ -661,7 +661,7 @@ export const PersonaTab = {
                       <div class="settings-toggle-item"><div><strong>压缩缩略图</strong><small>生成适合聊天窗口的预览尺寸。</small></div><Switch :model-value="draft.renderMediaThumbnailEnabled" @update:model-value="draft.renderMediaThumbnailEnabled = $event" /></div>
                     </div>
                     <div class="form-grid dense">
-                      <Field label="最近消息条数" type="number" v-model="draft.contextRecentMessageCount" tip="同时用于记录和注入；0 表示关闭最近上下文。" />
+                      <Field label="最近消息条数" type="number" v-model="draft.contextRecentMessageCount" tip="群聊每轮默认提供最近窗口，受预算限制，优先保留点名、引用和最近消息；0 表示关闭最近上下文。" />
                       <Field label="单张图片最大 bytes" type="number" v-model="draft.mediaMaxBytes" />
                       <Field label="缩略图最多张数" type="number" v-model="draft.renderMediaThumbnailCount" />
                     </div>

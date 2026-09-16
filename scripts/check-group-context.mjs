@@ -44,7 +44,7 @@ export async function checkGroupContext(image) {
     recentContextStore.record({...a,group_id:"another-group",message_id:"foreign",msg:"其他群秘密"})
     await send({...a,message_id:"a2"}, "你问问他图里是谁")
     assert(requests.at(-1).messages.filter(item => item.role === "system").every(item => !contentToText(item.content).includes("水仙是什么意思")))
-    assert(!contentToText(current().content).includes("水仙是什么意思"))
+    assert(contentToText(current().content).includes("水仙是什么意思"))
 
     assert(!contentToText(current().content).includes("其他群秘密"))
     assert(requests.at(-1).messages.some(item => item.role === "assistant" && item.content === "看不出图里是谁。"))
@@ -59,10 +59,45 @@ export async function checkGroupContext(image) {
     const ref = JSON.parse(recentContextStore.buildReference(a,"玖弦聊了什么",{maxTokens:1200}))
     assert(ref.messages.some(item => item.speaker.userId === "user-b"))
     assert(ref.messages.some(item => item.respondingToUserId === "user-b"))
-    assert.equal(recentContextStore.buildReference(a,"你好",{history:savedHistory}),"")
+    for (const prompt of ["你好", "玉玉他们叽里呱啦说啥呢", "他们在聊什么"]) {
+      const background = JSON.parse(recentContextStore.buildReference(a,prompt,{history:savedHistory}))
+      assert(background.messages.some(item => item.messageId === "b1"), "ordinary group prompts must include other members")
+      assert(background.messages.some(item => item.messageId === "bot-b1"))
+      assert.equal(background.includedMessages, background.messages.length)
+      assert.equal(background.eligibleMessages, background.includedMessages + background.omittedMessages)
+    }
+    await chatService.send({...a,message_id:"natural-group",msg:"玉玉他们叽里呱啦说啥呢"},"玉玉他们叽里呱啦说啥呢",{source:"firstPerson",disableTools:true,persistMemory:false})
+    assert(contentToText(current().content).includes("水仙是什么意思"))
+    assert(contentToText(current().content).includes("水仙是自己和自己配对"))
     const small = JSON.parse(recentContextStore.buildReference(a,"玖弦聊了什么",{maxTokens:180}))
     assert(small.messages.length === 0 || small.messages.some(item => item.messageId === "b1") && small.messages.some(item => item.messageId === "bot-b1"), "budget must retain or omit the whole question/answer")
     if (!small.messages.length) assert(small.unavailable)
+    assert(small.omissionReason)
+    const orderingEvent = {...a,group_id:"window-order"}
+    for (const [message_id,user_id] of [["older",a.user_id],["newer",b.user_id],["current",a.user_id]]) {
+      recentContextStore.record({...orderingEvent,message_id,user_id,sender:{nickname:user_id},msg:"一条群消息"})
+    }
+    const window = JSON.parse(recentContextStore.buildReference({...orderingEvent,message_id:"current"},"你好"))
+    assert.deepEqual(window.messages.map(item => item.messageId),["older","newer"], "current message must not be repeated")
+    const { estimateTokens } = await import("../output/runtime/core/chat/token-budget.js")
+    const oneRowBudget = 100 + Math.max(...window.messages.map(item => estimateTokens([item])))
+    const newest = JSON.parse(recentContextStore.buildReference({...orderingEvent,message_id:"current"},"你好",{maxTokens:oneRowBudget}))
+    assert.deepEqual(newest.messages.map(item => item.messageId),["newer"], "recent group messages must outrank older requester messages")
+    const quoted = JSON.parse(recentContextStore.buildReference({...orderingEvent,message_id:"current",message:[{type:"reply",id:"older"}]},"解释一下",{maxTokens:oneRowBudget}))
+    assert.deepEqual(quoted.messages.map(item => item.messageId),["older"], "explicit references must outrank newer messages")
+    const deduplicated = JSON.parse(recentContextStore.buildReference({...orderingEvent,message_id:"current"},"你好",{history:[{role:"user",metadata:{messageId:"older"}}]}))
+    assert.deepEqual(deduplicated.messages.map(item => item.messageId),["newer"])
+    const empty = JSON.parse(recentContextStore.buildReference({...a,group_id:"empty-window"},"你好"))
+    assert.deepEqual(empty.messages,[])
+    assert.equal(empty.windowMessages,0)
+    assert(empty.unavailable)
+    for (const context of [{...next.context,recentMessageCount:0},{...next.context,captureGroups:false}]) {
+      await configStore.save({...next,context})
+      assert.equal(recentContextStore.buildReference(a,"玉玉他们说啥呢"),"")
+    }
+    await configStore.save(next)
+    recentContextStore.record({...b,message_id:"b1",msg:"水仙是什么意思"})
+    recentContextStore.recordAssistant({...b,message_id:"b1"},"水仙是自己和自己配对。",{message_id:"bot-b1"})
     // 整体预算不足时，当前明确询问的群资料不能被整块替换为空。
     const tight = structuredClone(next)
     tight.chat.inputTokenBudget = 1800
