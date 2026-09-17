@@ -21,6 +21,7 @@ import { buildToolAccessMatrix, type AccessMatrixOptions } from "../access/matri
 import { hostRuntime } from "../../core/runtime/host-runtime.js"
 import { applyToolRuntimeConfigUpdate, maskToolRuntimeConfig, resolveToolRuntimeConfig } from "../../extensions/runtime-config.js"
 import { backgroundTaskService, type BackgroundTaskLimitsProvider, type PublicBackgroundTask } from "../../core/scheduling/background-task-service.js"
+import { modelToolAllowed } from "../../models/configuration/tool-policy.js"
 import { normalizeEventScope } from "../../core/message/event-scope.js"
 import type { ToolExecutionContext } from "./tool-contract.js"
 
@@ -300,6 +301,69 @@ export class ToolRegistry {
           modelCallId: text(runObservation.modelCallId || observation.modelCallId || record(runTrace).currentModelCallId),
         },
       })
+    }
+    if (execution.backgroundSilent && context.execution?.background !== false) {
+      const deadline = Date.now() + execution.timeoutMs
+      let task: PublicBackgroundTask | undefined
+      try {
+        const queue = resolveBackgroundQueue(tool, toolArgs, context, config, toolConfig)
+        task = backgroundTaskService.submit({
+          name, runId: traceId(context), parentToolId: text(observation.toolCallId), config,
+          ...queue,
+          execute: async queueSignal => {
+            if (Date.now() >= deadline) throw new Error("后台静默任务已过期")
+            const signal = AbortSignal.any([queueSignal, AbortSignal.timeout(Math.max(1, deadline - Date.now()))])
+            const ensureAllowed = () => {
+              signal.throwIfAborted()
+              if (this.get(name) !== tool) throw new Error("后台工具已停用或重新加载")
+              assertToolAllowed(tool, { ...context, config: configStore.get() })
+            }
+            const run = async () => {
+              ensureAllowed()
+              const value = await invoke({
+                ...context, signal, agent: { ...record(context.agent), signal },
+                execution: { background: false, beforeInvoke: ensureAllowed },
+              })
+              ensureAllowed()
+              const result = record(value)
+              if (result.isError === true || ["error", "failed"].includes(text(result.status)) || result.kind === "error") {
+                throw new Error("后台工具返回失败结果")
+              }
+              const plan = record(record(result.metadata).messageSendPlan)
+              if (record(getToolCommon(tool).autoDelivery).via === "message_send" && Array.isArray(plan.parts) && plan.parts.length) {
+                if (!modelToolAllowed(record(context.channel).modelConfig, "message_send")) throw new Error("模型策略不允许后台投递")
+                const agentTools = record(context.agent).allowedTools
+                if (Array.isArray(agentTools) && !agentTools.includes("message_send")) throw new Error("当前代理不允许后台投递")
+                const { executeDirectTool } = await import("./direct-execution.js")
+                const delivery = await executeDirectTool("message_send", { parts: plan.parts }, {
+                  ...context, config: configStore.get(), signal,
+                  agent: { ...record(context.agent), signal },
+                  execution: { background: false, beforeInvoke: ensureAllowed },
+                }, this)
+                if (delivery.status !== "success") throw new Error("后台媒体投递失败")
+                return { result: value, delivery: delivery.value }
+              }
+              return value
+            }
+            // 超时释放队列槽位；协作式取消信号同时传入工具和投递边界。
+            return await new Promise((resolve, reject) => {
+              const abort = () => reject(new Error("后台静默任务已取消或超时"))
+              signal.addEventListener("abort", abort, { once: true })
+              if (signal.aborted) { abort(); return }
+              run().then(resolve, reject).finally(() => signal.removeEventListener("abort", abort))
+            })
+          },
+          onComplete: context.execution?.onBackgroundComplete,
+        })
+      } catch {
+        // 装饰性动作允许在队列关闭或已满时丢弃，不让模型重试或打断主对话。
+        hostRuntime.logger?.warn?.(`[yui-chat] 后台静默工具 ${name} 未入队`)
+      }
+      return {
+        status: "accepted", content: "后台静默任务已处理；继续主对话，不等待、不汇报、不重复调用。",
+        retryAllowed: false,
+        metadata: { background: true, backgroundSilent: true, taskId: task?.id || "", backgroundStatus: task?.status || "dropped" },
+      }
     }
     if (execution.background && context.execution?.background !== false) {
       const queue = resolveBackgroundQueue(tool, toolArgs, context, config, toolConfig)

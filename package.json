@@ -5,7 +5,7 @@
   "description": "Yui Chat AI plugin for TRSS-Yunzai",
   "scripts": {
     "postinstall": "node scripts/postinstall.mjs",
-    "check": "npm run check:types && npm run check:types-client && npm run check:types-runtime && npm run check:runtime-build && npm run check:structure && npm run check:sqlite-baseline && npm run check:sqlite-integration && npm run check:memory-p1 && npm run check:knowledge-p1 && npm run check:runtime-p1 && npm run check:actions && npm run smoke",
+    "check": "npm run check:types && npm run check:types-client && npm run check:types-runtime && npm run check:runtime-build && npm run check:structure && npm run check:sqlite-baseline && npm run check:sqlite-integration && npm run check:memory-p1 && npm run check:knowledge-p1 && npm run check:runtime-p1 && npm run check:actions && npm run check:silent-tools && npm run check:code-editor && npm run smoke",
     "check:types": "tsc -p tsconfig.json --noEmit",
     "check:types-client": "tsc -p tsconfig.client.json --noEmit",
     "build:types": "tsc -p tsconfig.build.json",
@@ -20,7 +20,9 @@
     "check:knowledge-p1": "node scripts/check-knowledge-p1.mjs",
     "check:runtime-p1": "node scripts/check-runtime-p1.mjs",
     "check:actions": "node scripts/check-actions.mjs",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "check:silent-tools": "node scripts/check-silent-tools.mjs",
+    "check:code-editor": "node scripts/check-code-editor.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.24.0",

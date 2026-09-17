@@ -12,7 +12,7 @@ const typesRoot = path.join(outputRoot, "typescript")
 const runnerAgent = process.env.npm_config_user_agent ?? ""
 const runnerName = runnerAgent.startsWith("pnpm") ? "pnpm" : runnerAgent.startsWith("yarn") ? "yarn" : "npm"
 const npmCommand = process.platform === "win32" ? `${runnerName}.cmd` : runnerName
-const clientAssetVersion = "20260908-render-image-settings"
+const clientAssetVersion = "20260917-custom-editor"
 
 function run(command, args) {
   return new Promise((resolve, reject) => {

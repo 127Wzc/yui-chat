@@ -54,6 +54,7 @@ export interface ToolExecutionPolicy {
   maxAttempts: number
   timeoutMs: number
   background: boolean
+  backgroundSilent: boolean
   parallelSafe: boolean
   operationFamily: string
   polling: boolean

@@ -2,7 +2,7 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { configStore } from "../../config/store.js"
 
-const assetVersion = "20260901-image-log"
+const assetVersion = "20260917-custom-editor"
 const webRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 
 export const staticRoot = path.join(webRoot, "client")

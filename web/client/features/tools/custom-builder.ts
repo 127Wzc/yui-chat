@@ -70,6 +70,7 @@ export function customBuilderFromManifest(manifest: unknown = {}, id: unknown = 
     toolName: String(tool.name || `${String(id).replace(/-/g, "_")}_echo`),
     toolDescription: String(tool.description || "说明这个工具会做什么，以及什么时候该使用它。"),
     requiresFinalReply: String(tool.requiresFinalReply !== false),
+    backgroundSilent: String(record(tool.execution).backgroundSilent === true),
     execution: toJson(tool.execution || {}),
     executionByAction: toJson(tool.executionByAction || {}),
     resources: Object.entries(record(source.frameworkResources)).map(([alias, value]) => ({ alias, reference: typeof value === "string" ? value : String(record(value).reference || "") })),
@@ -89,6 +90,7 @@ export function applyCustomBuilder(manifest: unknown, builder: UnknownRecord): U
   const firstTool = stripRemovedExecutionFields(records(next.tools)[0] || {})
   delete firstTool.pipeline
   const execution = parseJsonText<UnknownRecord>(builder.execution || "{}", "执行策略", {})
+  execution.backgroundSilent = builder.backgroundSilent === "true"
   const executionByAction = parseJsonText<UnknownRecord>(builder.executionByAction || "{}", "按动作执行策略", {})
   next.frameworkResources = Object.fromEntries((Array.isArray(builder.resources) ? builder.resources : []).map(record)
     .filter(item => String(item.alias || "").trim() && String(item.reference || "").trim())

@@ -129,6 +129,7 @@ export function normalizeExecutionPolicy(value: unknown = {}, fallback: unknown 
     maxAttempts: Math.max(1, Math.min(5, Number(input.maxAttempts ?? fallbackObject.maxAttempts ?? inferredMaxAttempts) || 1)),
     timeoutMs: Math.max(1000, Math.min(600000, Number(input.timeoutMs ?? fallbackObject.timeoutMs ?? 60000) || 60000)),
     background: input.background === true || fallbackObject.background === true,
+    backgroundSilent: (input.backgroundSilent ?? fallbackObject.backgroundSilent) === true,
     parallelSafe,
     operationFamily: text(input.operationFamily || fallbackObject.operationFamily).trim(),
     polling: input.polling === true || fallbackObject.polling === true,

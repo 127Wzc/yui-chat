@@ -156,6 +156,13 @@ parameters = {
 | `parallelSafe` | boolean | 只有确定无共享可变状态的读取才能开启。 |
 | `maxAttempts` | 1–5 | 读取一般 2；副作用一般 1。 |
 | `timeoutMs` | 1000–600000 | 工具级总超时；网络调用仍应接收取消信号并使用更短的客户端超时。 |
+| `backgroundSilent` | boolean | 默认关闭。开启后入队即返回，不等待、不发开始或失败提示、不提前结束主对话。适合可丢弃的表情包、贴表情等动作。 |
+
+Custom 编辑器提供一个“后台静默执行”开关，保存到该工具的 `execution.backgroundSilent`，显式设置优先于入口源码默认值。执行保护策略中的其他字段不变。源码编辑区按需加载本地 CodeMirror 与 js-beautify，支持格式化、撤销格式化、行号、语法高亮、括号配对和代码折叠。格式化只调整草稿排版，不执行、保存或校验源码。
+
+静默后台复用有界队列，`timeoutMs` 从入队开始计时，排队过期后不执行。网络请求必须传递 `context.agent.signal`；忽略取消信号的自定义代码无法被强制终止，但超时后运行时不会再投递其媒体计划。队列满、失败和超时只记录诊断，不重试、不要求模型补救。它不会随正常对话结束而取消，也不在重启后恢复。实际执行及媒体发送前重新校验启用状态和权限。
+
+需要后台发图时继续声明 `autoDelivery: { via: "message_send", batching: "merge", continueConversation: false }`，结果返回下文的 `metadata.messageSendPlan.parts`。运行时后台执行 `message_send`，仍检查其权限和模型工具策略；不直接调用宿主发送。静默模式忽略最终回复和自动投递续答要求，模型只收到简短受理结果；真实完成状态保留在关联日志中。普通 `background` 工具行为不变。
 
 支持显式次数的工具还应声明：
 

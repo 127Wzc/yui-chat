@@ -139,6 +139,7 @@ function normalizedToolName(value: unknown): string {
 }
 
 function isSearchToolTrace(trace: UnknownRecord, prompt: string): boolean {
+  if (record(trace.metadata).backgroundSilent === true) return false
   const name = text(trace.name).trim()
   if (!name || name === "tool_search" || hasSuccessfulMediaDelivery([trace])) return false
   if (usesAutomaticMessageSend(name) && text(record(trace.arguments).action).toLowerCase() === "search") return false
@@ -1068,6 +1069,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
       break
     }
     const singleAsyncChain = traces.length === 1
+      && record(traces[0].metadata).backgroundSilent !== true
       && toolChain.every(item => item.name === traces[0].name && ["ok", "accepted"].includes(text(item.status)) && item.requiresFinalReply === false)
     if (singleAsyncChain
       && ["ok", "accepted"].includes(text(traces[0].status))

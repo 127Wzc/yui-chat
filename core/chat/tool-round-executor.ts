@@ -236,7 +236,8 @@ export async function executeToolRound(options: {
     const backgroundStatus = text(outputMetadata.backgroundStatus)
     // 后台工具仍向模型返回 accepted，但日志直接展示排队/进行中状态。
     const logStatus = backgroundStatus || status
-    const requiresFinalReply = ["success", "accepted"].includes(internalStatus) ? common.requiresFinalReply !== false : true
+    const requiresFinalReply = outputMetadata.backgroundSilent === true ? false
+      : ["success", "accepted"].includes(internalStatus) ? common.requiresFinalReply !== false : true
     const ended = Date.now()
     const durationMs = ended - started
     const policy = runtime.policyFor(tool, callArguments(call))

@@ -194,7 +194,17 @@ export class CustomToolManager {
         executionByAction: common.executionByAction || manifestTool.executionByAction || item.manifest.executionByAction,
         pipeline: common.pipeline || manifestTool.pipeline || item.manifest.pipeline,
       })
-      if (normalized) tools.push(normalized)
+      if (normalized) {
+        // 编辑器开关是管理员配置，优先于入口源码里的执行默认值。
+        const manifestExecution = record(manifestTool.execution)
+        if (typeof manifestExecution.backgroundSilent === "boolean") {
+          normalized.common.execution.backgroundSilent = manifestExecution.backgroundSilent
+          for (const policy of Object.values(normalized.common.executionByAction)) {
+            policy.backgroundSilent = manifestExecution.backgroundSilent
+          }
+        }
+        tools.push(normalized)
+      }
     }
     return { tools, dispose: typeof disposeCandidate === "function" ? disposeCandidate as DynamicDisposer : null, framework }
   }

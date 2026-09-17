@@ -931,3 +931,28 @@ pre {
   font-size: 12px;
   line-height: 1.5;
 }
+
+/* Custom JavaScript editor, local CodeMirror assets loaded on demand. */
+.source-code-editor { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+.source-code-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 12px; background: var(--surface); }
+.source-code-label { font-weight: 600; flex: 1; min-width: 140px; }
+.source-code-body { height: 460px; min-height: 220px; resize: vertical; overflow: hidden; background: #111827; }
+.source-code-body > textarea { width: 100%; height: 100%; font-family: ui-monospace, monospace; }
+.source-code-body .CodeMirror { height: 100%; font: 13px/22px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.source-code-editor .CodeMirror pre.CodeMirror-line, .source-code-editor .CodeMirror pre.CodeMirror-line-like { background: transparent; border: 0; border-radius: 0; max-height: none; }
+.cm-s-yui.CodeMirror { background: #111827; color: #e5e7eb; }
+.cm-s-yui .CodeMirror-gutters { background: #172033; border-right: 1px solid #334155; }
+.cm-s-yui .CodeMirror-linenumber { color: #94a3b8; }
+.cm-s-yui .CodeMirror-cursor { border-left-color: #fff; }
+.cm-s-yui .CodeMirror-selected { background: #334155; }
+.cm-s-yui.CodeMirror-focused .CodeMirror-selected { background: #234779; }
+.cm-s-yui .cm-comment { color: #94a3b8; }
+.cm-s-yui .cm-string, .cm-s-yui .cm-string-2 { color: #86efac; }
+.cm-s-yui .cm-keyword, .cm-s-yui .cm-atom { color: #c4b5fd; }
+.cm-s-yui .cm-number { color: #fdba74; }
+.cm-s-yui .cm-def, .cm-s-yui .cm-property { color: #93c5fd; }
+.cm-s-yui .CodeMirror-matchingbracket { color: #fff; background: #1d4ed8; outline: 1px solid #93c5fd; }
+.cm-s-yui .CodeMirror-nonmatchingbracket { color: #fca5a5; text-decoration: underline; }
+.cm-s-yui .CodeMirror-foldmarker { background: #334155; color: #e5e7eb; text-shadow: none; border-color: #64748b; }
+.source-code-editor > p { margin: 8px 12px; }
+.source-code-error { margin: 0; padding: 12px; color: #b91c1c; white-space: pre-wrap; max-height: 140px; overflow: auto; }
