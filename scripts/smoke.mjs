@@ -1634,6 +1634,48 @@ async function checkExtensionCreateFlow() {
     assert(created.id === "smoke-stock-query" && created.manifest.id === created.id, "saving a custom draft should derive the directory ID from the tool name")
     assert(created.validation.ok, "a saved custom draft should pass manifest validation")
 
+    const { ToolRegistry } = await import("../output/runtime/tools/support/registry.js")
+    const { configStore } = await import("../output/runtime/config/store.js")
+    const { filterToolsForModel } = await import("../output/runtime/models/configuration/tool-policy.js")
+    const registry = new ToolRegistry()
+    const reloadCustom = async () => {
+      registry.removeBySource("custom")
+      const loaded = await customToolManager.loadTools()
+      for (const tool of loaded.tools) registry.register(tool)
+    }
+    const config = await configStore.load()
+    config.tools.enabled = true
+    config.tools.enabledTools = []
+    config.tools.policy.allowCustomTools = true
+    config.tools.boundaryAccess.enabled = true
+    config.tools.boundaryAccess.roles.user.allowedSources = ["custom"]
+    const e = { isGroup: true, user_id: "custom-user", group_id: "custom-group", sender: { role: "member" } }
+    const available = async () => (await registry.getAllowedTools({ config, e })).some(tool => tool.name === "smoke_stock_query")
+    await customToolManager.setPackageEnabled(created.id, true)
+    await reloadCustom()
+    assert(await available(), "enabled Custom packages should expose tools without enabledTools entries")
+    const preview = (await registry.list()).find(tool => tool.name === "smoke_stock_query")
+    assert(preview?.enabled === true, "registered Custom tools should appear enabled in permission previews")
+    const allowed = await registry.getAllowedTools({ config, e })
+    assert(!filterToolsForModel(allowed, { toolPolicy: { mode: "allowlist", allow: [] } }).length, "model allowlists must still filter Custom tools")
+    config.tools.boundaryAccess.roles.user.deniedTools = ["smoke_stock_query"]
+    assert(!await available(), "explicit role denials must still block Custom tools")
+    config.tools.boundaryAccess.roles.user.deniedTools = []
+    config.tools.policy.allowCustomTools = false
+    assert(!await available(), "Custom policy switch must still block package tools")
+    config.tools.policy.allowCustomTools = true
+    config.tools.enabled = false
+    assert(!await available(), "global tool switch must still block package tools")
+    config.tools.enabled = true
+    config.tools.enabledTools = ["smoke_stock_query"]
+    await customToolManager.setPackageEnabled(created.id, false)
+    await reloadCustom()
+    assert(!registry.get("smoke_stock_query") && !await available(), "disabled packages must unload even with stale enabledTools entries")
+    await customToolManager.setPackageEnabled(created.id, true)
+    config.tools.enabledTools = []
+    await reloadCustom()
+    assert(await available(), "re-enabling a Custom package must restore its tools")
+
     const beforeSkills = (await listSkills()).map(item => item.id).sort()
     const skillTemplate = await createSkillTemplate("smoke-create-draft", { dryRun: true })
     assert(Boolean(skillTemplate.metadata?.name && skillTemplate.body), "dry-run skill template should return editable metadata and body")

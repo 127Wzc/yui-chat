@@ -180,6 +180,9 @@ export function isToolEnabledByConfig(config: unknown = {}, tool: unknown = {}):
     const server = record(servers[serverName])
     return mcp.enabled === true && Boolean(serverName) && Object.keys(server).length > 0 && server.enabled !== false
   }
+  // Custom 包只在启用且成功加载时注册；其工具随包启停，不再要求
+  // 管理员把动态工具名加入内置工具的启用名单。角色与模型策略仍独立检查。
+  if (text(common.source) === "custom" && text(toolProvenance(tool).packageId)) return true
   const enabledTools = Array.isArray(tools.enabledTools) ? tools.enabledTools.map(text) : []
   return new Set(enabledTools).has(text(toolRecord.name))
 }

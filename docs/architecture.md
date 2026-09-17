@@ -71,6 +71,8 @@
 
 Custom Tool/Filter 读取宿主或跨插件资源必须声明 `frameworkResources`，见 [框架资源文档](custom-framework-resources.md)。Skill 只注入提示词，不注册为可执行工具。用户扩展与源码分开，更新插件不覆盖用户代码。
 
+Custom 工具随扩展包启停：启用并成功加载后即可进入工具目录，无需加入 `tools.enabledTools`；停用后重新加载会移除该包工具。正式调用仍受工具总开关、角色权限、自定义工具策略和模型工具策略约束。
+
 ## 管理台与安全
 
 管理台默认挂载 `/yui-chat`，API 和 WebSocket 自行鉴权。主人通过 `#yui面板` 获取一次性登录链接；浏览器使用 HttpOnly、SameSite=Strict 会话，修改请求校验同源。管理 Token 不进入 URL、浏览器存储或日志；一次性登录码与长期 Token 分开处理。
