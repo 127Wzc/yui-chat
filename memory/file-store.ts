@@ -4,6 +4,7 @@ import crypto from "node:crypto"
 import { configStore, dataDir } from "../config/store.js"
 import { writeFileAtomic } from "../core/storage/atomic-file.js"
 import { hostRuntime } from "../core/runtime/host-runtime.js"
+import { toByteView } from "../core/shared/bytes.js"
 import { hasMemoryRecallIntent, hasSpeakerComparisonIntent, mentionedUserIds } from "./scopes.js"
 import { validateMemoryWrite } from "./write-policy.js"
 
@@ -268,7 +269,7 @@ async function readJsonl<T extends UnknownRecord = UnknownRecord>(file: string, 
       : stat.size
     const start = Math.max(0, stat.size - maxBytes)
     const buffer = Buffer.alloc(stat.size - start)
-    if (buffer.length) await handle.read(buffer, 0, buffer.length, start)
+    if (buffer.length) await handle.read(toByteView(buffer), 0, buffer.length, start)
     const lines = buffer.toString("utf8").split(/\n+/)
     if (start > 0) lines.shift()
     const completeLines = lines.filter(Boolean)

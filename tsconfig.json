@@ -79,6 +79,7 @@
     "web/http/routes/capabilities/extensions.ts",
     "core/scheduling/schedule-task-service.ts",
     "core/shared/identifiers.ts",
+    "core/shared/bytes.ts",
     "core/shared/safe-regex.ts",
     "core/shared/scoped-log.ts",
     "core/storage/**/*.ts",

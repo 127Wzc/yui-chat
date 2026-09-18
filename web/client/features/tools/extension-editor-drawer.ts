@@ -1,4 +1,5 @@
 import { CodeEditor } from "../../ui/code-editor.js"
+import { customBuilderHasActionPolicy, customBuilderIsBackground } from "./custom-builder.js"
 // 扩展编辑抽屉：Skill 表单与 Custom 五步构建器，草稿对象由父组件持有，保存/测试事件上浮。
 export const ExtensionEditorDrawer = {
   name: "ExtensionEditorDrawer",
@@ -19,6 +20,14 @@ export const ExtensionEditorDrawer = {
     riskOptions: { type: Array, default: () => [] },
   },
   emits: ["close", "save", "test", "seed-test", "copy-command", "create-action", "browse-resource"],
+  computed: {
+    customIsBackground(this: { customBuilder: Record<string, unknown> }) {
+      return customBuilderIsBackground(this.customBuilder)
+    },
+    customHasActionPolicy(this: { customBuilder: Record<string, unknown> }) {
+      return customBuilderHasActionPolicy(this.customBuilder)
+    },
+  },
   template: `
     <SideDrawer
       :open="open"
@@ -59,11 +68,22 @@ export const ExtensionEditorDrawer = {
           <div class="extension-result-preview"><Icon name="cpu" :size="17" /><div><strong>先说明它解决什么问题</strong><p>创建的是一个可启停的本地工具包；后续步骤再补资源、参数、代码和真实测试。</p></div></div>
           <div class="form-grid"><Field v-if="editor.mode !== 'create'" label="扩展 ID" v-model="editor.id" disabled /><Field label="显示名称" v-model="editor.name" /><Field label="中文短名" v-model="editor.displayNameZh" /><Field label="启用状态" type="select" :options="boolOptions" v-model="editor.enabled" /></div>
           <Field label="中文说明" type="textarea" rows="3" v-model="editor.descriptionZh" placeholder="例如：查询库存并返回当前可售数量。" />
-          <div class="form-grid"><Field label="工具 name" v-model="customBuilder.toolName" tip="代码导出的工具名；建议只用小写字母、数字和下划线。" /><Field label="工具说明" v-model="customBuilder.toolDescription" /><Field label="需要最终回复" type="select" :options="boolOptions" v-model="customBuilder.requiresFinalReply" tip="默认开启。关闭后，只有本轮单独调用这个工具时才允许不发送模型文字回复。" /></div>
-          <Field label="后台静默执行" type="select" :options="boolOptions" v-model="customBuilder.backgroundSilent" tip="立即交给后台，不等待、不发送开始或失败提示；超时沿用执行策略。适合表情包、贴表情等可丢弃动作。" />
-          <Collapse title="执行保护策略" hint="可选，适合有副作用、次数额度或特殊重试规则的工具" nested>
+          <div class="form-section">
+            <div class="section-title">工具定义</div>
+            <div class="form-grid"><Field label="工具 name" v-model="customBuilder.toolName" tip="代码导出的工具名；建议只用小写字母、数字和下划线。" /><Field label="工具说明" v-model="customBuilder.toolDescription" /></div>
+          </div>
+          <div class="form-section">
+            <div class="section-title">响应与执行</div>
+            <div class="form-grid">
+              <Field label="后台静默执行" type="select" :options="boolOptions" v-model="customBuilder.backgroundSilent" tip="立即交给后台，不等待、不发送开始或失败提示；适合表情包、贴表情等可丢弃动作。" />
+              <Field v-if="!customIsBackground" label="需要最终回复" type="select" :options="boolOptions" v-model="customBuilder.requiresFinalReply" tip="关闭后，本轮只执行工具，不要求模型再补一段文字回复。" />
+            </div>
+            <p v-if="customIsBackground" class="muted tiny">后台工具不会等待或要求最终文字回复。</p>
+          </div>
+          <Collapse title="执行保护策略" hint="可选；仅在有副作用、次数额度或特殊重试规则时填写" nested>
             <Field label="执行策略 JSON" type="textarea" rows="8" v-model="customBuilder.execution" tip="例如：{ &quot;effect&quot;: &quot;non_idempotent&quot;, &quot;repeatPolicy&quot;: &quot;explicit_only&quot;, &quot;supportsCount&quot;: true, &quot;countField&quot;: &quot;count&quot;, &quot;maxCount&quot;: 10, &quot;targetFields&quot;: [&quot;target&quot;], &quot;retryPolicy&quot;: &quot;no_ambiguous_retry&quot; }。未填写时会按工具来源采用安全默认值。" />
-            <Field label="按 action 覆盖 JSON" type="textarea" rows="6" v-model="customBuilder.executionByAction" placeholder="{ &quot;search&quot;: { &quot;effect&quot;: &quot;read&quot; }, &quot;write&quot;: { &quot;effect&quot;: &quot;non_idempotent&quot; } }" tip="复合工具可按 action 使用不同的效果、重复和重试策略；没有覆盖的字段继承执行策略。" />
+            <Field v-if="customHasActionPolicy" label="按 action 覆盖 JSON" type="textarea" rows="6" v-model="customBuilder.executionByAction" placeholder="{ &quot;search&quot;: { &quot;effect&quot;: &quot;read&quot; }, &quot;write&quot;: { &quot;effect&quot;: &quot;non_idempotent&quot; } }" tip="复合工具可按 action 使用不同的效果、重复和重试策略；没有覆盖的字段继承执行策略。" />
+            <p v-else class="muted tiny">工具参数中添加名为 action 的字段后，这里才会显示按 action 覆盖。</p>
           </Collapse>
           <Collapse title="高级包设置" hint="分类、风险、标签和原始 JSON" nested><div class="form-grid"><Field label="分类" v-model="editor.category" /><Field label="风险" type="select" :options="riskOptions" v-model="editor.risk" /><Field label="标签" v-model="editor.tags" /></div><Field label="英文说明" type="textarea" rows="2" v-model="editor.description" /><Field label="高级 manifest JSON" type="textarea" rows="8" v-model="editor.manifestJson" tip="仅用于少见字段；上面的可视化步骤会覆盖同名配置。" /></Collapse>
         </section>

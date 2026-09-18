@@ -6,6 +6,7 @@ import { tempDir } from "../../config/store.js"
 import { assertSafeHttpUrl, linkSafetyConfig, resolveTrustedResourceRequest } from "../network/link-safety-policy.js"
 import { fetchSafeHttp } from "../network/safe-http-client.js"
 import { hostRuntime } from "../runtime/host-runtime.js"
+import { toByteView } from "../shared/bytes.js"
 import type { UnknownRecord } from "../message/types.js"
 
 type MediaAttachment = UnknownRecord & {
@@ -158,7 +159,7 @@ async function makeThumbnailDataUrl(bytes: Uint8Array, options: UnknownRecord): 
     })
     [format]({ quality: Math.max(40, Math.min(95, number(options.quality, 76))) })
     .toBuffer()
-  return `data:image/${format};base64,${bufferFrom(resized).toString("base64")}`
+  return `data:image/${format};base64,${bufferFrom(toByteView(resized)).toString("base64")}`
 }
 
 async function thumbnailFromDataUrl(dataUrl: unknown, options: UnknownRecord): Promise<string> {

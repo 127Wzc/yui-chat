@@ -79,6 +79,36 @@ export function customBuilderFromManifest(manifest: unknown = {}, id: unknown = 
   }
 }
 
+/** 表单只把会脱离当前回合的执行模式当作“后台工具”。 */
+export function customBuilderIsBackground(builder: UnknownRecord = {}): boolean {
+  const selectedBackground = builder.backgroundSilent === true || builder.backgroundSilent === "true"
+  if (selectedBackground) return true
+  try {
+    const execution = parseJsonText<UnknownRecord>(builder.execution || "{}", "执行策略", {})
+    const actionPolicies = parseJsonText<UnknownRecord>(builder.executionByAction || "{}", "按动作执行策略", {})
+    const actionBackground = Object.values(actionPolicies).some(policy => {
+      const item = record(policy)
+      return item.background === true || item.backgroundSilent === true
+    })
+    if (builder.backgroundSilent !== undefined) return execution.background === true || actionBackground
+    return execution.background === true || execution.backgroundSilent === true || actionBackground
+  } catch {
+    return false
+  }
+}
+
+/** 没有 action 入参时，按 action 的高级覆盖没有编辑价值。 */
+export function customBuilderHasActionPolicy(builder: UnknownRecord = {}): boolean {
+  const parameters = rows(builder.parameters)
+  if (parameters.some(row => row.name.trim() === "action")) return true
+  try {
+    const overrides = parseJsonText<UnknownRecord>(builder.executionByAction || "{}", "按动作执行策略", {})
+    return Object.keys(overrides).length > 0
+  } catch {
+    return String(builder.executionByAction || "").trim().length > 0
+  }
+}
+
 export function applyCustomBuilder(manifest: unknown, builder: UnknownRecord): UnknownRecord {
   const next = clone(manifest)
   const makeSchema = (items: BuilderRow[], includeRequired = false): UnknownRecord => {
@@ -90,8 +120,12 @@ export function applyCustomBuilder(manifest: unknown, builder: UnknownRecord): U
   const firstTool = stripRemovedExecutionFields(records(next.tools)[0] || {})
   delete firstTool.pipeline
   const execution = parseJsonText<UnknownRecord>(builder.execution || "{}", "执行策略", {})
-  execution.backgroundSilent = builder.backgroundSilent === "true"
+  if (builder.backgroundSilent === "true") execution.backgroundSilent = true
+  else delete execution.backgroundSilent
   const executionByAction = parseJsonText<UnknownRecord>(builder.executionByAction || "{}", "按动作执行策略", {})
+  const background = customBuilderIsBackground(builder)
+  if (background || builder.requiresFinalReply !== "false") delete firstTool.requiresFinalReply
+  else firstTool.requiresFinalReply = false
   next.frameworkResources = Object.fromEntries((Array.isArray(builder.resources) ? builder.resources : []).map(record)
     .filter(item => String(item.alias || "").trim() && String(item.reference || "").trim())
     .map(item => [String(item.alias).trim(), String(item.reference).trim()]))
@@ -99,7 +133,6 @@ export function applyCustomBuilder(manifest: unknown, builder: UnknownRecord): U
     ...firstTool,
     name: String(builder.toolName || "").trim(),
     description: String(builder.toolDescription || "").trim(),
-    requiresFinalReply: builder.requiresFinalReply !== "false",
     ...(Object.keys(execution).length ? { execution } : {}),
     ...(Object.keys(executionByAction).length ? { executionByAction } : {}),
     parameters: makeSchema(rows(builder.parameters), true),

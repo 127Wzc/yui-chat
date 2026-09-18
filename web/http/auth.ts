@@ -2,6 +2,7 @@ import crypto from "node:crypto"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 import { configStore, registerConfigPublishHook, yunzaiRoot } from "../../config/store.js"
+import { toByteView } from "../../core/shared/bytes.js"
 import type { RuntimeConfigObject } from "../../config/types.js"
 
 type UnknownRecord = Record<string, unknown>
@@ -140,7 +141,7 @@ export function validateConfiguredWebToken(token: unknown): boolean {
   const candidate = text(token)
   const expected = Buffer.from(configuredToken)
   const actual = Buffer.from(candidate)
-  return actual.length === expected.length && crypto.timingSafeEqual(actual, expected)
+  return actual.length === expected.length && crypto.timingSafeEqual(toByteView(actual), toByteView(expected))
 }
 
 export function validateWebToken(token: unknown): boolean {

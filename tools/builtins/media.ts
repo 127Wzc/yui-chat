@@ -17,6 +17,7 @@ import { fetchBilibiliVideoBuffer, fetchBilibiliVideoDetail } from "./bilibili.j
 import { hostRuntime } from "../../core/runtime/host-runtime.js"
 import { fetchSafeHttp } from "../../core/network/safe-http-client.js"
 import { resolveTrustedResourceRequest, trustedResourceRequest } from "../../core/network/link-safety-policy.js"
+import { toByteView } from "../../core/shared/bytes.js"
 import type { ToolExecutionContext } from "../support/tool-contract.js"
 import { GenerateImageTool } from "./image-generation.js"
 
@@ -442,7 +443,7 @@ async function cacheBilibiliCover(item: UnknownRecord, videoId: string, context:
   if (inline) {
     const bytes = Buffer.from(inline[2].replace(/\s+/g, ""), "base64")
     if (!bytes.length) throw new Error("B 站封面内容为空。")
-    await fs.writeFile(file, bytes)
+    await fs.writeFile(file, toByteView(bytes))
     return { kind: "cache", value: file, mimeType: type.mimeType, name: `${videoId}_cover${type.extension}` }
   }
   // B 站官方 CDN 只允许命中集中可信目标；私网 DNS 是否例外由统一策略决定。
@@ -514,8 +515,8 @@ export async function prepareBilibiliVideoResources(args: ToolArgs, context: Med
     maxBytes: cfg.maxVideoBytes,
     timeoutMs: cfg.timeoutMs,
     signal: context.agent?.signal,
-  }) as Buffer
-  await fs.writeFile(file, buffer)
+  })
+  await fs.writeFile(file, toByteView(buffer))
   return {
     ...details,
     bytes: buffer.length,

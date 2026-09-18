@@ -76,6 +76,7 @@ interface BuilderDraft extends UnknownRecord {
   toolName: string
   toolDescription: string
   requiresFinalReply: string
+  backgroundSilent: string
   execution: string
   executionByAction: string
   resources: Array<{ alias?: string; reference?: string }>
