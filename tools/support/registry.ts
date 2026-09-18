@@ -313,18 +313,19 @@ export class ToolRegistry {
           execute: async queueSignal => {
             if (Date.now() >= deadline) throw new Error("后台静默任务已过期")
             const signal = AbortSignal.any([queueSignal, AbortSignal.timeout(Math.max(1, deadline - Date.now()))])
-            const ensureAllowed = () => {
+            const ensureAllowed = async () => {
+              await context.execution?.beforeInvoke?.()
               signal.throwIfAborted()
               if (this.get(name) !== tool) throw new Error("后台工具已停用或重新加载")
               assertToolAllowed(tool, { ...context, config: configStore.get() })
             }
             const run = async () => {
-              ensureAllowed()
+              await ensureAllowed()
               const value = await invoke({
                 ...context, signal, agent: { ...record(context.agent), signal },
                 execution: { background: false, beforeInvoke: ensureAllowed },
               })
-              ensureAllowed()
+              await ensureAllowed()
               const result = record(value)
               if (result.isError === true || ["error", "failed"].includes(text(result.status)) || result.kind === "error") {
                 throw new Error("后台工具返回失败结果")
@@ -337,6 +338,7 @@ export class ToolRegistry {
                 const { executeDirectTool } = await import("./direct-execution.js")
                 const delivery = await executeDirectTool("message_send", { parts: plan.parts }, {
                   ...context, config: configStore.get(), signal,
+                  ...(context.actionId ? { actionDelivery: true } : {}),
                   agent: { ...record(context.agent), signal },
                   execution: { background: false, beforeInvoke: ensureAllowed },
                 }, this)

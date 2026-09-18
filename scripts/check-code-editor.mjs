@@ -19,7 +19,7 @@ assert.equal(customBuilderIsBackground(builder), true)
 assert.equal(customBuilderHasActionPolicy(builder), false)
 builder.backgroundSilent = "false"
 const updated = applyCustomBuilder(manifest, builder)
-assert.equal(updated.tools[0].execution.backgroundSilent, undefined)
+assert.equal(updated.tools[0].execution.backgroundSilent, false)
 assert.equal(updated.tools[0].execution.timeoutMs, 8000)
 assert.equal(updated.tools[0].execution.effect, "read")
 assert.equal(updated.tools[0].requiresFinalReply, undefined)
@@ -29,4 +29,8 @@ assert.equal(customBuilderIsBackground({ ...builder, backgroundSilent: "false", 
 const silent = applyCustomBuilder(manifest, { ...builder, backgroundSilent: "true", requiresFinalReply: "false" })
 assert.equal(silent.tools[0].requiresFinalReply, undefined)
 assert.equal(silent.tools[0].execution.backgroundSilent, true)
+const minimal = { tools: [{ name: "sticker_pick", execution: { backgroundSilent: true } }] }
+const disabled = applyCustomBuilder(minimal, { ...customBuilderFromManifest(minimal), backgroundSilent: "false" })
+assert.deepEqual(disabled.tools[0].execution, { backgroundSilent: false })
+assert.equal(customBuilderFromManifest(disabled).backgroundSilent, "false")
 console.log("ok editor: JavaScript formatting preserves literals, formatting is idempotent, background switch round trip")

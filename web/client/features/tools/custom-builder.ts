@@ -120,8 +120,7 @@ export function applyCustomBuilder(manifest: unknown, builder: UnknownRecord): U
   const firstTool = stripRemovedExecutionFields(records(next.tools)[0] || {})
   delete firstTool.pipeline
   const execution = parseJsonText<UnknownRecord>(builder.execution || "{}", "执行策略", {})
-  if (builder.backgroundSilent === "true") execution.backgroundSilent = true
-  else delete execution.backgroundSilent
+  execution.backgroundSilent = builder.backgroundSilent === "true" || builder.backgroundSilent === true
   const executionByAction = parseJsonText<UnknownRecord>(builder.executionByAction || "{}", "按动作执行策略", {})
   const background = customBuilderIsBackground(builder)
   if (background || builder.requiresFinalReply !== "false") delete firstTool.requiresFinalReply

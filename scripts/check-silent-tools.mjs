@@ -41,7 +41,7 @@ try {
   }
   async function submit(name, extra = {}) {
     const completion = deferred()
-    const result = await registry.execute(name, {}, { ...context, ...extra, execution: { onBackgroundComplete: completion.resolve } })
+    const result = await registry.execute(name, {}, { ...context, ...extra, execution: { ...extra.execution, onBackgroundComplete: completion.resolve } })
     assert.equal(result.status, "accepted")
     assert.equal(result.metadata.backgroundSilent, true)
     assert.equal(result.metadata.messageSendPlan, undefined)
@@ -92,6 +92,49 @@ try {
   timeoutGate.resolve()
   await sleep(10)
   assert.equal(sends, 1, "timed out work must never deliver a late image")
+
+  // A queued task must preserve the caller's asynchronous authorization guard.
+  const queueGate = deferred()
+  const queuePolicy = { backgroundQueue: () => ({ queueKey: "silent-auth", maxConcurrent: 1, maxQueue: 2 }) }
+  register("silent_auth_blocker", async () => { await queueGate.promise; return "done" }, queuePolicy)
+  let guardedExecutions = 0, callerAllowed = true
+  register("silent_auth", async () => { guardedExecutions++; return plan }, { ...queuePolicy, autoDelivery: { via: "message_send" } })
+  const beforeInvoke = async () => { await Promise.resolve(); if (!callerAllowed) throw new Error("caller access revoked") }
+  const blocker = await submit("silent_auth_blocker")
+  const guarded = await submit("silent_auth", { execution: { beforeInvoke } })
+  assert.equal(guarded.result.metadata.backgroundStatus, "queued")
+  callerAllowed = false
+  queueGate.resolve()
+  await blocker.completion
+  assert.equal((await guarded.completion).status, "error")
+  assert.equal(guardedExecutions, 0)
+  assert.equal(sends, 1)
+
+  // Revoking caller access while the tool runs must also prevent its delivery.
+  const lateGate = deferred(), lateStarted = deferred()
+  callerAllowed = true
+  register("silent_auth_late", async () => { lateStarted.resolve(); await lateGate.promise; return plan }, { autoDelivery: { via: "message_send" } })
+  const late = await submit("silent_auth_late", { execution: { beforeInvoke } })
+  await lateStarted.promise
+  callerAllowed = false
+  lateGate.resolve()
+  assert.equal((await late.completion).status, "error")
+  assert.equal(sends, 1)
+
+  // Action delivery uses its saved authorization, including revocation checks.
+  config.actions.items.silent_picture_action = { enabled: true, tool: "silent_picture", minRole: "master", scope: "all" }
+  const actionPicture = await submit("silent_picture", { actionId: "silent_picture_action" })
+  assert.equal((await actionPicture.completion).status, "ok")
+  assert.equal(sends, 2)
+  const actionGate = deferred(), actionStarted = deferred()
+  register("silent_action_revoke", async () => { actionStarted.resolve(); await actionGate.promise; return plan }, { autoDelivery: { via: "message_send" } })
+  config.actions.items.silent_revoke_action = { enabled: true, tool: "silent_action_revoke", minRole: "master", scope: "all" }
+  const actionRevoke = await submit("silent_action_revoke", { actionId: "silent_revoke_action" })
+  await actionStarted.promise
+  config.actions.items.silent_revoke_action.enabled = false
+  actionGate.resolve()
+  assert.equal((await actionRevoke.completion).status, "error")
+  assert.equal(sends, 2)
 
   const fullGate = deferred()
   register("silent_full", async () => { await fullGate.promise; return "done" }, { backgroundQueue: () => ({ queueKey: "silent-full", maxConcurrent: 1, maxQueue: 0 }) })
@@ -148,6 +191,7 @@ try {
   assert.equal(ordinaryResponse.text, "任务已经开始。", "ordinary background tools retain their existing start reply")
 
   const draft = await customToolManager.createTemplate("silent-editor", { dryRun: true })
+  draft.source += '\ntools[0].execution = { backgroundSilent: true }\n'
   draft.manifest.tools[0].execution = { backgroundSilent: true }
   draft.manifest.tools[0].executionByAction = { pick: { effect: "read", backgroundSilent: false } }
   const created = await customToolManager.createPackage({ manifest: draft.manifest, source: draft.source })
@@ -155,7 +199,8 @@ try {
   assert.equal(loaded.tools.find(t => t.name === draft.toolName).common.execution.backgroundSilent, true)
   assert.equal(loaded.tools.find(t => t.name === draft.toolName).common.executionByAction.pick.backgroundSilent, true)
   const pkg = await customToolManager.getPackage(created.id)
-  pkg.manifest.tools[0].execution.backgroundSilent = false
+  const { applyCustomBuilder, customBuilderFromManifest } = await import("../output/runtime/web/client/features/tools/custom-builder.js")
+  pkg.manifest = applyCustomBuilder(pkg.manifest, { ...customBuilderFromManifest(pkg.manifest), backgroundSilent: "false" })
   await customToolManager.updatePackage(created.id, { manifest: pkg.manifest, source: pkg.source })
   loaded = await customToolManager.loadTools()
   assert.equal(loaded.tools.find(t => t.name === draft.toolName).common.execution.backgroundSilent, false)
