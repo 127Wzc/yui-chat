@@ -17,7 +17,7 @@ export class MusicPlayTool {
   policy = { externalNetwork: true }
   delivery = "media"
   requiresFinalReply = false
-  execution = { effect: "non_idempotent", repeatPolicy: "dedupe", operationFields: ["keyword"], retryPolicy: "no_ambiguous_retry", maxAttempts: 1, timeoutMs: 60000 }
+  execution = { effect: "non_idempotent", repeatPolicy: "dedupe", operationFields: ["keyword"], retryPolicy: "no_ambiguous_retry", maxAttempts: 1, timeoutMs: 60000, dispatchMarking: "deferred" }
   description = "Search QQ Music by song title or title and artist, select the first result, then immediately send its music card and audio as two separate messages to the current chat. Do not call message_send again for this result."
   parameters = {
     type: "object",
@@ -82,9 +82,18 @@ export class MusicPlayTool {
         if (result.isError || !["sent", "success", "accepted"].includes(text(receipt.status || result.status))) throw new Error("消息发送未成功。")
         sentCount++
       }
-      return { status: "success", content: `已发送《${title}》—${singer}，音乐卡片与音频已分两条发送。`, sentCount, retryAllowed: false }
+      return { status: "success", content: `已发送《${title}》—${singer}，音乐卡片与音频已分两条发送。`, sentCount, executedCount: 1, retryAllowed: false }
     } catch (error) {
-      return { status: "failed", isError: true, content: `${sentCount ? "音乐卡片已发送，音频发送失败" : "音乐发送失败"}：${error instanceof Error ? error.message : String(error)}`, sentCount, retryAllowed: false }
+      return {
+        status: sentCount ? "partial" : "failed",
+        isError: true,
+        content: `${sentCount ? "音乐卡片已发送，音频发送失败" : "音乐发送失败"}：${error instanceof Error ? error.message : String(error)}`,
+        sentCount,
+        // 消息片段数不等于业务操作数；已发卡片即消耗本次点歌操作额度。
+        executedCount: sentCount ? 1 : 0,
+        retryAllowed: false,
+        metadata: { receiptStatus: sentCount ? "partial" : "failed", receiptSentCount: sentCount, receiptFailedCount: 2 - sentCount },
+      }
     }
   }
 }

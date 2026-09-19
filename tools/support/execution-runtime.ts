@@ -55,6 +55,7 @@ interface ExecutionOperation {
   remaining: number
   status: OperationStatus
   attempts: number
+  retryAllowed: boolean
   polls: number
   lastResultFingerprint: string
   context: { source: string; purpose: string }
@@ -465,7 +466,7 @@ export function createExecutionRuntime(options: ExecutionRuntimeOptions = {}) {
     const requestedTotal = requestedCount(input.args, input.policy)
     const operation: ExecutionOperation = {
       id, key, family, targetKey: input.targetKey, tool: text(record(input.tool).name), requestedTotal,
-      completedTotal: 0, remaining: requestedTotal, status: "pending", attempts: 0, polls: 0,
+      completedTotal: 0, remaining: requestedTotal, status: "pending", attempts: 0, retryAllowed: true, polls: 0,
       lastResultFingerprint: "", context: { source: text(input.context.source), purpose: text(input.context.purpose) },
     }
     operations.set(key, operation)
@@ -514,6 +515,13 @@ export function createExecutionRuntime(options: ExecutionRuntimeOptions = {}) {
       state.guardBlockStreak++
       if (state.guardBlockStreak >= state.maxConsecutiveGuardBlocks) enterFinalization("AMBIGUOUS_OPERATION")
       return { ...base, decision: "skip", code: "AMBIGUOUS_OPERATION", message: "该副作用上一次执行结果不确定，可能已经完成，本次重复调用已阻止。" }
+    }
+    if (sideEffect && operationsForCall.some(operation => operation.attempts > 0
+      && ["failed", "partial", "denied", "canceled"].includes(operation.status)
+      && !operation.retryAllowed)) {
+      state.guardBlockStreak++
+      if (state.guardBlockStreak >= state.maxConsecutiveGuardBlocks) enterFinalization("OPERATION_RETRY_FORBIDDEN")
+      return { ...base, decision: "skip", code: "OPERATION_RETRY_FORBIDDEN", message: "该操作上次失败或仅部分完成，执行结果禁止重试，本次调用已阻止。请依据已有结果说明情况，不要重做已投递的内容。" }
     }
     const repeatAllowed = policy.execution.repeatPolicy === toolRepeatPolicies.allow
     if (sideEffect && !repeatAllowed) {
@@ -646,14 +654,14 @@ export function createExecutionRuntime(options: ExecutionRuntimeOptions = {}) {
       operation.remaining = Math.max(0, operation.requestedTotal - operation.completedTotal)
       operation.attempts += Math.max(1, asInt(result.attempt, 1))
       if (execution.polling) operation.polls++
-      operation.status = status === "accepted" ? "queued" : status === "success" || status === "partial" ? operation.remaining ? "partial" : "success" : status as OperationStatus
+      operation.status = status === "accepted" ? "queued" : status === "success" ? operation.remaining ? "partial" : "success" : status as OperationStatus
       operation.lastResultFingerprint = resultFingerprint
       completed.push({ operationId: operation.id, targetKey: operation.targetKey, requestedTotal: operation.requestedTotal, completedTotal: operation.completedTotal, remaining: operation.remaining })
     }
     state.toolCallCount++
     const accountedSideEffectCount = accepted ? Math.max(1, plannedTotal) : actualTotal
     state.sideEffectCount = Math.min(state.maxSideEffectCalls, state.sideEffectCount + Math.max(0, accountedSideEffectCount))
-    if (successful && guard.signature && execution.repeatPolicy === toolRepeatPolicies.dedupe && completed.every(operation => operation.remaining <= 0)) signatures.set(guard.signature, Date.now())
+    if (status === "success" && guard.signature && execution.repeatPolicy === toolRepeatPolicies.dedupe && completed.every(operation => operation.remaining <= 0)) signatures.set(guard.signature, Date.now())
     if (status === "success" && execution.effect === toolExecutionEffects.read) {
       if (execution.polling) { state.noProgressStreak = 0; state.pollDelayMs = Math.max(state.pollDelayMs, execution.minPollIntervalMs || 0) }
       else state.noProgressStreak = sameReadResult ? state.noProgressStreak + 1 : 0
@@ -662,9 +670,10 @@ export function createExecutionRuntime(options: ExecutionRuntimeOptions = {}) {
     const hasRemaining = completed.some(operation => operation.remaining > 0)
     const validationError = record(normalized.metadata).validationError === true
     const retryableValidation = status === "failed" && validationError && result.dispatched !== true && normalized.dispatched !== true
-    const retryAllowed = result.retryAllowed !== false
+    const retryAllowed = result.retryAllowed !== false && normalized.retryAllowed !== false
       && (retryableValidation || (!["failed", "ambiguous", "denied", "canceled"].includes(status)
         && (execution.effect === toolExecutionEffects.read ? execution.repeatPolicy !== toolRepeatPolicies.dedupe : hasRemaining)))
+    for (const operation of guard.operations) operation.retryAllowed = retryAllowed
     const entry: LedgerEntry = {
       runId: state.runId,
       userTurnId: state.userTurnId,

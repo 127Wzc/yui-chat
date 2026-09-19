@@ -1736,7 +1736,11 @@ async function checkMusicPlay() {
     return new Response(JSON.stringify(payload), {status:200})
   }
   try {
-    let result = await toolRegistry.execute("music_play", {keyword:"歌曲 歌手"}, context)
+    let successfulDispatches = 0
+    let result = await toolRegistry.execute("music_play", {keyword:"歌曲 歌手"}, {
+      ...context, execution: { markDispatched: () => { successfulDispatches++ } },
+    })
+    assert.equal(successfulDispatches, 2, "music delivery must preserve dispatch marking for both host sends")
     assert.equal(result.status, "success")
     assert.equal(sent.length, 2, "card and audio must use two separate host sends")
     assert(JSON.stringify(sent[0]).includes('"type":"music"') && JSON.stringify(sent[0]).includes("第一首"))
@@ -1751,7 +1755,7 @@ async function checkMusicPlay() {
       sent.length = 0
       mock.sendMessage = async () => {
         modelCalls++
-        return {id:"music-loop",text:"",toolCalls:[{id:"music-call",name:"music_play",arguments:{keyword:"歌曲 歌手"}}],stopReason:"tool_calls",usage:{input:1,output:1,total:2,source:"reported"}}
+        return {id:"music-loop",text:"",hostedToolCalls:[{type:"tool_search_call",id:"music-success-discovery",status:"completed"}],toolCalls:[{id:"music-call",name:"music_play",arguments:{keyword:"歌曲 歌手"}}],stopReason:"tool_calls",usage:{input:1,output:1,total:2,source:"reported"}}
       }
       const played = await chatService.runModelStepWithChannel({e:context.e,prompt:"来首歌",config,history:[],step:{id:"reply",task:"replyer",mode:"final"},channel:{id:"mock",type:"mock",model:"mock",modelConfig:{toolUse:true}}})
       assert.equal(modelCalls,1,"completed playback must not trigger further model delivery rounds")
@@ -1766,6 +1770,24 @@ async function checkMusicPlay() {
     assert.equal(result.sentCount, 1)
     assert.equal(sent.length, 1)
     assert.equal(result.retryAllowed, false)
+    assert.equal(result.status, "partial")
+    assert.equal(result.executedCount, 1, "a partial music delivery consumes one operation, not a count of message parts")
+    try {
+      sent.length = 0
+      modelCalls = 0
+      mock.sendMessage = async () => {
+        modelCalls++
+        return modelCalls <= 2
+          ? {id:`music-repeat-${modelCalls}`,text:"",stopReason:"tool_calls",toolCalls:[{id:`music-repeat-call-${modelCalls}`,name:"music_play",arguments:{keyword:"歌曲 歌手"}}]}
+          : {id:"music-partial-final",text:"音乐卡片已发送，音频发送失败。",stopReason:"end_turn",toolCalls:[]}
+      }
+      const partial = await chatService.runModelStepWithChannel({e:context.e,prompt:"来首歌",config,history:[],step:{id:"reply",task:"replyer",mode:"final"},channel:{id:"mock",type:"mock",model:"mock",modelConfig:{toolUse:true}}})
+      assert.equal(sent.length, 1, "repeated music calls must not resend an already delivered card")
+      assert.equal(partial.toolChain[0].status, "partial")
+      assert.equal(partial.toolChain[1].guardCode, "OPERATION_RETRY_FORBIDDEN")
+      assert.equal(partial.execution.operations[0].status, "partial", "consumed quota must not turn partial delivery into full success")
+      assert.equal(partial.text, "音乐卡片已发送，音频发送失败。")
+    } finally { mock.sendMessage = originalSend }
     sent.length = 0
     failAt = 1
     result = await toolRegistry.execute("music_play", {keyword:"歌曲 歌手"}, context)
@@ -1782,6 +1804,44 @@ async function checkMusicPlay() {
     assert.equal(sent.length, 0)
     payload = {code:0,search:{code:1}}
     await assert.rejects(toolRegistry.execute("music_play", {keyword:"歌曲 歌手"}, context), /搜索服务返回错误/)
+    let dispatched = 0
+    await assert.rejects(toolRegistry.execute("music_play", {keyword:"歌曲 歌手"}, {
+      ...context, execution: { markDispatched: () => { dispatched++ } },
+    }), /搜索服务返回错误/)
+    assert.equal(dispatched, 0, "music search failures must not mark a message as dispatched")
+    try {
+      for (const sendWithTool of [false, true]) {
+        modelCalls = 0
+        sent.length = 0
+        mock.sendMessage = async ({ toolChoice }) => {
+          modelCalls++
+          assert(modelCalls <= 2, "failed playback must not loop over reworded message sends")
+          if (modelCalls === 1) return {
+            id:"music-failed-loop", text:"", stopReason:"tool_calls",
+            hostedToolCalls:[{type:"tool_search_call",id:"music-discovery",status:"completed"}],
+            toolCalls:[{id:"music-failed-call",name:"music_play",arguments:{keyword:"歌曲 歌手"}}],
+            usage:{input:1,output:1,total:2,source:"reported"},
+          }
+          assert.equal(toolChoice, undefined, "failed music search must not force message_send")
+          return {
+            id:"music-failed-answer", text:sendWithTool ? "" : "音乐搜索服务失败，暂时无法播放。",
+            stopReason:sendWithTool ? "tool_calls" : "end_turn",
+            toolCalls:sendWithTool ? [{id:"music-failed-send",name:"message_send",arguments:{parts:[{type:"text",text:"音乐搜索服务失败，暂时无法播放。"}]}}] : [],
+            usage:{input:1,output:1,total:2,source:"reported"},
+          }
+        }
+        const failed = await chatService.runModelStepWithChannel({e:{...context.e,reply:async value => { sent.push(value); return {message_id:String(sent.length)} }},prompt:"来首歌",config,history:[],step:{id:"reply",task:"replyer",mode:"final"},channel:{id:"mock",type:"mock",model:"mock",modelConfig:{toolUse:true}}})
+        const musicTrace = failed.toolChain.find(item => item.name === "music_play")
+        assert.equal(musicTrace.status,"failed")
+        assert.equal(musicTrace.dispatched,false)
+        assert.equal(failed.searchDeliveryRequired,false)
+        assert.equal(failed.agentTurn.finalReplyRequired,false,"tool discovery alone must not latch a final reply")
+        assert.equal(modelCalls,2)
+        assert.equal(sent.length,sendWithTool ? 1 : 0)
+        assert.equal(failed.requiresFinalReply,!sendWithTool)
+        assert.equal(failed.text,sendWithTool ? "" : "音乐搜索服务失败，暂时无法播放。")
+      }
+    } finally { mock.sendMessage = originalSend }
     const abort = new AbortController()
     abort.abort()
     await assert.rejects(toolRegistry.execute("music_play", {keyword:"歌曲 歌手"}, {...context,agent:{signal:abort.signal}}))
@@ -4420,7 +4480,10 @@ async function checkConversations() {
           text: "",
           stopReason: "tool_calls",
           usage: { input: 1, output: 1, total: 2, source: "reported" },
-          toolCalls: [{ id: "hosted-message-send", name: "message_send", arguments: { parts: [{ type: "text", text: "图片已发送" }] } }],
+          toolCalls: [{ id: "hosted-message-send", name: "message_send", arguments: { parts: [
+            { type: "image", source: { kind: "url", value: "https://example.com/one.jpg" } },
+            { type: "image", source: { kind: "url", value: "https://example.com/two.jpg" } },
+          ] } }],
           hostedToolCalls: [{
             id: "hosted-message-web-search",
             type: "web_search_call",
@@ -4981,6 +5044,15 @@ async function checkConversations() {
           mixedNoToolFinalizations++
           return { id: "smoke-mixed-final", text: "都给你找来啦，慢慢看～", usage: { input: 1, output: 1, total: 2, source: "reported" }, toolCalls: [] }
         }
+        if (mixedScenario === "automatic-then-text" && mixedModelCall === 2) {
+          return {
+            id: "smoke-mixed-text-answer", text: "", usage: { input: 1, output: 1, total: 2, source: "reported" },
+            toolCalls: [{ id: "smoke-mixed-text-send", name: "message_send", arguments: { parts: [{type:"text",text:"图片已发，我继续执行后续动作。"}] } }],
+          }
+        }
+        if (mixedScenario === "automatic-then-text" && mixedModelCall === 3) {
+          return {id:"smoke-after-progress",text:"",toolCalls:[{id:"smoke-after-progress-action",name:mixedPassiveName,arguments:{}}],usage:{input:1,output:1,total:2,source:"reported"}}
+        }
         if (mixedScenario === "automatic-then-passive" && mixedModelCall === 2) {
           return {
             id: "smoke-mixed-follow-up-tool",
@@ -5097,6 +5169,19 @@ async function checkConversations() {
       assert(automaticThenPassiveResult.modelCalls.length === 3 && mixedNoToolFinalizations === 1 && automaticThenPassiveResult.text === "都给你找来啦，慢慢看～", "a natural terminal response after multiple tool rounds should be reused without an extra finalization model call")
       assert(automaticThenPassiveResult.modelCalls.map(item => item.stopReason).join(",") === "tool_calls,tool_calls,end_turn" && automaticThenPassiveResult.agentTurn.phase === "completed", "multiple tool rounds should stay inside one Agent Turn and finish once")
 
+      mixedScenario = "automatic-then-text"
+      mixedModelCall = 0
+      const executionsBeforeProgress = mixedPassiveExecutions
+      const sentContinuation = await chatService.runModelStepWithChannel({
+        e: { isGroup: true, isMaster: true, group_id: "20001", user_id: "10001", sender: { role: "owner" }, reply: async () => {} },
+        prompt: "发图片后先告知进度，再执行后续动作", config: {...multiRoundConfig,chat:{...multiRoundConfig.chat,maxToolRounds:3}}, history: [],
+        step: { id: "reply", task: "replyer", mode: "final" },
+        channel: { id: mixedAdapter.id, type: mixedAdapter.id, model: "smoke", modelConfig: { toolUse: true }, timeoutMs: 1000 },
+      })
+      assert(sentContinuation.modelCalls.length === 4 && sentContinuation.text === mixedTerminalText && sentContinuation.requiresFinalReply === true, "plain text delivery must not override a pending continuation")
+      assert(mixedPassiveExecutions === executionsBeforeProgress + 1, "the action following a progress message must actually execute")
+      assert(mixedDeliveries.at(-1).parts[0].text === "图片已发，我继续执行后续动作。", "the progress message should be delivered once")
+
       const passiveExecutionsBeforeStructuredStops = mixedPassiveExecutions
       mixedScenario = "max-tokens-tool"
       mixedModelCall = 0
@@ -5176,6 +5261,7 @@ async function checkConversations() {
     })
     let textSearchCalls = 0
     let textSearchForcedMessageSend = false
+    let textSearchFailureObserved = false
     const textSearchDeliveries = []
     const textSearchAdapter = {
       id: "smoke-text-search",
@@ -5184,10 +5270,15 @@ async function checkConversations() {
       supportsStreaming: false,
       supportsEmbeddings: false,
       async sendMessage({ messages = [], tools = [], toolChoice }) {
+        if (messages.some(item => item.name === "message_send")) {
+          assert(toolChoice === undefined && tools.length > 1, "attempted search delivery must release the forced sender even on failure")
+          textSearchFailureObserved = true
+          return { id:"text-search-failed-final",text:"发送未成功。",toolCalls:[],usage:{input:1,output:1,total:2,source:"reported"} }
+        }
         const searched = messages.some(item => item.name === textSearchName)
         if (!searched) {
           textSearchCalls++
-          return { id: "smoke-text-search-call", text: "", usage: { input: 1, output: 1, total: 2, source: "reported" }, toolCalls: [{ id: "smoke-text-search-tool-call", name: textSearchName, arguments: {} }] }
+          return { id: "smoke-text-search-call", text: "", hostedToolCalls: [{type:"web_search_call",id:"text-hosted-search",status:"completed"}], usage: { input: 1, output: 1, total: 2, source: "reported" }, toolCalls: [{ id: "smoke-text-search-tool-call", name: textSearchName, arguments: {} }] }
         }
         textSearchForcedMessageSend = tools.length === 1
           && tools[0]?.name === "message_send"
@@ -5218,10 +5309,24 @@ async function checkConversations() {
         step: { id: "reply", task: "replyer", mode: "final" },
         channel: { id: "smoke-text-search", type: "smoke-text-search", model: "smoke", modelConfig: { toolUse: true }, timeoutMs: 1000 },
       })
-      assert(textSearchCalls === 1 && textSearchResult.toolChain.map(item => item.name).join(",") === `${textSearchName},message_send`, "text-only search should finish through message_send")
+      assert(textSearchCalls === 1 && textSearchResult.toolChain.filter(item => item.name !== "openai:web_search").map(item => item.name).join(",") === `${textSearchName},message_send`, "text-only search should finish through message_send even with a hosted search reply obligation")
       assert(textSearchForcedMessageSend === true && textSearchDeliveries[0] === "文字搜索结果已整理。", "text-only search should force and execute a text message_send delivery")
       assert(textSearchDeliveries[1]?.type === "node" && textSearchDeliveries[1]?.data?.[0]?.message?.includes("https://example.com/source"), "search delivery should append prepared source nodes after the model-authored answer")
       assert(textSearchResult.searchDeliveryRequired === true && textSearchResult.searchDeliveryStatus === "sent" && textSearchResult.toolRounds === 2 && textSearchResult.modelCalls.length === 2 && textSearchResult.text === "", "text-only search delivery should use one bounded terminal send even when search consumed the normal tool round")
+      for (const successfulParts of [0, 1]) {
+        let sendAttempts = 0
+        textSearchFailureObserved = false
+        const failedSearchDelivery = await chatService.runModelStepWithChannel({
+          e: { isGroup: true, isMaster: true, group_id: "20001", user_id: "10001", sender: { role: "owner" }, reply: async () => {
+            if (++sendAttempts > successfulParts) throw new Error("模拟投递结果不确定")
+            return {message_id:String(sendAttempts)}
+          } },
+          prompt: "搜索文字资料并告诉我",
+          config: textSearchConfig, history: [], step: { id: "reply", task: "replyer", mode: "final" },
+          channel: { id: "smoke-text-search", type: "smoke-text-search", model: "smoke", modelConfig: { toolUse: true }, timeoutMs: 1000 },
+        })
+        assert(textSearchFailureObserved && failedSearchDelivery.toolChain.filter(item => item.name === "message_send").length === 1, "failed or partial search delivery should explain the result without forcing another send")
+      }
     } finally {
       toolRegistry.tools.delete(textSearchName)
       adapterRegistry.adapters.delete(textSearchAdapter.id)
@@ -5250,6 +5355,27 @@ async function checkConversations() {
       async execute() { return "unused" },
     })
     const budgetRuntime = createExecutionRuntime({ runId: "smoke-budget", prompt: "请戳我3次", maxSideEffectCalls: 2 })
+    const noRetryTool = normalizeTool({
+      name: "smoke_no_retry", source: "custom",
+      execution: {effect:"non_idempotent",repeatPolicy:"dedupe",operationFields:["target"],retryPolicy:"no_ambiguous_retry",maxAttempts:1},
+      async execute() { return "unused" },
+    })
+    for (const status of ["failed", "partial", "canceled", "denied", "ambiguous"]) {
+      const runtime = createExecutionRuntime({runId:`no-retry-${status}`})
+      const call = {name:noRetryTool.name,arguments:{target:"first"}}
+      const guard = runtime.guardToolCall({tool:noRetryTool,call})
+      const value = {status,content:"不可重试",executedCount:status === "partial" ? 1 : 0,retryAllowed:false}
+      runtime.recordExecution({guard,call,result:{status,value,attempt:1,dispatched:true}})
+      const repeated = runtime.guardToolCall({tool:noRetryTool,call:{...call,id:"another-model-call"}})
+      assert(repeated.decision === "skip" && repeated.code === (status === "ambiguous" ? "AMBIGUOUS_OPERATION" : "OPERATION_RETRY_FORBIDDEN"), "a new model call ID must not bypass an operation's no-retry result")
+      assert(runtime.guardToolCall({tool:noRetryTool,call:{...call,arguments:{target:"second"}}}).decision === "allow", "blocking one operation must not disable distinct operations")
+      assert(createExecutionRuntime({runId:"new-user-turn"}).guardToolCall({tool:noRetryTool,call}).decision === "allow", "a fresh user turn must not inherit the previous turn's block")
+    }
+    const validationRuntime = createExecutionRuntime({runId:"correctable-validation"})
+    const validationCall = {name:noRetryTool.name,arguments:{target:"first"}}
+    const validationGuard = validationRuntime.guardToolCall({tool:noRetryTool,call:validationCall})
+    validationRuntime.recordExecution({guard:validationGuard,call:validationCall,result:{status:"failed",attempt:1,dispatched:false,value:{kind:"error",chain:[],isError:true,metadata:{validationError:true}}}})
+    assert(validationRuntime.guardToolCall({tool:noRetryTool,call:validationCall}).decision === "allow", "undispatched validation errors should retain the existing correction path")
     const budgetGuard = budgetRuntime.guardToolCall({ tool: countedTool, call: { name: countedTool.name, arguments: { targets: ["a", "b"], count: 3 } } })
     assert(budgetGuard.decision === "rewrite" && budgetGuard.args.count === 1 && budgetGuard.plannedCount === 2, "global side-effect budget should clamp counted multi-target calls before execution")
     const partialRuntime = createExecutionRuntime({ runId: "smoke-partial", prompt: "请戳我3次", maxSideEffectCalls: 20 })

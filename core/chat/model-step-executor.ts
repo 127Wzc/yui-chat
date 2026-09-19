@@ -139,6 +139,7 @@ function normalizedToolName(value: unknown): string {
 }
 
 function isSearchToolTrace(trace: UnknownRecord, prompt: string): boolean {
+  if (text(trace.status) !== "ok") return false
   if (record(trace.metadata).backgroundSilent === true) return false
   const name = text(trace.name).trim()
   if (!name || name === "tool_search" || hasSuccessfulMediaDelivery([trace])) return false
@@ -845,9 +846,10 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
       if (source.url && !hostedSearchSources.has(source.url)) hostedSearchSources.set(source.url, source)
     }
     const hostedCalls = (current.hostedToolCalls || []).filter(call => /_call$/.test(call.type))
-    // 托管工具与本地 Function Call 出现在同一个 Responses 输出时，本地工具
+    // 托管业务工具与本地 Function Call 出现在同一个 Responses 输出时，本地工具
     // 执行结果仍必须回到模型生成最终说明，不能被 message_send 的静默语义截断。
-    if (hostedCalls.length && current.toolCalls?.length && !normalizeResponseText(current.text)) {
+    // tool_search 只发现工具，不产生需要单独回复的业务结果。
+    if (hostedCalls.some(call => call.type !== "tool_search_call") && current.toolCalls?.length && !normalizeResponseText(current.text)) {
       agentTurn.requestFinalReply(true)
     }
     for (const [callIndex, call] of hostedCalls.entries()) {
@@ -964,12 +966,13 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
   const canExecuteToolRound = (): boolean => {
     if (response.stopReason !== "tool_calls" || !response.toolCalls?.length) return false
     if (toolRounds < maxToolRounds) return true
-    if (!searchDeliveryRequired) return false
+    if (!searchDeliveryRequired || searchDeliveryStatus !== "required") return false
     return searchDeliveryExtraRoundsUsed < 2
       && response.toolCalls.every(call => call.name === "message_send")
   }
 
   while (canExecuteToolRound()) {
+    const completingSearchDelivery = searchDeliveryRequired && searchDeliveryStatus === "required"
     if (toolRounds >= maxToolRounds) searchDeliveryExtraRoundsUsed++
     toolRounds++
     executionRuntime.state.turnCount = toolRounds
@@ -1007,9 +1010,11 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
       searchDeliveryRequired = true
       searchDeliveryStatus = "required"
     }
+    const partialDelivery = traces.some(item => text(record(item.metadata).receiptStatus) === "partial")
+    if (partialDelivery) agentTurn.requestFinalReply(true)
     if (traces.some(item => item.name === "message_send")) {
       searchDeliveryAttempted = true
-      searchDeliveryStatus = hasSuccessfulMediaDelivery(traces) ? "sent" : "failed"
+      searchDeliveryStatus = partialDelivery ? "partial" : hasSuccessfulMediaDelivery(traces) ? "sent" : "failed"
       if (hasSuccessfulMediaDelivery(traces)) pendingMessageAppendParts = []
     }
     if (traces.some(item => number(record(item.metadata).mediaPartCount) > 0)) mediaResourceSeen = true
@@ -1040,7 +1045,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
     }
     if (automaticDeliveryTraces.length && hasSuccessfulMediaDelivery(automaticDeliveryTraces)) {
       searchDeliveryAttempted = true
-      searchDeliveryStatus = "sent"
+      searchDeliveryStatus = partialDelivery ? "partial" : "sent"
       agentTurn.requestFinalReply(shouldContinueAfterAutomaticDelivery(requestedTraces))
     }
     // continueConversation 只锁存“最终必须回复”，不会把当前工具轮当成最终轮。
@@ -1059,10 +1064,15 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
     }
     // 投递完成即收束，但仅限本轮只有这一个工具的情况：多工具轮次里其余
     // 工具的结果还没回到模型，提前 break 会让最终回复基于不完整信息生成。
+    const modelAnswerDelivered = requestedTraces.length === 1
+      && !partialDelivery
+      && requestedTraces[0].name === "message_send"
+      && completingSearchDelivery
     if (traces.length === 1
       && hasSuccessfulMediaDelivery(traces)
       && traces[0].requiresFinalReply === false
-      && agentTurn.state.finalReplyRequired !== true) {
+      // 仅明确的搜索结果投递可以履行回复义务；普通文字不能推断为最终答复。
+      && (agentTurn.state.finalReplyRequired !== true || modelAnswerDelivered)) {
       singleAsyncToolCompleted = true
       beginFinalization("MEDIA_DELIVERY_COMPLETED")
       response = { ...response, text: "", toolCalls: [] }
@@ -1080,14 +1090,15 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
       response = { ...response, text: "", toolCalls: [] }
       break
     }
-    const phase = searchDeliveryRequired ? "search-delivery" : "after-tools"
-    const nextMessages = searchDeliveryRequired
+    const pendingSearchDelivery = searchDeliveryRequired && searchDeliveryStatus === "required"
+    const phase = pendingSearchDelivery ? "search-delivery" : "after-tools"
+    const nextMessages = pendingSearchDelivery
       ? buildSearchDeliveryMessages(workingMessages)
       : agentTurn.state.finalReplyRequired
         ? buildAgentLoopContinuationMessages(workingMessages)
         : workingMessages
     const boundedMessages = await budgeted(nextMessages, phase)
-    const recoveryNextMessages = searchDeliveryRequired
+    const recoveryNextMessages = pendingSearchDelivery
       ? buildSearchDeliveryMessages(workingRecoveryMessages)
       : agentTurn.state.finalReplyRequired
         ? buildAgentLoopContinuationMessages(workingRecoveryMessages)
@@ -1097,7 +1108,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
       : boundedMessages
     await executionRuntime.waitForNextRound(agentContext.signal instanceof AbortSignal ? agentContext.signal : undefined)
     const availableAfterTools = currentTools()
-    const forcedToolName = searchDeliveryRequired ? "message_send" : ""
+    const forcedToolName = pendingSearchDelivery ? "message_send" : ""
     const afterTools = forcedToolName
       ? availableAfterTools.filter(tool => tool.name === forcedToolName)
       : availableAfterTools
