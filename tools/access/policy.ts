@@ -222,6 +222,10 @@ export function explainToolPolicy(tool: unknown, context: ToolAccessContext = {}
   if (source === "custom" && policyConfig.allowCustomTools === false) {
     return { allowed: false, reason: "自定义工具调用已被策略关闭。", roles, groups }
   }
+  // 注入名单是服务器硬边界，动作和调试入口也不能绕过。
+  if (source === "mcp" && !isToolEnabledByConfig(config, tool)) {
+    return { allowed: false, reason: "MCP 服务或此工具的注入已关闭。", roles, groups }
+  }
   if (source === "mcp" && policyConfig.allowMcpTools === false) {
     return { allowed: false, reason: "MCP 工具调用已被策略关闭。", roles, groups }
   }

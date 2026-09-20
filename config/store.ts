@@ -64,7 +64,7 @@ const configBackupFormat = "yui-chat-config-backup-v2"
 const preservedBackupReasons = new Set(["invalid"])
 const secretKeyParts = new Set([
   "authorization", "cookie", "cookies", "credential", "credentials",
-  "password", "passwords", "secret", "secrets", "token", "tokens",
+  "password", "passwords", "secret", "secrets", "token", "tokens", "auth",
 ])
 const noConfigOverride = Symbol("no-config-override")
 const localConfigFormat = "yui-chat-bootstrap-v1"
@@ -452,12 +452,20 @@ function isSecretKey(key = ""): boolean {
   return last === "key" || (last === "id" && parts[parts.length - 2] === "key")
 }
 
+function isHeaderMapKey(key = ""): boolean {
+  const parts = keyParts(key)
+  return parts.includes("header") || parts.includes("headers")
+}
+
 /** 递归脱敏公共配置；密钥只在运行时边界存在，绝不进入 Web 或日志。 */
 export function redactConfigSecrets(value: unknown, key = ""): unknown {
   if (Array.isArray(value)) return value.map(item => redactConfigSecrets(item, key))
   if (isObject(value)) {
     const out: ConfigRecord = {}
-    for (const [childKey, childValue] of Object.entries(value)) out[childKey] = redactConfigSecrets(childValue, childKey)
+    const headerMap = isHeaderMapKey(key)
+    for (const [childKey, childValue] of Object.entries(value)) {
+      out[childKey] = headerMap && typeof childValue === "string" && childValue && isSecretKey(childKey) ? "********" : redactConfigSecrets(childValue, childKey)
+    }
     return out
   }
   if (typeof value === "string" && isSecretKey(key) && value) return "********"
@@ -478,7 +486,12 @@ export function mergeRedactedConfigSecrets(candidate: unknown, current: unknown,
   if (isObject(candidate)) {
     const previous = isObject(current) ? current : {}
     const out: ConfigRecord = {}
-    for (const [childKey, childValue] of Object.entries(candidate)) out[childKey] = mergeRedactedConfigSecrets(childValue, previous[childKey], childKey)
+    const headerMap = isHeaderMapKey(key)
+    for (const [childKey, childValue] of Object.entries(candidate)) {
+      out[childKey] = headerMap && isSecretKey(childKey) && typeof childValue === "string" && redactedSecretValue.test(childValue.trim())
+        ? (typeof previous[childKey] === "string" && previous[childKey] ? previous[childKey] : childValue)
+        : mergeRedactedConfigSecrets(childValue, previous[childKey], childKey)
+    }
     return out
   }
   return candidate === undefined ? undefined : clone(candidate)

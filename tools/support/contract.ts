@@ -1,3 +1,4 @@
+import { isMcpToolSelected } from "../../mcp/tool-selection.js"
 import type { JsonValue } from "../../core/message-chain/types.js"
 import type { ToolAutoDelivery, ToolCommon, ToolDefinition, ToolExecutionEffect, ToolExecutionPolicy, ToolSource } from "./tool-contract.js"
 
@@ -180,6 +181,7 @@ export function isToolEnabledByConfig(config: unknown = {}, tool: unknown = {}):
     const serverName = text(provenance.serverName || record(toolRecord.mcp).serverName || toolRecord.serverName).trim()
     const server = record(servers[serverName])
     return mcp.enabled === true && Boolean(serverName) && Object.keys(server).length > 0 && server.enabled !== false
+      && isMcpToolSelected(server, text(record(toolRecord.mcp).originalName || toolRecord.originalName))
   }
   // Custom 包只在启用且成功加载时注册；其工具随包启停，不再要求
   // 管理员把动态工具名加入内置工具的启用名单。角色与模型策略仍独立检查。

@@ -1,4 +1,6 @@
 import path from "node:path"
+import { isMcpToolSelected } from "./tool-selection.js"
+import { resolveMcpEnv, resolveMcpHeaders, resolveMcpUrl } from "./transport-auth.js"
 import { configStore, pluginRoot } from "../config/store.js"
 import type { JsonValue } from "../core/message-chain/types.js"
 import { isJsonValue } from "../core/message-chain/types.js"
@@ -26,6 +28,19 @@ interface McpSdkModule {
 interface McpServerStatus {
   server: string
   error: string
+}
+
+export interface McpDiscoveredTool {
+  server: string
+  originalName: string
+  name: string
+  description: string
+  exposed: boolean
+}
+
+interface McpDiscovery {
+  catalog: McpDiscoveredTool[]
+  definitions: McpToolDefinition[]
 }
 
 function isRecord(value: unknown): value is UnknownRecord {
@@ -57,6 +72,90 @@ async function importSdk(specifier: string): Promise<UnknownRecord> {
   } catch (error) {
     throw new Error(`MCP SDK 未安装，请在 yui-chat 中安装 @modelcontextprotocol/sdk：${errorMessage(error)}`)
   }
+}
+
+async function loadSdk(): Promise<McpSdkModule> {
+  const [clientModule, stdioModule, sseModule] = await Promise.all([
+    importSdk("@modelcontextprotocol/sdk/client/index.js"),
+    importSdk("@modelcontextprotocol/sdk/client/stdio.js"),
+    importSdk("@modelcontextprotocol/sdk/client/sse.js"),
+  ])
+  return {
+    Client: clientModule.Client as McpSdkModule["Client"],
+    StdioClientTransport: stdioModule.StdioClientTransport as McpSdkModule["StdioClientTransport"],
+    SSEClientTransport: sseModule.SSEClientTransport as McpSdkModule["SSEClientTransport"],
+  }
+}
+
+async function connectServer(serverName: string, serverConfig: UnknownRecord, version: string, sdk: McpSdkModule): Promise<{ client: McpClient; transport: McpTransport }> {
+  if (!sdk.Client) throw new Error("MCP SDK 缺少 Client")
+  const client = new sdk.Client(
+    { name: "yui-chat", version: version || "0.1.0" },
+    { capabilities: {} },
+  )
+  const kind = transportKind(serverConfig)
+  const configuredEnv = resolveMcpEnv(serverConfig.env)
+  const scopedEnvironment = { ...process.env, ...configuredEnv }
+  const headers = resolveMcpHeaders(serverConfig.headers, scopedEnvironment)
+  const requestInit = Object.keys(headers).length ? { headers } : undefined
+  let transport: McpTransport | null = null
+  if (kind === "streamableHttp") {
+    if (!serverConfig.url) throw new Error("Streamable HTTP MCP server must define url")
+    const module = await importSdk("@modelcontextprotocol/sdk/client/streamableHttp.js")
+    const Constructor = module.StreamableHTTPClientTransport as McpSdkModule["StreamableHTTPClientTransport"]
+    if (!Constructor) throw new Error("MCP SDK 缺少 StreamableHTTPClientTransport")
+    transport = new Constructor(new URL(resolveMcpUrl(serverConfig.url)), requestInit ? { requestInit } : undefined)
+  } else if (kind === "sse") {
+    if (!serverConfig.url || !sdk.SSEClientTransport) throw new Error("SSE MCP server must define url")
+    transport = new sdk.SSEClientTransport(new URL(resolveMcpUrl(serverConfig.url)), requestInit
+      ? { requestInit, eventSourceInit: { headers } }
+      : undefined)
+  } else {
+    if (!serverConfig.command || !sdk.StdioClientTransport) throw new Error("stdio MCP server must define command")
+    const args = Array.isArray(serverConfig.args)
+      ? serverConfig.args.map(arg => typeof arg === "string" && (arg.startsWith("./") || arg.startsWith("../")
+        ? path.resolve(pluginRoot, arg)
+        : text(arg)))
+      : []
+    transport = new sdk.StdioClientTransport({
+      command: text(serverConfig.command),
+      args,
+      env: scopedEnvironment,
+    })
+  }
+  if (!client.connect || !transport) throw new Error(`MCP 服务 ${serverName} 的传输未创建`)
+  try {
+    await client.connect(transport)
+  } catch (error) {
+    try { await transport.close?.() } catch { /* 连接失败时仅清理临时传输。 */ }
+    throw error
+  }
+  return { client, transport }
+}
+
+async function discoverClientTools(serverName: string, client: McpClient, serverConfig: UnknownRecord): Promise<McpDiscovery> {
+  const catalog: McpDiscoveredTool[] = []
+  const definitions: McpToolDefinition[] = []
+  let cursor: string | undefined
+  const seenCursors = new Set<string>()
+  do {
+    const list = await client.listTools(cursor ? { cursor } : undefined)
+    for (const tool of list.tools || []) {
+      const adapter = new McpToolAdapter(serverName, client, tool, serverConfig)
+      catalog.push({
+        server: serverName,
+        originalName: tool.name,
+        name: adapter.name,
+        description: adapter.description,
+        exposed: isMcpToolSelected(serverConfig, tool.name),
+      })
+      definitions.push(tool)
+    }
+    cursor = list.nextCursor
+    if (cursor && seenCursors.has(cursor)) throw new Error("MCP 工具分页游标重复")
+    if (cursor) seenCursors.add(cursor)
+  } while (cursor)
+  return { catalog, definitions }
 }
 
 function normalizeSchema(schema: unknown): Record<string, unknown> {
@@ -166,12 +265,14 @@ export class McpManager {
   readonly clients = new Map<string, McpClient>()
   readonly transports = new Map<string, McpTransport>()
   tools: McpToolAdapter[] = []
+  catalog: McpDiscoveredTool[] = []
   errors: McpServerStatus[] = []
   initialized = false
 
   async init(): Promise<void> {
     const config = await configStore.load()
     this.tools = []
+    this.catalog = []
     this.errors = []
     const mcp = record(config.mcp)
     if (mcp.enabled !== true) {
@@ -182,16 +283,7 @@ export class McpManager {
 
     let sdk: McpSdkModule
     try {
-      const [clientModule, stdioModule, sseModule] = await Promise.all([
-        importSdk("@modelcontextprotocol/sdk/client/index.js"),
-        importSdk("@modelcontextprotocol/sdk/client/stdio.js"),
-        importSdk("@modelcontextprotocol/sdk/client/sse.js"),
-      ])
-      sdk = {
-        Client: clientModule.Client as McpSdkModule["Client"],
-        StdioClientTransport: stdioModule.StdioClientTransport as McpSdkModule["StdioClientTransport"],
-        SSEClientTransport: sseModule.SSEClientTransport as McpSdkModule["SSEClientTransport"],
-      }
+      sdk = await loadSdk()
     } catch (error) {
       this.errors.push({ server: "__sdk__", error: errorMessage(error) })
       this.initialized = false
@@ -205,45 +297,22 @@ export class McpManager {
       let client: McpClient | null = null
       let transport: McpTransport | null = null
       try {
-        if (!sdk.Client) throw new Error("MCP SDK 缺少 Client")
-        client = new sdk.Client(
-          { name: "yui-chat", version: text(config.version) || "0.1.0" },
-          { capabilities: {} },
-        )
-        const kind = transportKind(serverConfig)
-        if (kind === "streamableHttp") {
-          if (!serverConfig.url) throw new Error("Streamable HTTP MCP server must define url")
-          const module = await importSdk("@modelcontextprotocol/sdk/client/streamableHttp.js")
-          const Constructor = module.StreamableHTTPClientTransport as McpSdkModule["StreamableHTTPClientTransport"]
-          if (!Constructor) throw new Error("MCP SDK 缺少 StreamableHTTPClientTransport")
-          transport = new Constructor(new URL(text(serverConfig.url)))
-        } else if (kind === "sse") {
-          if (!serverConfig.url || !sdk.SSEClientTransport) throw new Error("SSE MCP server must define url")
-          transport = new sdk.SSEClientTransport(new URL(text(serverConfig.url)))
-        } else {
-          if (!serverConfig.command || !sdk.StdioClientTransport) throw new Error("stdio MCP server must define command")
-          const args = Array.isArray(serverConfig.args)
-            ? serverConfig.args.map(arg => typeof arg === "string" && (arg.startsWith("./") || arg.startsWith("../")
-              ? path.resolve(pluginRoot, arg)
-              : text(arg)))
-            : []
-          transport = new sdk.StdioClientTransport({
-            command: text(serverConfig.command),
-            args,
-            env: { ...process.env, ...record(serverConfig.env) },
-          })
-        }
-        if (!client.connect || !transport) throw new Error("MCP 客户端传输未创建")
-        await client.connect(transport)
+        const connection = await connectServer(name, serverConfig, text(config.version), sdk)
+        client = connection.client
+        transport = connection.transport
         this.clients.set(name, client)
         this.transports.set(name, transport)
-        const list = await client.listTools()
-        for (const tool of list.tools || []) this.tools.push(new McpToolAdapter(name, client, tool, serverConfig))
+        const discovered = await discoverClientTools(name, client, serverConfig)
+        this.catalog.push(...discovered.catalog)
+        for (const tool of discovered.definitions.filter(tool => isMcpToolSelected(serverConfig, tool.name))) {
+          this.tools.push(new McpToolAdapter(name, client, tool, serverConfig))
+        }
       } catch (error) {
         this.errors.push({ server: name, error: errorMessage(error) })
         this.clients.delete(name)
         this.transports.delete(name)
         this.tools = this.tools.filter(tool => tool.serverName !== name)
+        this.catalog = this.catalog.filter(tool => tool.server !== name)
         try { await client?.close?.() } catch { /* best-effort：失败不影响主流程。 */ }
         try { await transport?.close?.() } catch { /* best-effort：失败不影响主流程。 */ }
       }
@@ -255,11 +324,32 @@ export class McpManager {
     return [...this.tools]
   }
 
+  /** 连接并发现单个服务，但不注册工具、不写配置，也不改变当前运行连接。 */
+  async testServer(serverName: string, serverConfig: UnknownRecord): Promise<{ server: string; catalog: McpDiscoveredTool[]; exposed: string[]; elapsedMs: number }> {
+    const startedAt = Date.now()
+    const config = await configStore.load()
+    const sdk = await loadSdk()
+    const connection = await connectServer(serverName, serverConfig, text(config.version), sdk)
+    try {
+      const { catalog } = await discoverClientTools(serverName, connection.client, serverConfig)
+      return {
+        server: serverName,
+        catalog,
+        exposed: catalog.filter(item => item.exposed).map(item => item.originalName),
+        elapsedMs: Date.now() - startedAt,
+      }
+    } finally {
+      try { await connection.client.close?.() } catch { /* 测试连接结束时尽力关闭客户端。 */ }
+      try { await connection.transport.close?.() } catch { /* 测试连接结束时尽力关闭传输。 */ }
+    }
+  }
+
   status(): UnknownRecord {
     return {
       initialized: this.initialized,
       clients: [...this.clients.keys()],
       tools: this.tools.map(tool => tool.name),
+      catalog: this.catalog.map(tool => ({ ...tool })),
       errors: [...this.errors],
     }
   }
@@ -274,6 +364,7 @@ export class McpManager {
     this.clients.clear()
     this.transports.clear()
     this.tools = []
+    this.catalog = []
     this.initialized = false
   }
 }

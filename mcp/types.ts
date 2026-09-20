@@ -37,7 +37,7 @@ export interface McpToolDefinition {
 export interface McpClient {
   /** 第三个参数专门承载取消信号，避免误把 SDK 校验参数当成请求选项。 */
   callTool: (request: { name: string; arguments: Record<string, unknown> }, resultSchema?: unknown, options?: { signal?: AbortSignal }) => Promise<McpCallToolResult>
-  listTools: () => Promise<{ tools?: McpToolDefinition[] }>
+  listTools: (request?: { cursor?: string }) => Promise<{ tools?: McpToolDefinition[]; nextCursor?: string }>
   connect?: (transport: unknown) => Promise<void>
   close?: () => Promise<void>
 }

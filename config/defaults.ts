@@ -535,11 +535,13 @@ export const defaults = {
     servers: {},
     serverTemplate: {
       enabled: true,
+      allowedTools: null,
       transport: "stdio",
       url: "",
       command: "",
       args: [],
       env: {},
+      headers: {},
       category: "mcp",
       risk: "external",
       requiresFinalReply: true,

@@ -111,6 +111,8 @@ const reasoningEfforts = new Set(["low", "medium", "high"])
 const modelToolPolicyModes = new Set(["inherit", "allowlist", "denylist"])
 const modelToolSources = new Set(["auto", "hosted", "local", "disabled"])
 const modelWebSearchStrategies = new Set(["preferred", "fallback", "parallel"])
+const mcpEnvNamePattern = /^[A-Za-z_][A-Za-z0-9_]*$/
+const mcpHeaderNamePattern = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
 
 function isObject(value: unknown): value is ConfigSection {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value)
@@ -204,6 +206,20 @@ function validateToolExecutionPolicy(issues: ValidationIssue[], path: string, va
   const source = isObject(value) ? value : {}
   validateExecution(issues, `${path}.execution`, source.execution)
   validateExecutionByAction(issues, `${path}.executionByAction`, source.executionByAction)
+}
+
+function validateMcpMap(issues: ValidationIssue[], path: string, value: unknown, kind: "env" | "headers"): void {
+  if (value === undefined) return
+  if (!isObject(value)) {
+    add(issues, "error", path, `${path} 必须是对象`)
+    return
+  }
+  for (const [name, raw] of Object.entries(value)) {
+    const validName = kind === "env" ? mcpEnvNamePattern.test(name) : mcpHeaderNamePattern.test(name)
+    if (!validName) add(issues, "error", `${path}.${name}`, `${path} 中存在无效名称`)
+    if (typeof raw !== "string") add(issues, "error", `${path}.${name}`, `${path}.${name} 必须是字符串`)
+    else if (/[\r\n]/.test(raw)) add(issues, "error", `${path}.${name}`, `${path}.${name} 不能包含换行符`)
+  }
 }
 
 function positiveNumber(issues: ValidationIssue[], path: string, value: unknown, { min = 0, max = Infinity, level = "error", integer = false }: ValidationOptions = {}): void {
@@ -707,6 +723,12 @@ function validateMcp(config: ConfigRecord, issues: ValidationIssue[]): void {
     if (server.requiresFinalReply !== undefined && typeof server.requiresFinalReply !== "boolean") {
       add(issues, "error", `mcp.servers.${serverName}.requiresFinalReply`, "requiresFinalReply 必须是布尔值")
     }
+    if (server.allowedTools !== undefined && server.allowedTools !== null
+      && (!Array.isArray(server.allowedTools) || server.allowedTools.some(name => typeof name !== "string" || !name.trim() || name !== name.trim()))) {
+      add(issues, "error", `mcp.servers.${serverName}.allowedTools`, "allowedTools 必须为 null（全部开放）或原始工具名数组（空数组关闭全部）")
+    }
+    validateMcpMap(issues, `mcp.servers.${serverName}.env`, server.env, "env")
+    validateMcpMap(issues, `mcp.servers.${serverName}.headers`, server.headers, "headers")
     validateToolExecutionPolicy(issues, `mcp.servers.${serverName}`, server)
     if (server.tags !== undefined && !Array.isArray(server.tags)) add(issues, "error", `mcp.servers.${serverName}.tags`, "tags 必须是数组")
     if (server.policy !== undefined && !isObject(server.policy)) add(issues, "error", `mcp.servers.${serverName}.policy`, "policy 必须是对象")

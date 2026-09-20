@@ -1,9 +1,9 @@
 import { computed, reactive, ref } from "vue"
+import { McpToolsPanel } from "./mcp-tools-panel.js"
 import { confirmAction, store, request, toast, refreshTab, saveConfigPatch } from "../../app/store/store.js"
 import { splitTokens, parseJsonText, toJson } from "../../shared/format.js"
-import { asRecord, errorMessage, type UnknownRecord } from "../../shared/data.js"
+import { asRecord, asRecords, errorMessage, type UnknownRecord } from "../../shared/data.js"
 import { BOOL_OPTIONS, MCP_RISK_OPTIONS } from "./shared.js"
-
 interface McpServer extends UnknownRecord {
   id?: string
   name?: string
@@ -24,10 +24,10 @@ interface McpServer extends UnknownRecord {
   executionByAction?: UnknownRecord | string
   tags?: string[] | string
   env?: UnknownRecord | string
+  headers?: UnknownRecord | string
   policy?: UnknownRecord | string
   toolPolicies?: UnknownRecord | string
 }
-
 interface McpEditorDraft {
   mode: "create" | "edit"
   id: string
@@ -44,20 +44,19 @@ interface McpEditorDraft {
   executionByAction: string
   tags: string
   env: string
+  headers: string
   policy: string
   toolPolicies: string
+  allowedTools: unknown
 }
-
 interface McpSlice extends UnknownRecord {
   config?: { enabled?: boolean; servers?: Record<string, McpServer> }
 }
-
 const MCP_CONNECTION_OPTIONS = [
   { value: "stdio", label: "标准输入 / 输出 (stdio)" },
   { value: "sse", label: "服务器发送事件 (sse)" },
   { value: "streamableHttp", label: "可流式传输的 HTTP (streamableHttp)" },
 ]
-
 function defaultMcpEditor(): McpEditorDraft {
   return {
     mode: "create",
@@ -75,21 +74,20 @@ function defaultMcpEditor(): McpEditorDraft {
     executionByAction: "{}",
     tags: "mcp, external",
     env: "",
+    headers: "{}",
     policy: toJson({ externalNetwork: true }),
     toolPolicies: "{}",
+    allowedTools: null,
   }
 }
-
 function serverRequiresFinalReply(server: McpServer = {}) {
   return server.requiresFinalReply !== false
 }
-
 function envToLines(value: unknown): string {
   if (typeof value === "string") return value
   if (!value || typeof value !== "object" || Array.isArray(value)) return ""
   return Object.entries(value).map(([key, item]) => `${key}=${String(item ?? "")}`).join("\n")
 }
-
 function parseEnvText(value: unknown): UnknownRecord {
   const text = String(value || "").trim()
   if (!text) return {}
@@ -99,7 +97,6 @@ function parseEnvText(value: unknown): UnknownRecord {
     return [line.slice(0, separator).trim(), line.slice(separator + 1)]
   }))
 }
-
 function importedServerConfig(value: unknown): { id: string; server: McpServer } {
   const source = asRecord(value)
   const collection = asRecord(source.mcp).servers || source.mcpServers || source.servers
@@ -115,10 +112,10 @@ function importedServerConfig(value: unknown): { id: string; server: McpServer }
   }
   return { id: String(source.id || source.name || ""), server: asRecord<McpServer>(source) }
 }
-
 // MCP Server 管理。
 export const McpPanel = {
   name: "McpPanel",
+  components: { McpToolsPanel },
   setup() {
     const draft = reactive({
       mcpEnabled: String((asRecord<McpSlice>(store.mcp).config?.enabled ?? asRecord<{ mcp?: { enabled?: boolean } }>(store.config).mcp?.enabled ?? true) !== false),
@@ -140,7 +137,6 @@ export const McpPanel = {
       : (editor.connection === "stdio"
         ? "本地命令行 MCP 服务配置。"
         : (editor.connection === "streamableHttp" ? "支持 MCP Streamable HTTP 的远端服务配置。" : "服务器发送事件（SSE）服务配置。")))
-
     function applyEditor(id: string, server: McpServer = {}, mode: "create" | "edit" = "edit") {
       Object.assign(editor, defaultMcpEditor(), {
         mode,
@@ -160,7 +156,9 @@ export const McpPanel = {
         executionByAction: typeof server.executionByAction === "string" ? server.executionByAction : toJson(server.executionByAction || {}),
         tags: Array.isArray(server.tags) ? server.tags.join(", ") : (server.tags || "mcp, external"),
         env: envToLines(server.env),
+        headers: typeof server.headers === "string" ? server.headers : toJson(server.headers || {}),
         policy: typeof server.policy === "string" ? server.policy : toJson(server.policy || { externalNetwork: true }),
+        allowedTools: server.allowedTools ?? null,
         toolPolicies: typeof server.toolPolicies === "string" ? server.toolPolicies : toJson(server.toolPolicies || {}),
       })
       showEditor.value = true
@@ -218,13 +216,14 @@ export const McpPanel = {
         toast("已读取 JSON，请确认后保存服务")
       } catch (err) { toast(errorMessage(err)) }
     }
-    async function saveEditor() {
+    async function saveEditor(discover = false) {
       try {
         if (editorMode.value === "json" && editor.mode === "create") return importJsonToEditor()
         const id = String(editor.id || "").trim()
         if (!id) throw new Error("请输入 MCP 服务名称或 ID")
         const payload: UnknownRecord = {
           id,
+          ...(editor.mode === "create" ? { allowedTools: editor.allowedTools } : {}),
           description: String(editor.description || "").trim().slice(0, 240),
           enabled: editor.enabled === "true",
           mcpEnabled: draft.mcpEnabled === "true",
@@ -236,6 +235,7 @@ export const McpPanel = {
           executionByAction: parseJsonText(editor.executionByAction, "按动作执行策略", {}),
           tags: splitTokens(editor.tags),
           env: parseEnvText(editor.env),
+          headers: parseJsonText(editor.headers, "HTTP 请求头", {}),
           policy: parseJsonText(editor.policy, "Server Policy", { externalNetwork: true }),
           toolPolicies: parseJsonText(editor.toolPolicies, "Tool Policies", {}),
         }
@@ -248,7 +248,12 @@ export const McpPanel = {
           payload.url = String(editor.url || "").trim()
         }
         await request("/api/mcp/server", { method: "POST", body: JSON.stringify(payload) })
-        toast(`已保存 MCP 服务 ${id}`)
+        if (discover) {
+          const result = await request(`/api/mcp/${encodeURIComponent(id)}/discover`, { method: "POST", body: "{}" })
+          toast(`已保存并发现 ${asRecords(asRecord(result.probe).catalog).length} 个工具`)
+        } else {
+          toast(`已保存 MCP 服务 ${id}`)
+        }
         showEditor.value = false
         await refreshTab("tools")
       } catch (err) { toast(errorMessage(err)) }
@@ -330,6 +335,7 @@ export const McpPanel = {
               <button class="btn small" type="button" @click="openEdit(item.id)"><Icon name="pencil" :size="14" />编辑</button>
             </div>
           </div>
+          <McpToolsPanel :server-id="item.id" />
         </div>
       </PagedList>
       <SideDrawer
@@ -372,7 +378,8 @@ export const McpPanel = {
               <Field label="按 action 覆盖 JSON" type="textarea" rows="5" v-model="editor.executionByAction" tip="复合 MCP 工具可按 action 覆盖执行效果和重试策略；工具级 toolPolicies.execution 优先级更高。" />
               <Field label="标签" v-model="editor.tags" tip="逗号分隔，用来标记来源、用途或供应商。" />
             </div>
-            <Field v-if="editor.connection !== 'stdio'" label="环境变量" type="textarea" rows="4" v-model="editor.env" placeholder="KEY=value\nANOTHER_KEY=value" tip="每行一个 KEY=value；远端连接通常不需要。" />
+            <Field v-if="editor.connection !== 'stdio'" label="环境变量" type="textarea" rows="4" v-model="editor.env" placeholder="KEY=value\nANOTHER_KEY=value" tip="每行一个 KEY=value；仅供当前 MCP 连接内部引用，不会修改 Yunzai 主进程环境。" />
+            <Field v-if="editor.connection !== 'stdio'" label="HTTP 请求头 JSON" type="textarea" rows="5" v-model="editor.headers" placeholder='{"Authorization":"Bearer \${env:IMG_TAG_API_KEY}"}' tip="例如 Authorization 或 X-API-Key；用 \${env:变量名} 引用 Yunzai 进程环境变量，密钥不会写入配置接口。" />
             <Field label="服务策略 JSON" type="textarea" rows="5" v-model="editor.policy" tip="给整个 MCP 服务设置默认策略，例如 externalNetwork、requiresMaster 等。" />
               <Field label="工具策略 JSON" type="textarea" rows="6" v-model="editor.toolPolicies" tip="可按工具名覆盖权限、requiresFinalReply、execution 和 executionByAction；普通场景保留空对象即可。" />
           </Collapse>
@@ -381,6 +388,8 @@ export const McpPanel = {
           <button v-if="editor.mode === 'edit'" class="icon-btn danger mcp-editor-delete" type="button" data-tip="删除此 MCP 服务" @click="deleteEditorServer"><Icon name="trash" :size="15" /></button>
           <button class="btn outline" type="button" @click="showEditor = false"><Icon name="x" :size="14" />关闭</button>
           <button v-if="editor.mode === 'create' && editorMode === 'json'" class="btn primary small" type="button" @click="importJsonToEditor"><Icon name="download" :size="14" />读取 JSON</button>
+          <button v-else-if="editor.mode === 'create'" class="btn outline small" type="button" @click="saveEditor(true)"><Icon name="refresh" :size="14" />保存并发现</button>
+          <button v-else-if="editor.mode === 'edit'" class="btn outline small" type="button" @click="saveEditor(true)"><Icon name="refresh" :size="14" />保存并发现</button>
           <button v-else class="btn primary small" type="button" @click="saveEditor"><Icon name="save" :size="14" />保存服务</button>
         </template>
       </SideDrawer>
