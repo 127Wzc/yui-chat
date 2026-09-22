@@ -1046,6 +1046,15 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
     if (automaticDeliveryTraces.length && hasSuccessfulMediaDelivery(automaticDeliveryTraces)) {
       searchDeliveryAttempted = true
       searchDeliveryStatus = partialDelivery ? "partial" : "sent"
+      // 只有统一 message_send 返回成功回执后，才把模型可见的表情包选择
+      // 计入日常定格的冷却、配额和持久去重状态。
+      for (const trace of requestedTraces) {
+        const sticker = record(record(trace.metadata).stickerExpression)
+        if (!sticker.selectedId) continue
+        void import("../persona/sticker-expression-coordinator.js").then(module => module.noteExternalStickerDelivery(options.e, trace.metadata)).catch(error => {
+          hostRuntime.logger?.debug?.("[yui-chat] 表情包成功回执状态记录失败", error)
+        })
+      }
       agentTurn.requestFinalReply(shouldContinueAfterAutomaticDelivery(requestedTraces))
     }
     // continueConversation 只锁存“最终必须回复”，不会把当前工具轮当成最终轮。

@@ -153,6 +153,7 @@ for (const relative of [
   "tools/builtins/bilibili.js",
   "tools/builtins/command.js",
   "tools/builtins/network.js",
+  "tools/builtins/sticker-expression.js",
   "tools/builtins/group-admin.js",
   "tools/builtins/render.js",
   "tools/custom/manager.js",

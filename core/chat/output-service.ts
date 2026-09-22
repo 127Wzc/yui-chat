@@ -8,6 +8,7 @@ import { deliverMessageChain } from "../message-chain/delivery.js"
 import type { ForwardNode, MessageChain } from "../message-chain/types.js"
 import type { UnknownRecord } from "../message/types.js"
 import { armConversationContinuation } from "../persona/conversation-continuation.js"
+import { stickerExpressionCoordinator } from "../persona/sticker-expression-coordinator.js"
 import { buildReplyPayload, isEmptyResponse, normalizeResponseText } from "./response-pipeline.js"
 
 type ReplyMethod = (payload: unknown, quote?: unknown, options?: UnknownRecord) => unknown | Promise<unknown>
@@ -301,6 +302,14 @@ async function finishOutputDelivery(event: unknown, result: UnknownRecord, confi
   await deliverHostedSearchSources(event, result, config)
   rememberDeliveredConversation(event, result, source, botText, options)
   if (delivered !== false) recentContextStore.recordAssistant(event, botText, delivered)
+  if (delivered !== false) {
+    void stickerExpressionCoordinator.afterConversation(event, {
+      config,
+      source,
+      botText,
+      prompt: options.prompt || result.prompt,
+    }).catch(error => hostRuntime.logger?.debug?.("[yui-chat] 日常定格对话入口失败", error))
+  }
   return delivered
 }
 

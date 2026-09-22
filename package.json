@@ -5,7 +5,7 @@
   "description": "Yui Chat AI plugin for TRSS-Yunzai",
   "scripts": {
     "postinstall": "node scripts/postinstall.mjs",
-    "check": "npm run check:types && npm run check:types-client && npm run check:types-runtime && npm run check:runtime-build && npm run check:structure && npm run check:sqlite-baseline && npm run check:sqlite-integration && npm run check:memory-p1 && npm run check:knowledge-p1 && npm run check:runtime-p1 && npm run check:actions && npm run check:silent-tools && npm run check:mcp-selection && npm run check:code-editor && npm run smoke",
+    "check": "npm run check:types && npm run check:types-client && npm run check:types-runtime && npm run check:runtime-build && npm run check:structure && npm run check:sqlite-baseline && npm run check:sqlite-integration && npm run check:memory-p1 && npm run check:knowledge-p1 && npm run check:runtime-p1 && npm run check:actions && npm run check:silent-tools && npm run check:mcp-selection && npm run check:sticker-expression && npm run check:daily-still && npm run check:code-editor && npm run smoke",
     "check:types": "tsc -p tsconfig.json --noEmit",
     "check:types-client": "tsc -p tsconfig.client.json --noEmit",
     "build:types": "tsc -p tsconfig.build.json",
@@ -23,6 +23,8 @@
     "smoke": "node scripts/smoke.mjs",
     "check:mcp-selection": "node scripts/check-mcp-selection.mjs",
     "check:silent-tools": "node scripts/check-silent-tools.mjs",
+    "check:sticker-expression": "node scripts/check-sticker-expression.mjs",
+    "check:daily-still": "node scripts/check-daily-still.mjs",
     "check:code-editor": "node scripts/check-code-editor.mjs"
   },
   "dependencies": {

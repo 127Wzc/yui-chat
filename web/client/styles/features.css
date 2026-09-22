@@ -1547,3 +1547,37 @@
 .actions-example > svg, .actions-example > .badge { flex-shrink: 0; }
 @media (max-width: 700px) { .actions-examples { grid-template-columns: 1fr; } }
 @media (max-width: 540px) { .actions-tool-settings { align-items: flex-start; flex-direction: column; gap: 4px; } }
+
+/* 日常定格：把复杂的触发条件分成可扫读的配置卡片。 */
+.daily-still-page { gap: 14px; }
+.daily-still-hero { overflow: hidden; border-color: color-mix(in srgb, var(--primary) 30%, var(--border)); background: linear-gradient(135deg, color-mix(in srgb, var(--primary-weak) 70%, var(--card)), var(--card)); }
+.daily-still-hero > div { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 18px; }
+.daily-still-hero h2 { margin: 3px 0 6px; font-size: 18px; }
+.daily-still-hero p { max-width: 720px; color: var(--muted-foreground); font-size: 12px; line-height: 1.6; }
+.daily-still-hero .eyebrow { color: var(--primary); font-size: 10px; font-weight: 800; letter-spacing: .12em; }
+.daily-still-hero .hero-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; padding: 0; }
+.daily-still-page .setting-card { align-items: flex-start; flex-direction: column; }
+.daily-still-page .setting-card .switch { align-self: flex-end; }
+.daily-still-page .setting-card .field { width: 100%; }
+.daily-still-page .setting-card.inline { flex-direction: row; align-items: center; max-width: 320px; }
+.daily-still-page .setting-card.inline .switch { align-self: auto; }
+.daily-still-page .setting-title { display: flex; align-items: center; gap: 6px; min-height: 24px; }
+.daily-still-channel-picker { min-width: 0; }
+.daily-still-channel-picker-head { display: flex; align-items: center; gap: 6px; min-height: 24px; margin-bottom: 4px; font-size: 12px; font-weight: 650; }
+.daily-still-channel-picker-head > span:first-child { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
+.daily-still-channel-picker .field { width: 100%; }
+.daily-still-source-badge { margin-left: auto; flex: 0 0 auto; font-size: 9px; }
+.daily-still-page .daily-still-advanced { margin-top: 12px; border: 1px solid var(--border); border-radius: 10px; background: color-mix(in srgb, var(--muted) 45%, var(--card)); }
+.daily-still-page .daily-still-advanced > summary { display: flex; align-items: center; gap: 8px; padding: 10px 12px; cursor: pointer; list-style: none; font-size: 12px; font-weight: 700; }
+.daily-still-page .daily-still-advanced > summary::-webkit-details-marker { display: none; }
+.daily-still-page .daily-still-advanced > summary span { color: var(--muted-foreground); font-size: 11px; font-weight: 500; }
+.daily-still-page .daily-still-advanced[open] > summary { border-bottom: 1px solid var(--border); }
+.daily-still-page .daily-still-advanced > .form-grid { padding: 12px; }
+.daily-still-page .result-box { display: grid; grid-template-columns: minmax(0, 1fr) minmax(120px, 240px); gap: 12px; margin-top: 12px; padding: 11px; border: 1px solid var(--border); border-radius: 10px; background: var(--muted); }
+.daily-still-page .result-box pre { max-height: 260px; margin: 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.5 var(--font-mono, ui-monospace, monospace); }
+.daily-still-page .result-box img { width: 100%; max-height: 220px; object-fit: contain; border-radius: 8px; background: var(--card); }
+@media (max-width: 700px) {
+  .daily-still-hero > div { align-items: flex-start; flex-direction: column; }
+  .daily-still-hero .hero-actions { width: 100%; justify-content: space-between; }
+  .daily-still-page .result-box { grid-template-columns: 1fr; }
+}

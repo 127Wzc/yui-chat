@@ -24,6 +24,7 @@ export const icons = {
   "chevron-down": '<path d="m6 9 6 6 6-6" />', // lucide: chevron-down
   "alert": '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3" /><path d="M12 9v4" /><path d="M12 17h.01" />', // lucide: triangle-alert
   "info": '<circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" />', // lucide: info
+  "help": '<circle cx="12" cy="12" r="10" /><path d="M9.5 9a2.5 2.5 0 1 1 4.33 1.7c-.84.82-1.83 1.16-1.83 2.8" /><path d="M12 17h.01" />', // lucide: circle-help
   "copy": '<rect width="14" height="14" x="8" y="8" rx="2" ry="2" /><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />', // lucide: copy
   "key": '<path d="m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4" /><path d="m21 2-9.6 9.6" /><circle cx="7.5" cy="15.5" r="5.5" />', // lucide: key
   "zap": '<path d="M15.914 4a1.5 1.5 0 00-2.474-1.561l-9 9A1.5 1.5 0 005.5 14h4.002a.5.5 0 01.471.666L8.086 20a1.5 1.5 0 002.475 1.56l9-9A1.5 1.5 0 0018.5 10h-3.997a.5.5 0 01-.472-.667z" />', // lucide: zap

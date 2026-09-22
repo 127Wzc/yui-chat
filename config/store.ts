@@ -325,6 +325,47 @@ function migratePersonaPrompt(config: Config): Config {
   return config
 }
 
+/** 日常定格的时长统一以秒保存；兼容早期的毫秒和分钟字段。 */
+export function migrateStickerExpressionTimes(config: Config): Config {
+  const persona = isObject(config.persona) ? config.persona : null
+  const sticker = persona && isObject(persona.stickerExpression) ? persona.stickerExpression : null
+  if (!sticker) return config
+
+  const migrate = (target: ConfigRecord, secondsKey: string, legacyKey: string, factor: number): void => {
+    if (target[secondsKey] === undefined && target[legacyKey] !== undefined) {
+      const value = Number(target[legacyKey])
+      if (Number.isFinite(value)) target[secondsKey] = value * factor
+    }
+    delete target[legacyKey]
+  }
+
+  const ambient = isObject(sticker.ambient) ? sticker.ambient : null
+  if (ambient) migrate(ambient, "windowSeconds", "windowMs", 1 / 1000)
+
+  const idle = isObject(sticker.idle) ? sticker.idle : null
+  if (idle) {
+    migrate(idle, "intervalSeconds", "intervalMinutes", 60)
+    migrate(idle, "minIdleSeconds", "minIdleMinutes", 60)
+  }
+
+  migrate(sticker, "cooldownSeconds", "cooldownMs", 1 / 1000)
+  migrate(sticker, "attemptIntervalSeconds", "attemptIntervalMs", 1 / 1000)
+  migrate(sticker, "recentWindowSeconds", "recentWindowMinutes", 60)
+  migrate(sticker, "contextTtlSeconds", "contextTtlMs", 1 / 1000)
+  migrate(sticker, "intentTimeoutSeconds", "intentTimeoutMs", 1 / 1000)
+  migrate(sticker, "moodDecaySeconds", "moodDecayMinutes", 60)
+  const binding = isObject(sticker.binding) ? sticker.binding : null
+  if (binding) {
+    // 旧版本把内部包装器保存为 sticker_search；现在渠道直接绑定统一
+    // Tool Registry 中的真实 MCP/Custom 工具，迁移到项目内置的 imagTag 搜图工具。
+    for (const key of ["tool", "primaryTool"]) {
+      if (binding[key] === "sticker_search") binding[key] = "mcp_imagTag-mcp_search_images"
+    }
+    if (binding.fallbackTool === "sticker_search") binding.fallbackTool = ""
+  }
+  return config
+}
+
 function normalizeModelToolPolicies(config: Config): void {
   const models = Array.isArray(config.models) ? config.models : []
   for (const model of models) {
@@ -499,7 +540,7 @@ export function mergeRedactedConfigSecrets(candidate: unknown, current: unknown,
 
 function prepareConfig(value: unknown): Config {
   const raw = clone(value || {})
-  const incoming = migratePersonaPrompt(normalizeMessageFilters(isObject(raw) ? raw : {}))
+  const incoming = migrateStickerExpressionTimes(migratePersonaPrompt(normalizeMessageFilters(isObject(raw) ? raw : {})))
   const merged = clone(mergeConfig(defaults, incoming))
   const candidate = normalizeConfig(isObject(merged) ? merged : {})
   assertConfigValid(candidate as RuntimeConfigObject)

@@ -67,6 +67,31 @@ export interface ToolExecutionPolicy {
   } | null
 }
 
+/** 日常定格渠道的稳定契约；只读工具可以通过声明或结构推断接入。 */
+export interface StickerExpressionChannelContract {
+  version: 1
+  input: "keyword-tags-count"
+  output: "images"
+  readOnly?: boolean
+  /** 日常定格内部适配器使用的稳定入参到实际字段映射。 */
+  inputMapping?: {
+    keyword?: string
+    tags?: string
+    count?: string
+  }
+  /** 渠道固定附加参数，例如语义检索的 match/sort。 */
+  fixedArguments?: Record<string, JsonValue>
+  /** 候选数组路径和候选字段映射；只在日常定格内部生效。 */
+  outputMapping?: {
+    candidatesPath?: string
+    idField?: string
+    urlField?: string
+    descriptionField?: string
+    tagsField?: string
+    scoreField?: string
+  }
+}
+
 /** Builtin、Custom 和 MCP 共用的工具元数据，不包含具体执行实现。 */
 export interface ToolCommon {
   displayNameZh?: string
@@ -87,6 +112,8 @@ export interface ToolCommon {
   /** 默认 true；仅明确声明后台/即时动作的工具才可以关闭最终模型回复。 */
   requiresFinalReply: boolean
   hiddenFromModel?: boolean
+  /** 可选的日常定格选图渠道声明。未声明时由注册表按入参和说明推断。 */
+  stickerExpressionChannel?: StickerExpressionChannelContract
   execution: ToolExecutionPolicy
   executionByAction: Record<string, ToolExecutionPolicy>
   policy: ToolPolicy

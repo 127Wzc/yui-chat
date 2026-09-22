@@ -107,7 +107,7 @@ export const HelpTip = defineComponent({
         @mouseleave="hide"
         @focus="show"
         @blur="hide"
-      ><Icon name="info" :size="13" /></span>
+      ><Icon name="help" :size="13" /></span>
       <Teleport to="body">
         <div
           v-if="open && tip"

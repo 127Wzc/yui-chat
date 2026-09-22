@@ -202,6 +202,8 @@ export class McpToolAdapter {
   readonly executionByAction: UnknownRecord
   readonly tags: string[]
   readonly policy: UnknownRecord
+  readonly hiddenFromModel: boolean
+  readonly stickerExpressionChannel: UnknownRecord | null
   readonly pipeline: UnknownRecord | null
   readonly mcp: { serverName: string; originalName: string }
 
@@ -239,6 +241,10 @@ export class McpToolAdapter {
       ...record(serverConfig.policy),
       ...record(override.policy),
     }
+    this.hiddenFromModel = override.hiddenFromModel === true || serverConfig.hiddenFromModel === true
+    this.stickerExpressionChannel = isRecord(override.stickerExpressionChannel)
+      ? override.stickerExpressionChannel
+      : isRecord(serverConfig.stickerExpressionChannel) ? serverConfig.stickerExpressionChannel : null
     this.pipeline = isRecord(override.pipeline) ? override.pipeline : isRecord(serverConfig.pipeline) ? serverConfig.pipeline : null
     this.mcp = { serverName, originalName: this.originalName }
   }

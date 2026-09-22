@@ -91,6 +91,7 @@ export const schema: SchemaGroup[] = [
       { path: "persona.trigger.poke", label: "戳一戳触发策略", type: "json" },
       { path: "persona.output", label: "第一人称输出策略", type: "json" },
       { path: "persona.initiativeGreeting", label: "主动打招呼", type: "json" },
+      { path: "persona.stickerExpression", label: "日常定格", type: "json", description: "按对话、群聊窗口和空闲状态决定是否发送一张语境相关的表情包；群聊默认只对群白名单生效。" },
     ],
   },
   {

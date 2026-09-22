@@ -10,6 +10,7 @@ import { authStats, clearWebSession, consumeQuickLogin, issueWebAccessToken, rea
 import { createWebTestEvent as webTestEvent, sanitizeWebId as sanitizeId } from "../request-context.js"
 import { handleRoute } from "../route-handler.js"
 import type { RouteApp, RouteRequest, RouteResponse } from "../route-handler.js"
+import { toolRegistry } from "../../../tools/support/registry.js"
 
 /** 注册运行状态、Web 测试会话、媒体缓存与渲染预览接口。 */
 export function registerRuntimeRoutes(app: RouteApp): void {
@@ -54,6 +55,53 @@ export function registerRuntimeRoutes(app: RouteApp): void {
     const { runtimeStats } = await import("../../../core/runtime/lifecycle.js")
     res.json({ ok: true, stats: runtimeStats() })
   })
+  app.get("/api/daily-still", auth, handleRoute(async (_req, res) => {
+    const { buildStickerExpressionStatus } = await import("../../../core/persona/sticker-expression-coordinator.js")
+    const { listStickerExpressionChannels } = await import("../../../tools/builtins/sticker-expression.js")
+    const allTools = await toolRegistry.list()
+    const byName = new Map(allTools.map(item => [String(item.name || ""), item]))
+    const channels = listStickerExpressionChannels(allTools).map(channel => {
+      const item = byName.get(channel.name) || {}
+      return {
+        ...channel,
+        enabled: item.enabled === true,
+        common: item.common,
+      }
+    })
+    res.json({ ok: true, status: buildStickerExpressionStatus(configStore.getPublic()), channels, tools: channels })
+  }))
+  app.post("/api/daily-still/test", auth, handleRoute(async (req, res) => {
+    const keyword = String(req.body?.keyword || "").trim().slice(0, 500)
+    if (keyword.length < 2) throw new Error("请输入至少 2 个字符的表达意图。")
+    const groupId = String(req.body?.groupId || "").trim().slice(0, 64)
+    const event = {
+      isGroup: Boolean(groupId),
+      isPrivate: !groupId,
+      message_type: groupId ? "group" : "private",
+      group_id: groupId,
+      user_id: "web-test",
+      sender: { user_id: "web-test", nickname: "Web 测试" },
+      msg: keyword,
+      raw_message: keyword,
+    }
+    const { stickerExpressionCoordinator } = await import("../../../core/persona/sticker-expression-coordinator.js")
+    const testConfig = await configStore.load()
+    const requestedBinding = req.body?.binding
+    if (requestedBinding && typeof requestedBinding === "object" && !Array.isArray(requestedBinding)) {
+      const persona = (testConfig.persona && typeof testConfig.persona === "object" ? testConfig.persona : {}) as Record<string, unknown>
+      const sticker = (persona.stickerExpression && typeof persona.stickerExpression === "object" ? persona.stickerExpression : {}) as Record<string, unknown>
+      const binding = (sticker.binding && typeof sticker.binding === "object" ? sticker.binding : {}) as Record<string, unknown>
+      persona.stickerExpression = { ...sticker, binding: { ...binding, ...(requestedBinding as Record<string, unknown>) } }
+      const mutableConfig = testConfig as unknown as Record<string, unknown>
+      mutableConfig.persona = persona
+    }
+    const result = await stickerExpressionCoordinator.preview({ config: testConfig, event, keyword, tags: Array.isArray(req.body?.tags) ? req.body.tags : [] })
+    res.json({ ok: true, result })
+  }, { errorStatus: 400 }))
+  app.post("/api/daily-still/run", auth, handleRoute(async (req, res) => {
+    const { stickerExpressionCoordinator } = await import("../../../core/persona/sticker-expression-coordinator.js")
+    res.json({ ok: true, result: await stickerExpressionCoordinator.runIdle({ config: await configStore.load(), dryRun: req.body?.dryRun !== false, force: req.body?.force === true }) })
+  }, { errorStatus: 400 }))
   app.get("/api/conversations", auth, async (req: RouteRequest, res: RouteResponse) => {
     const { chatService } = await import("../../../core/chat/chat-service.js")
     res.json({ ok: true, conversations: chatService.listConversations({ limit: Number(req.query.limit || 100) }) })

@@ -9,6 +9,7 @@ import { YuiChatMaster } from "./apps/master.js"
 import { YuiChatFriendPoke, YuiChatGroupPoke, YuiChatNotifyPoke } from "./apps/poke.js"
 import { registerFirstPersonListener } from "./core/persona/first-person-listener.js"
 import { initiativeGreetingScheduler } from "./core/persona/initiative-greeting.js"
+import { stickerExpressionCoordinator } from "./core/persona/sticker-expression-coordinator.js"
 import { cleanupMediaCache } from "./core/media/media-cache.js"
 import { scheduleTaskService } from "./core/scheduling/schedule-task-service.js"
 import { hostRuntime } from "./core/runtime/host-runtime.js"
@@ -52,6 +53,7 @@ async function boot(): Promise<void> {
   commandObserver.registerAfterHandler(e => { groupCaptureStore.record(e) })
   registerFirstPersonListener()
   initiativeGreetingScheduler.start(config)
+  stickerExpressionCoordinator.start(config)
   scheduleTaskService.start(config)
   const mediaRecognition = record(record(config).mediaRecognition)
   const remoteFetch = record(mediaRecognition.remoteFetch)

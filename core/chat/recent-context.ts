@@ -562,6 +562,12 @@ export class RecentContextStore {
     return { scopes: buffers.size, messages }
   }
 
+  /** 返回当前会话短期窗口中最新一条消息的时间，供空闲触发器判断沉默时长。 */
+  latestMessageAt(event: unknown = {}): number {
+    this.prune()
+    return buffers.get(scopeKey(event))?.at(-1)?.time || 0
+  }
+
   clear(): void {
     buffers.clear()
     hydratedScopes.clear()

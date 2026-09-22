@@ -723,6 +723,9 @@ function validateMcp(config: ConfigRecord, issues: ValidationIssue[]): void {
     if (server.requiresFinalReply !== undefined && typeof server.requiresFinalReply !== "boolean") {
       add(issues, "error", `mcp.servers.${serverName}.requiresFinalReply`, "requiresFinalReply 必须是布尔值")
     }
+    if (server.hiddenFromModel !== undefined && typeof server.hiddenFromModel !== "boolean") {
+      add(issues, "error", `mcp.servers.${serverName}.hiddenFromModel`, "hiddenFromModel 必须是布尔值")
+    }
     if (server.allowedTools !== undefined && server.allowedTools !== null
       && (!Array.isArray(server.allowedTools) || server.allowedTools.some(name => typeof name !== "string" || !name.trim() || name !== name.trim()))) {
       add(issues, "error", `mcp.servers.${serverName}.allowedTools`, "allowedTools 必须为 null（全部开放）或原始工具名数组（空数组关闭全部）")
@@ -745,6 +748,9 @@ function validateMcp(config: ConfigRecord, issues: ValidationIssue[]): void {
         }
         if (policy.requiresFinalReply !== undefined && typeof policy.requiresFinalReply !== "boolean") {
           add(issues, "error", `mcp.servers.${serverName}.toolPolicies.${toolName}.requiresFinalReply`, "requiresFinalReply 必须是布尔值")
+        }
+        if (policy.hiddenFromModel !== undefined && typeof policy.hiddenFromModel !== "boolean") {
+          add(issues, "error", `mcp.servers.${serverName}.toolPolicies.${toolName}.hiddenFromModel`, "hiddenFromModel 必须是布尔值")
         }
         validateToolExecutionPolicy(issues, `mcp.servers.${serverName}.toolPolicies.${toolName}`, policy)
       }
@@ -1098,6 +1104,75 @@ function validateRuntimeNumbers(config: ConfigRecord, issues: ValidationIssue[])
       if (greeting.fallbackMessages !== undefined && !Array.isArray(greeting.fallbackMessages)) {
         add(issues, "error", "persona.initiativeGreeting.fallbackMessages", "fallbackMessages 必须是数组")
       }
+    }
+  }
+  const sticker = config.persona?.stickerExpression
+  if (sticker !== undefined) {
+    if (!isObject(sticker)) add(issues, "error", "persona.stickerExpression", "persona.stickerExpression 必须是对象")
+    else {
+      for (const [path, value] of [
+        ["persona.stickerExpression.enabled", sticker.enabled],
+        ["persona.stickerExpression.privateEnabled", sticker.privateEnabled],
+        ["persona.stickerExpression.moodEnabled", sticker.moodEnabled],
+      ] as Array<[string, unknown]>) {
+        if (value !== undefined && typeof value !== "boolean") add(issues, "error", path, "必须是布尔值")
+      }
+      const binding = sticker.binding
+      if (binding !== undefined) {
+        if (!isObject(binding)) add(issues, "error", "persona.stickerExpression.binding", "binding 必须是对象")
+        else {
+          for (const key of ["tool", "primaryTool", "fallbackTool", "mcpServer", "mcpTool", "selectionMode"]) {
+            if (binding[key] !== undefined && typeof binding[key] !== "string") add(issues, "error", `persona.stickerExpression.binding.${key}`, `${key} 必须是字符串`)
+          }
+          if (binding.primaryTool && binding.fallbackTool && String(binding.primaryTool) === String(binding.fallbackTool)) add(issues, "error", "persona.stickerExpression.binding.fallbackTool", "回退渠道不能与主渠道相同")
+          positiveNumber(issues, "persona.stickerExpression.binding.candidateCount", binding.candidateCount, { min: 3, max: 20, integer: true })
+          if (binding.selectionMode !== undefined && !["best", "randomTop"].includes(String(binding.selectionMode))) add(issues, "error", "persona.stickerExpression.binding.selectionMode", "selectionMode 只支持 best 或 randomTop")
+          if (binding.adapterConfigs !== undefined && !isObject(binding.adapterConfigs)) add(issues, "error", "persona.stickerExpression.binding.adapterConfigs", "adapterConfigs 必须是对象")
+          for (const [channel, adapter] of Object.entries(isObject(binding.adapterConfigs) ? binding.adapterConfigs : {})) {
+            if (!isObject(adapter)) {
+              add(issues, "error", `persona.stickerExpression.binding.adapterConfigs.${channel}`, "渠道适配规则必须是对象")
+              continue
+            }
+            for (const [section, value] of [["inputMapping", adapter.inputMapping], ["outputMapping", adapter.outputMapping], ["fixedArguments", adapter.fixedArguments]] as Array<[string, unknown]>) {
+              if (value !== undefined && !isObject(value)) add(issues, "error", `persona.stickerExpression.binding.adapterConfigs.${channel}.${section}`, `${section} 必须是对象`)
+            }
+          }
+        }
+      }
+      for (const mode of ["conversation", "ambient", "idle"]) {
+        const value = sticker[mode]
+        if (value === undefined) continue
+        if (!isObject(value)) {
+          add(issues, "error", `persona.stickerExpression.${mode}`, "必须是对象")
+          continue
+        }
+        if (value.enabled !== undefined && typeof value.enabled !== "boolean") add(issues, "error", `persona.stickerExpression.${mode}.enabled`, "enabled 必须是布尔值")
+        positiveNumber(issues, `persona.stickerExpression.${mode}.probabilityPercent`, value.probabilityPercent, { min: 0, max: 100 })
+      }
+      positiveNumber(issues, "persona.stickerExpression.ambient.windowSeconds", section(sticker.ambient).windowSeconds, { min: 1, max: 300 })
+      positiveNumber(issues, "persona.stickerExpression.ambient.maxMessages", section(sticker.ambient).maxMessages, { min: 1, max: 50, integer: true })
+      positiveNumber(issues, "persona.stickerExpression.idle.intervalSeconds", section(sticker.idle).intervalSeconds, { min: 60, max: 86400 })
+      positiveNumber(issues, "persona.stickerExpression.idle.minIdleSeconds", section(sticker.idle).minIdleSeconds, { min: 60, max: 604800 })
+      positiveNumber(issues, "persona.stickerExpression.cooldownSeconds", sticker.cooldownSeconds, { min: 0, max: 7 * 86400 })
+      positiveNumber(issues, "persona.stickerExpression.attemptIntervalSeconds", sticker.attemptIntervalSeconds, { min: 0, max: 86400 })
+      positiveNumber(issues, "persona.stickerExpression.dailyQuota", sticker.dailyQuota, { min: 0, max: 1000, integer: true })
+      positiveNumber(issues, "persona.stickerExpression.recentWindowSeconds", sticker.recentWindowSeconds, { min: 1, max: 604800 })
+      positiveNumber(issues, "persona.stickerExpression.contextTtlSeconds", sticker.contextTtlSeconds, { min: 60, max: 7 * 86400 })
+      positiveNumber(issues, "persona.stickerExpression.intentTimeoutSeconds", sticker.intentTimeoutSeconds, { min: 1, max: 600 })
+      positiveNumber(issues, "persona.stickerExpression.moodDecaySeconds", sticker.moodDecaySeconds, { min: 60, max: 604800 })
+      for (const key of ["allowlist", "blocklist"]) {
+        const value = section(sticker.groupScope)[key]
+        if (value !== undefined && !Array.isArray(value) && typeof value !== "string") add(issues, "error", `persona.stickerExpression.groupScope.${key}`, `${key} 必须是数组或逗号分隔字符串`)
+        if (Array.isArray(value) && value.some(item => !String(item || "").trim())) add(issues, "error", `persona.stickerExpression.groupScope.${key}`, `${key} 不能包含空群号`)
+      }
+      const groups = sticker.idle !== undefined ? section(sticker.idle).groups : undefined
+      if (groups !== undefined && !Array.isArray(groups) && typeof groups !== "string") add(issues, "error", "persona.stickerExpression.idle.groups", "groups 必须是数组或逗号分隔字符串")
+      const hours = section(section(sticker.idle).allowedHours)
+      for (const key of ["start", "end"]) {
+        if (hours[key] !== undefined && !/^([01]\d|2[0-3]):[0-5]\d$/.test(String(hours[key]))) add(issues, "error", `persona.stickerExpression.idle.allowedHours.${key}`, "时间必须是 HH:mm")
+      }
+      const taskName = String(sticker.intentTask || "").trim()
+      if (taskName && !section(config.modelTasks)[taskName]) add(issues, "error", "persona.stickerExpression.intentTask", `模型任务不存在：${taskName}`)
     }
   }
 }

@@ -193,6 +193,7 @@ export class CustomToolManager {
         execution: common.execution ?? manifestTool.execution ?? item.manifest.execution,
         executionByAction: common.executionByAction || manifestTool.executionByAction || item.manifest.executionByAction,
         pipeline: common.pipeline || manifestTool.pipeline || item.manifest.pipeline,
+        stickerExpressionChannel: common.stickerExpressionChannel || manifestTool.stickerExpressionChannel || item.manifest.stickerExpressionChannel,
       })
       if (normalized) {
         // 编辑器开关是管理员配置，优先于入口源码里的执行默认值。

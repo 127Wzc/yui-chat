@@ -11,6 +11,7 @@ import { unregisterWebSocket } from "../../web/http/websocket.js"
 import { clearBlockedUsers, clearMutedScopes, mutedStats } from "../chat/access-control.js"
 import { clearPersonaTriggerState, personaTriggerStats } from "../persona/persona-trigger.js"
 import { initiativeGreetingScheduler } from "../persona/initiative-greeting.js"
+import { stickerExpressionCoordinator } from "../persona/sticker-expression-coordinator.js"
 import { scheduleTaskService } from "../scheduling/schedule-task-service.js"
 import { memoryStore } from "../../memory/store.js"
 import { modelLogStore } from "../observability/model-log.js"
@@ -29,6 +30,7 @@ export interface RuntimeLifecycleOptions extends UnknownRecord {
   reinitTools?: boolean
   reinitFilters?: boolean
   restartInitiativeGreeting?: boolean
+  restartStickerExpression?: boolean
   restartScheduleTasks?: boolean
   clearMutedScopes?: boolean
   clearBlockedUsers?: boolean
@@ -37,6 +39,7 @@ export interface RuntimeLifecycleOptions extends UnknownRecord {
   restoreCommandPatch?: boolean
   unregisterWebSocket?: boolean
   stopInitiativeGreeting?: boolean
+  stopStickerExpression?: boolean
   stopScheduleTasks?: boolean
   flushMemory?: boolean
   shutdown?: boolean
@@ -53,6 +56,7 @@ export function runtimeStats(): RuntimeStats {
     response: responseStateStats(),
     personaTrigger: personaTriggerStats(),
     initiativeGreeting: initiativeGreetingScheduler.stats(),
+    stickerExpression: stickerExpressionCoordinator.stats(),
     scheduleTasks: scheduleTaskService.stats(),
     access: mutedStats(),
     knowledge: commandObserver.stats(),
@@ -67,6 +71,7 @@ export async function applyRuntimeConfig(config: UnknownRecord = {}, opts: Runti
     tools: false,
     filters: false,
     initiativeGreeting: null,
+    stickerExpression: null,
     scheduleTasks: null,
     groupCapture: false,
     logs: false,
@@ -84,6 +89,9 @@ export async function applyRuntimeConfig(config: UnknownRecord = {}, opts: Runti
   }
   if (opts.restartInitiativeGreeting !== false) {
     result.initiativeGreeting = initiativeGreetingScheduler.start(config)
+  }
+  if (opts.restartStickerExpression !== false) {
+    result.stickerExpression = stickerExpressionCoordinator.start(config)
   }
   if (opts.restartScheduleTasks !== false) {
     result.scheduleTasks = scheduleTaskService.start(config)
@@ -112,6 +120,7 @@ export async function endAllConversationsRuntime(opts: RuntimeLifecycleOptions =
   }
   if (opts.shutdown || opts.unregisterWebSocket) unregisterWebSocket()
   if (opts.shutdown || opts.stopInitiativeGreeting) initiativeGreetingScheduler.stop()
+  if (opts.shutdown || opts.stopStickerExpression) stickerExpressionCoordinator.stop()
   if (opts.shutdown || opts.stopScheduleTasks) scheduleTaskService.stop()
   if (opts.shutdown || opts.flushMemory) await memoryStore.flush()
   if (opts.shutdown) await groupCaptureStore.stop({ flush: true })

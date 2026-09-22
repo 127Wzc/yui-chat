@@ -159,6 +159,56 @@ export const defaults = {
         "路过冒个泡，有事可以叫我。",
       ],
     },
+    // 日常定格只在显式启用且命中群聊白名单后运行；默认不主动发图。
+    stickerExpression: {
+      enabled: false,
+      privateEnabled: false,
+      binding: {
+        primaryTool: "mcp_imagTag-mcp_search_images",
+        fallbackTool: "",
+        tool: "mcp_imagTag-mcp_search_images",
+        candidateCount: 10,
+        selectionMode: "randomTop",
+        adapterConfigs: {
+          "mcp_imagTag-mcp_search_images": {
+            inputMapping: { keyword: "keyword", tags: "tags", count: "count" },
+            fixedArguments: { match: "semantic", sort: "relevance" },
+            outputMapping: { candidatesPath: "structuredContent.images" },
+          },
+        },
+      },
+      conversation: {
+        enabled: false,
+        probabilityPercent: 20,
+      },
+      ambient: {
+        enabled: false,
+        probabilityPercent: 10,
+        windowSeconds: 15,
+        maxMessages: 8,
+      },
+      idle: {
+        enabled: false,
+        groups: [],
+        intervalSeconds: 1800,
+        minIdleSeconds: 1800,
+        probabilityPercent: 10,
+        allowedHours: { start: "00:00", end: "23:59" },
+      },
+      groupScope: {
+        allowlist: [],
+        blocklist: [],
+      },
+      cooldownSeconds: 1800,
+      attemptIntervalSeconds: 300,
+      dailyQuota: 5,
+      recentWindowSeconds: 7200,
+      contextTtlSeconds: 900,
+      intentTask: "replyer",
+      intentTimeoutSeconds: 30,
+      moodEnabled: true,
+      moodDecaySeconds: 14400,
+    },
   },
   apiProviders: [
     {
@@ -532,7 +582,39 @@ export const defaults = {
   },
   mcp: {
     enabled: false,
-    servers: {},
+    servers: {
+      "imagTag-mcp": {
+        enabled: false,
+        transport: "streamableHttp",
+        url: "https://imag-tag.559558.xyz/api/v1/mcp",
+        descriptionZh: "imagTag 表情图库（默认关闭）",
+        headers: {},
+        env: {},
+        allowedTools: ["search_images"],
+        category: "media",
+        categoryLabel: "表情图库",
+        risk: "external",
+        requiresFinalReply: true,
+        tags: ["image", "sticker", "search"],
+        policy: { externalNetwork: true },
+        toolPolicies: {
+          search_images: {
+            displayNameZh: "表情包语义搜索",
+            descriptionZh: "按语境检索表情包图片候选，只读，不发送消息。",
+            execution: { effect: "read", repeatPolicy: "bounded", retryPolicy: "safe" },
+            stickerExpressionChannel: {
+              version: 1,
+              input: "keyword-tags-count",
+              output: "images",
+              readOnly: true,
+              inputMapping: { keyword: "keyword", tags: "tags", count: "count" },
+              fixedArguments: { match: "semantic", sort: "relevance" },
+              outputMapping: { candidatesPath: "structuredContent.images" },
+            },
+          },
+        },
+      },
+    },
     serverTemplate: {
       enabled: true,
       allowedTools: null,

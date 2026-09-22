@@ -16,6 +16,7 @@ import { KnowledgeTab } from "./features/knowledge/knowledge-tab.js"
 import { MemoryTab } from "./features/memory/memory-tab.js"
 import { AdvancedTab } from "./features/advanced/advanced-tab.js"
 import { LogsTab } from "./features/logs/logs-tab.js"
+import { DailyStillTab } from "./features/daily-still/daily-still-tab.js"
 
 const app = createApp(AppShell)
 
@@ -25,7 +26,7 @@ for (const [name, component] of Object.entries(components)) {
 }
 
 // 全局注册页面组件，供 AppShell 动态 <component :is> 切换。
-for (const tab of [ActionsTab, OverviewTab, ChatTab, LogsTab, ProvidersTab, PersonaTab, ToolsTab, FiltersTab, KnowledgeTab, MemoryTab, AdvancedTab]) {
+for (const tab of [ActionsTab, OverviewTab, ChatTab, LogsTab, ProvidersTab, PersonaTab, DailyStillTab, ToolsTab, FiltersTab, KnowledgeTab, MemoryTab, AdvancedTab]) {
   const name = typeof tab.name === "string" ? tab.name : ""
   if (name) app.component(name, tab as Parameters<typeof app.component>[1])
 }

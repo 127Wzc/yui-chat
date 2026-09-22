@@ -1,6 +1,6 @@
 import { isMcpToolSelected } from "../../mcp/tool-selection.js"
 import type { JsonValue } from "../../core/message-chain/types.js"
-import type { ToolAutoDelivery, ToolCommon, ToolDefinition, ToolExecutionEffect, ToolExecutionPolicy, ToolSource } from "./tool-contract.js"
+import type { StickerExpressionChannelContract, ToolAutoDelivery, ToolCommon, ToolDefinition, ToolExecutionEffect, ToolExecutionPolicy, ToolSource } from "./tool-contract.js"
 
 type UnknownRecord = Record<string, unknown>
 type ToolExecutor = ToolDefinition["execute"]
@@ -332,7 +332,7 @@ export function normalizeTool(tool: unknown, defaults: unknown = {}): Normalized
     if (inputCommon[key] !== undefined) provenance[key] = inputCommon[key]
   }
   const sourceFields: UnknownRecord = { ...defaultRecord, ...sourceTool }
-  for (const key of ["common", "displayNameZh", "nameZh", "titleZh", "labelZh", "description", "descriptionZh", "parameters", "configSchema", "source", "category", "categoryLabel", "risk", "riskLabel", "tags", "deferLoading", "delivery", "deliveryLabel", "autoDelivery", "requiresFinalReply", "requiresFinalReplyLabel", "replyPolicy", "replyPolicyLabel", "responsePolicy", "hiddenFromModel", "pipeline", "repeatable", "repeatableByAction", "idempotencyKeyFields", "idempotencyKeyFieldsByAction", "execution", "executionByAction", "policy", "packageId", "packageName", "skillId", "serverName", "serverDescription"]) delete sourceFields[key]
+  for (const key of ["common", "displayNameZh", "nameZh", "titleZh", "labelZh", "description", "descriptionZh", "parameters", "configSchema", "source", "category", "categoryLabel", "risk", "riskLabel", "tags", "deferLoading", "delivery", "deliveryLabel", "autoDelivery", "requiresFinalReply", "requiresFinalReplyLabel", "replyPolicy", "replyPolicyLabel", "responsePolicy", "hiddenFromModel", "stickerExpressionChannel", "pipeline", "repeatable", "repeatableByAction", "idempotencyKeyFields", "idempotencyKeyFieldsByAction", "execution", "executionByAction", "policy", "packageId", "packageName", "skillId", "serverName", "serverDescription"]) delete sourceFields[key]
   const common: ToolCommon = {
     displayNameZh: inferDisplayNameZh({ ...sourceTool, ...inputCommon }, defaultCommon, source),
     description: text(inputCommon.description || defaultCommon.description),
@@ -350,11 +350,34 @@ export function normalizeTool(tool: unknown, defaults: unknown = {}): Normalized
     requiresFinalReply: resolveRequiresFinalReply({ common: { ...inputCommon, delivery } }, { common: defaultCommon }),
     execution, executionByAction,
     hiddenFromModel: inputCommon.hiddenFromModel === true || defaultCommon.hiddenFromModel === true,
+    stickerExpressionChannel: normalizeStickerExpressionChannel(inputCommon.stickerExpressionChannel ?? defaultCommon.stickerExpressionChannel),
     pipeline: isRecord(inputCommon.pipeline) ? jsonRecord(inputCommon.pipeline) : isRecord(defaultCommon.pipeline) ? jsonRecord(defaultCommon.pipeline) : null,
     policy: jsonRecord(policy) as ToolCommon["policy"],
     provenance: jsonRecord(provenance),
   }
   return { ...sourceFields, name: text(sourceTool.name), execute: (execute as ToolExecutor).bind(tool), common }
+}
+
+function normalizeStickerExpressionChannel(value: unknown): StickerExpressionChannelContract | undefined {
+  const source = record(value)
+  if (Number(source.version) !== 1 || text(source.input) !== "keyword-tags-count" || text(source.output) !== "images") return undefined
+  const inputSource = record(source.inputMapping)
+  const outputSource = record(source.outputMapping)
+  const inputMapping = Object.fromEntries(["keyword", "tags", "count"]
+    .map(key => [key, text(inputSource[key]).trim()])
+    .filter(([, item]) => Boolean(item))) as StickerExpressionChannelContract["inputMapping"]
+  const outputMapping = Object.fromEntries(["candidatesPath", "idField", "urlField", "descriptionField", "tagsField", "scoreField"]
+    .map(key => [key, text(outputSource[key]).trim()])
+    .filter(([, item]) => Boolean(item))) as StickerExpressionChannelContract["outputMapping"]
+  return {
+    version: 1,
+    input: "keyword-tags-count",
+    output: "images",
+    ...(source.readOnly === true ? { readOnly: true } : {}),
+    ...(Object.keys(inputMapping || {}).length ? { inputMapping } : {}),
+    ...(Object.keys(jsonRecord(source.fixedArguments)).length ? { fixedArguments: jsonRecord(source.fixedArguments) } : {}),
+    ...(Object.keys(outputMapping || {}).length ? { outputMapping } : {}),
+  }
 }
 
 export function annotateTool(tool: unknown, meta: unknown = {}): NormalizedTool | null { return normalizeTool(tool, meta) }

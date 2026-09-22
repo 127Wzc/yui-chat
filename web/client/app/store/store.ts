@@ -4,9 +4,9 @@ import { createApiClient } from "./api.js"
 export type UnknownRecord = Record<string, unknown>
 export type DataSlice = UnknownRecord | null
 
-const validTabs = ["overview", "chat", "logs", "providers", "persona", "actions", "tools", "filters", "tool-permissions", "knowledge", "memory", "advanced"] as const
+const validTabs = ["overview", "chat", "logs", "providers", "persona", "daily-still", "actions", "tools", "filters", "tool-permissions", "knowledge", "memory", "advanced"] as const
 type TabName = typeof validTabs[number]
-type SliceName = "actions" | "config" | "health" | "providers" | "tools" | "filters" | "skills" | "output" | "mcp" | "diagnostics" | "conversations" | "subAgentRuns" | "capabilities" | "setupGuide" | "logsSummary" | "memory" | "render" | "knowledge"
+type SliceName = "actions" | "config" | "health" | "providers" | "tools" | "filters" | "skills" | "output" | "mcp" | "diagnostics" | "conversations" | "subAgentRuns" | "capabilities" | "setupGuide" | "logsSummary" | "memory" | "render" | "knowledge" | "dailyStill"
 
 interface ClientStore {
   token: string
@@ -37,6 +37,7 @@ interface ClientStore {
   mcp: DataSlice
   output: DataSlice
   knowledge: DataSlice
+  dailyStill: DataSlice
   memory: DataSlice
   render: DataSlice
   diagnostics: DataSlice
@@ -90,6 +91,7 @@ export const store = reactive<ClientStore>({
   mcp: null,
   output: null,
   knowledge: null,
+  dailyStill: null,
   memory: null,
   render: null,
   diagnostics: null,
@@ -204,6 +206,7 @@ const refreshers: Record<SliceName, () => Promise<void>> = {
   memory: async () => { store.memory = await request("/api/memory") },
   render: async () => { store.render = await request("/api/render/templates") },
   knowledge: async () => { store.knowledge = await request("/api/knowledge") },
+  dailyStill: async () => { store.dailyStill = await request("/api/daily-still") },
 }
 
 // 每个页面真正依赖的切片；保存后只刷新这些，不再 loadAll 全量。
@@ -213,6 +216,7 @@ export const tabSlices: Record<TabName, SliceName[]> = {
   logs: ["config"],
   providers: ["config", "providers", "tools", "diagnostics", "subAgentRuns"],
   persona: ["config", "output", "diagnostics"],
+  "daily-still": ["config", "dailyStill", "tools", "diagnostics"],
   actions: ["actions"],
   tools: ["config", "tools", "skills", "mcp", "render", "diagnostics"],
   filters: ["filters", "config"],

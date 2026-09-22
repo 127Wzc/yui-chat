@@ -381,7 +381,7 @@ export const McpPanel = {
             <Field v-if="editor.connection !== 'stdio'" label="环境变量" type="textarea" rows="4" v-model="editor.env" placeholder="KEY=value\nANOTHER_KEY=value" tip="每行一个 KEY=value；仅供当前 MCP 连接内部引用，不会修改 Yunzai 主进程环境。" />
             <Field v-if="editor.connection !== 'stdio'" label="HTTP 请求头 JSON" type="textarea" rows="5" v-model="editor.headers" placeholder='{"Authorization":"Bearer \${env:IMG_TAG_API_KEY}"}' tip="例如 Authorization 或 X-API-Key；用 \${env:变量名} 引用 Yunzai 进程环境变量，密钥不会写入配置接口。" />
             <Field label="服务策略 JSON" type="textarea" rows="5" v-model="editor.policy" tip="给整个 MCP 服务设置默认策略，例如 externalNetwork、requiresMaster 等。" />
-              <Field label="工具策略 JSON" type="textarea" rows="6" v-model="editor.toolPolicies" tip="可按工具名覆盖权限、requiresFinalReply、execution 和 executionByAction；普通场景保留空对象即可。" />
+              <Field label="工具策略 JSON" type="textarea" rows="6" v-model="editor.toolPolicies" tip="可按工具名覆盖权限、requiresFinalReply、hiddenFromModel、execution 和 executionByAction；包装能力只需隐藏原始搜图工具时可写 {\"search_images\":{\"hiddenFromModel\":true}}。" />
           </Collapse>
         </template>
         <template #actions>

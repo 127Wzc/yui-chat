@@ -47,6 +47,7 @@ const navGroups = [
     tabs: [
       { id: "providers", label: "模型与回复", icon: "server", description: "接入模型服务并设置主模型、备用模型和视觉辅助" },
       { id: "persona", label: "助手人设", icon: "bot", description: "称呼、触发与回复" },
+      { id: "daily-still", label: "日常定格", icon: "image", description: "像聊天时随手发一张自拍或表情包" },
       { id: "knowledge", label: "知识库", icon: "book", description: "管理知识库内容、机器人指令和检索质量" },
       { id: "memory", label: "记忆管理", icon: "database", description: "按单用户或单群维护画像与长期记忆" },
     ],
@@ -71,6 +72,7 @@ const nameMap = {
   logs: "LogsTab",
   providers: "ProvidersTab",
   persona: "PersonaTab",
+  "daily-still": "DailyStillTab",
   actions: "ActionsTab",
   tools: "ToolsTab",
   filters: "FiltersTab",
