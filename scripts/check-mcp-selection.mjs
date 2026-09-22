@@ -14,7 +14,7 @@ process.chdir(path.resolve(root, "../.."))
 global.logger = { mark() {}, info() {}, warn() {}, error() {}, debug() {} }
 global.Bot = { express: null, wsf: {}, uin: [] }
 global.plugin = class {}
-let manager, server, mcpHttpServer, sqliteClient, modelLogStore
+  let manager, coldManager, server, mcpHttpServer, sqliteClient, modelLogStore
 try {
   const fixture = path.join(runtimeRoot, "server.mjs")
   await fs.writeFile(fixture, `import readline from 'node:readline';
@@ -23,6 +23,7 @@ readline.createInterface({input:process.stdin}).on('line', line => {
  const req = JSON.parse(line); if (req.id === undefined) return;
  let result = {};
  if (req.method === 'initialize') result = {protocolVersion:req.params.protocolVersion, capabilities:{tools:{}},serverInfo:{name:'fixture',version:'1'}};
+ if (req.method === 'tools/list' && process.env.MCP_FIXTURE_FAIL === '1') process.exit(1);
  if (req.method === 'tools/list') result = req.params?.cursor ? {tools:[tool('delete_image')]} : {tools:[tool('search_images')],nextCursor:'second'};
  if (req.method === 'tools/call') result = {content:[{type:'text',text:'ok'}]};
  process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:req.id,result})+'\\n');
@@ -79,6 +80,26 @@ readline.createInterface({input:process.stdin}).on('line', line => {
   const originalGet = configStore.get
   configStore.load = async () => structuredClone(config)
   configStore.get = () => config
+  // 冷启动首次连接失败时，名单中的工具仍先以待恢复适配器注入，后续调用可主动重连。
+  config.mcp.servers.gallery.env = { MCP_FIXTURE_FAIL: "1" }
+  coldManager = new McpManager()
+  await coldManager.init()
+  assert.deepEqual(coldManager.getTools().map(tool => tool.originalName), ["search_images"], "冷启动失败仍保留已配置工具")
+  assert.equal(coldManager.status().catalog[0]?.status, "unavailable")
+  delete config.mcp.servers.gallery.env
+  assert.equal((await coldManager.getTools()[0].execute({})).content[0].text, "ok", "冷启动失败后的首次触发可以重连")
+  await coldManager.destroy()
+  // 全开放模式没有可预先注入的工具名，后续异步入口会主动重试发现并补回工具。
+  config.mcp.servers.gallery.allowedTools = null
+  config.mcp.servers.gallery.env = { MCP_FIXTURE_FAIL: "1" }
+  coldManager = new McpManager()
+  await coldManager.init()
+  assert.equal(coldManager.getTools().length, 0)
+  delete config.mcp.servers.gallery.env
+  assert.equal(await coldManager.retryFailedServers(), true, "后续入口可以重试冷启动失败的服务")
+  assert.deepEqual(coldManager.getTools().map(tool => tool.originalName), ["search_images", "delete_image"])
+  await coldManager.destroy()
+  config.mcp.servers.gallery.allowedTools = ["search_images"]
   manager = new McpManager()
   await manager.init()
   assert.deepEqual(manager.status().errors, [])
@@ -93,6 +114,19 @@ readline.createInterface({input:process.stdin}).on('line', line => {
   const context = { config, e: { isMaster: true, user_id: 'tester' } }
   assert.equal((await toolRegistry.execute('mcp_gallery_search_images', {}, context)).content[0].text, 'ok')
   await assert.rejects(() => toolRegistry.execute('mcp_gallery_delete_image', {}, context), /not found/)
+  // 断线只改变运行状态，不撤销已经注入的工具；下一次调用会按原工具对象自动恢复。
+  config.mcp.servers.gallery.env = { MCP_FIXTURE_FAIL: "1" }
+  await manager.init()
+  assert.deepEqual(manager.getTools().map(tool => tool.originalName), ["search_images"], "断线时保留已开放工具")
+  assert.equal(manager.status().catalog.find(tool => tool.originalName === "search_images").status, "unavailable")
+  assert.match(manager.status().errors.find(error => error.server === "gallery")?.error || "", /MCP|exit|closed|断开/i)
+  const disconnectedTool = manager.getTools()[0]
+  await assert.rejects(() => disconnectedTool.execute({}), /当前不可用/)
+  delete config.mcp.servers.gallery.env
+  assert.equal((await disconnectedTool.execute({})).content[0].text, "ok", "下一次调用重新连接并复用工具")
+  assert.equal(manager.status().clients.includes("gallery"), true)
+  assert.equal(manager.status().catalog.find(tool => tool.originalName === "search_images").status, "available")
+  assert.equal(manager.status().errors.some(error => error.server === "gallery"), false)
   config.mcp.servers.gallery.allowedTools = []
   await assert.rejects(() => toolRegistry.execute('mcp_gallery_search_images', {}, { ...context, allowDisabledTool: true }), /注入已关闭/)
   assert.equal((await toolRegistry.searchAllowedTools('search_images', context, 10)).length, 0)
@@ -166,6 +200,7 @@ readline.createInterface({input:process.stdin}).on('line', line => {
   if (server) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)) }
   if (mcpHttpServer) { mcpHttpServer.closeAllConnections(); await new Promise(resolve => mcpHttpServer.close(resolve)) }
   await manager?.destroy()
+  await coldManager?.destroy()
   const { mcpManager } = await import("../output/runtime/mcp/index.js")
   await mcpManager.destroy()
   await modelLogStore?.stop({ flush: true })

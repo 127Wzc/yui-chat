@@ -22,7 +22,7 @@ export const McpToolsPanel = {
     const connection = computed(() => {
       const error = asRecords(status.value.errors).find(item => item.server === props.serverId)
       if (probe.value) return `测试成功：发现 ${catalog.value.length} 个工具，耗时 ${Number(probe.value.elapsedMs || 0)} ms。`
-      if (error) return `连接失败：${String(error.error)}`
+      if (error) return `当前异常${error.phase ? `（${String(error.phase)}）` : ''}：${String(error.error)}；已保留开放状态，后续调用会自动重连。`
       if (!Array.isArray(status.value.clients) || !status.value.clients.includes(props.serverId)) return "服务未连接；启用并成功连接后可查看发现的工具。"
       return `发现 ${catalog.value.length} 个工具；开放仅代表允许注入，调用仍受角色和工具权限控制。`
     })
@@ -67,7 +67,7 @@ export const McpToolsPanel = {
       <PagedList :rows="rows" :page-size="10" label="工具" empty="尚未发现工具。" v-slot="{ item }">
         <div class="item subtle">
           <div class="item-head">
-            <div><div class="item-title">{{ item.originalName }}</div><p class="muted tiny">{{ item.description }}</p><p v-if="item.name" class="muted tiny">{{ item.name }}</p></div>
+            <div><div class="item-title">{{ item.originalName }}</div><p class="muted tiny">{{ item.description }}</p><p v-if="item.name" class="muted tiny">{{ item.name }}</p><p v-if="item.status === 'unavailable'" class="danger tiny">当前异常：{{ item.error || '服务连接暂时不可用' }}；后续调用会自动重连。</p></div>
             <label><input type="checkbox" :disabled="busy" :checked="all || selected.includes(item.originalName)" @change="toggle(item.originalName, $event.target.checked)" /> 开放</label>
           </div>
         </div>

@@ -428,6 +428,7 @@ export async function selectStickerExpression(
   activeScopes.add(scope)
   try {
     const { toolRegistry } = await import("../support/registry.js")
+    await toolRegistry.refreshMcpIfNeeded()
     let last: StickerSelectionResult = empty("绑定的选图渠道均未返回符合语境的表情包。", firstBinding || undefined)
     for (const configuredTool of configuredTools) {
       const binding = {

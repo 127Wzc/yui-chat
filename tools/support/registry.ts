@@ -134,6 +134,15 @@ export class ToolRegistry {
     this.registryErrors = []
   }
 
+  /** MCP 首次连接失败时，在后续异步能力入口主动尝试恢复并同步新发现工具。 */
+  async refreshMcpIfNeeded(): Promise<boolean> {
+    const recovered = await mcpManager.retryFailedServers()
+    if (!recovered) return false
+    this.removeBySource("mcp")
+    for (const tool of mcpManager.getTools()) this.register(tool)
+    return true
+  }
+
   /** 进入注册表时立即完成公共契约归一化；不合格工具不会进入执行集合。 */
   register(tool: unknown): void {
     const normalized = normalizeTool(tool)
@@ -167,6 +176,7 @@ export class ToolRegistry {
   }
 
   async list(context: RegistryExecutionContext | null = null): Promise<UnknownRecord[]> {
+    await this.refreshMcpIfNeeded()
     const config = await configStore.load()
     const toolsConfig = record(config.tools)
     const runtimeVariables = record(toolsConfig.runtimeVariables)
@@ -194,6 +204,7 @@ export class ToolRegistry {
   }
 
   async getEnabledTools(config: RuntimeConfigObject | null = null): Promise<NormalizedTool[]> {
+    await this.refreshMcpIfNeeded()
     const current = config || await configStore.load()
     if (record(current.tools).enabled !== true) return []
     return [...this.tools.values()].filter(tool => isToolEnabledByConfig(current, tool))
