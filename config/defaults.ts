@@ -185,20 +185,25 @@ export const defaults = {
         moodConfidence: 0.3,
         timeoutSeconds: 10,
       },
-      // mood：先判断情绪再按标签选图；image：按原文语义召回后由决策模型挑图，需要决策模型。
-      pickMode: "mood",
+      // 精选选图时语义召回的候选数。
       imagePoolSize: 20,
       // 同一情绪在该时长内再次被选中时，优先改用次选情绪；0 表示不限制。
       moodRepeatSeconds: 1800,
+      // pick：mood 先判断情绪再按标签选图；image 语义召回后由决策模型挑图；latest 取最新上传，不调用模型。
       conversation: {
         enabled: false,
         probabilityPercent: 50,
+        pick: "mood",
+        // 按情绪选图时的候选分组；留空表示全部。
+        moods: [],
       },
       ambient: {
         enabled: false,
         probabilityPercent: 30,
         windowSeconds: 20,
         maxMessages: 6,
+        pick: "mood",
+        moods: [],
       },
       idle: {
         enabled: false,
@@ -207,7 +212,9 @@ export const defaults = {
         minIdleSeconds: 3600,
         probabilityPercent: 30,
         allowedHours: { start: "09:00", end: "23:30" },
-        moods: ["冒泡", "摸鱼", "吃瓜", "卖萌", "晚安"],
+        // 冒泡只支持 latest 与 mood（空闲情绪池随机），都不调用模型。
+        pick: "latest",
+        moods: ["冒泡", "摸鱼", "吃瓜", "发呆", "卖萌", "早安", "晚安"],
       },
       groupScope: {
         allowlist: [],

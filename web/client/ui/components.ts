@@ -2,6 +2,7 @@ import { toJson, paginate } from "../shared/format.js"
 import { confirmState, settleConfirm, toastState } from "../app/store/store.js"
 import { defineComponent, nextTick, watch } from "vue"
 import { icons } from "../shared/icons.js"
+import { primitives, RadioGroup } from "./primitives.js"
 
 const openDrawerStack: unknown[] = []
 let drawerSequence = 0
@@ -152,14 +153,25 @@ export const Field = defineComponent({
     tip: String,
     rows: Number,
     disabled: Boolean,
+    // 显示在输入框下方的常驻说明；tip 仍用于悬浮说明。
+    description: String,
   },
   emits: ["update:modelValue", "enter"],
+  components: { RadioGroup },
   computed: {
     normOptions() {
       return this.options.map((o: unknown) => (typeof o === "object" && o !== null ? o : { value: o, label: o }))
     },
+    // switch 同时兼容布尔值和旧配置里的 "true"/"false" 字符串。
+    checked(): boolean {
+      return this.modelValue === true || this.modelValue === "true"
+    },
   },
   methods: {
+    onToggle(event: Event) {
+      const value = event.target instanceof HTMLInputElement && event.target.checked
+      this.$emit("update:modelValue", typeof this.modelValue === "string" ? String(value) : value)
+    },
     onInput(event: Event) {
       const raw = event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement || event.target instanceof HTMLTextAreaElement ? event.target.value : ""
       const value = this.type === "number" ? (raw === "" ? "" : Number(raw)) : raw
@@ -167,7 +179,22 @@ export const Field = defineComponent({
     },
   },
   template: `
-    <label class="field">
+    <label v-if="type === 'switch'" class="field is-switch" :class="{ 'is-disabled': disabled }">
+      <span class="field-switch-text">
+        <span class="field-label">{{ label }}<HelpTip v-if="tip" :tip="tip" /></span>
+        <span v-if="description || hint" class="field-description">{{ description || hint }}</span>
+      </span>
+      <span class="switch"><input type="checkbox" :checked="checked" :disabled="disabled" @change="onToggle" /><span class="track"></span></span>
+    </label>
+    <div v-else-if="type === 'radio'" class="field">
+      <span class="field-label" v-if="label">{{ label }}
+        <small v-if="hint" class="field-hint">{{ hint }}</small>
+        <HelpTip v-if="tip" :tip="tip" />
+      </span>
+      <RadioGroup :model-value="modelValue" :options="normOptions" :disabled="disabled" :label="label" @update:model-value="$emit('update:modelValue', $event)" />
+      <span v-if="description" class="field-description">{{ description }}</span>
+    </div>
+    <label v-else class="field">
       <span class="field-label" v-if="label">{{ label }}
         <small v-if="hint" class="field-hint">{{ hint }}</small>
         <HelpTip v-if="tip" :tip="tip" />
@@ -194,6 +221,7 @@ export const Field = defineComponent({
         @input="onInput"
         @keydown.enter="$emit('enter', $event)"
       />
+      <span v-if="description" class="field-description">{{ description }}</span>
     </label>
   `,
 })
@@ -483,6 +511,8 @@ export const SideDrawer = defineComponent({
     icon: { type: String, default: "plus" },
     width: { type: String, default: "520px" },
     modal: Boolean,
+    // drawer：右侧抽屉；dialog：居中对话框（由 Dialog 组件使用）。
+    variant: { type: String, default: "drawer" },
   },
   emits: ["close"],
   data() {
@@ -559,9 +589,9 @@ export const SideDrawer = defineComponent({
   },
   template: `
     <Teleport to="body">
-      <div v-if="open" class="drawer-layer" :class="{ 'drawer-modal': modal }" :style="{ zIndex: layerZIndex }" role="dialog" aria-modal="true" :aria-labelledby="drawerUid + '-title'">
+      <div v-if="open" class="drawer-layer" :class="{ 'drawer-modal': modal || variant === 'dialog' }" :style="{ zIndex: layerZIndex }" role="dialog" aria-modal="true" :aria-labelledby="drawerUid + '-title'">
         <button class="drawer-scrim" type="button" aria-label="关闭抽屉" @click="$emit('close')"></button>
-        <aside ref="panel" class="side-drawer" :class="{ 'modal-dialog': modal }" :style="{ width }" tabindex="-1">
+        <aside ref="panel" class="side-drawer" :class="{ 'modal-dialog': modal, 'ui-dialog': variant === 'dialog' }" :style="{ width }" tabindex="-1">
           <header class="drawer-head">
             <div class="drawer-title">
               <span class="drawer-icon"><Icon :name="icon" :size="16" /></span>
@@ -663,4 +693,5 @@ export const components = {
   Toast,
   ConfirmDialog,
   EmptyHint,
+  ...primitives,
 }

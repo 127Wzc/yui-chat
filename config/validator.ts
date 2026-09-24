@@ -1208,9 +1208,16 @@ function validateRuntimeNumbers(config: ConfigRecord, issues: ValidationIssue[])
       if (sticker.pickMode !== undefined && !["mood", "image"].includes(String(sticker.pickMode))) add(issues, "error", "persona.stickerExpression.pickMode", "pickMode 只支持 mood 或 image")
       positiveNumber(issues, "persona.stickerExpression.imagePoolSize", sticker.imagePoolSize, { min: 3, max: 50, integer: true })
       positiveNumber(issues, "persona.stickerExpression.moodRepeatSeconds", sticker.moodRepeatSeconds, { min: 0, max: 7 * 86400 })
-      if (String(sticker.pickMode) === "image" && !String(section(sticker.decision).model || "").trim()) add(issues, "warn", "persona.stickerExpression.pickMode", "精选模式需要决策模型；未配置时会按情绪模式运行")
-      const idleMoods = sticker.idle !== undefined ? section(sticker.idle).moods : undefined
-      if (idleMoods !== undefined && !Array.isArray(idleMoods)) add(issues, "error", "persona.stickerExpression.idle.moods", "idle.moods 必须是数组")
+      for (const [entry, allowed] of [["conversation", ["mood", "image", "latest"]], ["ambient", ["mood", "image", "latest"]], ["idle", ["mood", "latest"]]] as const) {
+        const pick = section(sticker[entry]).pick
+        if (pick === undefined) continue
+        if (!(allowed as readonly string[]).includes(String(pick))) add(issues, "error", `persona.stickerExpression.${entry}.pick`, `${entry}.pick 只支持 ${allowed.join("、")}`)
+        else if (pick === "image" && !String(section(sticker.decision).model || "").trim()) add(issues, "warn", `persona.stickerExpression.${entry}.pick`, "精选需要决策模型；未配置时按情绪选图")
+      }
+      for (const entry of ["conversation", "ambient", "idle"]) {
+        const entryMoods = section(sticker[entry]).moods
+        if (entryMoods !== undefined && !Array.isArray(entryMoods)) add(issues, "error", `persona.stickerExpression.${entry}.moods`, `${entry}.moods 必须是数组`)
+      }
     }
   }
 }

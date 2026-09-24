@@ -9,6 +9,7 @@ import {
   recordStickerExpressionSentSeconds,
   scanStickerGallery,
   searchStickersBySemantic,
+  selectLatestSticker,
   selectStickerByTags,
   stickerCandidateSource,
   stickerPoolSelection,
@@ -385,7 +386,7 @@ async function attempt(options: AttemptOptions): Promise<UnknownRecord> {
       reason: text(result.reason || (result.sent ? "sent" : "")),
       mood: text(result.mood || record(decision.mood).name),
       pickMode: text(result.pickMode),
-      source: text(decision.source || (result.pickMode === "image" ? "model" : options.mode === "idle" ? "idle" : "")),
+      source: text(decision.source || (result.pickMode === "image" ? "model" : result.pickMode === "latest" ? "latest" : options.mode === "idle" ? "idle" : "")),
       sendScore: decision.sendScore ?? null,
       confidence: decision.confidence ?? null,
     }
@@ -543,11 +544,23 @@ interface ChooseOptions {
   canceled?: () => boolean
 }
 
+type PickMode = "mood" | "image" | "latest"
+
+/**
+ * 每个入口单独配置选图方式：对话和旁观默认按情绪，冒泡默认取最新上传。
+ * 旧版全局 pickMode 只作为对话和旁观的回退值。
+ */
+export function stickerExpressionPickMode(cfg: UnknownRecord, mode: AttemptOptions["mode"]): PickMode {
+  const value = text(record(cfg[mode]).pick || (mode === "idle" ? "" : cfg.pickMode)).trim()
+  if (mode === "idle") return value === "mood" ? "mood" : "latest"
+  return value === "image" || value === "latest" ? value : "mood"
+}
+
 interface ChooseResult extends UnknownRecord {
   skipped?: boolean
   reason?: string
-  /** mood：先判断情绪再按标签选图；image：语义召回后由决策模型挑图。 */
-  pickMode: "mood" | "image" | "idle"
+  /** mood：先判断情绪再按标签选图；image：语义召回后由决策模型挑图；latest：取最新上传。 */
+  pickMode: PickMode
   decision?: DailyStillDecision | DailyStillImageDecision | null
   /** 展示用情绪文本；精选模式取图片描述里的首个心情词。 */
   mood?: string
@@ -570,24 +583,32 @@ async function chooseSticker(options: ChooseOptions): Promise<ChooseResult> {
   const excludeIds = new Set(scopeState.recent.map(item => item.id))
   const context = selectionContext(config, cfg, event)
   const decisionConfig = record(cfg.decision)
-  if (options.mode === "idle") {
-    // 空闲入口不调用任何模型，只从空闲分组里随机取一种最近没发过的情绪。
-    const mood = pickIdleMood(moods, record(cfg.idle).moods, new Date(), Math.random(), recentMoods)
-    if (!mood) return { pickMode: "idle", skipped: true, reason: "no-idle-mood" }
-    const selection = await selectStickerByTags({ tags: mood.tags, fallbackKeyword: mood.name }, context, { excludeIds })
-    return { pickMode: "idle", mood: mood.name, moodGroup: mood.name, tags: mood.tags, selection }
+  const pick = stickerExpressionPickMode(cfg, options.mode)
+  if (pick === "latest") {
+    // 不调用模型：取最近上传且本会话没发过的一张。
+    return { pickMode: "latest", selection: await selectLatestSticker(context, { excludeIds }) }
   }
+  if (options.mode === "idle") {
+    // 冒泡没有聊天内容可判断，从空闲分组里随机取一种最近没发过的情绪，同样不调用模型。
+    const mood = pickIdleMood(moods, record(cfg.idle).moods, new Date(), Math.random(), recentMoods)
+    if (!mood) return { pickMode: "mood", skipped: true, reason: "no-idle-mood" }
+    const selection = await selectStickerByTags({ tags: mood.tags, fallbackKeyword: mood.name }, context, { excludeIds })
+    return { pickMode: "mood", mood: mood.name, moodGroup: mood.name, tags: mood.tags, selection }
+  }
+  // 对话和旁观可以限定候选分组；留空表示字典里的全部分组。
+  const entryMoods = list(record(cfg[options.mode]).moods)
+  const candidateMoods = entryMoods.length ? moods.filter(mood => entryMoods.includes(mood.name)) : moods
   const decisionInput = {
     config,
     decision: decisionConfig,
-    moods,
+    moods: candidateMoods,
     state: decisionState(options),
     plainText: [options.userText, options.replyText, options.contextText].map(text).join("\n"),
     event,
     signal: options.signal,
   }
   let pickFallback = ""
-  if (text(cfg.pickMode) === "image" && dailyStillDecisionAvailable(decisionInput)) {
+  if (pick === "image" && dailyStillDecisionAvailable(decisionInput)) {
     // 精选模式先检索再判断：每次都会调用图库，但决策模型直接在图片之间挑选。
     const pool = await searchStickersBySemantic(semanticQuery(options), context, { excludeIds, count: number(cfg.imagePoolSize, 20) })
     // 语义检索有相关度门槛，整句聊天常常召回很少；候选太少时退回情绪模式。
@@ -605,7 +626,7 @@ async function chooseSticker(options: ChooseOptions): Promise<ChooseResult> {
   const fallback = pickFallback ? { pickFallback } : {}
   const raw = await decideDailyStill(decisionInput)
   if (raw.error) lastError = raw.error
-  const decision = avoidRepeatedMood(raw, conversationMoods(moods), recentMoods, number(decisionConfig.moodConfidence, 0.3))
+  const decision = avoidRepeatedMood(raw, conversationMoods(candidateMoods), recentMoods, number(decisionConfig.moodConfidence, 0.3))
   if (!decision.send || !decision.mood) return { pickMode: "mood", ...fallback, skipped: true, reason: decision.reason, decision }
   const mood = decision.mood
   if (options.canceled?.()) return { pickMode: "mood", ...fallback, skipped: true, reason: "canceled-after-decision", decision, mood: mood.name }

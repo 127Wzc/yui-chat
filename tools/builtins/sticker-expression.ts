@@ -513,11 +513,11 @@ export async function selectStickerExpression(
 export interface StickerPoolQuery {
   /** 按优先级排列的精确标签；每个标签单独查询一次，结果合并。 */
   tags: string[]
-  /** 所有标签都没有候选时，用该词做一次模糊检索兜底；留空则不兜底。 */
+  /** 标签候选不足 topK 时，用该词按描述做一次模糊检索补齐；留空则不补。 */
   fallbackKeyword?: string
 }
 
-/** 候选池的一次检索；fallback 查询只在前面的查询全部没有候选时执行。 */
+/** 候选池的一次检索；fallback 标记只用于诊断，候选不足 limit 时照常执行。 */
 export interface StickerPoolSearch {
   keyword?: string
   tags?: string[]
@@ -617,8 +617,8 @@ export async function searchStickerPool(
       let total: number | null = null
       let failed = false
       for (const search of searches) {
+        // 候选凑够 limit 就停；兜底查询只在前面的查询不够时补齐。
         if (pool.length >= limit) break
-        if (search.fallback && pool.length) break
         const searchArgs = buildStickerChannelArguments(boundTool, {
           keyword: text(search.keyword),
           tags: search.tags || [],
@@ -681,7 +681,8 @@ export function stickerPoolSelection(result: StickerPoolResult, selected: Sticke
  * 按标签组成候选池并随机选图，供日常定格使用。
  *
  * 每个标签按最新排序单独查询，靠前标签的图片排在前面；候选达到
- * topK 后停止继续查询，最后在前 topK 张中随机选一张，避免总发同一张。
+ * topK 后停止继续查询，不足时按分组名模糊检索描述补齐，最后在前
+ * topK 张中随机选一张，避免冷门标签总发同一张。
  */
 export async function selectStickerByTags(
   query: StickerPoolQuery,
@@ -738,4 +739,17 @@ export async function scanStickerGallery(
   }
   if (!first) return { status: "skipped", reason: "没有可扫描的页。", scope: "", pool: [], total: null, recentWindowSeconds: DEFAULT_RECENT_WINDOW_SECONDS, errors: [] }
   return pool.length ? { ...first, status: "ok", pool, total: first.total ?? pool.length } : first
+}
+
+/**
+ * 取最近上传且本会话没发过的一张图，不做任何语义判断。
+ * 最多向后翻三页；三页内都发过时跳过，避免反复翻页。
+ */
+export async function selectLatestSticker(
+  context: StickerExpressionContext = {},
+  options: StickerSelectionOptions = {},
+): Promise<StickerSelectionResult> {
+  const searches: StickerPoolSearch[] = [1, 2, 3].map(page => ({ sort: "latest", page }))
+  const result = await searchStickerPool(searches, context, { excludeIds: options.excludeIds, limit: 1 })
+  return stickerPoolSelection(result, result.status === "ok" ? result.pool[0] : null)
 }

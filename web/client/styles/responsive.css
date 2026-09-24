@@ -5,10 +5,10 @@
   .layout, .layout.even { grid-template-columns: 1fr; }
   .cols { align-items: stretch; flex-direction: column; }
   .cols > .col, .cols > .col.side { width: 100%; flex-basis: auto; }
-  .provider-console, .provider-main-grid, .knowledge-console { grid-template-columns: 1fr; }
+  .knowledge-console { grid-template-columns: 1fr; }
   .provider-sidebar, .knowledge-sidebar { border-right: 0; border-bottom: 1px solid var(--border); }
-  .provider-main, .knowledge-main { padding-top: 0; }
-  .provider-hero-head, .provider-section-head, .knowledge-hero-head, .knowledge-pane-head { flex-direction: column; }
+  .knowledge-main { padding-top: 0; }
+  .knowledge-hero-head, .knowledge-pane-head { flex-direction: column; }
   .section-nav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .knowledge-main > .section-nav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .message-rule-basics { grid-template-columns: repeat(2, minmax(0, 1fr)); }

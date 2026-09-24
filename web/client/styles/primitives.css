@@ -1,0 +1,239 @@
+/* ============================================================
+   shadcn 风格基础组件（ui/primitives.ts 与 Field 扩展类型）
+   只使用 tokens.css 中的语义变量，浅色/暗色自动适配。
+   ============================================================ */
+
+/* ---- 常驻说明 ---- */
+.field-description { color: var(--muted-foreground); font-size: 11.5px; font-weight: 400; line-height: 1.45; }
+
+/* ---- Field type="switch"：左侧标题说明，右侧开关 ---- */
+.field.is-switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  cursor: pointer;
+}
+.field.is-switch.is-disabled { opacity: .55; cursor: not-allowed; }
+.field-switch-text { display: grid; gap: 2px; min-width: 0; }
+.field.is-switch .field-label { font-size: 12.5px; font-weight: 500; }
+
+/* ---- 焦点环：键盘聚焦时统一显示 ---- */
+.ui-check-box:focus-visible,
+.ui-radio-input:focus-visible + .ui-radio-icon,
+.ui-radio:has(.ui-radio-input:focus-visible),
+.ui-search:focus-within {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+/* ---- Checkbox ---- */
+.ui-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  min-width: 0;
+  cursor: pointer;
+}
+.ui-check.is-disabled { opacity: .55; cursor: not-allowed; }
+.ui-check-box {
+  appearance: none;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin: 1px 0 0;
+  padding: 0;
+  border: 1px solid var(--primary);
+  border-radius: 4px;
+  background: var(--card);
+  display: grid;
+  place-items: center;
+  cursor: inherit;
+  transition: background-color .12s ease;
+}
+.ui-check-box::after {
+  content: "";
+  width: 10px;
+  height: 10px;
+  background: var(--primary-foreground);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E") center / contain no-repeat;
+  transform: scale(0);
+  transition: transform .12s ease;
+}
+.ui-check-box:checked { background: var(--primary); }
+.ui-check-box:checked::after { transform: scale(1); }
+.ui-check-box:disabled { border-color: var(--border); }
+.ui-check-text { display: grid; gap: 2px; min-width: 0; }
+.ui-check-label { color: var(--foreground); font-size: 12.5px; font-weight: 500; line-height: 1.35; }
+.ui-check-desc { color: var(--muted-foreground); font-size: 11.5px; line-height: 1.4; }
+
+/* ---- RadioGroup：共用 ---- */
+.ui-radio-group { min-width: 0; }
+.ui-radio { position: relative; cursor: pointer; }
+.ui-radio.is-disabled { opacity: .5; cursor: not-allowed; }
+.ui-radio-text { display: grid; gap: 2px; min-width: 0; }
+
+/* segmented：隐藏原生圆点，整体是一组分段按钮 */
+.ui-radio-group.is-segmented {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--radius);
+  background: var(--muted);
+}
+.ui-radio-group.is-segmented .ui-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 3px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 500;
+  transition: background-color .12s ease, color .12s ease;
+}
+.ui-radio-group.is-segmented .ui-radio:hover { color: var(--foreground); }
+.ui-radio-group.is-segmented .ui-radio.is-active { background: var(--card); color: var(--foreground); box-shadow: var(--shadow-sm); }
+.ui-radio-group.is-segmented .ui-radio-input { position: absolute; opacity: 0; pointer-events: none; width: 1px; height: 1px; }
+
+/* cards：带说明的选项卡片，右上角显示原生圆点 */
+.ui-radio-group.is-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+.ui-radio-group.is-cards .ui-radio {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 4px 10px;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  transition: border-color .12s ease, background-color .12s ease;
+}
+.ui-radio-group.is-cards .ui-radio:hover { background: var(--accent); }
+.ui-radio-group.is-cards .ui-radio.is-active { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary); }
+.ui-radio-group.is-cards .ui-radio-input { position: absolute; opacity: 0; pointer-events: none; width: 1px; height: 1px; }
+.ui-radio-group.is-cards .ui-radio-icon { margin-top: 1px; color: var(--muted-foreground); }
+.ui-radio-group.is-cards .ui-radio.is-active .ui-radio-icon { color: var(--foreground); }
+.ui-radio-group.is-cards .ui-radio-label { color: var(--foreground); font-size: 12.5px; font-weight: 600; }
+.ui-radio-desc { color: var(--muted-foreground); font-size: 11.5px; line-height: 1.4; }
+
+/* list：纵向选项，左侧圆点，适合带说明的少量选项 */
+.ui-radio-group.is-list { display: grid; gap: 2px; }
+.ui-radio-group.is-list .ui-radio {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  padding: 7px 8px;
+  border-radius: var(--radius-sm);
+  transition: background-color .12s ease;
+}
+.ui-radio-group.is-list .ui-radio:hover { background: var(--accent); }
+.ui-radio-group.is-list .ui-radio.is-active { background: var(--accent); }
+.ui-radio-group.is-list .ui-radio-input {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  margin: 1px 0 0;
+  padding: 0;
+  border: 1px solid var(--primary);
+  border-radius: 50%;
+  background: var(--card);
+  cursor: inherit;
+}
+.ui-radio-group.is-list .ui-radio-input:checked { background: radial-gradient(circle, var(--primary) 0 4px, var(--card) 4.5px); }
+.ui-radio-group.is-list .ui-radio-input:disabled { border-color: var(--border); }
+.ui-radio-group.is-list .ui-radio-input:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.ui-radio-group.is-list .ui-radio-label { font-size: 12.5px; font-weight: 500; }
+.ui-radio-group.is-list .ui-radio.is-active .ui-radio-label { font-weight: 600; }
+
+/* ---- SearchInput ---- */
+.ui-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  min-width: 0;
+  padding: 0 8px 0 10px;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  color: var(--muted-foreground);
+  cursor: text;
+}
+.ui-search input {
+  flex: 1 1 auto;
+  height: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+}
+.ui-search input::-webkit-search-cancel-button { display: none; }
+.ui-search-clear {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--muted);
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+.ui-search-clear:hover { color: var(--foreground); }
+
+/* ---- Badge ---- */
+.ui-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+}
+.ui-badge.is-default { background: var(--primary); color: var(--primary-foreground); }
+.ui-badge.is-secondary { background: var(--secondary); color: var(--secondary-foreground); }
+.ui-badge.is-outline { border-color: var(--border); color: var(--muted-foreground); }
+.ui-badge.is-success { background: var(--good-weak); color: var(--good); }
+.ui-badge.is-warning { background: var(--warn-weak); color: var(--warn); }
+.ui-badge.is-destructive { background: var(--bad-weak); color: var(--bad); }
+
+/* ---- Dialog：居中、高度随内容，超出后正文滚动 ---- */
+.side-drawer.ui-dialog {
+  height: auto;
+  max-height: min(86vh, 880px);
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  animation: ui-dialog-in .16s ease-out;
+}
+.side-drawer.ui-dialog .drawer-head { min-height: 0; padding: 18px 20px 6px; border-bottom: 0; align-items: flex-start; }
+.side-drawer.ui-dialog .drawer-icon { display: none; }
+.side-drawer.ui-dialog .drawer-title h2 { font-size: 15px; font-weight: 600; }
+.side-drawer.ui-dialog .drawer-body { padding: 12px 20px 18px; }
+.side-drawer.ui-dialog .drawer-actions { padding: 12px 20px; background: transparent; }
+@keyframes ui-dialog-in {
+  from { opacity: 0; transform: translateY(6px) scale(.985); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .side-drawer.ui-dialog { animation: none; }
+}

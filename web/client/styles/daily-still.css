@@ -1,0 +1,159 @@
+/* ============================================================
+   日常定格页（features/daily-still）：单列卡片，次要设置收在折叠区。
+   ============================================================ */
+
+.ds-page { display: grid; gap: 12px; width: 100%; min-width: 0; }
+
+.ds-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ds-header-title { display: flex; align-items: center; gap: 12px; }
+.ds-header h2 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -.01em; }
+.ds-header-actions { display: flex; align-items: center; gap: 10px; }
+
+.ds-card {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+}
+.ds-card h3 { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 13.5px; font-weight: 600; }
+.ds-card h3 .muted { font-weight: 400; }
+.ds-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.ds-page .form-grid.two { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+.ds-page .config-details.nested-details { background: transparent; }
+
+/* 触发入口：三张并排的卡片，窄屏自动换行 */
+.ds-triggers { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 12px; align-items: start; }
+.ds-trigger-card {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+}
+.ds-trigger-card > header { display: flex; align-items: flex-start; gap: 10px; }
+.ds-trigger-icon { display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 auto; border-radius: var(--radius-sm); background: var(--muted); color: var(--foreground); }
+.ds-trigger-title { display: grid; gap: 2px; flex: 1 1 auto; min-width: 0; }
+.ds-trigger-title strong { font-size: 13.5px; font-weight: 600; }
+.ds-trigger-title span { color: var(--muted-foreground); font-size: 11.5px; }
+.ds-trigger-body { display: grid; gap: 10px; }
+.ds-trigger-card.is-off .ds-trigger-body { opacity: .5; }
+.ds-trigger-card.is-off .ds-trigger-icon { color: var(--muted-foreground); }
+.ds-trigger-params { padding-top: 10px; border-top: 1px solid var(--border); }
+.ds-trigger-card .form-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.ds-prob { display: flex; align-items: center; gap: 6px; color: var(--muted-foreground); font-size: 12px; font-weight: 400; }
+.ds-prob input { width: 60px; height: 28px; margin-left: auto; padding: 0 6px; text-align: right; }
+.ds-trigger-field { display: flex; align-items: center; gap: 8px; padding: 0 8px; font-size: 12px; }
+.ds-trigger-field > span { flex: 0 0 auto; color: var(--muted-foreground); }
+.ds-time-range { display: flex; align-items: center; gap: 6px; }
+.ds-time-range span { color: var(--muted-foreground); }
+
+/* 分组多选摘要 */
+.ds-mood-select { display: flex; align-items: center; gap: 6px; flex: 1 1 auto; min-width: 0; }
+.ds-mood-select-value { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ds-mood-select-value.is-empty { color: var(--muted-foreground); }
+.ds-mood-select-clear { margin-right: auto; }
+
+/* 决策卡片 */
+.ds-card.is-muted { opacity: .72; }
+.ds-decision { display: grid; grid-template-columns: minmax(260px, 2fr) repeat(auto-fit, minmax(130px, 1fr)); gap: 10px 12px; align-items: start; }
+.ds-inline { display: flex; align-items: center; gap: 8px; }
+.ds-inline select { flex: 1 1 auto; }
+
+/* 情绪字典：紧凑分组墙 */
+.ds-dict { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 6px; }
+.ds-dict-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  color: var(--foreground);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .12s ease, background-color .12s ease;
+}
+.ds-dict-item:hover { border-color: var(--ring); background: var(--accent); }
+.ds-dict-item:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.ds-dict-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.ds-dict-flag { flex: 0 0 auto; padding: 1px 5px; border-radius: 4px; background: var(--muted); color: var(--muted-foreground); font-size: 10px; }
+.ds-dict-count { flex: 0 0 auto; margin-left: auto; color: var(--muted-foreground); font-size: 11px; font-variant-numeric: tabular-nums; }
+.ds-dict-item.is-thin { border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); }
+.ds-dict-item.is-thin .ds-dict-count { color: var(--warn); }
+.ds-dict-terms { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.ds-term {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px dashed var(--input);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--foreground);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.ds-term:hover { border-style: solid; background: var(--accent); }
+.ds-term small, .ds-chip small { color: var(--muted-foreground); font-size: 10.5px; }
+
+/* 分组编辑对话框 */
+.ds-mood-form { display: grid; gap: 12px; }
+.ds-tag-counts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: -4px; }
+.ds-tag-counts span { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: 999px; background: var(--muted); font-size: 11.5px; }
+.ds-tag-counts span.is-empty { color: var(--muted-foreground); text-decoration: line-through; }
+.ds-danger { margin-right: auto; color: var(--bad); }
+
+.ds-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.ds-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 11px;
+  border: 1px solid var(--input);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--muted-foreground);
+  font-size: 12px;
+  cursor: pointer;
+}
+.ds-chip:hover { color: var(--foreground); }
+.ds-chip.active { border-color: var(--primary); background: var(--primary); color: var(--primary-foreground); }
+
+/* 次要设置：范围、频率、渠道并排折叠 */
+.ds-extras { display: grid; gap: 8px; }
+.ds-extras .config-details { background: var(--card); }
+
+/* 试运行结果 */
+.ds-result { display: grid; grid-template-columns: minmax(0, 1fr) 180px; gap: 14px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: color-mix(in srgb, var(--muted) 40%, var(--card)); }
+.ds-result img { width: 100%; max-height: 180px; object-fit: contain; border-radius: var(--radius-sm); background: var(--muted); }
+.ds-result-body { display: grid; gap: 10px; align-content: start; min-width: 0; }
+.ds-result-line { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.ds-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 14px; margin: 0; font-size: 12px; }
+.ds-facts dt { color: var(--muted-foreground); }
+.ds-facts dd { margin: 0; overflow-wrap: anywhere; }
+.ds-notes { margin: 0; padding-left: 16px; color: var(--warn); font-size: 11.5px; }
+.ds-bars { display: grid; gap: 4px; max-width: 360px; }
+.ds-bar { display: grid; grid-template-columns: 56px minmax(0, 1fr) 40px; align-items: center; gap: 8px; font-size: 11.5px; }
+.ds-bar i { height: 6px; border-radius: 3px; background: var(--muted); overflow: hidden; }
+.ds-bar b { display: block; height: 100%; background: var(--foreground); opacity: .7; }
+.ds-bar em { color: var(--muted-foreground); font-style: normal; text-align: right; }
+
+.ds-error { color: var(--bad); max-width: 360px; }
+.ds-status { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; padding: 2px; color: var(--muted-foreground); font-size: 12px; }
+
+@media (max-width: 700px) {
+  .ds-result { grid-template-columns: 1fr; }
+  .ds-decision { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .ds-decision > .field:first-child { grid-column: 1 / -1; }
+}

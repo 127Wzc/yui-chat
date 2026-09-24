@@ -343,12 +343,11 @@ export const ModelRoutingBuilder = {
         </div>
       </Panel>
 
-      <SideDrawer
+      <Dialog
         :open="showDrawer"
+        size="lg"
         title="全局回复设置"
-        subtitle="选择主回复模型、备用模型和全局传输参数。"
-        icon="sparkles"
-        width="620px"
+        description="选择主回复模型、备用模型和全局传输参数。"
         @close="showDrawer = false"
       >
         <div class="form-section">
@@ -389,7 +388,7 @@ export const ModelRoutingBuilder = {
           <button class="btn primary" type="button" :disabled="saving" @click="saveSimple"><Icon name="save" :size="14" :class="{ 'icon-spin': saving }" />{{ saving ? "保存中..." : "保存回复方案" }}</button>
           <button class="btn outline" type="button" :disabled="previewing" @click="runPreview()"><Icon name="eye" :size="14" :class="{ 'icon-spin': previewing }" />{{ previewing ? "刷新中..." : "刷新预览" }}</button>
         </template>
-      </SideDrawer>
+      </Dialog>
     </div>
   `,
 }

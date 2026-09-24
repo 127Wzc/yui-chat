@@ -22,6 +22,7 @@ try {
     stickerExpressionVersionCurrent,
     isStickerExpressionScopeAllowed,
     stickerExpressionExplicitRequest,
+    stickerExpressionPickMode,
   } = await import("../output/runtime/core/persona/sticker-expression-coordinator.js")
   const { isEmptyResponse } = await import("../output/runtime/core/chat/response-pipeline.js")
   const {
@@ -164,6 +165,14 @@ try {
   const failed = await decideDailyStill({ ...baseInput, decision: { model: "jev" } })
   assert.equal(failed.source, "keywords")
   assert.match(failed.error, /invalid key/)
+  // 选图方式按入口配置；冒泡默认最新，旧版全局 pickMode 只回退到对话和旁观。
+  assert.equal(stickerExpressionPickMode({}, "conversation"), "mood")
+  assert.equal(stickerExpressionPickMode({}, "idle"), "latest")
+  assert.equal(stickerExpressionPickMode({ pickMode: "image" }, "ambient"), "image")
+  assert.equal(stickerExpressionPickMode({ pickMode: "image" }, "idle"), "latest")
+  assert.equal(stickerExpressionPickMode({ pickMode: "image", conversation: { pick: "latest" } }, "conversation"), "latest")
+  assert.equal(stickerExpressionPickMode({ idle: { pick: "image" } }, "idle"), "latest")
+  assert.equal(stickerExpressionPickMode({ idle: { pick: "mood" } }, "idle"), "mood")
   assert.equal(stickerExpressionProbabilityHit(0, 0), false)
   assert.equal(stickerExpressionProbabilityHit(100, 0.999), true)
   assert.equal(stickerExpressionExplicitRequest("给我发个表情包"), true)
@@ -365,7 +374,7 @@ try {
   // 标签候选池：按标签顺序合并，达到 topK 后停止；排除近期已发送。
   resetStickerExpressionState()
   const poolCalls = []
-  toolRegistry.get = name => name === "pool_gallery" ? { name, common: { source: "custom", execution: { effect: "read" }, parameters: { type: "object", properties: { keyword: { type: "string" }, tags: { type: "array" }, count: { type: "integer" }, sort: { type: "string" }, match: { type: "string" } } } } } : null
+  toolRegistry.get = name => name === "pool_gallery" ? { name, common: { source: "custom", execution: { effect: "read" }, parameters: { type: "object", properties: { keyword: { type: "string" }, tags: { type: "array" }, count: { type: "integer" }, sort: { type: "string" }, match: { type: "string" }, page: { type: "integer" } } } } } : null
   toolRegistry.execute = async (_name, args) => {
     poolCalls.push(args)
     const byTag = {
@@ -387,10 +396,23 @@ try {
 
   // 空闲试运行不调用决策模型。
   decideCalls.length = 0
-  const idleConfig = { ...decisionConfig, tools: { enabled: true }, persona: { stickerExpression: { enabled: true, binding: { primaryTool: "pool_gallery", candidateCount: 30, topK: 3 }, decision: { model: "jev" }, idle: { moods: ["安慰"] } } } }
+  const idleConfig = { ...decisionConfig, tools: { enabled: true }, persona: { stickerExpression: { enabled: true, binding: { primaryTool: "pool_gallery", candidateCount: 30, topK: 3 }, decision: { model: "jev" }, idle: { moods: ["安慰"], pick: "mood" } } } }
   const idlePreview = await stickerExpressionCoordinator.preview({ config: idleConfig, event: { isGroup: true, group_id: "100", user_id: "u" }, mode: "idle" })
   assert.equal(idlePreview.ok, true)
   assert.equal(idlePreview.mood, "安慰")
+  assert.equal(decideCalls.length, 0)
+  // 冒泡默认取最新上传的一张，不调用决策，也不按标签检索。
+  poolCalls.length = 0
+  const latestConfig = { ...idleConfig, persona: { stickerExpression: { ...idleConfig.persona.stickerExpression, idle: { pick: "latest" } } } }
+  const latestPreview = await stickerExpressionCoordinator.preview({ config: latestConfig, event: { isGroup: true, group_id: "100", user_id: "u" }, mode: "idle" })
+  assert.equal(latestPreview.ok, true)
+  assert.equal(latestPreview.pickMode, "latest")
+  assert.equal(latestPreview.selection.selected.id, "fuzzy")
+  assert.deepEqual(poolCalls, [{ count: 30, sort: "latest", page: 1 }])
+  assert.equal(decideCalls.length, 0)
+  // 对话也可以配置为最新，同样不调用决策。
+  const latestConversation = await stickerExpressionCoordinator.preview({ config: { ...latestConfig, persona: { stickerExpression: { ...latestConfig.persona.stickerExpression, conversation: { pick: "latest" } } } }, event: { isGroup: true, group_id: "100", user_id: "u" }, mode: "conversation", text: "好累" })
+  assert.equal(latestConversation.pickMode, "latest")
   assert.equal(decideCalls.length, 0)
   // 对话试运行：send_now 低于阈值时只调用一次决策，不查询图库。
   poolCalls.length = 0
@@ -400,6 +422,13 @@ try {
   assert.equal(lowPreview.reason, "not-a-moment")
   assert.equal(decideCalls.length, 1)
   assert.equal(poolCalls.length, 0)
+
+  // 对话可以限定候选分组，决策选项只包含这些分组。
+  decideCalls.length = 0
+  decideAnswer = { send_now: { type: "noul", noul: 0.9 }, mood: { type: "choice", choice: "安慰", confidence: 0.8 } }
+  const subsetConfig = { ...idleConfig, persona: { stickerExpression: { ...idleConfig.persona.stickerExpression, conversation: { pick: "mood", moods: ["安慰", "疲惫"] } } } }
+  await stickerExpressionCoordinator.preview({ config: subsetConfig, event: { isGroup: true, group_id: "100", user_id: "u" }, mode: "conversation", text: "好累" })
+  assert.deepEqual(Object.keys(decideCalls[0].questions.mood.criteria), ["安慰", "疲惫", "none"])
 
   // 精选模式：按原文语义召回，一次决策同时判断是否发送和挑哪张。
   const semanticCalls = []
