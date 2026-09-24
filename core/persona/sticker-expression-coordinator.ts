@@ -45,6 +45,7 @@ interface PersistedScope {
   date: string
   sentCount: number
   lastAttemptAt: number
+  lastAmbientAttemptAt: number
   lastSuccessAt: number
   recent: PersistedRecent[]
   /** 最近发送的情绪分组，用于避免连续发同一种情绪。 */
@@ -86,6 +87,7 @@ const MIN_IMAGE_POOL = 3
 export interface StickerExpressionGateState {
   lastSuccessAt?: number
   lastAttemptAt?: number
+  lastAmbientAttemptAt?: number
   sentCount?: number
 }
 
@@ -99,6 +101,7 @@ const stateRepository = new AtomicJsonRepository<PersistedState>({
       scopes[key] = {
         date: text(item.date),
         sentCount: Math.max(0, number(item.sentCount, 0)),
+        lastAmbientAttemptAt: Math.max(0, number(item.lastAmbientAttemptAt, 0)),
         lastAttemptAt: Math.max(0, number(item.lastAttemptAt, 0)),
         lastSuccessAt: Math.max(0, number(item.lastSuccessAt, 0)),
         recent: Array.isArray(item.recent)
@@ -192,7 +195,7 @@ function stateFor(scope: string): PersistedScope {
   const current = state.scopes[scope]
   if (!current || current.date !== date) {
     // 配额和尝试时间按天重置；已发送图片跨天保留，避免每天都从同一批最新图片里重复挑。
-    const next: PersistedScope = { date, sentCount: 0, lastAttemptAt: current?.lastAttemptAt || 0, lastSuccessAt: current?.lastSuccessAt || 0, recent: current?.recent || [], moods: current?.moods || [] }
+    const next: PersistedScope = { date, sentCount: 0, lastAmbientAttemptAt: current?.lastAmbientAttemptAt || 0, lastAttemptAt: current?.lastAttemptAt || 0, lastSuccessAt: current?.lastSuccessAt || 0, recent: current?.recent || [], moods: current?.moods || [] }
     state.scopes[scope] = next
   }
   const active = state.scopes[scope]
@@ -272,8 +275,10 @@ export function stickerExpressionExplicitRequest(value: unknown): boolean {
   return /(?:发|来|给|要|想要|想看|丢|贴|整|发送|配|附).{0,8}(?:表情包|表情|图片|图|自拍)|(?:表情包|表情|图片|图|自拍)(?:呢|呀|吧)?[！？!！?？]?(?:发|来|给|要|丢|贴|整)/u.test(input)
 }
 
-export function stickerExpressionGate(config: unknown, current: StickerExpressionGateState = {}, now = Date.now()): string {
+export function stickerExpressionGate(config: unknown, current: StickerExpressionGateState = {}, now = Date.now(), mode: AttemptOptions["mode"] = "conversation"): string {
   const cfg = configOf(config)
+  if (mode === "ambient" && number(current.lastAmbientAttemptAt, 0) > 0
+    && now - number(current.lastAmbientAttemptAt, 0) < durationMs(record(cfg.ambient), "intervalSeconds", 3600)) return "ambient-interval"
   const cooldownMs = durationMs(cfg, "cooldownSeconds", 1800, "cooldownMs")
   const attemptIntervalMs = durationMs(cfg, "attemptIntervalSeconds", 300, "attemptIntervalMs")
   const quota = Math.max(0, Math.floor(number(cfg.dailyQuota, 0)))
@@ -367,6 +372,7 @@ async function sendCandidate(event: UnknownRecord, candidate: StickerCandidate, 
     e: event,
     config: context.config as RuntimeConfigObject,
     source: "dailyStill",
+    delivery: { quote: false },
     agent: { signal: context.signal as AbortSignal | undefined },
     execution: { background: false },
     observability: { trace: { id: `daily-still-${Date.now()}` } },
@@ -407,9 +413,9 @@ async function runAttempt(options: AttemptOptions): Promise<UnknownRecord> {
   await ensureState()
   const scopeState = stateFor(scope)
   const now = Date.now()
-    const lastAttempt = scopeState.lastAttemptAt
+  const lastAttempt = scopeState.lastAttemptAt
   if (!options.force) {
-    const gate = stickerExpressionGate(config, { lastSuccessAt: scopeState.lastSuccessAt, lastAttemptAt: lastAttempt, sentCount: scopeState.sentCount }, now)
+    const gate = stickerExpressionGate(config, { lastSuccessAt: scopeState.lastSuccessAt, lastAttemptAt: lastAttempt, lastAmbientAttemptAt: scopeState.lastAmbientAttemptAt, sentCount: scopeState.sentCount }, now, options.mode)
     if (gate !== "ok") return { skipped: true, reason: gate }
   }
   if (!options.force && !stickerExpressionProbabilityHit(mode.probabilityPercent)) return { skipped: true, reason: "probability" }
@@ -418,6 +424,7 @@ async function runAttempt(options: AttemptOptions): Promise<UnknownRecord> {
   attempts++
   if (options.dryRun !== true) {
     scopeState.lastAttemptAt = now
+    if (options.mode === "ambient") scopeState.lastAmbientAttemptAt = now
     // 失败、取消和没有候选也算一次尝试；这样重启后不会立即重复调用模型。
     await persistState()
   }
@@ -468,12 +475,14 @@ async function runAttempt(options: AttemptOptions): Promise<UnknownRecord> {
       return { ...choice, skipped: true, reason: delivery.status || "delivery-failed", delivery }
     }
     const sentAt = Date.now()
-    scopeState.sentCount += 1
-    scopeState.lastSuccessAt = sentAt
-    scopeState.recent.push({ binding: selection.binding.serverName, id: selection.selected.id, at: sentAt })
-    scopeState.recent = scopeState.recent.slice(-MAX_RECENT)
-    if (choice.moodGroup) scopeState.moods = [...scopeState.moods, { name: choice.moodGroup, at: sentAt }].slice(-MAX_RECENT_MOODS)
-    recordStickerExpressionSentSeconds(scope, selection.binding.serverName, selection.selected.id, durationSeconds(cfg, "recentWindowSeconds", 259200, "", "recentWindowMinutes"))
+    // 保存尝试会替换内存快照；回执必须写入当前作用域，不能继续修改旧引用。
+    const deliveredState = stateFor(scope)
+    deliveredState.sentCount += 1
+    deliveredState.lastSuccessAt = sentAt
+    deliveredState.recent.push({ binding: selection.binding.serverName, id: selection.selected.id, at: sentAt })
+    deliveredState.recent = deliveredState.recent.slice(-MAX_RECENT)
+    if (choice.moodGroup) deliveredState.moods = [...deliveredState.moods, { name: choice.moodGroup, at: sentAt }].slice(-MAX_RECENT_MOODS)
+    recordStickerExpressionSentSeconds(scope, selection.binding.serverName, selection.selected.id, durationSeconds(cfg, "recentWindowSeconds", 21600, "", "recentWindowMinutes"))
     await persistState()
     lastSuccessAt = sentAt
     sent++
@@ -512,7 +521,7 @@ function selectionContext(config: RuntimeConfigObject, cfg: UnknownRecord, event
     config,
     toolConfig: {
       ...record(cfg.binding),
-      recentWindowSeconds: durationSeconds(cfg, "recentWindowSeconds", 259200, "", "recentWindowMinutes"),
+      recentWindowSeconds: durationSeconds(cfg, "recentWindowSeconds", 21600, "", "recentWindowMinutes"),
     },
   }
 }
@@ -580,7 +589,8 @@ async function chooseSticker(options: ChooseOptions): Promise<ChooseResult> {
   const { config, cfg, event, scopeState } = options
   const moods = dailyStillMoods(cfg.moods)
   const recentMoods = recentMoodNames(cfg, scopeState)
-  const excludeIds = new Set(scopeState.recent.map(item => item.id))
+  const expiry = Date.now() - durationMs(cfg, "recentWindowSeconds", 21600, "", "recentWindowMinutes")
+  const excludeIds = new Set(scopeState.recent.filter(item => item.at > expiry).map(item => item.id))
   const context = selectionContext(config, cfg, event)
   const decisionConfig = record(cfg.decision)
   const pick = stickerExpressionPickMode(cfg, options.mode)
@@ -679,7 +689,7 @@ class StickerExpressionCoordinator {
     const cfg = configOf(config)
     const idle = record(cfg.idle)
     if (cfg.enabled === false || idle.enabled !== true || !list(idle.groups).length) return this.stats()
-    const intervalMs = Math.max(1, durationSeconds(idle, "intervalSeconds", 1800, "", "intervalMinutes")) * 1000
+    const intervalMs = Math.max(1, durationSeconds(idle, "intervalSeconds", 3600, "", "intervalMinutes")) * 1000
     startedAt = Date.now()
     nextRunAt = startedAt + intervalMs
     timer = setInterval(() => { void this.runIdle({ reason: "interval" }).catch(error => { lastError = text(error) }) }, intervalMs)
@@ -737,13 +747,13 @@ class StickerExpressionCoordinator {
       const event = await syntheticGroupEvent(groupId, record(options))
       if (!isStickerExpressionScopeAllowed(event, config)) { results.push({ groupId, skipped: true, reason: "scope" }); continue }
       const lastMessageAt = recentContextStore.latestMessageAt(event)
-      if (!lastMessageAt || Date.now() - lastMessageAt < Math.max(1, durationSeconds(idle, "minIdleSeconds", 1800, "", "minIdleMinutes")) * 1000) {
+      if (!lastMessageAt || Date.now() - lastMessageAt < Math.max(1, durationSeconds(idle, "minIdleSeconds", 3600, "", "minIdleMinutes")) * 1000) {
         results.push({ groupId, skipped: true, reason: "not-idle" }); continue
       }
       const version = versions.get(scopeKey(event)) || 0
       results.push(await attempt({ config: config as RuntimeConfigObject, event, mode: "idle", version, force: options.force === true, dryRun: options.dryRun === true }))
     }
-    nextRunAt = timer ? Date.now() + Math.max(1, durationSeconds(idle, "intervalSeconds", 1800, "", "intervalMinutes")) * 1000 : 0
+    nextRunAt = timer ? Date.now() + Math.max(1, durationSeconds(idle, "intervalSeconds", 3600, "", "intervalMinutes")) * 1000 : 0
     return { groups: groups.length, results }
   }
 
@@ -820,7 +830,7 @@ export async function noteExternalStickerDelivery(event: unknown, metadata: unkn
   current.recent.push({ binding: server, id: selectedId, at: now })
   current.recent = current.recent.slice(-MAX_RECENT)
   const cfg = configOf(configStore.get())
-  recordStickerExpressionSentSeconds(scope, server, selectedId, durationSeconds(cfg, "recentWindowSeconds", 259200, "", "recentWindowMinutes"))
+  recordStickerExpressionSentSeconds(scope, server, selectedId, durationSeconds(cfg, "recentWindowSeconds", 21600, "", "recentWindowMinutes"))
   lastSuccessAt = now
   sent++
   await persistState()

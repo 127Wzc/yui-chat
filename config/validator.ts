@@ -1154,6 +1154,7 @@ function validateRuntimeNumbers(config: ConfigRecord, issues: ValidationIssue[])
         positiveNumber(issues, `persona.stickerExpression.${mode}.probabilityPercent`, value.probabilityPercent, { min: 0, max: 100 })
       }
       positiveNumber(issues, "persona.stickerExpression.ambient.windowSeconds", section(sticker.ambient).windowSeconds, { min: 1, max: 300 })
+      positiveNumber(issues, "persona.stickerExpression.ambient.intervalSeconds", section(sticker.ambient).intervalSeconds, { min: 60, max: 86400 })
       positiveNumber(issues, "persona.stickerExpression.ambient.maxMessages", section(sticker.ambient).maxMessages, { min: 1, max: 50, integer: true })
       positiveNumber(issues, "persona.stickerExpression.idle.intervalSeconds", section(sticker.idle).intervalSeconds, { min: 60, max: 86400 })
       positiveNumber(issues, "persona.stickerExpression.idle.minIdleSeconds", section(sticker.idle).minIdleSeconds, { min: 60, max: 604800 })

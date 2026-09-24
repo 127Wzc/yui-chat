@@ -6,6 +6,7 @@ import type { JsonValue } from "../core/message-chain/types.js"
 import { isJsonValue } from "../core/message-chain/types.js"
 import { redactErrorText } from "../core/shared/error-details.js"
 import type { McpClient, McpToolDefinition } from "./types.js"
+import { normalizeTool, resolveToolExecutionPolicy } from "../tools/support/contract.js"
 import type { ToolExecutionContext } from "../tools/support/tool-contract.js"
 
 type UnknownRecord = Record<string, unknown>
@@ -287,6 +288,11 @@ export class McpToolAdapter {
     this.unavailableReason = ""
   }
 
+  /** 保留在途调用的对象身份，同时完整刷新发现结果与管理员覆盖配置。 */
+  refreshDefinition(client: McpClient, tool: McpToolDefinition, serverConfig: UnknownRecord): void {
+    Object.assign(this, new McpToolAdapter(this.serverName, client, tool, serverConfig, this.hooks))
+  }
+
   /** 标记传输异常；工具定义仍保留在注册表中，下一次执行会触发恢复。 */
   markUnavailable(reason: string): void {
     this.client = null
@@ -305,8 +311,10 @@ export class McpToolAdapter {
     throw formatUnavailableError(this.serverName, this.originalName, this.unavailableReason)
   }
 
-  private isReadOnly(): boolean {
-    return text(this.execution.effect) === "read" || this.annotations.readOnlyHint === true
+  private canRetry(args: Record<string, unknown>): boolean {
+    // 使用与 Registry 相同的归一化和按 action 覆盖规则，不让服务端注解覆盖管理员策略。
+    const { execution } = resolveToolExecutionPolicy(normalizeTool(this), args)
+    return execution.effect === "read" && execution.retryPolicy === "safe"
   }
 
   private async callTool(args: Record<string, unknown>, context: ToolExecutionContext): Promise<unknown> {
@@ -330,10 +338,10 @@ export class McpToolAdapter {
       const signal = context.signal || context.agent?.signal
       // 只读查询可以安全地在连接异常后重连并重试一次；写入类工具只报告异常，
       // 避免请求已经抵达远端但回执丢失时产生重复副作用。
-      if (transportFailure && !(error instanceof McpUnavailableError) && this.isReadOnly() && this.hooks.reconnect && !signal?.aborted) {
+      if (transportFailure && !(error instanceof McpUnavailableError) && this.canRetry(args) && this.hooks.reconnect && !signal?.aborted) {
         try {
           const recovered = await this.hooks.reconnect()
-          if (recovered) {
+          if (recovered && this.canRetry(args)) {
             this.attachClient(recovered)
             result = await this.callTool(args, context)
           } else {
@@ -377,6 +385,8 @@ export class McpManager {
   private readonly recoveries = new Map<string, Promise<McpClient | null>>()
   private retryFailedServersTask: Promise<boolean> | null = null
   private lastRetryAt = 0
+  /** 重连刷新定义后，Registry 用此版本重新归一化工具。 */
+  toolsRevision = 0
 
   async init(): Promise<void> {
     const config = await configStore.load()
@@ -563,9 +573,13 @@ export class McpManager {
     this.errors = this.errors.filter(item => item.server !== server)
   }
 
-  private adapterHooks(serverName: string): McpAdapterHooks {
+  private adapterHooks(serverName: string, toolName: string): McpAdapterHooks {
     return {
-      reconnect: () => this.recoverServer(serverName),
+      reconnect: async () => {
+        const client = await this.recoverServer(serverName)
+        // 重连时可能撤销或移除该工具，不能给旧适配器重新挂回可用连接。
+        return this.tools.some(tool => tool.serverName === serverName && tool.originalName === toolName) ? client : null
+      },
       onFailure: error => this.noteRuntimeFailure(serverName, error),
     }
   }
@@ -577,7 +591,7 @@ export class McpManager {
     this.catalogCache.set(serverName, catalog.map(item => ({ ...item })))
     this.catalog.push(...catalog)
     for (const tool of discovered.definitions.filter(item => isMcpToolSelected(serverConfig, item.name))) {
-      this.tools.push(new McpToolAdapter(serverName, client, tool, serverConfig, this.adapterHooks(serverName)))
+      this.tools.push(new McpToolAdapter(serverName, client, tool, serverConfig, this.adapterHooks(serverName, tool.name)))
     }
     this.clearError(serverName)
   }
@@ -588,7 +602,7 @@ export class McpManager {
     const catalog = cachedCatalog.length
       ? cachedCatalog.map(item => ({ ...item, status: "unavailable" as const, error: reason }))
       : definitions.map(tool => {
-        const adapter = new McpToolAdapter(serverName, null, tool, serverConfig, this.adapterHooks(serverName))
+        const adapter = new McpToolAdapter(serverName, null, tool, serverConfig, this.adapterHooks(serverName, tool.name))
         return {
           server: serverName,
           originalName: tool.name,
@@ -601,7 +615,7 @@ export class McpManager {
       })
     this.catalog.push(...catalog)
     for (const tool of definitions.filter(item => isMcpToolSelected(serverConfig, item.name))) {
-      const adapter = new McpToolAdapter(serverName, null, tool, serverConfig, this.adapterHooks(serverName))
+      const adapter = new McpToolAdapter(serverName, null, tool, serverConfig, this.adapterHooks(serverName, tool.name))
       adapter.markUnavailable(reason)
       this.tools.push(adapter)
     }
@@ -688,14 +702,16 @@ export class McpManager {
       const current = this.tools.filter(tool => tool.serverName === serverName)
       for (const tool of current) {
         const definition = selected.get(tool.originalName)
-        if (definition) tool.attachClient(freshConnection.client)
+        if (definition) tool.refreshDefinition(freshConnection.client, definition, serverConfig)
         else tool.markUnavailable("工具已不在服务端的最新发现列表中")
       }
+      this.tools = this.tools.filter(tool => tool.serverName !== serverName || selected.has(tool.originalName))
       for (const [name, definition] of selected) {
         if (!current.some(tool => tool.originalName === name)) {
-          this.tools.push(new McpToolAdapter(serverName, freshConnection.client, definition, serverConfig, this.adapterHooks(serverName)))
+          this.tools.push(new McpToolAdapter(serverName, freshConnection.client, definition, serverConfig, this.adapterHooks(serverName, name)))
         }
       }
+      this.toolsRevision++
       this.clearError(serverName)
       if (oldClient && oldClient !== freshConnection.client) void Promise.resolve().then(() => oldClient.close?.()).catch(() => {})
       if (oldTransport && oldTransport !== freshConnection.transport) void Promise.resolve().then(() => oldTransport.close?.()).catch(() => {})

@@ -18,7 +18,7 @@ global.plugin = class {}
 try {
   const fixture = path.join(runtimeRoot, "server.mjs")
   await fs.writeFile(fixture, `import readline from 'node:readline';
-const tool = name => ({name, description: name, inputSchema: {type:'object',properties:{}}, annotations:{readOnlyHint:true}});
+const tool = name => ({name, description: name, inputSchema: {type:'object',properties:{keyword:{type:'string'}},...(process.env.MCP_FIXTURE_REQUIRED === '1' ? {required:['keyword']} : {})}, annotations:{readOnlyHint:true}});
 readline.createInterface({input:process.stdin}).on('line', line => {
  const req = JSON.parse(line); if (req.id === undefined) return;
  let result = {};
@@ -33,7 +33,37 @@ readline.createInterface({input:process.stdin}).on('line', line => {
   const { validateConfig } = await import("../output/runtime/config/validator.js")
   const { resolveMcpEnv, resolveMcpHeaders, resolveMcpUrl } = await import("../output/runtime/mcp/transport-auth.js")
   const { mergeRedactedConfigSecrets, redactConfigSecrets } = await import("../output/runtime/config/store.js")
-  const { McpManager } = await import("../output/runtime/mcp/index.js")
+  const { McpManager, McpToolAdapter, mcpManager } = await import("../output/runtime/mcp/index.js")
+  // 管理员和 action 策略优先于服务端只读注解；只读安全调用最多重试一次。
+  for (const test of [
+    { policy: {}, args: {}, expected: 2 },
+    { policy: { execution: { effect: "destructive", retryPolicy: "no_ambiguous_retry" } }, args: {}, expected: 1 },
+    { policy: { execution: { effect: "read", retryPolicy: "none" } }, args: {}, expected: 1 },
+    { policy: { execution: { effect: "read", retryPolicy: "no_ambiguous_retry" } }, args: {}, expected: 1 },
+    { policy: { executionByAction: { delete: { effect: "destructive", retryPolicy: "no_ambiguous_retry" } } }, args: { action: "delete" }, expected: 1 },
+    { policy: { executionByAction: { search: { retryPolicy: "none" } } }, args: { action: "search" }, expected: 1 },
+  ]) {
+    let calls = 0
+    const adapter = new McpToolAdapter("retry", { callTool: async () => { calls++; throw new Error("Connection closed") } },
+      { name: "query", inputSchema: { type: "object" }, annotations: { readOnlyHint: true } },
+      { toolPolicies: { query: test.policy } },
+      { reconnect: async () => ({ callTool: async () => { calls++; return { content: [] } } }) })
+    if (test.expected === 1) await assert.rejects(() => adapter.execute(test.args), /当前不可用/)
+    else await adapter.execute(test.args)
+    assert.equal(calls, test.expected, JSON.stringify(test))
+  }
+  // 恢复发现后从只读变为写入，不得沿用旧策略重试。
+  let changedCalls = 0
+  const changedDefinition = { name: "query", inputSchema: { type: "object" }, annotations: { readOnlyHint: true } }
+  const changedClient = { callTool: async () => { changedCalls++; return { content: [] } } }
+  const changedAdapter = new McpToolAdapter("retry", { callTool: async () => { changedCalls++; throw new Error("Connection closed") } }, changedDefinition, {}, {
+    reconnect: async () => {
+      changedAdapter.refreshDefinition(changedClient, { ...changedDefinition, annotations: { destructiveHint: true } }, {})
+      return changedClient
+    },
+  })
+  await assert.rejects(() => changedAdapter.execute({}), /当前不可用/)
+  assert.equal(changedCalls, 1)
   const { toolRegistry } = await import("../output/runtime/tools/support/registry.js")
   process.env.MCP_SELECTION_TEST_TOKEN = "selection-secret"
   assert.equal(resolveMcpUrl("https://example.test/${env:MCP_SELECTION_TEST_TOKEN}/mcp"), "https://example.test/selection-secret/mcp")
@@ -82,12 +112,32 @@ readline.createInterface({input:process.stdin}).on('line', line => {
   configStore.get = () => config
   // 冷启动首次连接失败时，名单中的工具仍先以待恢复适配器注入，后续调用可主动重连。
   config.mcp.servers.gallery.env = { MCP_FIXTURE_FAIL: "1" }
-  coldManager = new McpManager()
+  coldManager = mcpManager
   await coldManager.init()
   assert.deepEqual(coldManager.getTools().map(tool => tool.originalName), ["search_images"], "冷启动失败仍保留已配置工具")
   assert.equal(coldManager.status().catalog[0]?.status, "unavailable")
+  const placeholder = coldManager.getTools()[0]
+  toolRegistry.register(placeholder)
+  assert.deepEqual(toolRegistry.get(placeholder.name).common.parameters.properties, {})
+  config.mcp.servers.gallery.env = { MCP_FIXTURE_REQUIRED: "1" }
+  assert.equal((await placeholder.execute({ keyword: "cat" })).content[0].text, "ok", "冷启动失败后的首次触发可以重连")
+  assert.equal(coldManager.getTools()[0], placeholder, "保留在途适配器身份")
+  assert.deepEqual(placeholder.parameters.required, ["keyword"])
+  assert.equal(placeholder.description, "search_images")
+  assert.equal(placeholder.execution.effect, "read")
+  assert.deepEqual(toolRegistry.get(placeholder.name).common.parameters.required, ["keyword"], "直接恢复后 Registry 自动更新契约")
+  assert.equal(toolRegistry.get(placeholder.name).common.execution.effect, "read")
+  await assert.rejects(() => toolRegistry.execute(placeholder.name, {}, { config, e: { isMaster: true } }), /keyword.*必填/)
+  assert.equal((await toolRegistry.execute(placeholder.name, { keyword: "cat" }, { config, e: { isMaster: true } })).content[0].text, "ok")
+  // 重连发现不再开放的工具不能通过旧适配器再次调用，Registry 同步移除。
+  placeholder.markUnavailable("test disconnect")
+  config.mcp.servers.gallery.allowedTools = []
+  await assert.rejects(() => placeholder.execute({ keyword: "cat" }), /当前不可用/)
+  assert.equal(coldManager.getTools().length, 0)
+  assert.equal(toolRegistry.get(placeholder.name), null)
+  config.mcp.servers.gallery.allowedTools = ["search_images"]
+  toolRegistry.removeBySource("mcp")
   delete config.mcp.servers.gallery.env
-  assert.equal((await coldManager.getTools()[0].execute({})).content[0].text, "ok", "冷启动失败后的首次触发可以重连")
   await coldManager.destroy()
   // 全开放模式没有可预先注入的工具名，后续异步入口会主动重试发现并补回工具。
   config.mcp.servers.gallery.allowedTools = null

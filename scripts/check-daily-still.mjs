@@ -23,6 +23,7 @@ try {
     isStickerExpressionScopeAllowed,
     stickerExpressionExplicitRequest,
     stickerExpressionPickMode,
+    noteExternalStickerDelivery,
   } = await import("../output/runtime/core/persona/sticker-expression-coordinator.js")
   const { isEmptyResponse } = await import("../output/runtime/core/chat/response-pipeline.js")
   const {
@@ -41,6 +42,39 @@ try {
   const { dailyStillMoods, pickIdleMood, matchMoodByKeywords, moodAvailableAt, parseStillDescription, summarizeGallery } = await import("../output/runtime/core/persona/daily-still-moods.js")
   const { stickerExpressionCoordinator } = await import("../output/runtime/core/persona/sticker-expression-coordinator.js")
   const { createBuiltinTools } = await import("../output/runtime/tools/builtins/index.js")
+
+  const { initDraft, buildConfig } = await import("../output/runtime/web/client/features/daily-still/daily-still-draft.js")
+  const { DailyStillMoodSelect } = await import("../output/runtime/web/client/features/daily-still/daily-still-mood-select.js")
+  const defaultSticker = defaults.persona.stickerExpression
+  assert.equal(defaultSticker.ambient.intervalSeconds, 3600)
+  assert.equal(defaultSticker.idle.intervalSeconds, 3600)
+  assert.equal(defaultSticker.idle.minIdleSeconds, 3600)
+  assert.deepEqual(defaultSticker.idle.allowedHours, { start: "09:00", end: "23:00" })
+  assert.equal(defaultSticker.recentWindowSeconds, 21600)
+  const form = initDraft(defaults, [])
+  assert.equal(form.ambientIntervalMinutes, 60)
+  assert.equal(form.idleIntervalMinutes, 60)
+  assert.equal(form.recentWindowHours, 6)
+  const savedForm = buildConfig(form, [])
+  assert.equal(savedForm.ambient.intervalSeconds, 3600)
+  assert.equal(savedForm.idle.intervalSeconds, 3600)
+  assert.equal(savedForm.recentWindowSeconds, 21600)
+  let emitted
+  const select = DailyStillMoodSelect.setup({ modelValue: [], options: ["开心", "安慰"], emptyMeansAll: true }, { emit: (_event, value) => { emitted = value } })
+  select.start()
+  assert.deepEqual(select.draft.value, ["开心", "安慰"])
+  select.confirm()
+  assert.deepEqual(emitted, []) // 全选保留“全部”的含义，新增分组也自动加入。
+  select.toggle("开心")
+  select.confirm()
+  assert.deepEqual(emitted, ["安慰"])
+  const idleSelect = DailyStillMoodSelect.setup({ modelValue: [], options: ["开心", "安慰"], emptyMeansAll: false }, { emit() {} })
+  idleSelect.start()
+  assert.deepEqual(idleSelect.draft.value, [])
+  const intervalConfig = { persona: { stickerExpression: { cooldownSeconds: 0, attemptIntervalSeconds: 0, ambient: { intervalSeconds: 3600 } } } }
+  assert.equal(stickerExpressionGate(intervalConfig, { lastAmbientAttemptAt: 1000 }, 3600999, "ambient"), "ambient-interval")
+  assert.equal(stickerExpressionGate(intervalConfig, { lastAmbientAttemptAt: 1000 }, 3601000, "ambient"), "ok")
+  assert.equal(stickerExpressionGate(intervalConfig, { lastAmbientAttemptAt: 1000 }, 2000, "conversation"), "ok")
 
   // 情绪分组：未配置或全部无效时回到默认分组；时段支持跨午夜。
   const moods = dailyStillMoods(undefined)
@@ -410,6 +444,86 @@ try {
   assert.equal(latestPreview.selection.selected.id, "fuzzy")
   assert.deepEqual(poolCalls, [{ count: 30, sort: "latest", page: 1 }])
   assert.equal(decideCalls.length, 0)
+  // 持久化发送记录只在配置的 6 小时内排除；恰好到期即可重新选择。
+  const dedupeEvent = { isGroup: true, group_id: "dedupe-window", user_id: "u" }
+  const originalNow = Date.now
+  const sentTime = originalNow()
+  try {
+    Date.now = () => sentTime
+    await noteExternalStickerDelivery(dedupeEvent, { stickerExpression: { selectedId: "fuzzy", serverName: "pool_gallery" } })
+    resetStickerExpressionState() // 模拟重启后仅保留持久化记录。
+    Date.now = () => sentTime + 21600000 - 1
+    assert.equal((await stickerExpressionCoordinator.preview({ config: latestConfig, event: dedupeEvent, mode: "idle" })).ok, false)
+    Date.now = () => sentTime + 21600000
+    assert.equal((await stickerExpressionCoordinator.preview({ config: latestConfig, event: dedupeEvent, mode: "idle" })).selection.selected.id, "fuzzy")
+  } finally {
+    Date.now = originalNow
+  }
+  // 真实投递链（模拟宿主回执）：保存尝试后，成功计数与去重记录仍须写回当前状态。
+  const { configStore, dataDir } = await import("../output/runtime/config/store.js")
+  const savedGetConfig = configStore.get
+  const savedSegment = global.segment
+  const hostReplies = []
+  global.segment = { image: value => ({ type: "image", data: { file: value } }) }
+  const savedGetTool = toolRegistry.get
+  const savedExecute = toolRegistry.execute
+  const sendTool = createBuiltinTools().find(tool => tool.name === "message_send")
+  const sendConfig = { ...latestConfig, persona: { stickerExpression: { ...latestConfig.persona.stickerExpression,
+    conversation: { enabled: true, probabilityPercent: 100, pick: "latest" },
+    groupScope: { allowlist: ["receipt-test"] }, cooldownSeconds: 0, attemptIntervalSeconds: 0, dailyQuota: 1,
+  } } }
+  try {
+    configStore.get = () => sendConfig
+    toolRegistry.get = name => name === "message_send" ? sendTool : savedGetTool(name)
+    toolRegistry.execute = async (name, ...args) => name === "message_send"
+      ? sendTool.execute(...args) : savedExecute(name, ...args)
+    const sendEvent = { isGroup: true, group_id: "receipt-test", user_id: "u", reply: async (payload, quote) => {
+      hostReplies.push({ payload, quote })
+      return { message_id: "still-image" }
+    } }
+    const delivered = await stickerExpressionCoordinator.afterConversation(sendEvent, { config: sendConfig, botText: "你好" })
+    assert.equal(delivered.sent, true, JSON.stringify(delivered))
+    assert.equal(hostReplies[0].quote, false)
+    assert.equal(hostReplies[0].payload.type, "image")
+    // 普通 message_send 仍使用全局默认的引用回复。
+    await sendTool.execute({ parts: [{ type: "text", text: "normal message" }] }, { config: sendConfig, e: sendEvent })
+    assert.equal(hostReplies[1].quote, true)
+    const savedState = JSON.parse(await fs.readFile(path.join(dataDir, "daily-still-state.json"), "utf8"))
+    assert.equal(savedState.scopes["group:receipt-test"].sentCount, 1)
+    assert.equal(savedState.scopes["group:receipt-test"].recent[0].id, "fuzzy")
+    assert.equal((await stickerExpressionCoordinator.afterConversation(sendEvent, { config: sendConfig, botText: "你好" })).reason, "daily-quota")
+    // 旁观定时入口同样不引用触发消息。
+    sendConfig.persona.stickerExpression.groupScope.allowlist.push("ambient-quote", "idle-quote")
+    sendConfig.persona.stickerExpression.ambient = { enabled: true, probabilityPercent: 100, windowSeconds: 1, pick: "latest" }
+    stickerExpressionCoordinator.observeGroupMessage({ ...sendEvent, group_id: "ambient-quote", __yuiChatReplied: false })
+    const deadline = Date.now() + 5000
+    while ((hostReplies.length < 3 || stickerExpressionCoordinator.stats().runningScopes > 0) && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 20))
+    }
+    assert.equal(hostReplies.length, 3)
+    assert.equal(hostReplies[2].quote, false)
+    assert.equal(hostReplies[2].payload.type, "image")
+    // 冷场入口通过群发送接口直接发图，不附加 reply 片段。
+    const { recentContextStore } = await import("../output/runtime/core/chat/recent-context.js")
+    const savedLatestMessageAt = recentContextStore.latestMessageAt
+    const idlePayloads = []
+    try {
+      stickerExpressionCoordinator.observeGroupMessage({ ...sendEvent, group_id: "idle-quote", __yuiChatReplied: true })
+      recentContextStore.latestMessageAt = () => Date.now() - 3600001
+      sendConfig.persona.stickerExpression.idle = { enabled: true, probabilityPercent: 100, pick: "latest", groups: ["idle-quote"], minIdleSeconds: 3600, allowedHours: { start: "00:00", end: "23:59" } }
+      const idleResult = await stickerExpressionCoordinator.runIdle({ config: sendConfig, bot: { pickGroup: () => ({ sendMsg: async payload => { idlePayloads.push(payload); return { message_id: "idle-still" } } }) } })
+      assert.equal(idleResult.results[0].sent, true, JSON.stringify(idleResult))
+      assert.equal(idlePayloads[0].type, "image")
+    } finally {
+      recentContextStore.latestMessageAt = savedLatestMessageAt
+    }
+  } finally {
+    stickerExpressionCoordinator.stop()
+    global.segment = savedSegment
+    configStore.get = savedGetConfig
+    toolRegistry.get = savedGetTool
+    toolRegistry.execute = savedExecute
+  }
   // 对话也可以配置为最新，同样不调用决策。
   const latestConversation = await stickerExpressionCoordinator.preview({ config: { ...latestConfig, persona: { stickerExpression: { ...latestConfig.persona.stickerExpression, conversation: { pick: "latest" } } } }, event: { isGroup: true, group_id: "100", user_id: "u" }, mode: "conversation", text: "好累" })
   assert.equal(latestConversation.pickMode, "latest")

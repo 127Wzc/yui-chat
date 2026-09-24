@@ -20,6 +20,7 @@ export interface DailyStillDraft {
   conversationProbability: number
   ambientEnabled: boolean
   ambientProbability: number
+  ambientIntervalMinutes: number
   ambientWindowSeconds: number
   ambientMaxMessages: number
   idleEnabled: boolean
@@ -129,14 +130,15 @@ export function initDraft(config: UnknownRecord, moods: unknown[]): DailyStillDr
     ambientEnabled: bool(ambient.enabled),
     ambientProbability: number(ambient.probabilityPercent, 30),
     ambientWindowSeconds: seconds(ambient.windowSeconds, 20, ambient.windowMs),
+    ambientIntervalMinutes: round(seconds(ambient.intervalSeconds, 3600) / 60),
     ambientMaxMessages: number(ambient.maxMessages, 6),
     idleEnabled: bool(idle.enabled),
     idleProbability: number(idle.probabilityPercent, 30),
     idleGroups: join(idle.groups, "\n"),
-    idleIntervalMinutes: round(seconds(idle.intervalSeconds, 1800, undefined, idle.intervalMinutes) / 60),
+    idleIntervalMinutes: round(seconds(idle.intervalSeconds, 3600, undefined, idle.intervalMinutes) / 60),
     idleMinIdleMinutes: round(seconds(idle.minIdleSeconds, 3600, undefined, idle.minIdleMinutes) / 60),
     idleStart: text(hours.start || "09:00"),
-    idleEnd: text(hours.end || "23:30"),
+    idleEnd: text(hours.end || "23:00"),
     idleMoods: Array.isArray(idle.moods) ? list(idle.moods) : [...DEFAULT_IDLE_MOODS],
     decisionModel: text(decision.model),
     sendThreshold: number(decision.sendThreshold, 0.6),
@@ -152,7 +154,7 @@ export function initDraft(config: UnknownRecord, moods: unknown[]): DailyStillDr
     cooldownMinutes: round(seconds(cfg.cooldownSeconds, 1200, cfg.cooldownMs) / 60),
     attemptIntervalSeconds: seconds(cfg.attemptIntervalSeconds, 120, cfg.attemptIntervalMs),
     dailyQuota: number(cfg.dailyQuota, 8),
-    recentWindowHours: round(seconds(cfg.recentWindowSeconds, 259200, undefined, cfg.recentWindowMinutes) / 3600),
+    recentWindowHours: round(seconds(cfg.recentWindowSeconds, 21600, undefined, cfg.recentWindowMinutes) / 3600),
     contextTtlSeconds: seconds(cfg.contextTtlSeconds, 900, cfg.contextTtlMs),
     primaryTool,
     fallbackTool: text(binding.fallbackTool),
@@ -177,12 +179,12 @@ export function buildConfig(draft: DailyStillDraft, defaultMoods: unknown[]): Un
     privateEnabled: draft.privateEnabled,
     groupScope: { allowlist: list(draft.allowlist), blocklist: list(draft.blocklist) },
     conversation: { enabled: draft.conversationEnabled, probabilityPercent: draft.conversationProbability, pick: draft.conversationPick, moods: [...draft.conversationMoods] },
-    ambient: { enabled: draft.ambientEnabled, probabilityPercent: draft.ambientProbability, windowSeconds: draft.ambientWindowSeconds, maxMessages: draft.ambientMaxMessages, pick: draft.ambientPick, moods: [...draft.ambientMoods] },
+    ambient: { enabled: draft.ambientEnabled, probabilityPercent: draft.ambientProbability, windowSeconds: draft.ambientWindowSeconds, intervalSeconds: Math.round(number(draft.ambientIntervalMinutes, 60) * 60), maxMessages: draft.ambientMaxMessages, pick: draft.ambientPick, moods: [...draft.ambientMoods] },
     idle: {
       enabled: draft.idleEnabled,
       probabilityPercent: draft.idleProbability,
       groups: list(draft.idleGroups),
-      intervalSeconds: Math.round(number(draft.idleIntervalMinutes, 30) * 60),
+      intervalSeconds: Math.round(number(draft.idleIntervalMinutes, 60) * 60),
       minIdleSeconds: Math.round(number(draft.idleMinIdleMinutes, 60) * 60),
       allowedHours: { start: draft.idleStart, end: draft.idleEnd },
       moods: [...draft.idleMoods],
@@ -200,7 +202,7 @@ export function buildConfig(draft: DailyStillDraft, defaultMoods: unknown[]): Un
     cooldownSeconds: Math.round(number(draft.cooldownMinutes, 20) * 60),
     attemptIntervalSeconds: draft.attemptIntervalSeconds,
     dailyQuota: draft.dailyQuota,
-    recentWindowSeconds: Math.round(number(draft.recentWindowHours, 72) * 3600),
+    recentWindowSeconds: Math.round(number(draft.recentWindowHours, 6) * 3600),
     contextTtlSeconds: draft.contextTtlSeconds,
     binding: {
       primaryTool,

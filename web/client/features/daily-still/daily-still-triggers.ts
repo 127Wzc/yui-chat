@@ -35,7 +35,7 @@ export const DailyStillTriggers = {
         <div class="ds-trigger-body">
           <label class="ds-prob">触发概率<input type="number" min="0" max="100" v-model.number="draft.conversationProbability" /><span>%</span></label>
           <RadioGroup v-model="draft.conversationPick" :options="chatPickOptions" variant="list" label="对话后选图方式" />
-          <div v-if="draft.conversationPick === 'mood'" class="ds-trigger-field"><span>候选分组</span><DailyStillMoodSelect v-model="draft.conversationMoods" :options="moodNames" title="对话后可用的情绪分组" /></div>
+          <div v-if="draft.conversationPick === 'mood'" class="ds-trigger-field"><span>候选分组</span><DailyStillMoodSelect v-model="draft.conversationMoods" :options="moodNames" title="对话后可用的情绪分组" empty-means-all /></div>
         </div>
       </section>
 
@@ -48,8 +48,9 @@ export const DailyStillTriggers = {
         <div class="ds-trigger-body">
           <label class="ds-prob">触发概率<input type="number" min="0" max="100" v-model.number="draft.ambientProbability" /><span>%</span></label>
           <RadioGroup v-model="draft.ambientPick" :options="chatPickOptions" variant="list" label="旁观选图方式" />
-          <div v-if="draft.ambientPick === 'mood'" class="ds-trigger-field"><span>候选分组</span><DailyStillMoodSelect v-model="draft.ambientMoods" :options="moodNames" title="旁观可用的情绪分组" /></div>
+          <div v-if="draft.ambientPick === 'mood'" class="ds-trigger-field"><span>候选分组</span><DailyStillMoodSelect v-model="draft.ambientMoods" :options="moodNames" title="旁观可用的情绪分组" empty-means-all /></div>
           <div class="form-grid two ds-trigger-params">
+            <Field v-model="draft.ambientIntervalMinutes" label="判断间隔（分钟）" type="number" tip="同一群两次旁观判断的最短间隔。" />
             <Field v-model="draft.ambientWindowSeconds" label="安静几秒后判断" type="number" tip="期间有新消息会重新计时。" />
             <Field v-model="draft.ambientMaxMessages" label="参考几条消息" type="number" />
           </div>
@@ -72,7 +73,7 @@ export const DailyStillTriggers = {
             <Field v-model="draft.idleIntervalMinutes" label="检查间隔（分钟）" type="number" />
             <div class="field">
               <span class="field-label">时段<HelpTip tip="支持跨午夜，例如 22:00 到 02:00。" /></span>
-              <div class="ds-time-range"><input v-model="draft.idleStart" placeholder="09:00" /><span>–</span><input v-model="draft.idleEnd" placeholder="23:30" /></div>
+              <div class="ds-time-range"><input v-model="draft.idleStart" placeholder="09:00" /><span>–</span><input v-model="draft.idleEnd" placeholder="23:00" /></div>
             </div>
           </div>
         </div>

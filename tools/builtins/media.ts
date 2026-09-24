@@ -285,6 +285,7 @@ async function sendMessageChainAction(args: ToolArgs, context: MediaToolContext)
   const receipt = await deliverMessageChain(chain, {
     e: context.e,
     config: context.config,
+    quote: typeof context.delivery?.quote === "boolean" ? context.delivery.quote : undefined,
     operationId: text(context.execution?.operationId),
   })
   const failed = receipt.status === "failed"

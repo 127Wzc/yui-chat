@@ -106,6 +106,7 @@ export class ToolRegistry {
   skillErrors: unknown[] = []
   customErrors: unknown[] = []
   registryErrors: RegistryError[] = []
+  private mcpToolsRevision = mcpManager.toolsRevision
 
   async init(): Promise<void> {
     this.tools.clear()
@@ -116,6 +117,7 @@ export class ToolRegistry {
     for (const tool of custom.tools) this.register(tool)
     await mcpManager.init()
     for (const tool of mcpManager.getTools()) this.register(tool)
+    this.mcpToolsRevision = mcpManager.toolsRevision
     await skillManager.refresh()
     this.skillErrors = skillManager.errors
     if (this.registryErrors.length) {
@@ -137,9 +139,15 @@ export class ToolRegistry {
   /** MCP 首次连接失败时，在后续异步能力入口主动尝试恢复并同步新发现工具。 */
   async refreshMcpIfNeeded(): Promise<boolean> {
     const recovered = await mcpManager.retryFailedServers()
-    if (!recovered) return false
+    const synchronized = this.syncMcpTools()
+    return recovered || synchronized
+  }
+
+  private syncMcpTools(): boolean {
+    if (this.mcpToolsRevision === mcpManager.toolsRevision) return false
     this.removeBySource("mcp")
     for (const tool of mcpManager.getTools()) this.register(tool)
+    this.mcpToolsRevision = mcpManager.toolsRevision
     return true
   }
 
@@ -172,6 +180,7 @@ export class ToolRegistry {
   }
 
   get(name: string): NormalizedTool | null {
+    this.syncMcpTools()
     return this.tools.get(name) || null
   }
 
@@ -228,6 +237,7 @@ export class ToolRegistry {
 
   // 按名字取工具（用于子代理的独立工具集）：仍经过权限校验，但不受 enabledTools 限制。
   getToolsByNames(names: string[] = [], context: RegistryExecutionContext = {}): NormalizedTool[] {
+    this.syncMcpTools()
     const wanted = new Set(names)
     return [...this.tools.values()].filter(tool => {
       if (!wanted.has(tool.name)) return false
@@ -276,7 +286,7 @@ export class ToolRegistry {
 
   /** 执行前完成权限、参数、派发标记和后台队列接入。 */
   async execute(name: string, args: unknown = {}, context: RegistryExecutionContext = {}): Promise<unknown> {
-    const tool = this.tools.get(name)
+    const tool = this.get(name)
     if (context.e && typeof context.e === "object") normalizeEventScope(context.e as UnknownRecord)
     const observation = record(context.observability)
     if (!tool) throw new Error(`Tool ${name} not found`)

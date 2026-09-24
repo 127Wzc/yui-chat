@@ -8,14 +8,15 @@ export const DailyStillMoodSelect = {
     modelValue: { type: Array, default: () => [] },
     options: { type: Array, default: () => [] },
     title: { type: String, default: "选择分组" },
+    emptyMeansAll: Boolean,
     emptyLabel: { type: String, default: "全部分组" },
   },
   emits: ["update:modelValue"],
-  setup(props: { modelValue: string[]; options: string[] }, { emit }: { emit: (event: "update:modelValue", value: string[]) => void }) {
+  setup(props: { modelValue: string[]; options: string[]; emptyMeansAll: boolean }, { emit }: { emit: (event: "update:modelValue", value: string[]) => void }) {
     const open = ref(false)
     const draft = ref<string[]>([])
     // 字典里已删除的分组不再计入摘要。
-    const selected = computed(() => props.modelValue.filter(name => props.options.includes(name)))
+    const selected = computed(() => props.emptyMeansAll && !props.modelValue.length ? props.options : props.modelValue.filter(name => props.options.includes(name)))
     const summary = computed(() => selected.value.length > 3
       ? `${selected.value.slice(0, 3).join("、")} 等 ${selected.value.length} 组`
       : selected.value.join("、"))
@@ -29,7 +30,8 @@ export const DailyStillMoodSelect = {
     }
     function confirm() {
       // 按字典顺序保存，方便对比配置差异。
-      emit("update:modelValue", props.options.filter(name => draft.value.includes(name)))
+      const values = props.options.filter(name => draft.value.includes(name))
+      emit("update:modelValue", props.emptyMeansAll && values.length === props.options.length ? [] : values)
       open.value = false
     }
     return { open, draft, selected, summary, start, toggle, confirm }
