@@ -41,6 +41,7 @@ const MAX_RECENT_SCOPES = 1000
 const MAX_RECENT_IDS = 50
 const DEFAULT_RECENT_WINDOW_SECONDS = 7200
 const DEFAULT_RECENT_WINDOW_MINUTES = DEFAULT_RECENT_WINDOW_SECONDS / 60
+const MAX_SEARCH_TAGS = 2
 const INTENT_TERMS = [
   "安慰", "抚慰", "心疼", "抱抱", "拍拍", "摸摸头", "摸头", "治愈", "鼓励", "宠溺", "乖巧", "辛苦",
   "疲惫", "疲倦", "累", "困", "加班", "低落", "难过", "委屈", "伤心", "开心", "高兴", "庆祝", "生气",
@@ -382,8 +383,8 @@ export async function selectStickerExpression(
   const config = context.config || configStore.get()
   const toolConfig = record(context.toolConfig)
   const keyword = text(args.keyword).trim().slice(0, 500)
-  const tags = stringList(args.tags, 12).map(item => item.slice(0, 40))
-  const candidateCount = Math.max(3, Math.min(20, Number(toolConfig.candidateCount) || 10))
+  const tags = stringList(args.tags, MAX_SEARCH_TAGS).map(item => item.slice(0, 40))
+  const candidateCount = Math.max(3, Math.min(50, Number(toolConfig.candidateCount) || 10))
   const selectionMode = text(toolConfig.selectionMode || "randomTop") === "best" ? "best" : "randomTop"
   const configuredRecentSeconds = Number(toolConfig.recentWindowSeconds)
   const hasSecondsWindow = Number.isFinite(configuredRecentSeconds)
@@ -451,45 +452,52 @@ export async function selectStickerExpression(
         last = empty("绑定的选图工具不是只读搜图能力，已尝试下一个渠道。", binding)
         continue
       }
-      const searchArgs = buildStickerChannelArguments(boundTool, { keyword, tags, count: candidateCount }, toolConfig)
-      try {
-        const result = await toolRegistry.execute(binding.registeredName, searchArgs, {
-          ...context,
-          config,
-          execution: { ...context.execution, background: false },
-        })
-        const raw = record(result)
-        if (raw.isError === true || ["error", "failed"].includes(text(raw.status))) {
-          const contentText = Array.isArray(raw.content)
-            ? raw.content.map(item => { const value = record(item); return text(value.text || value.message || value.data) }).filter(Boolean).join(" ")
-            : ""
-          const responseMessage = raw.error || raw.message || contentText || raw.status || (raw.isError === true ? "工具返回 isError=true。" : "工具返回失败状态。")
-          diagnostic(binding, boundTool, "response", "TOOL_RESPONSE_ERROR", responseMessage, raw.error || raw)
-          last = empty("图库查询失败，已尝试下一个渠道。", binding)
-          continue
-        }
-        const candidates = extractStickerCandidates(projectStickerChannelOutput(result, boundTool, toolConfig), candidateCount * 3)
-          .filter(candidate => !recent.has(`${binding.serverName}:${candidate.id}`) && !recent.has(candidate.id))
-        const ranked = rankStickerCandidates(candidates, keyword, tags)
-        const selected = chooseStickerCandidate(ranked, selectionMode)
-        if (!selected) {
-          diagnostic(binding, boundTool, "response", candidates.length ? "NO_MATCHING_CANDIDATES" : "NO_IMAGE_CANDIDATES", candidates.length
-            ? `渠道返回 ${candidates.length} 个候选，但没有符合标签或去重条件的图片。`
-            : "渠道没有返回可归一化的图片候选。", { returnedCandidates: candidates.length, requiredTags: tags })
+      const queries = tags.length ? [tags, []] : [tags]
+      for (let queryIndex = 0; queryIndex < queries.length; queryIndex += 1) {
+        const queryTags = queries[queryIndex]
+        const searchArgs = buildStickerChannelArguments(boundTool, { keyword, tags: queryTags, count: candidateCount }, toolConfig)
+        try {
+          const result = await toolRegistry.execute(binding.registeredName, searchArgs, {
+            ...context,
+            config,
+            execution: { ...context.execution, background: false },
+          })
+          const raw = record(result)
+          if (raw.isError === true || ["error", "failed"].includes(text(raw.status))) {
+            const contentText = Array.isArray(raw.content)
+              ? raw.content.map(item => { const value = record(item); return text(value.text || value.message || value.data) }).filter(Boolean).join(" ")
+              : ""
+            const responseMessage = raw.error || raw.message || contentText || raw.status || (raw.isError === true ? "工具返回 isError=true。" : "工具返回失败状态。")
+            diagnostic(binding, boundTool, "response", "TOOL_RESPONSE_ERROR", responseMessage, raw.error || raw)
+            last = empty("图库查询失败，已尝试下一个渠道。", binding)
+            break
+          }
+          const candidates = extractStickerCandidates(projectStickerChannelOutput(result, boundTool, toolConfig), candidateCount * 3)
+            .filter(candidate => !recent.has(`${binding.serverName}:${candidate.id}`) && !recent.has(candidate.id))
+          const ranked = rankStickerCandidates(candidates, keyword, queryTags)
+          const selected = chooseStickerCandidate(ranked, selectionMode)
+          if (selected) {
+            if (options.trackRecent === true) {
+              if (hasSecondsWindow) recordStickerExpressionSentSeconds(scope, binding.serverName, selected.id, recentWindowSeconds)
+              else recordStickerExpressionSent(scope, binding.serverName, selected.id, recentWindowMinutes)
+            }
+            return {
+              status: "selected", scope, binding, selected, ranked, candidateCount: ranked.length, selectionMode, recentWindowMinutes, recentWindowSeconds,
+              ...(errors.length ? { errors: errors.slice() } : {}),
+            }
+          }
+          const hasTagFallback = queryTags.length > 0 && queryIndex + 1 < queries.length
+          diagnostic(binding, boundTool, "response", hasTagFallback ? "TAG_FILTER_NO_MATCH" : (candidates.length ? "NO_MATCHING_CANDIDATES" : "NO_IMAGE_CANDIDATES"), hasTagFallback
+            ? "带标签检索没有符合候选，已记录诊断并去掉标签按关键词重试。"
+            : candidates.length
+              ? "渠道返回候选，但没有符合语境或去重条件的图片。"
+              : "渠道没有返回可归一化的图片候选。", { returnedCandidates: candidates.length, requiredTags: queryTags })
           last = { ...empty("图库没有返回符合语境且未重复的表情包，已尝试下一个渠道。", binding), ranked }
-          continue
+        } catch (error) {
+          diagnostic(binding, boundTool, "invoke", "TOOL_EXECUTION_ERROR", errorSummary(error, 500), error)
+          last = empty("表情包图库暂时不可用，已尝试下一个渠道。", binding)
+          break
         }
-        if (options.trackRecent === true) {
-          if (hasSecondsWindow) recordStickerExpressionSentSeconds(scope, binding.serverName, selected.id, recentWindowSeconds)
-          else recordStickerExpressionSent(scope, binding.serverName, selected.id, recentWindowMinutes)
-        }
-        return {
-          status: "selected", scope, binding, selected, ranked, candidateCount: ranked.length, selectionMode, recentWindowMinutes, recentWindowSeconds,
-          ...(errors.length ? { errors: errors.slice() } : {}),
-        }
-      } catch (error) {
-        diagnostic(binding, boundTool, "invoke", "TOOL_EXECUTION_ERROR", errorSummary(error, 500), error)
-        last = empty("表情包图库暂时不可用，已尝试下一个渠道。", binding)
       }
     }
     return last
@@ -500,4 +508,234 @@ export async function selectStickerExpression(
   } finally {
     activeScopes.delete(scope)
   }
+}
+
+export interface StickerPoolQuery {
+  /** 按优先级排列的精确标签；每个标签单独查询一次，结果合并。 */
+  tags: string[]
+  /** 所有标签都没有候选时，用该词做一次模糊检索兜底；留空则不兜底。 */
+  fallbackKeyword?: string
+}
+
+/** 候选池的一次检索；fallback 查询只在前面的查询全部没有候选时执行。 */
+export interface StickerPoolSearch {
+  keyword?: string
+  tags?: string[]
+  match?: string
+  sort?: string
+  page?: number
+  fallback?: boolean
+}
+
+export interface StickerPoolResult {
+  status: "ok" | "skipped"
+  reason?: string
+  scope: string
+  binding?: StickerBinding
+  pool: StickerCandidate[]
+  /** 渠道报告的总数；仅部分图库返回。 */
+  total: number | null
+  recentWindowSeconds: number
+  errors: UnknownRecord[]
+}
+
+export interface StickerPoolOptions {
+  excludeIds?: Iterable<string>
+  /** 候选达到该数量后不再执行后续查询。 */
+  limit?: number
+  /** 按会话去重并加锁；图库扫描等管理操作传 false。 */
+  scoped?: boolean
+}
+
+function responseFailure(raw: UnknownRecord): unknown {
+  if (raw.isError !== true && !["error", "failed"].includes(text(raw.status))) return null
+  const contentText = Array.isArray(raw.content)
+    ? raw.content.map(item => { const value = record(item); return text(value.text || value.message || value.data) }).filter(Boolean).join(" ")
+    : ""
+  return raw.error || raw.message || contentText || raw.status || (raw.isError === true ? "工具返回 isError=true。" : "工具返回失败状态。")
+}
+
+function reportedTotal(result: unknown): number | null {
+  const source = record(result)
+  const structured = record(source.structuredContent)
+  const total = Number(structured.total ?? source.total)
+  return Number.isFinite(total) && total >= 0 ? total : null
+}
+
+/**
+ * 按顺序执行一组检索，合并为去重后的候选池。
+ *
+ * 只调用绑定的只读图库，不投递消息，也不记录去重；主渠道失败或
+ * 没有候选时依次尝试回退渠道，沿用原有的诊断格式。
+ */
+export async function searchStickerPool(
+  searches: StickerPoolSearch[],
+  context: StickerExpressionContext = {},
+  options: StickerPoolOptions = {},
+): Promise<StickerPoolResult> {
+  const config = context.config || configStore.get()
+  const toolConfig = record(context.toolConfig)
+  const candidateCount = Math.max(3, Math.min(50, Number(toolConfig.candidateCount) || 30))
+  const limit = Math.max(1, Number(options.limit) || candidateCount)
+  const configuredRecentSeconds = Number(toolConfig.recentWindowSeconds)
+  const recentWindowSeconds = Number.isFinite(configuredRecentSeconds) ? Math.max(1, Math.min(604800, configuredRecentSeconds)) : DEFAULT_RECENT_WINDOW_SECONDS
+  const scoped = options.scoped !== false
+  const scope = scopeKey(record(context.e))
+  const errors: UnknownRecord[] = []
+  const skipped = (reason: string, binding?: StickerBinding): StickerPoolResult => ({
+    status: "skipped", reason, scope, ...(binding ? { binding } : {}), pool: [], total: null, recentWindowSeconds, errors: errors.slice(),
+  })
+  if (!searches.length) return skipped("没有可检索的条件。")
+  if (scoped && activeScopes.has(scope)) return skipped("当前会话已有一项表情包表达正在处理，已跳过重复调用。")
+  const recent = scoped ? recentIds(scope, recentWindowSeconds * 1000) : new Set<string>()
+  for (const id of options.excludeIds || []) recent.add(text(id))
+  if (scoped) activeScopes.add(scope)
+  try {
+    const { toolRegistry } = await import("../support/registry.js")
+    await toolRegistry.refreshMcpIfNeeded()
+    let last = skipped("绑定的选图渠道均未返回可用图片。")
+    for (const configuredTool of configuredToolNames(toolConfig)) {
+      const binding = { serverName: `tool:${configuredTool}`, toolName: configuredTool, registeredName: configuredTool }
+      const boundTool = toolRegistry.get(configuredTool)
+      const note = (tool: unknown, phase: string, code: string, message: unknown, detail?: unknown): void => {
+        errors.push({ phase, code, channel: configuredTool, toolName: channelOriginalName(tool, configuredTool), message: redactErrorText(message, 500) || "未知错误", ...(detail === undefined ? {} : { details: errorDetails(detail) }) })
+      }
+      if (!boundTool) {
+        note(null, "resolve", "TOOL_NOT_FOUND", "绑定的选图工具尚未连接或未开放。")
+        last = skipped("绑定的选图工具尚未连接或未开放，已尝试下一个渠道。", binding)
+        continue
+      }
+      const effect = text(record(getToolCommon(boundTool).execution).effect)
+      const declaredReadOnly = record(getToolCommon(boundTool).stickerExpressionChannel).readOnly === true
+      if (effect !== "read" && !((!effect || effect === "unknown") && (isSemanticMcpSearch(boundTool, configuredTool) || declaredReadOnly))) {
+        note(boundTool, "contract", "CHANNEL_NOT_READ_ONLY", "绑定的选图工具没有声明为只读搜图能力。")
+        last = skipped("绑定的选图工具不是只读搜图能力，已尝试下一个渠道。", binding)
+        continue
+      }
+      const pool: StickerCandidate[] = []
+      const seen = new Set<string>()
+      let total: number | null = null
+      let failed = false
+      for (const search of searches) {
+        if (pool.length >= limit) break
+        if (search.fallback && pool.length) break
+        const searchArgs = buildStickerChannelArguments(boundTool, {
+          keyword: text(search.keyword),
+          tags: search.tags || [],
+          count: candidateCount,
+          ...(search.sort ? { sort: search.sort } : {}),
+          ...(search.match ? { match: search.match } : {}),
+          ...(search.page ? { page: search.page } : {}),
+        }, toolConfig)
+        try {
+          const result = await toolRegistry.execute(configuredTool, searchArgs, { ...context, config, execution: { ...context.execution, background: false } })
+          const failure = responseFailure(record(result))
+          if (failure) {
+            note(boundTool, "response", "TOOL_RESPONSE_ERROR", failure)
+            failed = true
+            break
+          }
+          total ??= reportedTotal(result)
+          for (const candidate of extractStickerCandidates(projectStickerChannelOutput(result, boundTool, toolConfig), candidateCount)) {
+            if (recent.has(`${binding.serverName}:${candidate.id}`) || recent.has(candidate.id) || seen.has(candidate.id)) continue
+            seen.add(candidate.id)
+            pool.push(candidate)
+          }
+        } catch (error) {
+          note(boundTool, "invoke", "TOOL_EXECUTION_ERROR", errorSummary(error, 500), error)
+          failed = true
+          break
+        }
+      }
+      if (pool.length) return { status: "ok", scope, binding, pool, total, recentWindowSeconds, errors: errors.slice() }
+      if (!failed) note(boundTool, "response", "NO_IMAGE_CANDIDATES", "检索条件都没有找到未发送过的图片。", { searches: searches.map(item => ({ keyword: item.keyword, tags: item.tags })) })
+      last = skipped(failed ? "表情包图库暂时不可用，已尝试下一个渠道。" : "图库没有符合条件且未重复的图片，已尝试下一个渠道。", binding)
+    }
+    return last
+  } catch (error) {
+    errors.push({ phase: "runtime", code: "STICKER_SELECTION_ERROR", message: errorSummary(error, 500) })
+    return skipped("表情包图库暂时不可用，已跳过本次表达。")
+  } finally {
+    if (scoped) activeScopes.delete(scope)
+  }
+}
+
+/** 把候选池转换为选图结果；selected 为空时视为跳过。 */
+export function stickerPoolSelection(result: StickerPoolResult, selected: StickerCandidate | null, reason = ""): StickerSelectionResult {
+  const base = {
+    scope: result.scope,
+    ranked: result.pool,
+    candidateCount: result.pool.length,
+    selectionMode: "randomTop" as const,
+    recentWindowMinutes: result.recentWindowSeconds / 60,
+    recentWindowSeconds: result.recentWindowSeconds,
+    ...(result.binding ? { binding: result.binding } : {}),
+    ...(result.errors.length ? { errors: result.errors } : {}),
+  }
+  return selected
+    ? { status: "selected", selected, ...base }
+    : { status: "skipped", reason: reason || result.reason || "没有可用图片。", ...base }
+}
+
+/**
+ * 按标签组成候选池并随机选图，供日常定格使用。
+ *
+ * 每个标签按最新排序单独查询，靠前标签的图片排在前面；候选达到
+ * topK 后停止继续查询，最后在前 topK 张中随机选一张，避免总发同一张。
+ */
+export async function selectStickerByTags(
+  query: StickerPoolQuery,
+  context: StickerExpressionContext = {},
+  options: StickerSelectionOptions & { random?: () => number } = {},
+): Promise<StickerSelectionResult> {
+  const toolConfig = record(context.toolConfig)
+  const tags = stringList(query.tags, 6).map(item => item.slice(0, 40))
+  const fallbackKeyword = text(query.fallbackKeyword).trim().slice(0, 100)
+  const candidateCount = Math.max(3, Math.min(50, Number(toolConfig.candidateCount) || 30))
+  const topK = Math.max(1, Math.min(candidateCount, Number(toolConfig.topK) || 8))
+  const searches: StickerPoolSearch[] = tags.map(tag => ({ tags: [tag], sort: "latest" }))
+  if (fallbackKeyword) searches.push({ keyword: fallbackKeyword, match: "fuzzy", sort: "latest", fallback: true })
+  if (!searches.length) return stickerPoolSelection({ status: "skipped", scope: scopeKey(record(context.e)), pool: [], total: null, recentWindowSeconds: DEFAULT_RECENT_WINDOW_SECONDS, errors: [] }, null, "没有可检索的标签。")
+  const result = await searchStickerPool(searches, context, { excludeIds: options.excludeIds, limit: topK })
+  if (result.status !== "ok") return stickerPoolSelection(result, null)
+  const top = result.pool.slice(0, topK)
+  const random = options.random || Math.random
+  return stickerPoolSelection(result, top[Math.min(top.length - 1, Math.floor(random() * top.length))])
+}
+
+/** 按原文语义召回候选，供精选模式交给决策模型挑图。 */
+export async function searchStickersBySemantic(
+  keyword: string,
+  context: StickerExpressionContext = {},
+  options: StickerSelectionOptions & { count?: number } = {},
+): Promise<StickerPoolResult> {
+  const count = Math.max(3, Math.min(50, Number(options.count) || 20))
+  return searchStickerPool([{ keyword: text(keyword).trim().slice(0, 300), match: "semantic", sort: "relevance" }], {
+    ...context,
+    toolConfig: { ...record(context.toolConfig), candidateCount: count },
+  }, { excludeIds: options.excludeIds, limit: count })
+}
+
+/** 按最新排序分页读取图库，用于管理台统计；不加会话锁，也不排除已发送图片。 */
+export async function scanStickerGallery(
+  context: StickerExpressionContext = {},
+  options: { maxPages?: number; pageSize?: number } = {},
+): Promise<StickerPoolResult> {
+  const maxPages = Math.max(1, Math.min(60, Number(options.maxPages) || 40))
+  const pageSize = Math.max(3, Math.min(50, Number(options.pageSize) || 50))
+  const searches: StickerPoolSearch[] = Array.from({ length: maxPages }, (_, index) => ({ sort: "latest", page: index + 1 }))
+  const scanContext = { ...context, toolConfig: { ...record(context.toolConfig), candidateCount: pageSize } }
+  const pool: StickerCandidate[] = []
+  let first: StickerPoolResult | null = null
+  // 逐页请求，拿到总数后提前结束；每页单独调用以便遇到空页时停止。
+  for (const search of searches) {
+    const page = await searchStickerPool([search], scanContext, { scoped: false })
+    first ??= page
+    if (page.status !== "ok") break
+    const known = new Set(pool.map(item => item.id))
+    pool.push(...page.pool.filter(item => !known.has(item.id)))
+    if (page.pool.length < pageSize || (page.total !== null && pool.length >= page.total)) break
+  }
+  if (!first) return { status: "skipped", reason: "没有可扫描的页。", scope: "", pool: [], total: null, recentWindowSeconds: DEFAULT_RECENT_WINDOW_SECONDS, errors: [] }
+  return pool.length ? { ...first, status: "ok", pool, total: first.total ?? pool.length } : first
 }

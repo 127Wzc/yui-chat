@@ -184,7 +184,7 @@ export const ModelRoutingBuilder = {
   setup(props: { cfg: RoutingConfig; modelNames: string[]; compact: boolean }) {
     const chatModels = computed(() => (props.cfg.models || []).filter(model => {
       const purpose = String(model.purpose || "").toLowerCase()
-      if (purpose === "image" || purpose === "embedding") return false
+      if (purpose === "image" || purpose === "embedding" || purpose === "decision") return false
       return model.capabilities?.chat !== false
     }))
     const modelOptions = computed(() => [

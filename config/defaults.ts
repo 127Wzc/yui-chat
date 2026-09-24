@@ -167,8 +167,9 @@ export const defaults = {
         primaryTool: "mcp_imagTag-mcp_search_images",
         fallbackTool: "",
         tool: "mcp_imagTag-mcp_search_images",
-        candidateCount: 10,
-        selectionMode: "randomTop",
+        // 每个标签单次召回的数量；前 topK 张中随机选一张。
+        candidateCount: 30,
+        topK: 8,
         adapterConfigs: {
           "mcp_imagTag-mcp_search_images": {
             inputMapping: { keyword: "keyword", tags: "tags", count: "count" },
@@ -177,37 +178,46 @@ export const defaults = {
           },
         },
       },
+      // 决策模型引用“渠道与模型”里的决策用途模型；留空时使用本地关键词判断。
+      decision: {
+        model: "",
+        sendThreshold: 0.6,
+        moodConfidence: 0.3,
+        timeoutSeconds: 10,
+      },
+      // mood：先判断情绪再按标签选图；image：按原文语义召回后由决策模型挑图，需要决策模型。
+      pickMode: "mood",
+      imagePoolSize: 20,
+      // 同一情绪在该时长内再次被选中时，优先改用次选情绪；0 表示不限制。
+      moodRepeatSeconds: 1800,
       conversation: {
         enabled: false,
-        probabilityPercent: 20,
+        probabilityPercent: 50,
       },
       ambient: {
         enabled: false,
-        probabilityPercent: 10,
-        windowSeconds: 15,
-        maxMessages: 8,
+        probabilityPercent: 30,
+        windowSeconds: 20,
+        maxMessages: 6,
       },
       idle: {
         enabled: false,
         groups: [],
         intervalSeconds: 1800,
-        minIdleSeconds: 1800,
-        probabilityPercent: 10,
-        allowedHours: { start: "00:00", end: "23:59" },
+        minIdleSeconds: 3600,
+        probabilityPercent: 30,
+        allowedHours: { start: "09:00", end: "23:30" },
+        moods: ["冒泡", "摸鱼", "吃瓜", "卖萌", "晚安"],
       },
       groupScope: {
         allowlist: [],
         blocklist: [],
       },
-      cooldownSeconds: 1800,
-      attemptIntervalSeconds: 300,
-      dailyQuota: 5,
-      recentWindowSeconds: 7200,
+      cooldownSeconds: 1200,
+      attemptIntervalSeconds: 120,
+      dailyQuota: 8,
+      recentWindowSeconds: 259200,
       contextTtlSeconds: 900,
-      intentTask: "replyer",
-      intentTimeoutSeconds: 30,
-      moodEnabled: true,
-      moodDecaySeconds: 14400,
     },
   },
   apiProviders: [

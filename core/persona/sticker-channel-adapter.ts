@@ -11,6 +11,9 @@ export interface StickerChannelAdapterConfig {
     keyword?: string
     tags?: string
     count?: string
+    sort?: string
+    match?: string
+    page?: string
   }
   fixedArguments?: Record<string, JsonValue>
   outputMapping?: {
@@ -27,6 +30,10 @@ export interface StickerChannelInput {
   keyword: string
   tags: string[]
   count: number
+  /** 可选排序、匹配方式与页码；只发给声明或已知支持这些参数的渠道。 */
+  sort?: string
+  match?: string
+  page?: number
 }
 
 function isRecord(value: unknown): value is UnknownRecord {
@@ -104,6 +111,9 @@ function mergeConfig(base: StickerChannelAdapterConfig, override: unknown): Stic
       keyword: text(input.keyword || baseInput.keyword || "keyword").trim() || "keyword",
       tags: text(input.tags || baseInput.tags || "tags").trim() || "tags",
       count: text(input.count || baseInput.count || "count").trim() || "count",
+      sort: text(input.sort || baseInput.sort).trim(),
+      match: text(input.match || baseInput.match).trim(),
+      page: text(input.page || baseInput.page).trim(),
     },
     fixedArguments: { ...jsonRecord(base.fixedArguments), ...jsonRecord(source.fixedArguments) },
     outputMapping: {
@@ -139,15 +149,29 @@ export function resolveStickerChannelAdapter(tool: unknown, toolConfig: UnknownR
   return mergeConfig(mergeConfig(semanticDefaults, declaredConfig(tool)), configured)
 }
 
+function declaredProperties(tool: unknown): UnknownRecord {
+  const common = getToolCommon(tool)
+  return record(record(common.parameters || record(tool).parameters).properties)
+}
+
+/** sort/match/page 属于可选能力：显式映射、入参声明或已知的语义搜图工具才发送。 */
+function acceptsOptionalArgument(tool: unknown, key: "sort" | "match" | "page", mapping: UnknownRecord): boolean {
+  return Boolean(text(mapping[key]).trim()) || Object.hasOwn(declaredProperties(tool), key) || isSemanticImageSearch(tool)
+}
+
 /** 把定格的稳定入参映射为具体渠道的参数；只支持声明式字段映射和固定 JSON 参数。 */
 export function buildStickerChannelArguments(tool: unknown, input: StickerChannelInput, toolConfig: UnknownRecord = {}): UnknownRecord {
   const adapter = resolveStickerChannelAdapter(tool, toolConfig)
   const mapping = record(adapter.inputMapping)
   const result: UnknownRecord = { ...record(adapter.fixedArguments) }
-  const values: Record<string, unknown> = { keyword: input.keyword, tags: input.tags, count: input.count }
-  for (const key of ["keyword", "tags", "count"]) {
+  const values: Record<string, unknown> = { keyword: input.keyword, tags: input.tags, count: input.count, sort: input.sort, match: input.match, page: input.page }
+  for (const key of ["keyword", "tags", "count", "sort", "match", "page"] as const) {
     const path = text(mapping[key] || key).trim()
-    if (path && (key !== "tags" || input.tags.length)) writePath(result, path, values[key])
+    if (!path) continue
+    if (key === "keyword" && !text(input.keyword).trim()) continue
+    if (key === "tags" && !input.tags.length) continue
+    if ((key === "sort" || key === "match" || key === "page") && (!text(values[key] ?? "").trim() || !acceptsOptionalArgument(tool, key, mapping))) continue
+    writePath(result, path, values[key])
   }
   return result
 }

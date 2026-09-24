@@ -183,25 +183,26 @@ function capabilities(model: ModelConfig): UnknownRecord {
   return record(model.capabilities)
 }
 
-function channelPurpose(value: unknown, declared?: unknown): "chat" | "image" {
+function channelPurpose(value: unknown, declared?: unknown): "chat" | "image" | "decision" {
   const purpose = text(declared).trim().toLowerCase()
-  if (purpose === "image") return "image"
-  if (purpose === "chat") return "chat"
+  if (purpose === "image" || purpose === "chat" || purpose === "decision") return purpose
   const type = text(value).trim().toLowerCase()
+  if (type === "typesafe") return "decision"
   return ["openai-images", "openai-chat-completions", "gemini-images"].includes(type) ? "image" : "chat"
 }
 
-export function modelPurpose(model: ModelConfig | UnknownRecord = {}): "chat" | "image" | "embedding" {
+export function modelPurpose(model: ModelConfig | UnknownRecord = {}): "chat" | "image" | "embedding" | "decision" {
   const declared = text(model.purpose).trim().toLowerCase()
-  if (declared === "image" || declared === "embedding" || declared === "chat") return declared
+  if (declared === "image" || declared === "embedding" || declared === "chat" || declared === "decision") return declared
   const adapter = text(model.adapter).trim().toLowerCase()
+  if (adapter === "typesafe") return "decision"
   if (["openai-images", "openai-chat-completions", "gemini-images"].includes(adapter)) return "image"
   return capabilities(model).embedding === true && capabilities(model).chat === false ? "embedding" : "chat"
 }
 
-function taskPurpose(taskName: string, task: ModelTask): "chat" | "image" | "embedding" {
+function taskPurpose(taskName: string, task: ModelTask): "chat" | "image" | "embedding" | "decision" {
   const declared = text(task.purpose).trim().toLowerCase()
-  if (declared === "image" || declared === "embedding" || declared === "chat") return declared
+  if (declared === "image" || declared === "embedding" || declared === "chat" || declared === "decision") return declared
   return taskName === "imageGeneration" ? "image" : taskName === "embedding" ? "embedding" : "chat"
 }
 

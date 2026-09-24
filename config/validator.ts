@@ -97,8 +97,8 @@ interface ConfigRecord extends ConfigSection {
   logging?: ConfigSection
 }
 
-const adapterIds = new Set(["mock", "openai-compatible", "openai-responses", "openai-images", "openai-chat-completions", "qwen", "gemini", "gemini-images", "claude", "chatglm"])
-const modelPurposes = new Set(["chat", "image", "embedding"])
+const adapterIds = new Set(["mock", "openai-compatible", "openai-responses", "openai-images", "openai-chat-completions", "qwen", "gemini", "gemini-images", "claude", "chatglm", "typesafe"])
+const modelPurposes = new Set(["chat", "image", "embedding", "decision"])
 const authTypes = new Set(["bearer", "none", "query", "x-api-key", "api-key", "custom-header"])
 const selectionStrategies = new Set(["sequential", "random", "fallback"])
 const boundaryRoles = new Set(["user", "groupAdmin", "groupOwner", "master"])
@@ -126,6 +126,7 @@ function modelPurpose(model: ConfigSection): string {
   const declared = String(model.purpose || "").trim().toLowerCase()
   if (modelPurposes.has(declared)) return declared
   const adapter = String(model.adapter || "").trim().toLowerCase()
+  if (adapter === "typesafe") return "decision"
   if (["openai-images", "openai-chat-completions", "gemini-images"].includes(adapter)) return "image"
   return section(model.capabilities).embedding === true && section(model.capabilities).chat === false ? "embedding" : "chat"
 }
@@ -367,6 +368,9 @@ function validateProviders(config: ConfigRecord, issues: ValidationIssue[]): voi
     const purpose = modelPurpose(model)
     if (model.purpose !== undefined && !modelPurposes.has(String(model.purpose).trim().toLowerCase())) {
       add(issues, "error", `models.${index}.purpose`, `未知模型用途：${String(model.purpose)}`)
+    }
+    if (purpose === "decision" && adapter !== "typesafe") {
+      add(issues, "warn", `models.${index}.adapter`, `决策模型 ${modelName} 使用 ${adapter}，当前仅支持 TypeSafe System One 协议`)
     }
     if (purpose === "image" && ["openai-responses", "claude"].includes(adapter)) {
       add(issues, "warn", `models.${index}.adapter`, `图片模型 ${modelName} 使用 ${adapter}，当前仅支持 OpenAI Images 或 Gemini 图片协议`)
@@ -1113,7 +1117,6 @@ function validateRuntimeNumbers(config: ConfigRecord, issues: ValidationIssue[])
       for (const [path, value] of [
         ["persona.stickerExpression.enabled", sticker.enabled],
         ["persona.stickerExpression.privateEnabled", sticker.privateEnabled],
-        ["persona.stickerExpression.moodEnabled", sticker.moodEnabled],
       ] as Array<[string, unknown]>) {
         if (value !== undefined && typeof value !== "boolean") add(issues, "error", path, "必须是布尔值")
       }
@@ -1125,7 +1128,8 @@ function validateRuntimeNumbers(config: ConfigRecord, issues: ValidationIssue[])
             if (binding[key] !== undefined && typeof binding[key] !== "string") add(issues, "error", `persona.stickerExpression.binding.${key}`, `${key} 必须是字符串`)
           }
           if (binding.primaryTool && binding.fallbackTool && String(binding.primaryTool) === String(binding.fallbackTool)) add(issues, "error", "persona.stickerExpression.binding.fallbackTool", "回退渠道不能与主渠道相同")
-          positiveNumber(issues, "persona.stickerExpression.binding.candidateCount", binding.candidateCount, { min: 3, max: 20, integer: true })
+          positiveNumber(issues, "persona.stickerExpression.binding.candidateCount", binding.candidateCount, { min: 3, max: 50, integer: true })
+          positiveNumber(issues, "persona.stickerExpression.binding.topK", binding.topK, { min: 1, max: 50, integer: true })
           if (binding.selectionMode !== undefined && !["best", "randomTop"].includes(String(binding.selectionMode))) add(issues, "error", "persona.stickerExpression.binding.selectionMode", "selectionMode 只支持 best 或 randomTop")
           if (binding.adapterConfigs !== undefined && !isObject(binding.adapterConfigs)) add(issues, "error", "persona.stickerExpression.binding.adapterConfigs", "adapterConfigs 必须是对象")
           for (const [channel, adapter] of Object.entries(isObject(binding.adapterConfigs) ? binding.adapterConfigs : {})) {
@@ -1158,8 +1162,6 @@ function validateRuntimeNumbers(config: ConfigRecord, issues: ValidationIssue[])
       positiveNumber(issues, "persona.stickerExpression.dailyQuota", sticker.dailyQuota, { min: 0, max: 1000, integer: true })
       positiveNumber(issues, "persona.stickerExpression.recentWindowSeconds", sticker.recentWindowSeconds, { min: 1, max: 604800 })
       positiveNumber(issues, "persona.stickerExpression.contextTtlSeconds", sticker.contextTtlSeconds, { min: 60, max: 7 * 86400 })
-      positiveNumber(issues, "persona.stickerExpression.intentTimeoutSeconds", sticker.intentTimeoutSeconds, { min: 1, max: 600 })
-      positiveNumber(issues, "persona.stickerExpression.moodDecaySeconds", sticker.moodDecaySeconds, { min: 60, max: 604800 })
       for (const key of ["allowlist", "blocklist"]) {
         const value = section(sticker.groupScope)[key]
         if (value !== undefined && !Array.isArray(value) && typeof value !== "string") add(issues, "error", `persona.stickerExpression.groupScope.${key}`, `${key} 必须是数组或逗号分隔字符串`)
@@ -1171,8 +1173,44 @@ function validateRuntimeNumbers(config: ConfigRecord, issues: ValidationIssue[])
       for (const key of ["start", "end"]) {
         if (hours[key] !== undefined && !/^([01]\d|2[0-3]):[0-5]\d$/.test(String(hours[key]))) add(issues, "error", `persona.stickerExpression.idle.allowedHours.${key}`, "时间必须是 HH:mm")
       }
-      const taskName = String(sticker.intentTask || "").trim()
-      if (taskName && !section(config.modelTasks)[taskName]) add(issues, "error", "persona.stickerExpression.intentTask", `模型任务不存在：${taskName}`)
+      const decision = sticker.decision
+      if (decision !== undefined) {
+        if (!isObject(decision)) add(issues, "error", "persona.stickerExpression.decision", "decision 必须是对象")
+        else {
+          const modelName = decision.model === undefined ? "" : String(decision.model).trim()
+          if (decision.model !== undefined && typeof decision.model !== "string") add(issues, "error", "persona.stickerExpression.decision.model", "model 必须是字符串")
+          if (modelName) {
+            const model = asArray(config.models).map(section).find(item => String(item.name || "") === modelName)
+            if (!model) add(issues, "warn", "persona.stickerExpression.decision.model", `决策模型不存在，将使用本地关键词判断：${modelName}`)
+            else if (modelPurpose(model) !== "decision") add(issues, "error", "persona.stickerExpression.decision.model", `模型 ${modelName} 不是决策用途`)
+          }
+          positiveNumber(issues, "persona.stickerExpression.decision.sendThreshold", decision.sendThreshold, { min: 0, max: 1 })
+          positiveNumber(issues, "persona.stickerExpression.decision.moodConfidence", decision.moodConfidence, { min: 0, max: 1 })
+          positiveNumber(issues, "persona.stickerExpression.decision.timeoutSeconds", decision.timeoutSeconds, { min: 1, max: 120 })
+        }
+      }
+      if (sticker.moods !== undefined) {
+        if (!Array.isArray(sticker.moods)) add(issues, "error", "persona.stickerExpression.moods", "moods 必须是数组")
+        else {
+          const names = new Set<string>()
+          for (const [index, mood] of sticker.moods.entries()) {
+            const item = section(mood)
+            const name = String(item.name || "").trim()
+            if (!name) add(issues, "error", `persona.stickerExpression.moods.${index}.name`, "情绪分组名称不能为空")
+            else if (name === "none") add(issues, "error", `persona.stickerExpression.moods.${index}.name`, "none 是保留名称")
+            else if (names.has(name)) add(issues, "error", `persona.stickerExpression.moods.${index}.name`, `情绪分组重复：${name}`)
+            names.add(name)
+            if (!Array.isArray(item.tags) || !item.tags.some(tag => String(tag || "").trim())) add(issues, "error", `persona.stickerExpression.moods.${index}.tags`, `情绪分组 ${name || index} 至少需要一个检索标签`)
+            if (item.hours !== undefined && String(item.hours).trim() && !/^([01]?\d|2[0-3]):[0-5]\d-([01]?\d|2[0-3]):[0-5]\d$/.test(String(item.hours).trim())) add(issues, "error", `persona.stickerExpression.moods.${index}.hours`, "时段格式应为 HH:mm-HH:mm")
+          }
+        }
+      }
+      if (sticker.pickMode !== undefined && !["mood", "image"].includes(String(sticker.pickMode))) add(issues, "error", "persona.stickerExpression.pickMode", "pickMode 只支持 mood 或 image")
+      positiveNumber(issues, "persona.stickerExpression.imagePoolSize", sticker.imagePoolSize, { min: 3, max: 50, integer: true })
+      positiveNumber(issues, "persona.stickerExpression.moodRepeatSeconds", sticker.moodRepeatSeconds, { min: 0, max: 7 * 86400 })
+      if (String(sticker.pickMode) === "image" && !String(section(sticker.decision).model || "").trim()) add(issues, "warn", "persona.stickerExpression.pickMode", "精选模式需要决策模型；未配置时会按情绪模式运行")
+      const idleMoods = sticker.idle !== undefined ? section(sticker.idle).moods : undefined
+      if (idleMoods !== undefined && !Array.isArray(idleMoods)) add(issues, "error", "persona.stickerExpression.idle.moods", "idle.moods 必须是数组")
     }
   }
 }

@@ -1,4 +1,4 @@
-import type { EmbeddingRequest, EmbeddingResponse, ImageGenerationRequest, ImageGenerationResponse, ModelListRequest, ModelRequest, ModelResponse } from "./types.js"
+import type { DecisionRequest, DecisionResponse, EmbeddingRequest, EmbeddingResponse, ImageGenerationRequest, ImageGenerationResponse, ModelListRequest, ModelRequest, ModelResponse } from "./types.js"
 
 /**
  * 模型适配器的 TS 目标基类。
@@ -32,6 +32,9 @@ export abstract class ModelAdapter {
   /** 是否支持 Responses 原生 tool_search/defer_loading。 */
   readonly supportsNativeToolSearch: boolean = false
 
+  /** 是否支持结构化决策（noul/choice/score）。 */
+  readonly supportsDecision: boolean = false
+
   /** 将统一请求协议转换为供应商请求并返回统一模型响应。 */
   abstract sendMessage(request: ModelRequest): Promise<ModelResponse>
 
@@ -48,5 +51,10 @@ export abstract class ModelAdapter {
   /** 执行图片生成；不支持时由基类给出明确错误。 */
   async generateImages(_request: ImageGenerationRequest): Promise<ImageGenerationResponse> {
     throw new Error(`${this.id} 适配器不支持图片生成`)
+  }
+
+  /** 执行结构化决策；不支持时由基类给出明确错误。 */
+  async decide(_request: DecisionRequest): Promise<DecisionResponse> {
+    throw new Error(`${this.id} 适配器不支持决策请求`)
   }
 }

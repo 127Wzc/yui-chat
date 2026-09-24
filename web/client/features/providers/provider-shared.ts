@@ -48,6 +48,19 @@ export function uniqueModelIds(items: unknown[] = []): string[] {
   return [...new Set(items.map(item => String(item || "").trim()).filter(Boolean))]
 }
 
+/** 渠道卡片上按能力和用途统计的模型数量。 */
+export function providerModelCounts(items: UnknownRecord[]) {
+  const count = (test: (item: UnknownRecord) => boolean) => items.filter(test).length
+  return {
+    channelCount: items.length,
+    visualCount: count(item => Boolean(item.visual)),
+    toolCount: count(item => Boolean(item.toolUse)),
+    embeddingCount: count(item => Boolean(item.embedding)),
+    imageCount: count(item => item.purpose === "image" || item.imageGeneration === true),
+    decisionCount: count(item => item.purpose === "decision"),
+  }
+}
+
 export interface MutableBooleanRef {
   value: boolean
 }

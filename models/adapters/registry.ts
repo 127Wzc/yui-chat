@@ -3,6 +3,7 @@ import { configStore } from "../../config/store.js"
 import { ClaudeAdapter } from "./claude.js"
 import { GeminiAdapter, GeminiImagesAdapter } from "./gemini.js"
 import { MockAdapter } from "./mock.js"
+import { TypeSafeAdapter } from "./typesafe.js"
 import { ChatGLMAdapter, OpenAICompatibleAdapter, OpenAIImagesAdapter, QwenAdapter } from "./openai/chat/adapter.js"
 import { OpenAIResponsesAdapter } from "./openai/responses/adapter.js"
 import { toolsForResponses } from "./openai/responses/tool-adapter.js"
@@ -11,8 +12,9 @@ import { normalizeModelResponse } from "../protocol/normalize.js"
 import { modelLogStore } from "../../core/observability/model-log.js"
 import { createMediaThumbnail } from "../../core/media/media-cache.js"
 import { hostRuntime } from "../../core/runtime/host-runtime.js"
-import type { EmbeddingRequest, ImageGenerationRequest, ImageGenerationResponse, ModelChannel, ModelListRequest, ModelMessage, ModelRequest, ModelResponse, ModelToolChoice } from "../protocol/types.js"
+import type { DecisionQuestion, DecisionResponse, EmbeddingRequest, ImageGenerationRequest, ImageGenerationResponse, ModelChannel, ModelListRequest, ModelMessage, ModelRequest, ModelResponse, ModelToolChoice } from "../protocol/types.js"
 import type { ListedModel } from "./base.js"
+import type { JsonValue } from "../../core/message-chain/types.js"
 import type { ToolDefinition } from "../../tools/support/tool-contract.js"
 
 interface RuntimeModelRequest extends ModelRequest {
@@ -38,10 +40,12 @@ interface RuntimeAdapter {
   readonly supportsEmbeddings: boolean
   readonly supportsImageGeneration: boolean
   readonly supportsNativeToolSearch: boolean
+  readonly supportsDecision?: boolean
   compact?(request: RuntimeModelRequest): Promise<ModelResponse>
   sendMessage(request: RuntimeModelRequest): Promise<ModelResponse>
   embedTexts(request: RuntimeEmbeddingRequest): Promise<Awaited<ReturnType<import("../protocol/adapter.js").ModelAdapter["embedTexts"]>>>
   generateImages?(request: ImageGenerationRequest): Promise<ImageGenerationResponse>
+  decide?(request: import("../protocol/types.js").DecisionRequest): Promise<DecisionResponse>
   listModels?(request?: ModelListRequest): Promise<unknown[]>
 }
 
@@ -100,10 +104,23 @@ interface ImageSendOptions {
   metadata?: Record<string, unknown>
 }
 
+interface DecisionSendOptions {
+  channel?: ModelChannel
+  state?: JsonValue
+  questions?: Record<string, DecisionQuestion>
+  signal?: AbortSignal
+  event?: unknown
+  purpose?: string
+  source?: string
+  taskName?: string
+  trace?: unknown
+  metadata?: Record<string, unknown>
+}
+
 interface ChannelTestResult {
   channel?: string
   adapter: string
-  operation: "chat" | "embedding" | "image"
+  operation: "chat" | "embedding" | "image" | "decision"
   text: string
   dimensions?: number
   vectorCount?: number
@@ -120,6 +137,10 @@ function isEmbeddingChannel(channel: ModelChannel): boolean {
 function isImageChannel(channel: ModelChannel): boolean {
   const modelConfig = record(channel.modelConfig)
   return String(modelConfig.purpose || "") === "image" || ["openai-images", "openai-chat-completions", "gemini-images"].includes(String(channel.type || ""))
+}
+
+function isDecisionChannel(channel: ModelChannel): boolean {
+  return String(record(channel.modelConfig).purpose || channel.purpose || "") === "decision"
 }
 
 function unknownImageUsage() {
@@ -144,6 +165,7 @@ export class AdapterRegistry {
     this.register(new QwenAdapter())
     this.register(new ClaudeAdapter())
     this.register(new ChatGLMAdapter())
+    this.register(new TypeSafeAdapter())
   }
 
   register(adapter: RuntimeAdapter): void {
@@ -154,7 +176,7 @@ export class AdapterRegistry {
     return this.adapters.get(type) || this.adapters.get("mock") as RuntimeAdapter
   }
 
-  listAdapters(): Array<Pick<RuntimeAdapter, "id" | "protocol" | "supportsTools" | "supportsVision" | "supportsStreaming" | "supportsEmbeddings" | "supportsImageGeneration" | "supportsNativeToolSearch">> {
+  listAdapters(): Array<Pick<RuntimeAdapter, "id" | "protocol" | "supportsTools" | "supportsVision" | "supportsStreaming" | "supportsEmbeddings" | "supportsImageGeneration" | "supportsNativeToolSearch" | "supportsDecision">> {
     return [...this.adapters.values()].map(adapter => ({
       id: adapter.id,
       protocol: adapter.protocol,
@@ -164,6 +186,7 @@ export class AdapterRegistry {
       supportsEmbeddings: adapter.supportsEmbeddings,
       supportsImageGeneration: adapter.supportsImageGeneration,
       supportsNativeToolSearch: adapter.supportsNativeToolSearch,
+      supportsDecision: adapter.supportsDecision === true,
     }))
   }
 
@@ -269,8 +292,31 @@ export class AdapterRegistry {
     }
   }
 
+  /** 统一决策入口；日志只记录问题 ID 与答案摘要，state 按普通消息快照保存。 */
+  async decide({ channel, state = "", questions = {}, signal, event, purpose = "decision", source = "decision", taskName = "", trace = null, metadata = {} }: DecisionSendOptions = {}): Promise<DecisionResponse> {
+    if (!channel) throw new Error("channel is required")
+    const adapter = this.get(channel.type)
+    if (!adapter.decide || adapter.supportsDecision !== true) throw new Error(`${adapter.id} adapter does not support decision requests`)
+    const stateText = typeof state === "string" ? state : JSON.stringify(state)
+    const call = modelLogStore.beginModelCall({ trace, event, source, purpose, taskName, operation: "decision", channel, messages: [{ role: "user", content: stateText }], tools: [], metadata: { ...metadata, questions: Object.keys(questions) }, request: { protocol: adapter.protocol } })
+    try {
+      const result = await adapter.decide({ channel, state, questions, signal, onRequest: capture => modelLogStore.captureModelRequest(call, capture) })
+      modelLogStore.completeModelCall(call, { response: { id: crypto.randomUUID(), text: JSON.stringify(result.answers), toolCalls: [], stopReason: "end_turn", usage: result.usage } })
+      return result
+    } catch (error) {
+      modelLogStore.completeModelCall(call, { error })
+      throw error
+    }
+  }
+
   async testChannel(channel: ModelChannel): Promise<ChannelTestResult> {
     const adapter = channel.type === "openai-chat-completions" ? this.get("openai-images") : this.get(channel.type)
+    if (isDecisionChannel(channel) || adapter.supportsDecision === true) {
+      const result = await this.decide({ channel, state: "谢谢你帮我修好了这个问题！", questions: { thanks: { type: "noul", instructions: "这条消息是否在表达感谢？" } }, purpose: "model-test", source: "management", taskName: "channel-test" })
+      const value = Number(result.answers.thanks?.noul)
+      if (!Number.isFinite(value)) throw new Error("决策模型没有返回有效答案")
+      return { channel: channel.id, adapter: adapter.id, operation: "decision", text: `决策测试通过：${result.model}，感谢判断 ${value.toFixed(2)}` }
+    }
     if (isImageChannel(channel)) return { channel: channel.id, adapter: adapter.id, operation: "image", text: "图片模型已配置，未发起生成请求" }
     if (isEmbeddingChannel(channel)) {
       const result = await this.embedTexts({ channel, texts: ["embedding health check"], purpose: "model-test", source: "management", taskName: "channel-test" })

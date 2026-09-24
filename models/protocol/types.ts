@@ -180,6 +180,41 @@ export interface ImageGenerationResponse {
   raw?: unknown
 }
 
+/**
+ * 决策模型问题，沿用 TypeSafe System One 的三种类型：
+ * noul 为是/否概率，choice 为固定选项单选，score 为有序等级。
+ */
+export interface DecisionQuestion {
+  type: "noul" | "choice" | "score"
+  instructions: JsonValue
+  criteria?: JsonValue
+}
+
+/** 供应商无关的决策请求；state 是被判断的内容，questions 由调用方命名。 */
+export interface DecisionRequest {
+  channel: ModelChannel
+  state: JsonValue
+  questions: Record<string, DecisionQuestion>
+  signal?: AbortSignal
+  onRequest?: (capture: ModelRequestCapture) => void
+}
+
+/** 单个问题的回答；choice/score 带概率分布与置信度，noul 只有是的概率。 */
+export interface DecisionAnswer {
+  type: string
+  noul?: number
+  choice?: string
+  score?: number
+  confidence?: number
+  probabilities?: Record<string, number>
+}
+
+export interface DecisionResponse {
+  model: string
+  answers: Record<string, DecisionAnswer>
+  usage: ModelUsage
+}
+
 /** embedding 响应。 */
 export interface EmbeddingResponse {
   vectors: number[][]

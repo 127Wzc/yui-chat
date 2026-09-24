@@ -1998,7 +1998,7 @@ async function checkProviderTemplates() {
   const { validateConfig } = await import("../output/runtime/config/validator.js")
   const { configStore } = await import("../output/runtime/config/store.js")
   const templates = listProviderTemplates()
-  assert(templates.length === 3 && ["openai", "gemini", "openai_compatible"].every(id => templates.some(item => item.id === id)), "provider templates should expose only the three public connection types")
+  assert(templates.length === 4 && ["openai", "gemini", "openai_compatible", "typesafe"].every(id => templates.some(item => item.id === id)), "provider templates should expose only the three chat connection types plus the TypeSafe decision connection")
   assert(templates.find(item => item.id === "gemini")?.toolUse === true, "gemini template should expose tool use")
   assert(getProviderTemplate("claude").toolUse === true, "legacy claude template alias should remain usable by existing configuration imports")
   assert(!getProviderTemplate("openai_responses").responses?.toolSearch, "OpenAI Responses alias should keep capability routing out of protocol-specific settings")

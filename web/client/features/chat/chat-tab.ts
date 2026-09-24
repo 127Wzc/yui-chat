@@ -34,6 +34,7 @@ interface Channel {
   name?: string
   model?: string
   enabled?: boolean
+  purpose?: string
 }
 
 interface ProviderData extends UnknownRecord {
@@ -103,7 +104,7 @@ export const ChatTab = {
 
     const providers = computed(() => asRecord<ProviderData>(store.providers))
     const config = computed(() => asRecord<AppConfig>(store.config))
-    const channels = computed(() => (providers.value.channels || []).filter(item => item.enabled !== false))
+    const channels = computed(() => (providers.value.channels || []).filter(item => item.enabled !== false && item.purpose !== "decision"))
     const channelOptions = computed(() => [
       { value: "", label: `默认回复模型${config.value.chat?.defaultChannel ? ` · ${config.value.chat.defaultChannel}` : ""}` },
       ...channels.value.map(item => ({ value: item.id, label: `${item.name || item.id}${item.model && item.model !== item.id ? ` · ${item.model}` : ""}` })),

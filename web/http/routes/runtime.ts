@@ -68,11 +68,15 @@ export function registerRuntimeRoutes(app: RouteApp): void {
         common: item.common,
       }
     })
-    res.json({ ok: true, status: buildStickerExpressionStatus(configStore.getPublic()), channels, tools: channels })
+    const { dailyStillMoods, DEFAULT_DAILY_STILL_MOODS } = await import("../../../core/persona/daily-still-moods.js")
+    const publicConfig = configStore.getPublic()
+    const sticker = (publicConfig.persona as Record<string, unknown> | undefined)?.stickerExpression as Record<string, unknown> | undefined
+    res.json({ ok: true, status: buildStickerExpressionStatus(publicConfig), channels, tools: channels, moods: dailyStillMoods(sticker?.moods), defaultMoods: DEFAULT_DAILY_STILL_MOODS })
   }))
   app.post("/api/daily-still/test", auth, handleRoute(async (req, res) => {
-    const keyword = String(req.body?.keyword || "").trim().slice(0, 500)
-    if (keyword.length < 2) throw new Error("请输入至少 2 个字符的表达意图。")
+    const input = String(req.body?.text || "").trim().slice(0, 1000)
+    const mode = ["conversation", "ambient", "idle"].includes(String(req.body?.mode)) ? String(req.body.mode) as "conversation" | "ambient" | "idle" : "conversation"
+    if (mode !== "idle" && input.length < 2) throw new Error("请输入至少 2 个字符的聊天内容。")
     const groupId = String(req.body?.groupId || "").trim().slice(0, 64)
     const event = {
       isGroup: Boolean(groupId),
@@ -81,21 +85,33 @@ export function registerRuntimeRoutes(app: RouteApp): void {
       group_id: groupId,
       user_id: "web-test",
       sender: { user_id: "web-test", nickname: "Web 测试" },
-      msg: keyword,
-      raw_message: keyword,
+      msg: input,
+      raw_message: input,
     }
     const { stickerExpressionCoordinator } = await import("../../../core/persona/sticker-expression-coordinator.js")
     const testConfig = await configStore.load()
-    const requestedBinding = req.body?.binding
-    if (requestedBinding && typeof requestedBinding === "object" && !Array.isArray(requestedBinding)) {
+    // 管理台可以带上未保存的定格草稿，试运行不会写入配置。
+    const draft = req.body?.draft
+    if (draft && typeof draft === "object" && !Array.isArray(draft)) {
       const persona = (testConfig.persona && typeof testConfig.persona === "object" ? testConfig.persona : {}) as Record<string, unknown>
-      const sticker = (persona.stickerExpression && typeof persona.stickerExpression === "object" ? persona.stickerExpression : {}) as Record<string, unknown>
-      const binding = (sticker.binding && typeof sticker.binding === "object" ? sticker.binding : {}) as Record<string, unknown>
-      persona.stickerExpression = { ...sticker, binding: { ...binding, ...(requestedBinding as Record<string, unknown>) } }
+      persona.stickerExpression = { ...(persona.stickerExpression as Record<string, unknown> || {}), ...(draft as Record<string, unknown>) }
       const mutableConfig = testConfig as unknown as Record<string, unknown>
       mutableConfig.persona = persona
     }
-    const result = await stickerExpressionCoordinator.preview({ config: testConfig, event, keyword, tags: Array.isArray(req.body?.tags) ? req.body.tags : [] })
+    const result = await stickerExpressionCoordinator.preview({ config: testConfig, event, mode, text: input, reply: String(req.body?.reply || "").slice(0, 1000) })
+    res.json({ ok: true, result })
+  }, { errorStatus: 400 }))
+  app.post("/api/daily-still/gallery-stats", auth, handleRoute(async (req, res) => {
+    const { stickerExpressionCoordinator } = await import("../../../core/persona/sticker-expression-coordinator.js")
+    const testConfig = await configStore.load()
+    // 与试运行一致：可以带上未保存的分组草稿计算覆盖情况。
+    const moods = req.body?.moods
+    if (Array.isArray(moods)) {
+      const persona = (testConfig.persona && typeof testConfig.persona === "object" ? testConfig.persona : {}) as Record<string, unknown>
+      persona.stickerExpression = { ...(persona.stickerExpression as Record<string, unknown> || {}), moods }
+      ;(testConfig as unknown as Record<string, unknown>).persona = persona
+    }
+    const result = await stickerExpressionCoordinator.galleryStats({ config: testConfig, maxPages: Number(req.body?.maxPages) || undefined })
     res.json({ ok: true, result })
   }, { errorStatus: 400 }))
   app.post("/api/daily-still/run", auth, handleRoute(async (req, res) => {

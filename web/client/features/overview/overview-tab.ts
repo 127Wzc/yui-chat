@@ -24,6 +24,7 @@ interface ModelConfig extends UnknownRecord {
   adapter?: string
   apiProvider?: string
   modelIdentifier?: string
+  purpose?: string
   capabilities?: { chat?: boolean }
 }
 interface ApiProvider extends UnknownRecord { name?: string; authType?: string }
@@ -113,7 +114,7 @@ export const OverviewTab = {
     const providerData = computed(() => asRecord<ProviderData>(store.providers))
     const providerTemplates = computed(() => providerData.value.templates || [])
     const providerTemplateOptions = computed(() => providerTemplates.value.map(item => ({ value: item.id, label: item.label || item.id })))
-    const realModels = computed(() => (config.value.models || []).filter(model => model.adapter !== "mock" && model.name !== "mock"))
+    const realModels = computed(() => (config.value.models || []).filter(model => model.adapter !== "mock" && model.name !== "mock" && model.purpose !== "decision"))
     const modelOptions = computed(() => realModels.value.map(model => ({ value: model.name, label: `${model.name}${model.modelIdentifier && model.modelIdentifier !== model.name ? ` · ${model.modelIdentifier}` : ""}` })))
     const fallbackModelOptions = computed(() => [{ value: "", label: "暂不设置" }, ...modelOptions.value.filter(item => item.value !== wizard.mainModel)])
 

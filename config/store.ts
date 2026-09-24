@@ -229,13 +229,15 @@ function normalizeModelRoutingDefaults(config: Config): Config {
     const capabilities = isObject(value.capabilities) ? value.capabilities : {}
     const declaredPurpose = String(value.purpose || "").trim().toLowerCase()
     const adapter = String(value.adapter || "").trim().toLowerCase()
-    const purpose = ["chat", "image", "embedding"].includes(declaredPurpose)
+    const purpose = ["chat", "image", "embedding", "decision"].includes(declaredPurpose)
       ? declaredPurpose
-      : ["openai-images", "openai-chat-completions", "gemini-images"].includes(adapter)
-        ? "image"
-        : capabilities.embedding && capabilities.chat === false ? "embedding" : "chat"
+      : adapter === "typesafe"
+        ? "decision"
+        : ["openai-images", "openai-chat-completions", "gemini-images"].includes(adapter)
+          ? "image"
+          : capabilities.embedding && capabilities.chat === false ? "embedding" : "chat"
     value.purpose = purpose
-    value.capabilities = purpose === "image"
+    value.capabilities = purpose === "image" || purpose === "decision"
       ? { chat: false, embedding: false }
       : purpose === "embedding"
         ? { chat: false, embedding: true }
@@ -250,6 +252,10 @@ function normalizeModelRoutingDefaults(config: Config): Config {
     .filter(value => isObject(value) && String(value.purpose || "") === "image")
     .map(value => isObject(value) ? String(value.name || "") : "")
     .filter(Boolean))
+  const decisionModels = new Set(models
+    .filter(value => isObject(value) && String(value.purpose || "") === "decision")
+    .map(value => isObject(value) ? String(value.name || "") : "")
+    .filter(Boolean))
   const embeddingOnly = new Set(models
     .filter(value => isObject(value) && isObject(value.capabilities) && value.capabilities.embedding && value.capabilities.chat === false)
     .map(value => isObject(value) ? String(value.name || "") : "")
@@ -261,20 +267,23 @@ function normalizeModelRoutingDefaults(config: Config): Config {
       return models.some(value => isObject(value) && String(value.name || "") === modelName)
         && !imageModels.has(modelName)
         && !embeddingOnly.has(modelName)
+        && !decisionModels.has(modelName)
     })
     : []
   for (const [taskName, taskValue] of Object.entries(modelTasks)) {
     if (!isObject(taskValue) || !Array.isArray(taskValue.modelList)) continue
     const modelList = taskValue.modelList
     const declaredTaskPurpose = String(taskValue.purpose || "").trim().toLowerCase()
-    const taskPurpose = declaredTaskPurpose === "image" || declaredTaskPurpose === "embedding"
+    const taskPurpose = ["image", "embedding", "decision"].includes(declaredTaskPurpose)
       ? declaredTaskPurpose
       : taskName === "imageGeneration" ? "image" : taskName === "embedding" ? "embedding" : "chat"
     const filteredModelList = modelList.filter(name => taskPurpose === "image"
       ? imageModels.has(String(name))
       : taskPurpose === "embedding"
         ? embeddingOnly.has(String(name))
-        : !embeddingOnly.has(String(name)) && !imageModels.has(String(name)))
+        : taskPurpose === "decision"
+          ? decisionModels.has(String(name))
+          : !embeddingOnly.has(String(name)) && !imageModels.has(String(name)) && !decisionModels.has(String(name)))
     taskValue.modelList = filteredModelList
     if (!filteredModelList.length && taskName === "replyer" && defaultReplyerModelList.length) {
       taskValue.modelList = [...defaultReplyerModelList]

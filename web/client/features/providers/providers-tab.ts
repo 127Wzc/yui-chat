@@ -6,6 +6,7 @@ import { ModelRoutingBuilder } from "./provider-routing.js"
 import {
   INHERIT_BOOL_OPTIONS,
   ProviderFilterSearch,
+  providerModelCounts,
   requestProviderModels,
   runLocked,
   uniqueModelIds,
@@ -71,6 +72,7 @@ interface ProviderCard extends ApiProvider {
   toolCount: number
   embeddingCount: number
   imageCount: number
+  decisionCount: number
   defaultCount: number
   items: Channel[]
 }
@@ -85,7 +87,7 @@ export const ProvidersTab = {
     const channels = computed(() => providerSlice.value.channels || [])
     const modelByName = computed<Record<string, ModelConfig>>(() => Object.fromEntries((cfg.value.models || []).map(model => [model.name, model])))
     const modelNames = computed(() => (cfg.value.models || [])
-      .filter(model => model.purpose !== "image" && model.purpose !== "embedding")
+      .filter(model => model.purpose !== "image" && model.purpose !== "embedding" && model.purpose !== "decision")
       .map(model => model.name))
     const defaultReplyChannel = computed(() => cfg.value.chat?.defaultChannel || cfg.value.modelTasks?.replyer?.modelList?.[0] || "")
     const defaultImageChannel = computed(() => cfg.value.modelTasks?.imageGeneration?.modelList?.[0] || "")
@@ -114,11 +116,7 @@ export const ProvidersTab = {
       const items = channels.value.filter(channel => channel.provider === provider.name)
       return {
         ...provider,
-        channelCount: items.length,
-        visualCount: items.filter(item => item.visual).length,
-        toolCount: items.filter(item => item.toolUse).length,
-        embeddingCount: items.filter(item => item.embedding).length,
-        imageCount: items.filter(item => item.purpose === "image" || item.imageGeneration === true).length,
+        ...providerModelCounts(items),
         defaultCount: items.filter(item => item.id === defaultReplyChannel.value || item.id === defaultImageChannel.value).length,
         items,
       }
@@ -196,9 +194,9 @@ export const ProvidersTab = {
       remoteModelQuery.value = ""
       remoteModels.value = []
       remoteSelected.value = []
-      remotePurpose.value = "chat"
       remoteStream.value = ""
       const provider = apiProviders.value.find(item => item.name === name)
+      remotePurpose.value = provider?.type === "typesafe" ? "decision" : "chat"
       remoteImageAdapter.value = provider?.type === "gemini" ? "gemini-images" : "openai-images"
     }
     async function testChannel(channelId: string | Channel = "") {
@@ -334,8 +332,8 @@ export const ProvidersTab = {
     async function setDefault(ch: Channel) {
       const name = modelByName.value[ch.id]?.name || ch.id
       const image = ch.purpose === "image" || ch.imageGeneration === true
-      if (ch.purpose === "embedding" || ch.embedding) {
-        toast("向量模型请在知识库或记忆设置中选择")
+      if (ch.purpose === "embedding" || ch.embedding || ch.purpose === "decision") {
+        toast(ch.purpose === "decision" ? "决策模型请在引用它的功能里选择，例如日常定格" : "向量模型请在知识库或记忆设置中选择")
         return
       }
       const taskName = image ? "imageGeneration" : (cfg.value.chat?.defaultTask || "replyer")
@@ -510,6 +508,7 @@ export const ProvidersTab = {
                 <span class="badge">{{ selectedProviderCard?.toolCount || 0 }} 个工具模型</span>
                 <span class="badge accent">{{ selectedProviderCard?.embeddingCount || 0 }} 个向量模型</span>
                 <span v-if="selectedProviderCard?.imageCount" class="badge accent">{{ selectedProviderCard.imageCount }} 个图片模型</span>
+                <span v-if="selectedProviderCard?.decisionCount" class="badge accent">{{ selectedProviderCard.decisionCount }} 个决策模型</span>
               </div>
             </div>
 
@@ -542,7 +541,7 @@ export const ProvidersTab = {
                       </div>
                       <div class="row-actions">
                         <IconButton icon="play" tone="accent" tip="测试该模型" tip-dir="tip-left" :busy="channelBusy('test:' + ch.id)" @click="testChannel(ch)" />
-                        <IconButton v-if="canManage(ch) && ch.purpose !== 'embedding' && !ch.embedding && ch.id !== ((ch.purpose === 'image' || ch.imageGeneration) ? defaultImageChannel : defaultReplyChannel)" icon="check" tone="good" :tip="(ch.purpose === 'image' || ch.imageGeneration) ? '设为默认画图模型' : '设为默认回复模型'" tip-dir="tip-left" :busy="channelBusy('default:' + ch.id)" @click="setDefault(ch)" />
+                        <IconButton v-if="canManage(ch) && ch.purpose !== 'embedding' && ch.purpose !== 'decision' && !ch.embedding && ch.id !== ((ch.purpose === 'image' || ch.imageGeneration) ? defaultImageChannel : defaultReplyChannel)" icon="check" tone="good" :tip="(ch.purpose === 'image' || ch.imageGeneration) ? '设为默认画图模型' : '设为默认回复模型'" tip-dir="tip-left" :busy="channelBusy('default:' + ch.id)" @click="setDefault(ch)" />
                         <IconButton v-if="canManage(ch)" icon="pencil" tone="accent" tip="编辑模型参数" tip-dir="tip-left" @click="openModelEditor(ch.id)" />
                         <IconButton v-if="canManage(ch)" icon="trash" tone="danger" tip="删除模型" tip-dir="tip-left" :busy="channelBusy('remove:' + ch.id)" @click="requestRemoveModel(ch)" />
                       </div>
@@ -552,7 +551,8 @@ export const ProvidersTab = {
                       <span v-if="ch.id === defaultReplyChannel" class="badge accent"><Icon name="sparkles" :size="11" />默认回复</span>
                       <span v-if="ch.id === defaultImageChannel" class="badge accent"><Icon name="image" :size="11" />默认画图</span>
                       <span v-if="ch.purpose === 'image' || ch.imageGeneration" class="badge">图片</span>
-                      <template v-else-if="ch.purpose !== 'image' && !ch.imageGeneration">
+                      <span v-else-if="ch.purpose === 'decision'" class="badge">决策</span>
+                      <template v-else-if="ch.purpose !== 'image' && ch.purpose !== 'decision' && !ch.imageGeneration">
                         <span v-if="ch.visual" class="badge accent">视觉</span>
                         <span v-if="ch.toolUse" class="badge">工具</span>
                         <span v-if="ch.embedding" class="badge accent">向量{{ ch.embeddingDimensions ? ' · ' + ch.embeddingDimensions + ' 维' : '' }}</span>
@@ -592,7 +592,7 @@ export const ProvidersTab = {
                   </div>
                 </div>
                 <div class="form-grid dense">
-                  <Field label="模型用途" type="select" :options="[{ value: 'chat', label: '文本对话' }, { value: 'image', label: '图片生成' }, { value: 'embedding', label: '向量检索' }]" v-model="remotePurpose" tip="导入后模型只会加入对应任务。" />
+                  <Field label="模型用途" type="select" :options="[{ value: 'chat', label: '文本对话' }, { value: 'image', label: '图片生成' }, { value: 'embedding', label: '向量检索' }, { value: 'decision', label: '决策判断' }]" v-model="remotePurpose" tip="导入后模型只会加入对应任务；决策模型由引用它的功能单独选择。" />
                   <Field v-if="remotePurpose === 'image'" label="图片协议" type="select" :options="[{ value: 'openai-images', label: 'OpenAI Images（兼容协议）' }, { value: 'openai-chat-completions', label: 'OpenAI Chat Completions（生图/编辑）' }, { value: 'gemini-images', label: 'Gemini 图片协议' }]" v-model="remoteImageAdapter" tip="按模型实际接口选择协议。" />
                   <Field v-if="remotePurpose === 'chat' || remotePurpose === 'image'" label="流式响应" type="select" :options="INHERIT_BOOL_OPTIONS" v-model="remoteStream" tip="留空继承全局；图片流需要上游支持。" />
                 </div>

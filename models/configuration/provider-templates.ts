@@ -80,6 +80,11 @@ export const providerTemplates: Record<string, ProviderTemplate> = {
     baseURL: "https://api.anthropic.com/v1", authType: "x-api-key", authHeader: "x-api-key",
     modelIdentifier: "claude-3-5-haiku-latest", visual: true, toolUse: true, taskName: "replyer", params: { max_tokens: 1024 },
   },
+  typesafe: {
+    id: "typesafe", label: "TypeSafe 决策模型", adapter: "typesafe", providerName: "typesafe",
+    baseURL: "https://api.typesafe.ai/v1", authType: "bearer", authHeader: "Authorization",
+    modelIdentifier: "jev-latest", visual: false, toolUse: false, taskName: "", params: {},
+  },
   chatglm: {
     id: "chatglm", label: "ChatGLM / BigModel", adapter: "chatglm", providerName: "chatglm-main",
     baseURL: "https://open.bigmodel.cn/api/paas/v4", authType: "bearer", authHeader: "Authorization",
@@ -87,9 +92,9 @@ export const providerTemplates: Record<string, ProviderTemplate> = {
   },
 }
 
-// 管理台只展示最常用的三类连接。其余名称作为读取旧配置/脚本的别名保留，
+// 管理台只展示最常用的对话连接和决策模型连接。其余名称作为读取旧配置/脚本的别名保留，
 // 不再占用新增渠道表单的选择项。
-const publicProviderTemplateIds = ["openai", "gemini", "openai_compatible"] as const
+const publicProviderTemplateIds = ["openai", "gemini", "openai_compatible", "typesafe"] as const
 
 export function getProviderTemplate(id: unknown = ""): ProviderTemplate {
   const key = text(id).trim()

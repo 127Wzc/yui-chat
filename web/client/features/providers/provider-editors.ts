@@ -195,6 +195,7 @@ export const ModelEditor = {
   props: { model: Object },
   setup(props: { model: ModelConfig }, { emit }: { emit: Emit }) {
     const initialPurpose = props.model.purpose
+      || (props.model.adapter === "typesafe" ? "decision" : "")
       || (props.model.adapter === "openai-images" || props.model.adapter === "openai-chat-completions" || props.model.adapter === "gemini-images" ? "image" : props.model.capabilities?.chat === false && props.model.capabilities?.embedding ? "embedding" : "chat")
     const draft = reactive({
       modelIdentifier: props.model.modelIdentifier || "",
@@ -337,7 +338,7 @@ export const ModelEditor = {
     }
     return {
       draft, toolPolicyOptions, loadingModels, saving, fetchedModels, modelFilter, filteredFetchedModels,
-      purposeOptions: [{ value: "chat", label: "文本对话" }, { value: "image", label: "图片生成" }, { value: "embedding", label: "向量检索" }],
+      purposeOptions: [{ value: "chat", label: "文本对话" }, { value: "image", label: "图片生成" }, { value: "embedding", label: "向量检索" }, { value: "decision", label: "决策判断" }],
       imageAdapterOptions: [{ value: "openai-images", label: "OpenAI Images（兼容协议）" }, { value: "openai-chat-completions", label: "OpenAI Chat Completions（生图/编辑）" }, { value: "gemini-images", label: "Gemini 图片协议" }],
       fetchModels, chooseModelIdentifier, applyBgePreset, save, BOOL_OPTIONS, BOOL_OFF_OPTIONS, INHERIT_BOOL_OPTIONS,
       REASONING_TARGET_OPTIONS, REASONING_EFFORT_OPTIONS, TOOL_POLICY_MODE_OPTIONS, TOOL_SOURCE_OPTIONS,

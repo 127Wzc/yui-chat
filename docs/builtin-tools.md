@@ -47,6 +47,8 @@ Responses 的 `file_search` 是供应商托管能力，需配置 Vector Store；
 
 项目默认带有一个名为 `imagTag-mcp` 的 Streamable HTTP MCP 模板，地址为 `https://imag-tag.559558.xyz/api/v1/mcp`，只允许 `search_images`，服务和全局 MCP 开关都默认关闭。启用服务后，它会以真实的 `mcp_imagTag-mcp_search_images` 工具出现在统一工具列表和日常定格渠道选择中；默认适配器固定传入 `match: "semantic"`、`sort: "relevance"`，从 `structuredContent.images` 读取候选。
 
+意图任务把完整语境放在 `keyword`，`tags` 只保留最多两个确认存在且必须匹配的硬标签。带标签检索没有候选时，适配器会记录一次 `TAG_FILTER_NO_MATCH` 诊断，并用相同关键词省略标签重试一次；工具错误不会重复请求，而是按主渠道、回退渠道继续处理。
+
 其它图库只需注册一个只读工具，并在公共工具声明或 MCP 工具策略中加入 `stickerExpressionChannel`。除了契约版本外，还可以声明 `inputMapping`、`fixedArguments` 和 `outputMapping`，无需修改日常定格协调层即可切换主渠道和回退渠道。例如：
 
 ```json

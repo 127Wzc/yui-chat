@@ -1,6 +1,5 @@
 import path from "node:path"
 import { configStore, dataDir } from "../../config/store.js"
-import { runIsolatedModelTask } from "../../models/isolated-task.js"
 import { recentContextStore } from "../chat/recent-context.js"
 import { normalizeEventScope, groupIdFromEvent, isGroupEvent } from "../message/event-scope.js"
 import { hostRuntime } from "../runtime/host-runtime.js"
@@ -8,10 +7,24 @@ import { AtomicJsonRepository } from "../storage/atomic-json-repository.js"
 import { executeDirectTool } from "../../tools/support/direct-execution.js"
 import {
   recordStickerExpressionSentSeconds,
-  selectStickerExpression,
+  scanStickerGallery,
+  searchStickersBySemantic,
+  selectStickerByTags,
   stickerCandidateSource,
+  stickerPoolSelection,
   type StickerCandidate,
+  type StickerSelectionResult,
 } from "../../tools/builtins/sticker-expression.js"
+import {
+  avoidRepeatedMood,
+  dailyStillDecisionAvailable,
+  decideDailyStill,
+  decideDailyStillImage,
+  type DailyStillDecision,
+  type DailyStillImageDecision,
+} from "./daily-still-decider.js"
+import { conversationMoods, dailyStillMoods, parseStillDescription, pickIdleMood, summarizeGallery, type GalleryStats } from "./daily-still-moods.js"
+import type { JsonValue } from "../message-chain/types.js"
 import type { RuntimeConfigObject } from "../../config/types.js"
 
 type UnknownRecord = Record<string, unknown>
@@ -22,12 +35,19 @@ interface PersistedRecent {
   at: number
 }
 
+interface PersistedMood {
+  name: string
+  at: number
+}
+
 interface PersistedScope {
   date: string
   sentCount: number
   lastAttemptAt: number
   lastSuccessAt: number
   recent: PersistedRecent[]
+  /** 最近发送的情绪分组，用于避免连续发同一种情绪。 */
+  moods: PersistedMood[]
 }
 
 interface PersistedState {
@@ -44,13 +64,23 @@ interface AttemptOptions {
   config?: RuntimeConfigObject | UnknownRecord
   event: UnknownRecord
   mode: "conversation" | "ambient" | "idle"
+  /** 对话入口：用户消息与机器人回复。 */
+  userText?: string
+  replyText?: string
+  /** 旁观入口：最近窗口原文。 */
   contextText?: string
-  prompt?: string
-  tags?: string[]
   force?: boolean
   dryRun?: boolean
   version?: number
 }
+
+/** 决策模型只看截断后的短内容，控制每次判断的 token。 */
+const STATE_TEXT_LIMIT = 200
+const STATE_LINE_LIMIT = 120
+const MAX_RECENT = 80
+const MAX_RECENT_MOODS = 20
+/** 精选模式至少需要这么多候选才值得让决策模型挑图。 */
+const MIN_IMAGE_POOL = 3
 
 export interface StickerExpressionGateState {
   lastSuccessAt?: number
@@ -71,7 +101,10 @@ const stateRepository = new AtomicJsonRepository<PersistedState>({
         lastAttemptAt: Math.max(0, number(item.lastAttemptAt, 0)),
         lastSuccessAt: Math.max(0, number(item.lastSuccessAt, 0)),
         recent: Array.isArray(item.recent)
-          ? item.recent.map(record).map(entry => ({ binding: text(entry.binding), id: text(entry.id), at: number(entry.at, 0) })).filter(entry => entry.binding && entry.id && entry.at > 0).slice(-50)
+          ? item.recent.map(record).map(entry => ({ binding: text(entry.binding), id: text(entry.id), at: number(entry.at, 0) })).filter(entry => entry.binding && entry.id && entry.at > 0).slice(-MAX_RECENT)
+          : [],
+        moods: Array.isArray(item.moods)
+          ? item.moods.map(record).map(entry => ({ name: text(entry.name), at: number(entry.at, 0) })).filter(entry => entry.name && entry.at > 0).slice(-MAX_RECENT_MOODS)
           : [],
       }
     }
@@ -83,7 +116,6 @@ let state: PersistedState = { scopes: {} }
 let stateLoaded = false
 const pendingWindows = new Map<string, PendingWindow>()
 const versions = new Map<string, number>()
-const moods = new Map<string, { emotion: string; intensity: number; at: number; expiresAt: number }>()
 
 const runningScopes = new Set<string>()
 let timer: ReturnType<typeof setInterval> | null = null
@@ -92,6 +124,7 @@ let nextRunAt = 0
 let lastAttemptAt = 0
 let lastSuccessAt = 0
 let lastError = ""
+let lastOutcome: UnknownRecord | null = null
 let attempts = 0
 let skipped = 0
 let sent = 0
@@ -132,10 +165,6 @@ function durationMs(source: UnknownRecord, secondsKey: string, fallbackSeconds: 
   return durationSeconds(source, secondsKey, fallbackSeconds, legacyMsKey, legacyMinutesKey) * 1000
 }
 
-function bool(value: unknown, fallback: boolean): boolean {
-  return typeof value === "boolean" ? value : fallback
-}
-
 function list(value: unknown): string[] {
   if (Array.isArray(value)) return [...new Set(value.map(text).map(item => item.trim()).filter(Boolean))]
   return text(value).split(/[\n,，、|]+/).map(item => item.trim()).filter(Boolean)
@@ -161,22 +190,15 @@ function stateFor(scope: string): PersistedScope {
   const date = currentDate()
   const current = state.scopes[scope]
   if (!current || current.date !== date) {
-    const next: PersistedScope = { date, sentCount: 0, lastAttemptAt: 0, lastSuccessAt: 0, recent: [] }
+    // 配额和尝试时间按天重置；已发送图片跨天保留，避免每天都从同一批最新图片里重复挑。
+    const next: PersistedScope = { date, sentCount: 0, lastAttemptAt: current?.lastAttemptAt || 0, lastSuccessAt: current?.lastSuccessAt || 0, recent: current?.recent || [], moods: current?.moods || [] }
     state.scopes[scope] = next
-    return next
   }
+  const active = state.scopes[scope]
   const expiry = Date.now() - 14 * 86400000
-  current.recent = current.recent.filter(item => item.at >= expiry).slice(-50)
-  return current
-}
-
-function moodFor(scope: string, now: number): UnknownRecord {
-  const mood = moods.get(scope)
-  if (!mood || mood.expiresAt <= now) {
-    moods.delete(scope)
-    return {}
-  }
-  return mood
+  active.recent = active.recent.filter(item => item.at >= expiry).slice(-MAX_RECENT)
+  active.moods = (active.moods || []).filter(item => item.at >= expiry).slice(-MAX_RECENT_MOODS)
+  return active
 }
 
 async function ensureState(): Promise<void> {
@@ -206,7 +228,7 @@ function modeConfig(config: unknown, mode: AttemptOptions["mode"]): UnknownRecor
 
 function bindingSignature(config: unknown): string {
   const binding = record(configOf(config).binding)
-  return ["primaryTool", "fallbackTool", "tool", "mcpServer", "mcpTool", "candidateCount", "selectionMode", "adapterConfigs"]
+  return ["primaryTool", "fallbackTool", "tool", "mcpServer", "mcpTool", "candidateCount", "topK", "adapterConfigs"]
     .map(key => `${key}=${key === "adapterConfigs" ? JSON.stringify(binding[key] || {}) : text(binding[key]).trim()}`)
     .join("|")
 }
@@ -286,54 +308,6 @@ function allowedHours(cfg: UnknownRecord, now = new Date()): boolean {
   return from <= to ? current >= from && current <= to : current >= from || current <= to
 }
 
-function extractJson(value: unknown): unknown {
-  if (typeof value !== "string") return value
-  const source = value.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")
-  try { return JSON.parse(source) } catch {
-    const start = source.indexOf("{")
-    const end = source.lastIndexOf("}")
-    if (start >= 0 && end > start) {
-      try { return JSON.parse(source.slice(start, end + 1)) } catch { return null }
-    }
-    return null
-  }
-}
-
-export interface StickerIntent {
-  shouldSend: boolean
-  emotion: string
-  intensity: number
-  keyword: string
-  tags: string[]
-}
-
-export function parseStickerIntent(value: unknown): StickerIntent | null {
-  const item = record(extractJson(value))
-  const keyword = text(item.keyword).trim().slice(0, 500)
-  const tags = list(item.tags).slice(0, 12).map(tag => tag.slice(0, 40))
-  if (typeof item.shouldSend !== "boolean") return null
-  if (item.shouldSend && keyword.length < 2) return null
-  return {
-    shouldSend: item.shouldSend,
-    emotion: text(item.emotion || "平静").trim().slice(0, 40),
-    intensity: Math.max(0, Math.min(1, number(item.intensity, 0.5))),
-    keyword,
-    tags,
-  }
-}
-
-function intentPrompt(mode: AttemptOptions["mode"], contextText: string, prompt: string, mood: UnknownRecord): string {
-  return [
-    `你是“日常定格”的表达意图判断器，触发来源为 ${mode}。`,
-    "只判断是否值得发送一张表情包，不要回答用户，不要调用工具。",
-    "返回严格 JSON，不要 Markdown：{\"shouldSend\":true|false,\"emotion\":\"...\",\"intensity\":0到1,\"keyword\":\"态度和画面描述\",\"tags\":[\"确认存在的标签\"]}。",
-    "只有语境明确、表情包能补充交流时 shouldSend 才为 true；不合适、重复、需要文字解释或会打断正在进行的对话时为 false。",
-    mood.emotion ? `最近心情参考：${text(mood.emotion)}（强度 ${number(mood.intensity, 0.5).toFixed(2)}）` : "最近没有可用的短期心情。",
-    `当前消息或回复：${prompt.slice(0, 2000) || "（无）"}`,
-    `最近窗口：${contextText.slice(0, 5000) || "（无）"}`,
-  ].join("\n")
-}
-
 function ownEvent(event: UnknownRecord): boolean {
   const sender = record(event.sender)
   const selfId = text(event.self_id || record(event.bot).uin || record(hostRuntime.bot).uin).trim()
@@ -399,7 +373,27 @@ async function sendCandidate(event: UnknownRecord, candidate: StickerCandidate, 
   return record(result)
 }
 
+/** 记录最近一次走到判断阶段的结果；冷却、概率等门控跳过不覆盖它。 */
 async function attempt(options: AttemptOptions): Promise<UnknownRecord> {
+  const result = await runAttempt(options)
+  const decision = record(result.decision)
+  if (result.sent === true || result.decision || result.mood) {
+    lastOutcome = {
+      at: new Date().toISOString(),
+      mode: options.mode,
+      sent: result.sent === true,
+      reason: text(result.reason || (result.sent ? "sent" : "")),
+      mood: text(result.mood || record(decision.mood).name),
+      pickMode: text(result.pickMode),
+      source: text(decision.source || (result.pickMode === "image" ? "model" : options.mode === "idle" ? "idle" : "")),
+      sendScore: decision.sendScore ?? null,
+      confidence: decision.confidence ?? null,
+    }
+  }
+  return result
+}
+
+async function runAttempt(options: AttemptOptions): Promise<UnknownRecord> {
   const config = options.config || await configStore.load()
   const cfg = configOf(config)
   const event = normalizeEventScope(options.event)
@@ -428,44 +422,27 @@ async function attempt(options: AttemptOptions): Promise<UnknownRecord> {
   }
   lastAttemptAt = now
   try {
-    const contextText = options.contextText || boundedContext(event, options.mode === "ambient" ? number(mode.maxMessages, 8) : 12, durationMs(cfg, "contextTtlSeconds", 900, "contextTtlMs"))
-    const prompt = options.prompt || text(event.msg || event.raw_message)
-    const mood = moodFor(scope, now)
-    const intentResult = await runIsolatedModelTask({
+    const choice = await chooseSticker({
       config: config as RuntimeConfigObject,
-      taskName: text(cfg.intentTask || "replyer"),
-      timeoutMs: durationMs(cfg, "intentTimeoutSeconds", 30, "intentTimeoutMs"),
-      maxTokens: 400,
-      systemPrompt: intentPrompt(options.mode, contextText, prompt, mood),
-      prompt: "请根据以上规则只输出 JSON。",
+      cfg,
       event,
-      purpose: "chat",
-      source: "dailyStill.intent",
-      metadata: { mode: options.mode, scope },
-    })
-    const intent = parseStickerIntent(intentResult.text)
-    if (!intent || !intent.shouldSend) return { skipped: true, reason: "intent-negative", intent }
-    if (stale(scope, options.version) || (isGroupEvent(event) && event.__yuiChatReplied === true)) return { skipped: true, reason: "canceled-after-intent", intent }
-    if (bool(cfg.moodEnabled, true)) {
-      moods.set(scope, { emotion: intent.emotion, intensity: intent.intensity, at: now, expiresAt: now + Math.max(1, durationSeconds(cfg, "moodDecaySeconds", 14400, "", "moodDecayMinutes")) * 1000 })
-    }
-    const bindingConfig = record(cfg.binding)
-    const recentIds = new Set(scopeState.recent.map(item => item.id))
-    const selection = await selectStickerExpression({ keyword: intent.keyword, tags: intent.tags }, {
-      e: event,
-      config: config as RuntimeConfigObject,
-      toolConfig: {
-        ...bindingConfig,
-        recentWindowSeconds: durationSeconds(cfg, "recentWindowSeconds", 7200, "", "recentWindowMinutes"),
-      },
+      mode: options.mode,
+      userText: options.userText,
+      replyText: options.replyText,
+      contextText: options.contextText,
+      scopeState,
       signal: options.event.signal as AbortSignal | undefined,
-    }, { trackRecent: false, excludeIds: recentIds })
+      // 判断期间有新消息或已被正常回复时放弃，避免插话。
+      canceled: () => stale(scope, options.version) || (options.mode === "ambient" && event.__yuiChatReplied === true),
+    })
+    const { selection } = choice
+    if (choice.skipped || !selection) return choice
     if (selection.status !== "selected" || !selection.selected || !selection.binding) {
       const diagnostics = Array.isArray(selection.errors) ? selection.errors : []
       if (diagnostics.length) lastError = diagnostics.map(item => text(record(item).message)).filter(Boolean).join("；").slice(0, 500)
-      return { skipped: true, reason: selection.reason || "no-candidate", intent, selection }
+      return { ...choice, skipped: true, reason: selection.reason || "no-candidate" }
     }
-    if (options.dryRun === true) return { skipped: false, dryRun: true, intent, selection: { ...selection, selected: { ...selection.selected, url: selection.selected.url } } }
+    if (options.dryRun === true) return { ...choice, skipped: false, dryRun: true }
     const currentConfig = configStore.get()
     const currentMode = modeConfig(currentConfig, options.mode)
     if (bindingSignature(currentConfig) !== bindingSignature(config)
@@ -473,7 +450,7 @@ async function attempt(options: AttemptOptions): Promise<UnknownRecord> {
       || currentMode.enabled !== true
       || !isStickerExpressionScopeAllowed(event, currentConfig)
       || stale(scope, options.version)) {
-      return { skipped: true, reason: "stale-config", intent, selection }
+      return { ...choice, skipped: true, reason: "stale-config" }
     }
     await ensureState()
     const latestState = stateFor(scope)
@@ -483,23 +460,24 @@ async function attempt(options: AttemptOptions): Promise<UnknownRecord> {
       lastAttemptAt: 0,
       sentCount: latestState.sentCount,
     })
-    if (sendGate === "cooldown" || sendGate === "daily-quota") return { skipped: true, reason: `stale-${sendGate}`, intent, selection }
+    if (sendGate === "cooldown" || sendGate === "daily-quota") return { ...choice, skipped: true, reason: `stale-${sendGate}` }
     const delivery = await sendCandidate(event, selection.selected, { config })
     if (!receiptSuccessful(delivery)) {
       lastError = text(record(delivery.value).error || delivery.error || "表情包投递失败")
-      return { skipped: true, reason: delivery.status || "delivery-failed", intent, selection, delivery }
+      return { ...choice, skipped: true, reason: delivery.status || "delivery-failed", delivery }
     }
     const sentAt = Date.now()
     scopeState.sentCount += 1
     scopeState.lastSuccessAt = sentAt
     scopeState.recent.push({ binding: selection.binding.serverName, id: selection.selected.id, at: sentAt })
-    scopeState.recent = scopeState.recent.slice(-50)
-    recordStickerExpressionSentSeconds(scope, selection.binding.serverName, selection.selected.id, durationSeconds(cfg, "recentWindowSeconds", 7200, "", "recentWindowMinutes"))
+    scopeState.recent = scopeState.recent.slice(-MAX_RECENT)
+    if (choice.moodGroup) scopeState.moods = [...scopeState.moods, { name: choice.moodGroup, at: sentAt }].slice(-MAX_RECENT_MOODS)
+    recordStickerExpressionSentSeconds(scope, selection.binding.serverName, selection.selected.id, durationSeconds(cfg, "recentWindowSeconds", 259200, "", "recentWindowMinutes"))
     await persistState()
     lastSuccessAt = sentAt
     sent++
     event.__yuiChatReplied = true
-    return { skipped: false, sent: true, intent, selection, delivery }
+    return { ...choice, skipped: false, sent: true, delivery }
   } catch (error) {
     lastError = text(error instanceof Error ? error.message : error).slice(0, 300)
     return { skipped: true, reason: "error", error: lastError }
@@ -508,24 +486,170 @@ async function attempt(options: AttemptOptions): Promise<UnknownRecord> {
   }
 }
 
-async function preview(options: { config?: unknown; event: UnknownRecord; keyword: string; tags?: string[]; send?: boolean }): Promise<UnknownRecord> {
-  const config = options.config || await configStore.load()
+function clip(value: unknown, limit: number): string {
+  const source = text(value).replace(/\s+/g, " ").trim()
+  return source.length > limit ? `${source.slice(0, limit)}…` : source
+}
+
+/** 旁观窗口去掉首行说明，只保留最后几条消息并逐条截断。 */
+function windowLines(contextText: string, maxMessages: number): string[] {
+  const lines = text(contextText).split("\n").slice(1).map(line => clip(line, STATE_LINE_LIMIT)).filter(Boolean)
+  return lines.slice(-Math.max(1, Math.floor(maxMessages)))
+}
+
+function decisionState(options: AttemptOptions): Record<string, JsonValue> {
+  if (options.mode === "ambient") return { 最近群聊: windowLines(text(options.contextText), 6) }
+  const state: Record<string, JsonValue> = { 对方: clip(options.userText, STATE_TEXT_LIMIT) }
+  const reply = clip(options.replyText, STATE_TEXT_LIMIT)
+  if (reply) state.我的回复 = reply
+  return state
+}
+
+function selectionContext(config: RuntimeConfigObject, cfg: UnknownRecord, event: UnknownRecord) {
+  return {
+    e: event,
+    config,
+    toolConfig: {
+      ...record(cfg.binding),
+      recentWindowSeconds: durationSeconds(cfg, "recentWindowSeconds", 259200, "", "recentWindowMinutes"),
+    },
+  }
+}
+
+/** 最近在重复窗口内发过的情绪分组；窗口为 0 时不做去重。 */
+function recentMoodNames(cfg: UnknownRecord, scopeState: PersistedScope, now = Date.now()): string[] {
+  const windowMs = durationMs(cfg, "moodRepeatSeconds", 1800)
+  if (windowMs <= 0) return []
+  return [...new Set(scopeState.moods.filter(item => now - item.at < windowMs).map(item => item.name))]
+}
+
+/** 精选模式的语义检索词：对话用对方原话，旁观用最近三条消息。 */
+function semanticQuery(options: Pick<ChooseOptions, "mode" | "userText" | "contextText">): string {
+  if (options.mode === "ambient") return windowLines(text(options.contextText), 3).join(" ").slice(0, 300)
+  return clip(options.userText, STATE_TEXT_LIMIT)
+}
+
+interface ChooseOptions {
+  config: RuntimeConfigObject
+  cfg: UnknownRecord
+  event: UnknownRecord
+  mode: AttemptOptions["mode"]
+  userText?: string
+  replyText?: string
+  contextText?: string
+  scopeState: PersistedScope
+  signal?: AbortSignal
+  /** 判断完成后、检索前检查一次；返回 true 时放弃本次表达。 */
+  canceled?: () => boolean
+}
+
+interface ChooseResult extends UnknownRecord {
+  skipped?: boolean
+  reason?: string
+  /** mood：先判断情绪再按标签选图；image：语义召回后由决策模型挑图。 */
+  pickMode: "mood" | "image" | "idle"
+  decision?: DailyStillDecision | DailyStillImageDecision | null
+  /** 展示用情绪文本；精选模式取图片描述里的首个心情词。 */
+  mood?: string
+  /** 精选模式退回情绪模式的原因，例如语义召回太少。 */
+  pickFallback?: string
+  /** 实际使用的情绪分组，发送成功后计入最近情绪。 */
+  moodGroup?: string
+  tags?: string[]
+  selection?: StickerSelectionResult
+}
+
+/**
+ * 判断是否发送并选出图片，不做冷却检查、不投递、不改状态。
+ * 实际发送和管理台试运行共用这一段，保证两边行为一致。
+ */
+async function chooseSticker(options: ChooseOptions): Promise<ChooseResult> {
+  const { config, cfg, event, scopeState } = options
+  const moods = dailyStillMoods(cfg.moods)
+  const recentMoods = recentMoodNames(cfg, scopeState)
+  const excludeIds = new Set(scopeState.recent.map(item => item.id))
+  const context = selectionContext(config, cfg, event)
+  const decisionConfig = record(cfg.decision)
+  if (options.mode === "idle") {
+    // 空闲入口不调用任何模型，只从空闲分组里随机取一种最近没发过的情绪。
+    const mood = pickIdleMood(moods, record(cfg.idle).moods, new Date(), Math.random(), recentMoods)
+    if (!mood) return { pickMode: "idle", skipped: true, reason: "no-idle-mood" }
+    const selection = await selectStickerByTags({ tags: mood.tags, fallbackKeyword: mood.name }, context, { excludeIds })
+    return { pickMode: "idle", mood: mood.name, moodGroup: mood.name, tags: mood.tags, selection }
+  }
+  const decisionInput = {
+    config,
+    decision: decisionConfig,
+    moods,
+    state: decisionState(options),
+    plainText: [options.userText, options.replyText, options.contextText].map(text).join("\n"),
+    event,
+    signal: options.signal,
+  }
+  let pickFallback = ""
+  if (text(cfg.pickMode) === "image" && dailyStillDecisionAvailable(decisionInput)) {
+    // 精选模式先检索再判断：每次都会调用图库，但决策模型直接在图片之间挑选。
+    const pool = await searchStickersBySemantic(semanticQuery(options), context, { excludeIds, count: number(cfg.imagePoolSize, 20) })
+    // 语义检索有相关度门槛，整句聊天常常召回很少；候选太少时退回情绪模式。
+    if (pool.status === "ok" && pool.pool.length >= MIN_IMAGE_POOL) {
+      const decision = await decideDailyStillImage(decisionInput, pool.pool.map(item => ({ id: item.id, description: item.description })))
+      if (decision.error) lastError = decision.error
+      const picked = pool.pool.find(item => item.id === decision.pickedId) || null
+      const mood = picked ? parseStillDescription(picked.description).moods[0] || "" : ""
+      if (!decision.send || !picked) return { pickMode: "image", skipped: true, reason: decision.reason, decision, mood, selection: stickerPoolSelection(pool, null, decision.reason) }
+      if (options.canceled?.()) return { pickMode: "image", skipped: true, reason: "canceled-after-decision", decision, mood }
+      return { pickMode: "image", decision, mood, selection: stickerPoolSelection(pool, picked) }
+    }
+    pickFallback = pool.status === "ok" ? `semantic-pool-${pool.pool.length}` : "semantic-search-failed"
+  }
+  const fallback = pickFallback ? { pickFallback } : {}
+  const raw = await decideDailyStill(decisionInput)
+  if (raw.error) lastError = raw.error
+  const decision = avoidRepeatedMood(raw, conversationMoods(moods), recentMoods, number(decisionConfig.moodConfidence, 0.3))
+  if (!decision.send || !decision.mood) return { pickMode: "mood", ...fallback, skipped: true, reason: decision.reason, decision }
+  const mood = decision.mood
+  if (options.canceled?.()) return { pickMode: "mood", ...fallback, skipped: true, reason: "canceled-after-decision", decision, mood: mood.name }
+  const selection = await selectStickerByTags({ tags: mood.tags, fallbackKeyword: mood.name }, context, { excludeIds })
+  return { pickMode: "mood", ...fallback, decision, mood: mood.name, moodGroup: mood.name, tags: mood.tags, selection }
+}
+
+interface PreviewOptions {
+  config?: unknown
+  event: UnknownRecord
+  mode?: "conversation" | "ambient" | "idle"
+  text?: string
+  reply?: string
+}
+
+/** 管理台试运行：走完整的判断与选图，但不检查冷却、不发送、不计入配额。 */
+async function preview(options: PreviewOptions): Promise<UnknownRecord> {
+  const config = (options.config || await configStore.load()) as RuntimeConfigObject
   const cfg = configOf(config)
   const event = normalizeEventScope(options.event)
-  const scope = scopeKey(event)
   await ensureState()
-  const current = stateFor(scope)
-  const selection = await selectStickerExpression({ keyword: options.keyword, tags: options.tags || [] }, {
-    e: event,
-    config: config as RuntimeConfigObject,
-    toolConfig: { ...record(cfg.binding), recentWindowSeconds: durationSeconds(cfg, "recentWindowSeconds", 7200, "", "recentWindowMinutes") },
-  }, { trackRecent: false, excludeIds: new Set(current.recent.map(item => item.id)) })
-  if (selection.status !== "selected" || !selection.selected) return { ok: false, reason: selection.reason || "没有可用候选", selection }
-  if (options.send === true) {
-    const delivery = await sendCandidate(event, selection.selected, { config })
-    return { ok: receiptSuccessful(delivery), selection, delivery }
-  }
-  return { ok: true, preview: true, selection: { ...selection, selected: { ...selection.selected } } }
+  const mode = options.mode || "conversation"
+  const result = await chooseSticker({
+    config,
+    cfg,
+    event,
+    mode,
+    scopeState: stateFor(scopeKey(event)),
+    ...(mode === "ambient" ? { contextText: `群聊窗口\n${text(options.text)}` } : { userText: options.text, replyText: options.reply }),
+  })
+  const ok = !result.skipped && result.selection?.status === "selected"
+  return { ...result, ok, reason: result.reason || result.selection?.reason || "" }
+}
+
+let lastGalleryStats: (GalleryStats & { at: string }) | null = null
+
+/** 扫描图库并统计心情词与分组覆盖；只在管理台手动触发。 */
+async function galleryStats(options: { config?: unknown; maxPages?: number } = {}): Promise<UnknownRecord> {
+  const config = (options.config || await configStore.load()) as RuntimeConfigObject
+  const cfg = configOf(config)
+  const scan = await scanStickerGallery(selectionContext(config, cfg, {}), { maxPages: options.maxPages })
+  if (scan.status !== "ok") return { ok: false, reason: scan.reason || "图库扫描失败", errors: scan.errors }
+  lastGalleryStats = { ...summarizeGallery(scan.pool, dailyStillMoods(cfg.moods), scan.total), at: new Date().toISOString() }
+  return { ok: true, stats: lastGalleryStats }
 }
 
 class StickerExpressionCoordinator {
@@ -556,14 +680,13 @@ class StickerExpressionCoordinator {
     if (e.__yuiChatReplied && text(options.source) === "dailyStill") return { skipped: true, reason: "self" }
     if (text(options.source) === "dailyStill" || text(options.source) === "initiativeGreeting" || text(options.source) === "web-test") return { skipped: true, reason: "internal" }
     if (stickerExpressionExplicitRequest(e.msg || e.raw_message || options.prompt)) return { skipped: true, reason: "explicit-request" }
-    const result = await attempt({
+    return attempt({
       config: options.config as RuntimeConfigObject,
       event: e,
       mode: "conversation",
-      prompt: `${text(options.prompt || e.msg || e.raw_message)}\n助手回复：${text(options.botText)}`,
-      contextText: boundedContext(e, 12, durationMs(configOf(options.config), "contextTtlSeconds", 900, "contextTtlMs")),
+      userText: text(options.prompt || e.msg || e.raw_message),
+      replyText: text(options.botText),
     })
-    return result
   }
 
   observeGroupMessage(event: unknown): void {
@@ -575,10 +698,10 @@ class StickerExpressionCoordinator {
     const ambient = record(cfg.ambient)
     if (cfg.enabled === false || ambient.enabled !== true || e.__yuiChatReplied === true || ownEvent(e) || stickerExpressionExplicitRequest(e.msg || e.raw_message) || !isStickerExpressionScopeAllowed(e, configStore.get())) return
     const version = versions.get(scope) || 0
-    const windowMs = Math.max(1000, durationMs(ambient, "windowSeconds", 15, "windowMs"))
+    const windowMs = Math.max(1000, durationMs(ambient, "windowSeconds", 20, "windowMs"))
     const timerValue = setTimeout(() => {
       pendingWindows.delete(scope)
-      void attempt({ config: configStore.get(), event: e, mode: "ambient", contextText: boundedContext(e, number(ambient.maxMessages, 8), durationMs(configOf(configStore.get()), "contextTtlSeconds", 900, "contextTtlMs")), prompt: text(e.msg || e.raw_message), version }).catch(error => { lastError = text(error) })
+      void attempt({ config: configStore.get(), event: e, mode: "ambient", contextText: boundedContext(e, number(ambient.maxMessages, 6), durationMs(configOf(configStore.get()), "contextTtlSeconds", 900, "contextTtlMs")), version }).catch(error => { lastError = text(error) })
     }, windowMs)
     pendingWindows.set(scope, { version, timer: timerValue, event: e })
   }
@@ -597,22 +720,26 @@ class StickerExpressionCoordinator {
         results.push({ groupId, skipped: true, reason: "not-idle" }); continue
       }
       const version = versions.get(scopeKey(event)) || 0
-      results.push(await attempt({ config: config as RuntimeConfigObject, event, mode: "idle", contextText: boundedContext(event, 12, durationMs(cfg, "contextTtlSeconds", 900, "contextTtlMs")), prompt: "群聊已经安静了一段时间。" , version, force: options.force === true, dryRun: options.dryRun === true }))
+      results.push(await attempt({ config: config as RuntimeConfigObject, event, mode: "idle", version, force: options.force === true, dryRun: options.dryRun === true }))
     }
     nextRunAt = timer ? Date.now() + Math.max(1, durationSeconds(idle, "intervalSeconds", 1800, "", "intervalMinutes")) * 1000 : 0
     return { groups: groups.length, results }
   }
 
-  async preview(options: { config?: unknown; event: UnknownRecord; keyword: string; tags?: string[]; send?: boolean }): Promise<UnknownRecord> {
+  async preview(options: PreviewOptions): Promise<UnknownRecord> {
     return preview(options)
+  }
+
+  async galleryStats(options: { config?: unknown; maxPages?: number } = {}): Promise<UnknownRecord> {
+    return galleryStats(options)
   }
 
   async clearState(): Promise<UnknownRecord> {
     await ensureState()
     const count = Object.keys(state.scopes).length
     state = { scopes: {} }
-    moods.clear()
-    await persistState()
+    // persistState 按作用域合并；清空时直接写入空状态。
+    await stateRepository.update(() => ({ scopes: {} }))
     return { scopes: count }
   }
 
@@ -631,6 +758,8 @@ class StickerExpressionCoordinator {
       sent,
       skipped,
       lastError,
+      lastOutcome,
+      galleryStats: lastGalleryStats,
     }
   }
 }
@@ -668,9 +797,9 @@ export async function noteExternalStickerDelivery(event: unknown, metadata: unkn
   current.sentCount += 1
   current.lastSuccessAt = now
   current.recent.push({ binding: server, id: selectedId, at: now })
-  current.recent = current.recent.slice(-50)
+  current.recent = current.recent.slice(-MAX_RECENT)
   const cfg = configOf(configStore.get())
-  recordStickerExpressionSentSeconds(scope, server, selectedId, durationSeconds(cfg, "recentWindowSeconds", 7200, "", "recentWindowMinutes"))
+  recordStickerExpressionSentSeconds(scope, server, selectedId, durationSeconds(cfg, "recentWindowSeconds", 259200, "", "recentWindowMinutes"))
   lastSuccessAt = now
   sent++
   await persistState()

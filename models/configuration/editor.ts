@@ -43,17 +43,25 @@ function normalizeReasoningPatch(value: unknown, fallback: UnknownRecord | null 
   return isRecord(value) ? value : fallback
 }
 
-function modelPurpose(value: UnknownRecord = {}): "chat" | "image" | "embedding" {
+type ModelPurpose = "chat" | "image" | "embedding" | "decision"
+const modelPurposes: readonly ModelPurpose[] = ["chat", "image", "embedding", "decision"]
+
+function isModelPurpose(value: string): value is ModelPurpose {
+  return (modelPurposes as readonly string[]).includes(value)
+}
+
+function modelPurpose(value: UnknownRecord = {}): ModelPurpose {
   const declared = text(value.purpose).trim().toLowerCase()
-  if (declared === "image" || declared === "embedding" || declared === "chat") return declared
+  if (isModelPurpose(declared)) return declared
   const adapter = text(value.adapter).trim().toLowerCase()
+  if (adapter === "typesafe") return "decision"
   if (["openai-images", "openai-chat-completions", "gemini-images"].includes(adapter)) return "image"
   return record(value.capabilities).embedding === true && record(value.capabilities).chat === false ? "embedding" : "chat"
 }
 
-function taskPurpose(taskName: string, task: UnknownRecord = {}): "chat" | "image" | "embedding" {
+function taskPurpose(taskName: string, task: UnknownRecord = {}): ModelPurpose {
   const declared = text(task.purpose).trim().toLowerCase()
-  if (declared === "image" || declared === "embedding" || declared === "chat") return declared
+  if (isModelPurpose(declared)) return declared
   if (taskName === "imageGeneration") return "image"
   if (taskName === "embedding") return "embedding"
   return "chat"
@@ -218,7 +226,7 @@ export function updateModelConfig(config: UnknownRecord, modelName = "", patch: 
     : purpose === "chat" && ["openai-images", "gemini-images"].includes(currentAdapter)
       ? (currentAdapter === "gemini-images" ? "gemini" : "openai-compatible")
       : currentAdapter
-  const capabilitiesValue = purpose === "image"
+  const capabilitiesValue = purpose === "image" || purpose === "decision"
     ? { chat: false, embedding: false }
     : purpose === "embedding"
       ? { chat: false, embedding: true }
@@ -393,19 +401,20 @@ export function addModelsToProvider(config: UnknownRecord, providerName = "", mo
   if (!identifiers.length) throw new Error("modelIdentifiers is required")
   const template = listProviderTemplates().find(item => item.adapter === (text(provider.type) || "openai-compatible"))
     || getProviderTemplate(provider.type)
-  const requestedPurpose = ["chat", "image", "embedding"].includes(text(options.purpose).trim().toLowerCase()) ? text(options.purpose).trim().toLowerCase() : "chat"
+  const requestedPurposeText = text(options.purpose).trim().toLowerCase()
+  const requestedPurpose: ModelPurpose = isModelPurpose(requestedPurposeText) ? requestedPurposeText : "chat"
   const currentModels = configModels(config)
   const nextModels = [...currentModels]
   const usedNames = new Set(nextModels.map(item => text(item.name)).filter(Boolean))
-  const fallbackForPurpose = (purpose: "chat" | "image" | "embedding"): UnknownRecord | undefined => currentModels.find(item => text(item.apiProvider) === name && modelPurpose(item) === purpose)
+  const fallbackForPurpose = (purpose: ModelPurpose): UnknownRecord | undefined => currentModels.find(item => text(item.apiProvider) === name && modelPurpose(item) === purpose)
   const addedNames: string[] = []
-  const addedByPurpose: Record<"chat" | "image" | "embedding", string[]> = { chat: [], image: [], embedding: [] }
+  const addedByPurpose: Record<ModelPurpose, string[]> = { chat: [], image: [], embedding: [], decision: [] }
   for (const modelIdentifier of identifiers) {
     const existingIndex = nextModels.findIndex(item => text(item.apiProvider) === name && text(item.modelIdentifier) === modelIdentifier)
     const existing = existingIndex >= 0 ? nextModels[existingIndex] : {}
     const generatedName = generatedModelName(name, modelIdentifier, usedNames)
     const existingPurpose = modelPurpose(existing)
-    const purpose = (options.purpose ? requestedPurpose : (existingIndex >= 0 ? existingPurpose : "chat")) as "chat" | "image" | "embedding"
+    const purpose: ModelPurpose = options.purpose ? requestedPurpose : (existingIndex >= 0 ? existingPurpose : (text(provider.type) === "typesafe" ? "decision" : "chat"))
     const fallbackModel = fallbackForPurpose(purpose)
     const fallbackChat = fallbackForPurpose("chat")
     const fallbackEmbedding = fallbackForPurpose("embedding")
@@ -427,7 +436,7 @@ export function addModelsToProvider(config: UnknownRecord, providerName = "", mo
           ? (existing.contextWindowTokens === undefined ? {} : { contextWindowTokens: existing.contextWindowTokens })
           : { contextWindowTokens: fallbackChat?.contextWindowTokens ?? 200000 })
         : {}),
-      capabilities: purpose === "image"
+      capabilities: purpose === "image" || purpose === "decision"
         ? { chat: false, embedding: false }
         : purpose === "embedding"
           ? { chat: false, embedding: true }
@@ -458,11 +467,12 @@ export function addModelsToProvider(config: UnknownRecord, providerName = "", mo
   }
   const tasks = configTasks(config)
   const explicitTaskName = text(options.taskName).trim()
-  const taskName = explicitTaskName || (options.purpose ? (requestedPurpose === "image" ? "imageGeneration" : requestedPurpose === "embedding" ? "" : "replyer") : "")
+  // 向量与决策模型由引用方按名称选择，不自动加入任何回复任务。
+  const taskName = explicitTaskName || (options.purpose ? (requestedPurpose === "image" ? "imageGeneration" : requestedPurpose === "embedding" || requestedPurpose === "decision" ? "" : "replyer") : "")
   if (!taskName) {
     const nextTasks: Record<string, UnknownRecord> = { ...tasks }
-    for (const [purpose, names] of Object.entries(addedByPurpose) as Array<["chat" | "image" | "embedding", string[]]>) {
-      if (!names.length || purpose === "embedding") continue
+    for (const [purpose, names] of Object.entries(addedByPurpose) as Array<[ModelPurpose, string[]]>) {
+      if (!names.length || purpose === "embedding" || purpose === "decision") continue
       const targetTaskName = purpose === "image" ? "imageGeneration" : "replyer"
       const currentTask = nextTasks[targetTaskName] || {}
       const currentList = Array.isArray(currentTask.modelList) ? currentTask.modelList.map(text) : []
