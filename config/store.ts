@@ -1,3 +1,4 @@
+import { migrateStoredReasoning } from "../models/configuration/reasoning.js"
 import fs from "node:fs/promises"
 import path from "node:path"
 import crypto from "node:crypto"
@@ -661,6 +662,7 @@ export class ConfigStore implements ConfigStoreContract {
       const source = await this.readConfigFile()
       this.runtimeConfigBackendHint = source.backendHint
       const storedOverrides = this.runtimeConfigRepository ? mergeConfig(this.runtimeConfigOverrides, source.userConfig) : source.userConfig
+      migrateStoredReasoning(storedOverrides)
       const candidate = prepareConfig(storedOverrides)
       const { all, bootstrap } = splitConfigOverrides(candidate)
       const storage = isObject(candidate.storage) && isObject(candidate.storage.sqlite) ? candidate.storage.sqlite : {}
@@ -763,6 +765,7 @@ export class ConfigStore implements ConfigStoreContract {
       this.runtimeConfigBackendHint = source.backendHint
       try {
         const merged = mergeConfig(this.runtimeConfigOverrides, source.userConfig)
+        migrateStoredReasoning(merged)
         return this.performSave(prepareConfig(merged)) as Promise<RuntimeConfigSnapshot>
       } catch (error) {
         this.runtimeConfigRepository = previousRepository
@@ -980,7 +983,9 @@ export class ConfigStore implements ConfigStoreContract {
       const file = this.backupPath(fileName)
       const payload: unknown = JSON.parse(await fs.readFile(file, "utf8"))
       const packaged = isObject(payload) && payload.format === configBackupFormat
-      const candidate = prepareConfig(packaged && isObject(payload) ? payload.config : payload)
+      const restored = packaged && isObject(payload) ? payload.config : payload
+      migrateStoredReasoning(restored)
+      const candidate = prepareConfig(restored)
       if (packaged && options.beforeSave && isObject(payload)) await options.beforeSave(clone(payload.sqliteConfig))
       return this.performSave(candidate) as Promise<RuntimeConfigSnapshot>
     })

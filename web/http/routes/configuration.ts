@@ -1,3 +1,4 @@
+import { getReasoningOptions } from "../../../models/configuration/reasoning.js"
 import { configStore, mergeRedactedConfigSecrets, redactConfigSecrets } from "../../../config/store.js"
 import { getSchemaManifest, schema } from "../../../config/schema.js"
 import { adapterRegistry } from "../../../models/adapters/registry.js"
@@ -199,6 +200,20 @@ export function registerConfigRoutes(app: RouteApp): void {
       diagnostics: await providerResolver.diagnostics(adapterRegistry.listAdapters().map(item => item.id)),
     })
   }, { errorStatus: 400, includeValidation: true }))
+  app.post("/api/models/:name/reasoning-options", auth, handleRoute(async (req, res) => {
+    const config = configStore.get()
+    const model = records(config.models).find(item => item.name === req.params.name)
+    if (!model) throw new Error("模型不存在")
+    const body = bodyOf(req)
+    const provider = records(config.apiProviders).find(item => item.name === model.apiProvider) || {}
+    res.json(getReasoningOptions({
+      type: String(body.adapter || model.adapter || provider.type || ""),
+      model: String(body.modelIdentifier ?? model.modelIdentifier ?? model.name),
+      baseURL: String(model.baseURL || provider.baseURL || ""),
+      provider,
+      reasoning: { target: String(body.target || "auto") },
+    }))
+  }, { errorStatus: 400 }))
   app.patch("/api/models/:name", auth, handleRoute(async (req, res) => {
     const modelName = String(req.params.name || "").trim()
     const { saved, runtime } = await updateConfigAndApply(config => configValue(updateModelConfig(config, modelName, bodyOf(req))))

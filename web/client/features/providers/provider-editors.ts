@@ -6,7 +6,6 @@ import {
   BOOL_OFF_OPTIONS,
   BOOL_OPTIONS,
   INHERIT_BOOL_OPTIONS,
-  REASONING_EFFORT_OPTIONS,
   REASONING_TARGET_OPTIONS,
   requestProviderModels,
   runLocked,
@@ -222,12 +221,44 @@ export const ModelEditor = {
       priceIn: props.model.priceIn ?? 0,
       priceOut: props.model.priceOut ?? 0,
       reasoningTarget: props.model.reasoning?.target || "auto",
-      reasoningEffort: props.model.reasoning?.effort || "",
+      reasoningEffort: props.model.reasoning?.effort ?? "",
       params: toJson(props.model.params || {}),
       ...modelToolPolicyDraft(props.model.toolPolicy),
       ...responsesModelDraft(props.model.responses),
     })
     const toolPolicyOptions = computed(() => buildModelToolPolicyOptions(store.tools, store.config, [...draft.toolPolicyAllow, ...draft.toolPolicyDeny]))
+    const reasoningEffortOptions = ref([{ value: "", label: "default" }])
+    const reasoningLoading = ref(false)
+    const reasoningError = ref("")
+    let initializeReasoning = props.model.reasoning === undefined
+    const chatAdapter = computed(() => draft.chatProtocol === "responses" ? "openai-responses"
+      : props.model.adapter === "openai-responses" || props.model.adapter === "openai-images" ? "openai-compatible"
+      : props.model.adapter === "gemini-images" ? "gemini" : props.model.adapter)
+    watch(() => [draft.modelIdentifier, draft.reasoningTarget, chatAdapter.value], async (_value, _previous, onCleanup) => {
+      let cancelled = false
+      onCleanup(() => { cancelled = true })
+      reasoningLoading.value = true
+      reasoningError.value = ""
+      try {
+        const result = asRecord(await request(`/api/models/${encodeURIComponent(props.model.name)}/reasoning-options`, {
+          method: "POST",
+          body: JSON.stringify({ modelIdentifier: draft.modelIdentifier, target: draft.reasoningTarget, adapter: chatAdapter.value }),
+        }))
+        if (cancelled) return
+        const efforts = Array.isArray(result.efforts) ? result.efforts.map(String) : []
+        reasoningEffortOptions.value = [{ value: "", label: "default" }, ...efforts.map(value => ({ value, label: value }))]
+        if (initializeReasoning) {
+          draft.reasoningEffort = String(result.defaultEffort || "")
+          initializeReasoning = false
+        } else if (draft.reasoningEffort && !efforts.includes(draft.reasoningEffort)) {
+          draft.reasoningEffort = String(result.defaultEffort || "")
+        }
+      } catch (error) {
+        if (!cancelled) reasoningError.value = errorMessage(error)
+      } finally {
+        if (!cancelled) reasoningLoading.value = false
+      }
+    }, { immediate: true })
     const loadingModels = ref(false)
     const saving = ref(false)
     const fetchedModels = ref<RemoteModel[]>([])
@@ -277,19 +308,14 @@ export const ModelEditor = {
     async function save() {
       return runLocked(saving, async () => {
         try {
+        if (reasoningLoading.value || reasoningError.value) throw new Error(reasoningError.value || "思考等级选项正在加载，请稍后保存")
         const name = props.model.name
         const result = asRecord<RequestResult>(await request(`/api/models/${encodeURIComponent(name)}`, {
           method: "PATCH",
           body: JSON.stringify({
             modelIdentifier: draft.modelIdentifier,
             purpose: draft.purpose,
-            adapter: draft.purpose === "image"
-              ? imageAdapterValue(draft.imageProtocol)
-              : (draft.chatProtocol === "responses"
-                ? "openai-responses"
-                : (props.model.adapter === "openai-responses"
-                  ? "openai-compatible"
-                  : (props.model.adapter === "openai-images" ? "openai-compatible" : (props.model.adapter === "gemini-images" ? "gemini" : props.model.adapter)))),
+            adapter: draft.purpose === "image" ? imageAdapterValue(draft.imageProtocol) : chatAdapter.value,
             image: draft.purpose === "image" ? {
               protocol: draft.imageProtocol,
               ...(draft.imageAspectRatio ? { aspectRatio: draft.imageAspectRatio } : {}),
@@ -304,9 +330,7 @@ export const ModelEditor = {
             stream: (draft.purpose === "chat" || draft.purpose === "image") && draft.stream !== "" ? draft.stream === "true" : null,
             priceIn: Number(draft.priceIn || 0),
             priceOut: Number(draft.priceOut || 0),
-            reasoning: draft.purpose === "chat" && draft.reasoningEffort
-              ? { target: draft.reasoningTarget || "auto", effort: draft.reasoningEffort }
-              : (draft.purpose === "chat" && draft.reasoningTarget && draft.reasoningTarget !== "auto" ? { target: draft.reasoningTarget, effort: "" } : null),
+            reasoning: draft.purpose === "chat" ? { target: draft.reasoningTarget || "auto", effort: draft.reasoningEffort } : null,
             capabilities: {
               chat: draft.purpose === "chat",
               embedding: draft.purpose === "embedding",
@@ -337,11 +361,11 @@ export const ModelEditor = {
       }})
     }
     return {
-      draft, toolPolicyOptions, loadingModels, saving, fetchedModels, modelFilter, filteredFetchedModels,
+      draft, toolPolicyOptions, reasoningLoading, reasoningError, loadingModels, saving, fetchedModels, modelFilter, filteredFetchedModels,
       purposeOptions: [{ value: "chat", label: "文本对话" }, { value: "image", label: "图片生成" }, { value: "embedding", label: "向量检索" }, { value: "decision", label: "决策判断" }],
       imageAdapterOptions: [{ value: "openai-images", label: "OpenAI Images（兼容协议）" }, { value: "openai-chat-completions", label: "OpenAI Chat Completions（生图/编辑）" }, { value: "gemini-images", label: "Gemini 图片协议" }],
       fetchModels, chooseModelIdentifier, applyBgePreset, save, BOOL_OPTIONS, BOOL_OFF_OPTIONS, INHERIT_BOOL_OPTIONS,
-      REASONING_TARGET_OPTIONS, REASONING_EFFORT_OPTIONS, TOOL_POLICY_MODE_OPTIONS, TOOL_SOURCE_OPTIONS,
+      REASONING_TARGET_OPTIONS, reasoningEffortOptions, TOOL_POLICY_MODE_OPTIONS, TOOL_SOURCE_OPTIONS,
       WEB_SEARCH_STRATEGY_OPTIONS,
       RESPONSES_STATE_MODE_OPTIONS,
     }
@@ -426,13 +450,14 @@ export const ModelEditor = {
           <Field
             label="推理等级"
             type="select"
-            :options="REASONING_EFFORT_OPTIONS"
+            :options="reasoningEffortOptions"
+            :disabled="reasoningLoading || Boolean(reasoningError)"
             v-model="draft.reasoningEffort"
-            tip="只对推理模型有意义。统一提供低 / 中 / 高三档，其他更细参数继续放在高级扩展。"
+            tip="等级和初始值由适配目标决定；default 不额外指定等级。具体模型可能只支持其中一部分。"
           />
         </div>
-        <p class="muted tiny">保存后会自动翻译成对应上游参数：OpenAI 用 reasoning.effort，DeepSeek 用 reasoning_effort，Claude 用 thinking.effort。</p>
       </Collapse>
+      <p v-if="reasoningError" class="muted tiny">{{ reasoningError }}</p>
       <Collapse title="高级扩展" hint="价格统计与模型私有参数" nested>
         <div class="form-grid dense">
           <Field label="输入价格 / 1M（CNY）" type="number" v-model="draft.priceIn" tip="仅用于成本估算和展示，不影响实际调用。" />
@@ -441,7 +466,7 @@ export const ModelEditor = {
         <Field label="Params JSON" type="textarea" v-model="draft.params" tip="给这个模型追加私有请求参数，比如特定温度、max_tokens 或供应商私有扩展字段。推理等级优先走上面的统一配置。" />
       </Collapse>
       <div class="row row-end">
-        <button class="btn primary small" type="button" :disabled="saving" @click="save"><Icon name="save" :size="14" :class="{ 'icon-spin': saving }" />{{ saving ? "保存中..." : "保存模型参数" }}</button>
+        <button class="btn primary small" type="button" :disabled="saving || reasoningLoading || Boolean(reasoningError)" @click="save"><Icon name="save" :size="14" :class="{ 'icon-spin': saving }" />{{ saving ? "保存中..." : "保存模型参数" }}</button>
       </div>
     </div>
   `,

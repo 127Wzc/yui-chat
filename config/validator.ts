@@ -1,3 +1,4 @@
+import { COMMON_REASONING_TARGETS, getReasoningOptions } from "../models/configuration/reasoning.js"
 import { parseActions } from "../core/actions/contract.js"
 import { isLogLevel } from "./logging.js"
 import { isToolDeliveryMode, isToolExecutionEffect, isToolRepeatPolicy, isToolRetryPolicy, isToolRiskLevel } from "../tools/support/contract.js"
@@ -106,8 +107,6 @@ const renderEngines = new Set(["html", "svg"])
 const pokeResponseModes = new Set(["ai", "fallback", "ai-with-fallback"])
 const segmentationIntervalMethods = new Set(["random", "log"])
 const segmentationModes = new Set(["regex", "natural"])
-const reasoningTargets = new Set(["auto", "openai", "deepseek", "claude"])
-const reasoningEfforts = new Set(["low", "medium", "high"])
 const modelToolPolicyModes = new Set(["inherit", "allowlist", "denylist"])
 const modelToolSources = new Set(["auto", "hosted", "local", "disabled"])
 const modelWebSearchStrategies = new Set(["preferred", "fallback", "parallel"])
@@ -488,8 +487,9 @@ function validateProviders(config: ConfigRecord, issues: ValidationIssue[]): voi
       else {
         const target = String(reasoning.target || "auto").trim().toLowerCase()
         const effort = String(reasoning.effort || "").trim().toLowerCase()
-        if (target && !reasoningTargets.has(target)) add(issues, "error", `models.${index}.reasoning.target`, `未知推理适配目标：${target}`)
-        if (effort && !reasoningEfforts.has(effort)) add(issues, "error", `models.${index}.reasoning.effort`, `未知推理等级：${effort}`)
+        if (target && !COMMON_REASONING_TARGETS.has(target)) add(issues, "error", `models.${index}.reasoning.target`, `未知推理适配目标：${target}`)
+        const options = getReasoningOptions({ type: adapter, model: String(model.modelIdentifier || model.model || model.name || ""), baseURL: String(model.baseURL || provider?.baseURL || ""), provider, reasoning })
+        if (effort && !(options.efforts as readonly string[]).includes(effort)) add(issues, "error", `models.${index}.reasoning.effort`, `目标 ${target} 不支持推理等级：${effort}`)
       }
     }
   }

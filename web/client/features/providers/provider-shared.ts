@@ -25,12 +25,6 @@ export const REASONING_TARGET_OPTIONS = [
   { value: "deepseek", label: "按 DeepSeek 推理参数发送" },
   { value: "claude", label: "按 Claude 思考参数发送" },
 ]
-export const REASONING_EFFORT_OPTIONS = [
-  { value: "", label: "默认 / 不额外指定" },
-  { value: "low", label: "低" },
-  { value: "medium", label: "中" },
-  { value: "high", label: "高" },
-]
 
 export function strategyLabel(value: unknown = ""): string {
   const normalized = String(value || "")

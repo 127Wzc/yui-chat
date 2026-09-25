@@ -2115,11 +2115,11 @@ async function checkAdapterToolProtocol() {
   const claudeCalls = parseClaudeToolCalls({ content: [{ type: "tool_use", id: "toolu_1", name: "command_search", input: { query: "体力" } }] })
   assert(claudeCalls[0]?.id === "toolu_1" && claudeCalls[0]?.arguments?.query === "体力", "claude response should parse tool calls")
   const openaiReasoning = buildReasoningPayload({ type: "openai-compatible", model: "gpt-5-mini", reasoning: { effort: "medium" } })
-  assert(openaiReasoning?.reasoning?.effort === "medium", "openai reasoning helper should emit reasoning.effort")
+  assert(openaiReasoning?.reasoning_effort === "medium", "openai Chat Completions helper should emit reasoning_effort")
   const deepseekReasoning = buildReasoningPayload({ type: "openai-compatible", model: "deepseek-reasoner", reasoning: { effort: "high" } })
-  assert(deepseekReasoning?.reasoning_effort === "high" && deepseekReasoning?.thinking?.type === "enabled", "deepseek reasoning helper should emit thinking + reasoning_effort")
+  assert(deepseekReasoning?.reasoning_effort === "high" && deepseekReasoning?.thinking?.type === "enabled", "deepseek reasoning helper should pass the native effort through and emit thinking + reasoning_effort")
   const claudeReasoning = buildReasoningPayload({ type: "claude", model: "claude-sonnet", reasoning: { effort: "low" } })
-  assert(claudeReasoning?.thinking?.effort === "low", "claude reasoning helper should emit thinking.effort")
+  assert(claudeReasoning?.thinking?.type === "adaptive" && claudeReasoning?.output_config?.effort === "low", "claude helper should emit adaptive thinking and output_config.effort")
 
   const originalFetch = global.fetch
   let streamedRequest
@@ -6636,6 +6636,15 @@ async function checkWebAndBoot() {
     const cookie = setCookie.split(";")[0]
     const cookieConfigResponse = await fetch(`http://127.0.0.1:${port}/api/config`, { headers: { cookie } })
     assert(cookieConfigResponse.ok, "HttpOnly Web session should authorize protected APIs")
+    const reasoningModelName = String(configStore.get().models[0].name)
+    const reasoningOptionsUrl = `http://127.0.0.1:${port}/api/models/${encodeURIComponent(reasoningModelName)}/reasoning-options`
+    const reasoningOptionsBody = JSON.stringify({ modelIdentifier: "deepseek-flash", adapter: "claude", target: "auto" })
+    const unauthenticatedReasoning = await fetch(reasoningOptionsUrl, { method: "POST", headers: { "content-type": "application/json" }, body: reasoningOptionsBody })
+    assert(unauthenticatedReasoning.status === 401, "reasoning options must require authentication")
+    const reasoningOptionsResponse = await fetch(reasoningOptionsUrl, { method: "POST", headers: { "content-type": "application/json", cookie }, body: reasoningOptionsBody })
+    const reasoningOptions = await reasoningOptionsResponse.json()
+    assert(reasoningOptionsResponse.ok && reasoningOptions.target === "deepseek" && reasoningOptions.defaultEffort === "high" && reasoningOptions.efforts.join(",") === "none,low,high,max", "reasoning options must share backend inference and native levels for DeepSeek Messages")
+    assert(Object.keys(reasoningOptions).sort().join(",") === "defaultEffort,efforts,target", "reasoning options must not expose provider credentials or configuration")
     const webTestSessionId = "smoke-web-history"
     const webTestCreateResponse = await fetch(`http://127.0.0.1:${port}/api/chat/test`, {
       method: "POST",

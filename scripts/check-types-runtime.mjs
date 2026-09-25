@@ -35,7 +35,7 @@ assert.equal(adapterRegistry.listAdapters().length, 10)
 assert.equal(adapterRegistry.get("typesafe").supportsDecision, true)
 assert.equal(adapterRegistry.get("openai-images").supportsImageGeneration, true)
 assert.equal(adapterRegistry.get("gemini-images").supportsImageGeneration, true)
-assert.equal(buildReasoningPayload({ type: "openai-compatible", model: "gpt-5", reasoning: { effort: "medium" } })?.reasoning?.effort, "medium")
+assert.equal(buildReasoningPayload({ type: "openai-compatible", model: "gpt-5", reasoning: { effort: "medium" } })?.reasoning_effort, "medium")
 assert.equal(await replaceWithSafeRegex("a1", "\\d", "x"), "ax")
 
 const chain = new MessageChainBuilder()
