@@ -358,7 +358,7 @@ export const defaults = {
       },
       customPackages: {},
       skillPackages: {},
-      mcpServers: {},
+      mcpServers: { "imagTag-mcp": { enabled: true, minRole: "user" } },
     },
     builtin: {
       websiteFetch: {
@@ -604,7 +604,7 @@ export const defaults = {
       "imagTag-mcp": {
         enabled: false,
         transport: "streamableHttp",
-        url: "https://imag-tag.559558.xyz/api/v1/mcp",
+        url: "https://imag-tag.559558.xyz//api/v1/mcp/public",
         descriptionZh: "imagTag 表情图库（默认关闭）",
         headers: {},
         env: {},

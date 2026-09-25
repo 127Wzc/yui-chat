@@ -6,7 +6,7 @@ import type { JsonValue } from "../core/message-chain/types.js"
 import { isJsonValue } from "../core/message-chain/types.js"
 import { redactErrorText } from "../core/shared/error-details.js"
 import type { McpClient, McpToolDefinition } from "./types.js"
-import { normalizeTool, resolveToolExecutionPolicy } from "../tools/support/contract.js"
+import { normalizeTool, resolveToolExecutionPolicy, validateToolArguments } from "../tools/support/contract.js"
 import type { ToolExecutionContext } from "../tools/support/tool-contract.js"
 
 type UnknownRecord = Record<string, unknown>
@@ -319,6 +319,9 @@ export class McpToolAdapter {
 
   private async callTool(args: Record<string, unknown>, context: ToolExecutionContext): Promise<unknown> {
     const client = await this.ensureClient()
+    // 按需重连可能更新参数定义，发送前必须校验最新 schema。
+    const validation = validateToolArguments(this, args)
+    if (!validation.ok) throw new Error(`工具参数无效：${validation.issues.join("；")}`)
     return client.callTool(
       { name: this.originalName, arguments: args },
       undefined,
@@ -383,8 +386,6 @@ export class McpManager {
   private readonly definitionsCache = new Map<string, McpToolDefinition[]>()
   private readonly catalogCache = new Map<string, McpDiscoveredTool[]>()
   private readonly recoveries = new Map<string, Promise<McpClient | null>>()
-  private retryFailedServersTask: Promise<boolean> | null = null
-  private lastRetryAt = 0
   /** 重连刷新定义后，Registry 用此版本重新归一化工具。 */
   toolsRevision = 0
 
@@ -394,7 +395,6 @@ export class McpManager {
     this.tools = []
     this.catalog = []
     this.errors = []
-    this.lastRetryAt = 0
     const mcp = record(config.mcp)
     if (mcp.enabled !== true) {
       this.clearCaches()
@@ -459,38 +459,6 @@ export class McpManager {
     return [...this.tools]
   }
 
-  /**
-   * 给模型工具列表、诊断和日常定格使用的轻量恢复入口。它只处理上次连接
-   * 失败的服务，并用短暂冷却避免每轮对话重复建立连接；成功后调用方可以
-   * 重新同步 getTools()，因此全开放模式在冷启动失败时也能恢复出工具。
-   */
-  async retryFailedServers(): Promise<boolean> {
-    const config = await configStore.load()
-    if (record(config.mcp).enabled !== true) return false
-    const failedServers = [...new Set(this.errors
-      .map(item => item.server)
-      .filter(name => name && name !== "__sdk__"))]
-    if (!failedServers.length) return false
-    const running = this.retryFailedServersTask
-    if (running) return running
-    if (Date.now() - this.lastRetryAt < 5000) return false
-    this.lastRetryAt = Date.now()
-    const task = (async () => {
-      let recovered = false
-      for (const serverName of failedServers) {
-        if (await this.recoverServer(serverName)) recovered = true
-      }
-      if (recovered) this.clearError("__sdk__")
-      return recovered
-    })()
-    this.retryFailedServersTask = task
-    try {
-      return await task
-    } finally {
-      if (this.retryFailedServersTask === task) this.retryFailedServersTask = null
-    }
-  }
-
   /** 连接并发现单个服务，但不注册工具、不写配置，也不改变当前运行连接。 */
   async testServer(serverName: string, serverConfig: UnknownRecord): Promise<{ server: string; catalog: McpDiscoveredTool[]; exposed: string[]; elapsedMs: number }> {
     const startedAt = Date.now()
@@ -526,8 +494,6 @@ export class McpManager {
     this.tools = []
     this.catalog = []
     this.clearCaches()
-    this.retryFailedServersTask = null
-    this.lastRetryAt = 0
     this.initialized = false
   }
 

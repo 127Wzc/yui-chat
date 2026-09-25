@@ -246,7 +246,7 @@ try {
   assert.equal(defaults.mcp.enabled, false)
   assert.equal(imagTagServer.enabled, false)
   assert.equal(imagTagServer.transport, "streamableHttp")
-  assert.equal(imagTagServer.url, "https://imag-tag.559558.xyz/api/v1/mcp")
+  assert.equal(imagTagServer.url, "https://imag-tag.559558.xyz//api/v1/mcp/public")
   assert.deepEqual(imagTagServer.allowedTools, ["search_images"])
   assert.equal(defaults.persona.stickerExpression.binding.primaryTool, "mcp_imagTag-mcp_search_images")
   assert.equal(defaults.persona.stickerExpression.decision.model, "")

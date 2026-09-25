@@ -45,7 +45,7 @@ Responses 的 `file_search` 是供应商托管能力，需配置 Vector Store；
 
 日常定格不再注册一个重复的 `sticker_search` AI 工具。它只从统一 Tool Registry 中读取真实的内置、MCP 或 Custom 工具，并在内部套用声明式适配器：把 `keyword`、`tags`、`count` 映射到渠道入参，把返回结果映射为图片候选。表达意图、概率、冷却、去重、候选选择和投递仍由人格协调器统一处理。
 
-项目默认带有一个名为 `imagTag-mcp` 的 Streamable HTTP MCP 模板，地址为 `https://imag-tag.559558.xyz/api/v1/mcp`，只允许 `search_images`，服务和全局 MCP 开关都默认关闭。启用服务后，它会以真实的 `mcp_imagTag-mcp_search_images` 工具出现在统一工具列表和日常定格渠道选择中；默认适配器固定传入 `match: "semantic"`、`sort: "relevance"`，从 `structuredContent.images` 读取候选。
+项目默认带有一个名为 `imagTag-mcp` 的 Streamable HTTP MCP 模板，地址为 `https://imag-tag.559558.xyz//api/v1/mcp/public`，只允许 `search_images`，服务和全局 MCP 开关都默认关闭；启用后该服务的最低角色默认为普通用户，所有用户均可使用已开放的只读搜图工具。启用服务后，它会以真实的 `mcp_imagTag-mcp_search_images` 工具出现在统一工具列表和日常定格渠道选择中；默认适配器固定传入 `match: "semantic"`、`sort: "relevance"`，从 `structuredContent.images` 读取候选。
 
 意图任务把完整语境放在 `keyword`，`tags` 只保留最多两个确认存在且必须匹配的硬标签。带标签检索没有候选时，适配器会记录一次 `TAG_FILTER_NO_MATCH` 诊断，并用相同关键词省略标签重试一次；工具错误不会重复请求，而是按主渠道、回退渠道继续处理。
 

@@ -18,6 +18,8 @@ global.plugin = class {}
 try {
   const fixture = path.join(runtimeRoot, "server.mjs")
   await fs.writeFile(fixture, `import readline from 'node:readline';
+import fs from 'node:fs';
+if (process.env.MCP_FIXTURE_LOG) fs.appendFileSync(process.env.MCP_FIXTURE_LOG, process.env.MCP_FIXTURE_LABEL+'\\n');
 const tool = name => ({name, description: name, inputSchema: {type:'object',properties:{keyword:{type:'string'}},...(process.env.MCP_FIXTURE_REQUIRED === '1' ? {required:['keyword']} : {})}, annotations:{readOnlyHint:true}});
 readline.createInterface({input:process.stdin}).on('line', line => {
  const req = JSON.parse(line); if (req.id === undefined) return;
@@ -65,6 +67,16 @@ readline.createInterface({input:process.stdin}).on('line', line => {
   await assert.rejects(() => changedAdapter.execute({}), /当前不可用/)
   assert.equal(changedCalls, 1)
   const { toolRegistry } = await import("../output/runtime/tools/support/registry.js")
+  const { explainToolPolicy } = await import("../output/runtime/tools/access/policy.js")
+  const { normalizeTool } = await import("../output/runtime/tools/support/contract.js")
+  const publicGalleryConfig = structuredClone(defaults)
+  publicGalleryConfig.mcp.enabled = true
+  publicGalleryConfig.mcp.servers["imagTag-mcp"].enabled = true
+  const publicGalleryTool = normalizeTool(new McpToolAdapter("imagTag-mcp", null, { name: "search_images", inputSchema: { type: "object" } }, publicGalleryConfig.mcp.servers["imagTag-mcp"]))
+  for (const event of [{ isPrivate: true, user_id: "reader" }, { isGroup: true, group_id: "group", user_id: "reader" }, { isGroup: true, group_id: "group", sender: { role: "admin" } }, { isMaster: true }]) {
+    assert.equal(explainToolPolicy(publicGalleryTool, { config: publicGalleryConfig, e: event }).allowed, true, "默认图库对所有用户开放")
+  }
+
   process.env.MCP_SELECTION_TEST_TOKEN = "selection-secret"
   assert.equal(resolveMcpUrl("https://example.test/${env:MCP_SELECTION_TEST_TOKEN}/mcp"), "https://example.test/selection-secret/mcp")
   assert.deepEqual(resolveMcpHeaders({ Authorization: "Bearer ${env:MCP_SELECTION_TEST_TOKEN}" }), { Authorization: "Bearer selection-secret" })
@@ -139,17 +151,43 @@ readline.createInterface({input:process.stdin}).on('line', line => {
   toolRegistry.removeBySource("mcp")
   delete config.mcp.servers.gallery.env
   await coldManager.destroy()
-  // 全开放模式没有可预先注入的工具名，后续异步入口会主动重试发现并补回工具。
+  // 全开放模式首次发现失败时不隐式重连，由管理员重新加载完成发现。
   config.mcp.servers.gallery.allowedTools = null
   config.mcp.servers.gallery.env = { MCP_FIXTURE_FAIL: "1" }
   coldManager = new McpManager()
   await coldManager.init()
   assert.equal(coldManager.getTools().length, 0)
   delete config.mcp.servers.gallery.env
-  assert.equal(await coldManager.retryFailedServers(), true, "后续入口可以重试冷启动失败的服务")
+  await coldManager.init()
   assert.deepEqual(coldManager.getTools().map(tool => tool.originalName), ["search_images", "delete_image"])
   await coldManager.destroy()
   config.mcp.servers.gallery.allowedTools = ["search_images"]
+  // 多服务失联：读取目录不重连；调用 gallery 时只恢复 gallery，并重新校验参数。
+  const startsFile = path.join(runtimeRoot, "starts.log")
+  const serverBase = { ...config.mcp.servers.gallery }
+  config.mcp.servers = Object.fromEntries(["gallery", "other"].map(name => [name, { ...serverBase,
+    env: { MCP_FIXTURE_FAIL: "1", MCP_FIXTURE_LOG: startsFile, MCP_FIXTURE_LABEL: name },
+  }]))
+  coldManager = mcpManager
+  await coldManager.init()
+  for (const tool of coldManager.getTools()) toolRegistry.register(tool)
+  for (const server of Object.values(config.mcp.servers)) {
+    delete server.env.MCP_FIXTURE_FAIL
+    server.env.MCP_FIXTURE_REQUIRED = "1"
+  }
+  await toolRegistry.list()
+  await toolRegistry.getEnabledTools(config)
+  assert.deepEqual((await fs.readFile(startsFile, "utf8")).trim().split("\n"), ["gallery", "other"], "读取列表不创建连接")
+  const lazyTool = coldManager.getTools().find(tool => tool.serverName === "gallery")
+  await assert.rejects(() => toolRegistry.execute(lazyTool.name, {}, { config, e: { isMaster: true } }), /keyword.*必填/)
+  assert.deepEqual((await fs.readFile(startsFile, "utf8")).trim().split("\n"), ["gallery", "other", "gallery"], "只恢复当前调用的服务")
+  assert.deepEqual(toolRegistry.get(lazyTool.name).common.parameters.required, ["keyword"])
+  assert.equal((await toolRegistry.execute(lazyTool.name, { keyword: "cat" }, { config, e: { isMaster: true } })).content[0].text, "ok")
+  await toolRegistry.list()
+  assert.deepEqual((await fs.readFile(startsFile, "utf8")).trim().split("\n"), ["gallery", "other", "gallery"], "其他失败服务保持不连接")
+  await coldManager.destroy()
+  toolRegistry.removeBySource("mcp")
+  config.mcp.servers = { gallery: serverBase }
   manager = new McpManager()
   await manager.init()
   assert.deepEqual(manager.status().errors, [])
