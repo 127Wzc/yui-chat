@@ -81,3 +81,8 @@ export const ProviderFilterSearch = {
     </label>
   `,
 }
+
+/** 展示上游模型名称；配置引用仍使用内部 name/id。 */
+export function modelDisplayName(model?: { modelIdentifier?: unknown; model?: unknown; name?: unknown; id?: unknown } | null): string {
+  return String(model?.modelIdentifier || model?.model || model?.name || model?.id || "")
+}

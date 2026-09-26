@@ -373,7 +373,7 @@ export const ModelEditor = {
   template: `
     <div class="settings-stack">
       <div class="form-grid dense">
-        <Field label="Model ID" v-model="draft.modelIdentifier" placeholder="gpt-4o-mini" tip="真正请求时发给上游的模型名；和本地显示名称可以不同。" />
+        <Field label="Model ID" v-model="draft.modelIdentifier" placeholder="gpt-4o-mini" tip="上游模型的原始名称，也用于界面显示。" />
         <Field label="模型用途" type="select" :options="purposeOptions" v-model="draft.purpose" tip="一个模型只绑定一种用途。" />
         <template v-if="draft.purpose === 'image'">
           <Field label="图片协议" type="select" :options="imageAdapterOptions" v-model="draft.imageProtocol" tip="选择该图片模型实际使用的接口。" />

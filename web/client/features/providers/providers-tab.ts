@@ -4,7 +4,7 @@ import { asRecord, errorMessage, type UnknownRecord } from "../../shared/data.js
 import { AddChannelForm, ModelEditor, ProviderEditor } from "./provider-editors.js"
 import { ModelRoutingBuilder } from "./provider-routing.js"
 import { ProviderImportDialog } from "./provider-import-dialog.js"
-import { providerModelCounts, runLocked } from "./provider-shared.js"
+import { modelDisplayName, providerModelCounts, runLocked } from "./provider-shared.js"
 interface ProviderTemplate extends UnknownRecord {
   id: string
   label?: string
@@ -259,9 +259,9 @@ export const ProvidersTab = {
         return
       }
       const taskName = image ? "imageGeneration" : (cfg.value.chat?.defaultTask || "replyer")
-      const currentName = defaultModel.value?.name || defaultReplyChannel.value || "当前默认模型"
+      const currentName = modelDisplayName(defaultModel.value) || defaultReplyChannel.value || "当前默认模型"
       const accepted = await confirmAction({
-        title: image ? `将“${name}”设为默认画图模型？` : `将“${name}”设为默认回复模型？`,
+        title: image ? `将“${modelDisplayName(ch)}”设为默认画图模型？` : `将“${modelDisplayName(ch)}”设为默认回复模型？`,
         message: image ? "图片生成工具会优先使用该模型。" : `新的普通对话会优先使用该模型，替代“${currentName}”。`,
         detail: ch.modelIdentifier || ch.model || ch.id,
         confirmText: "确认切换默认模型",
@@ -276,7 +276,7 @@ export const ProvidersTab = {
           body: JSON.stringify({ taskName }),
         }))
         store.config = asRecord(result.config)
-        toast(image ? `已将 ${name} 设为默认画图模型` : `已将 ${name} 设为默认回复模型`)
+        toast(image ? `已将 ${modelDisplayName(ch)} 设为默认画图模型` : `已将 ${modelDisplayName(ch)} 设为默认回复模型`)
         await refreshTab("providers")
       } catch (err) {
         toast(errorMessage(err))
@@ -290,7 +290,7 @@ export const ProvidersTab = {
         await runChannelAction(`remove:${ch.id}`, async () => {
           const result = asRecord<ApiResult>(await request(`/api/models/${encodeURIComponent(name)}`, { method: "DELETE" }))
           store.config = asRecord(result.config)
-          toast(`已删除模型 ${name}${result.fallbackModel ? `，默认回退到 ${result.fallbackModel}` : ""}`)
+          toast(`已删除模型 ${modelDisplayName(ch)}${result.fallbackModel ? `，默认回退到 ${modelDisplayName(modelByName.value[result.fallbackModel]) || result.fallbackModel}` : ""}`)
           if (editingId.value === ch.id) editingId.value = ""
           await refreshTab("providers")
         })
@@ -301,9 +301,8 @@ export const ProvidersTab = {
 
     async function requestRemoveModel(ch: Channel) {
       if (!ch?.id) return
-      const name = modelByName.value[ch.id]?.name || ch.id
       const accepted = await confirmAction({
-        title: `删除模型“${name}”？`,
+        title: `删除模型“${modelDisplayName(ch)}”？`,
         message: "相关回复方案会移除该模型；如果它是主模型，系统会自动选择可用模型回退。",
         detail: ch.modelIdentifier || ch.model || ch.id,
         confirmText: "确认删除模型",
@@ -312,7 +311,7 @@ export const ProvidersTab = {
     }
 
     return {
-      cfg, templates, modelNames, providerCards, filteredProviders,
+      modelDisplayName, cfg, templates, modelNames, providerCards, filteredProviders,
       selectedProvider, selectedProviderCard, selectedProviderChannels, filteredSelectedProviderChannels, currentProviderModelIds, providerSummary,
       activeProvider, activeModel, activeProviderName, providerQuery, modelQuery,
       showAddDialog, showImportDialog, editingId, editingProvider, providerTesting, providerDeleting,
@@ -329,7 +328,7 @@ export const ProvidersTab = {
       <Dialog :open="!!activeProvider" :title="'编辑渠道 · ' + (activeProvider?.name || '')" @close="editingProvider = ''">
         <ProviderEditor v-if="activeProvider" :provider="activeProvider" @saved="editingProvider = ''" />
       </Dialog>
-      <Dialog :open="!!activeModel" size="lg" :title="'编辑模型 · ' + (activeModel?.name || '')" @close="editingId = ''">
+      <Dialog :open="!!activeModel" size="lg" :title="'编辑模型 · ' + modelDisplayName(activeModel)" @close="editingId = ''">
         <ModelEditor v-if="activeModel" :model="activeModel" @saved="editingId = ''" />
       </Dialog>
       <ProviderImportDialog :open="showImportDialog" :provider="selectedProvider" :existing-ids="currentProviderModelIds" @close="showImportDialog = false" />
@@ -397,11 +396,10 @@ export const ProvidersTab = {
               <span class="pv-model-icon" :data-tip="purposeOf(ch).label"><Icon :name="purposeOf(ch).icon" :size="15" /></span>
               <div class="pv-model-main">
                 <div class="pv-model-name">
-                  <span class="truncate">{{ ch.id }}</span>
+                  <span class="truncate">{{ modelDisplayName(ch) }}</span>
                   <Badge v-if="defaultLabel(ch)" variant="default" icon="star">{{ defaultLabel(ch) }}</Badge>
                 </div>
                 <div class="pv-model-meta">
-                  <code>{{ ch.model || "-" }}</code>
                   <span>{{ ch.type }}</span>
                   <span v-for="tag in capabilityTags(ch)" :key="tag">{{ tag }}</span>
                 </div>

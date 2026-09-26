@@ -3,6 +3,7 @@ import { refreshTab, saveConfigPatch, store, toast } from "../../app/store/store
 import { splitNames } from "../../shared/format.js"
 import { asRecord, asRecords, errorMessage, type UnknownRecord } from "../../shared/data.js"
 import {
+  modelDisplayName,
   BOOL_OFF_OPTIONS,
   STRATEGY_OPTIONS,
   runLocked,
@@ -187,9 +188,13 @@ export const ModelRoutingBuilder = {
       if (purpose === "image" || purpose === "embedding" || purpose === "decision") return false
       return model.capabilities?.chat !== false
     }))
+    const modelLabel = (name = "") => {
+      const model = (props.cfg.models || []).find(item => item.name === name)
+      return model ? [modelDisplayName(model), model.apiProvider].filter(Boolean).join(" · ") : name
+    }
     const modelOptions = computed(() => [
       { value: "", label: "自动选择" },
-      ...(chatModels.value.length ? chatModels.value.map(model => ({ value: model.name, label: model.name })) : (props.modelNames || []).map(name => ({ value: name, label: name }))),
+      ...(chatModels.value.length ? chatModels.value.map(model => ({ value: model.name, label: modelLabel(model.name) })) : (props.modelNames || []).map(name => ({ value: name, label: name }))),
     ])
     const configuredReplyerModels = props.cfg.modelTasks?.replyer?.modelList || []
     const availableChatNames = chatModels.value.map(model => model.name)
@@ -274,7 +279,7 @@ export const ModelRoutingBuilder = {
     }
 
     return {
-      store,
+      store, modelLabel,
       modelOptions, STRATEGY_OPTIONS, BOOL_OFF_OPTIONS, draft, replyerModelList, replyerModelCards,
       replyerStrategyLabel,
       visionOk,
@@ -288,7 +293,7 @@ export const ModelRoutingBuilder = {
         <div class="provider-routing-compact-main">
           <div class="section-title"><Icon name="sparkles" :size="13" />全局回复设置</div>
           <PillList :items="[
-            { label: '主模型 ' + (replyerModelList[0] || '尚未设置'), active: !!replyerModelList.length },
+            { label: '主模型 ' + (modelLabel(replyerModelList[0]) || '尚未设置'), active: !!replyerModelList.length },
             { label: '备用 ' + Math.max(0, replyerModelList.length - 1) },
             { label: '策略 ' + replyerStrategyLabel },
             { label: draft.modelStream === 'true' ? '默认流式' : '默认非流式', tone: draft.modelStream === 'true' ? 'accent' : '' }
@@ -306,7 +311,7 @@ export const ModelRoutingBuilder = {
           { label: '策略 ' + replyerStrategyLabel },
           { label: '超时 ' + Math.round(Number(draft.modelRequestTimeoutMs || 0) / 1000) + ' 秒' },
           { label: draft.modelStream === 'true' ? '默认流式' : '默认非流式', tone: draft.modelStream === 'true' ? 'accent' : '' },
-          { label: draft.recognitionModel ? ('识图增强 ' + draft.recognitionModel) : '识图自动选择', tone: 'accent' }
+          { label: draft.recognitionModel ? ('识图增强 ' + modelLabel(draft.recognitionModel)) : '识图自动选择', tone: 'accent' }
         ]" />
 
         <Collapse title="查看路由详情" :hint="replyerModelList.length + ' 个候选模型'">
@@ -316,11 +321,11 @@ export const ModelRoutingBuilder = {
             <div class="item-title">预览 · {{ previewResult.task || "replyer" }}</div>
             <span class="badge" :class="previewResult.ok === false ? 'risk-high' : 'on'">{{ previewResult.ok === false ? "有错误" : "就绪" }}</span>
           </div>
-          <div v-for="(m, i) in previewResult.candidates" :key="i" class="row" style="margin-top:6px" :data-tip="m.name + ' / ' + (m.adapter || '-')">
+          <div v-for="(m, i) in previewResult.candidates" :key="i" class="row" style="margin-top:6px" :data-tip="modelLabel(m.name) + ' / ' + (m.adapter || '-')">
             <span class="flow-node-num">{{ i + 1 }}</span>
             <span class="badge accent">{{ i === 0 ? "主用" : "回退" }}</span>
             <span class="badge">{{ m.provider || "-" }}</span>
-            <span class="muted tiny">{{ m.name }}</span>
+            <span class="muted tiny">{{ modelLabel(m.name) }}</span>
             <span class="badge">{{ Math.round(Number(m.timeoutMs || 0) / 1000) }} 秒</span>
             <span class="badge" :class="m.stream ? 'on' : ''">{{ m.stream ? "流式" : "非流式" }}</span>
           </div>
@@ -361,7 +366,7 @@ export const ModelRoutingBuilder = {
             >
               <button class="routing-model-toggle" type="button" :aria-pressed="model.selected" @click="toggleReplyerModel(model.name)">
                 <span class="model-select-indicator"><Icon :name="model.selected ? 'check' : 'plus'" :size="13" /></span>
-                <span class="routing-model-copy"><strong>{{ model.name }}</strong><small>{{ model.modelIdentifier || model.adapter || '模型' }}</small></span>
+                <span class="routing-model-copy"><strong>{{ modelLabel(model.name) }}</strong><small>{{ model.adapter || '模型' }}</small></span>
                 <span v-if="model.primary" class="badge accent"><Icon name="sparkles" :size="11" />主模型</span>
                 <span v-else-if="model.selected" class="badge accent">备用 {{ replyerModelList.indexOf(model.name) }}</span>
               </button>
