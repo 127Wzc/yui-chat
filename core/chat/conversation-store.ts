@@ -112,7 +112,7 @@ function webTestSessionFromRow(row: ConversationRow): WebTestSession | null {
 
 /** SQLite 会话存储；只负责 TTL、键匹配和原子清理，不承载聊天编排。 */
 export class ConversationStore {
-  async get(key: string): Promise<{ history: unknown[]; lastSeen: number; usage: UnknownRecord; toolCalls: number; turns: unknown[]; protocolState: UnknownRecord } | null> {
+  async get(key: string): Promise<{ sessionId: string; history: unknown[]; lastSeen: number; usage: UnknownRecord; toolCalls: number; turns: unknown[]; protocolState: UnknownRecord } | null> {
     if (!sqliteClient.status.available) return null
     const conversation = await sqliteClient.get<ConversationRow>("SELECT history_json, state_json, last_seen_at, expires_at FROM conversations WHERE conversation_key = ?", [key])
     if (!conversation) return null
@@ -122,6 +122,7 @@ export class ConversationStore {
     }
     const state = stateOf(conversation.state_json)
     return {
+      sessionId: text(state.sessionId),
       history: historyOf(conversation.history_json),
       lastSeen: Number(conversation.last_seen_at || 0),
       usage: record(state.usage),
@@ -131,7 +132,7 @@ export class ConversationStore {
     }
   }
 
-  async save(input: { id: string; history?: readonly unknown[]; turns?: readonly unknown[]; usage?: UnknownRecord; toolCalls?: unknown; protocolState?: UnknownRecord }): Promise<boolean> {
+  async save(input: { id: string; sessionId?: string; history?: readonly unknown[]; turns?: readonly unknown[]; usage?: UnknownRecord; toolCalls?: unknown; protocolState?: UnknownRecord }): Promise<boolean> {
     if (!sqliteClient.status.available) return false
     const now = Date.now()
     const expiresAt = now + conversationTtlMs()
@@ -143,6 +144,7 @@ export class ConversationStore {
     }
     const normalized = Array.isArray(input.history) ? input.history : []
     const state = {
+      sessionId: text(input.sessionId),
       turns: Array.isArray(input.turns) ? input.turns : [],
       usage: record(input.usage),
       toolCalls: Math.max(0, Number(input.toolCalls || 0)),

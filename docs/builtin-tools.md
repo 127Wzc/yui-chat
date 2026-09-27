@@ -87,6 +87,8 @@ Responses 的 `file_search` 是供应商托管能力，需配置 Vector Store；
 
 ### 统一图片渲染
 
+默认 `send:true`，一次调用完成渲染和发送；只有用户明确要求预览或不发送时才使用 `send:false`（仅返回完成状态，不向模型返回预览图），不要例行先预览再重新渲染发送。输出为静态 PNG，不支持动画输出。HTML 内容样式与统一外框隔离，使用窄边框和紧凑顶部标题，副标题置于页脚；按完整内容自动适配尺寸，固定宽度画布收拢外框，普通内容渲染不使用 `viewport` 或 `fullPage` 裁切参数。
+
 统一使用 `render_image({ format, data, send })`，内容放在 `data.content`，可选 `data.title`、`data.subtitle`。不再使用 `template`、`data.html`、`data.markdown` 或独立 HTML 工具。
 
 | format | 内容 |

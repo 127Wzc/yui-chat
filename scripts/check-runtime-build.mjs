@@ -164,6 +164,7 @@ for (const relative of [
   "core/storage/sqlite/migrations/002-tool-call-events.sql",
   "core/storage/sqlite/migrations/003-model-call-snapshots.sql",
   "core/storage/sqlite/migrations/004-conversation-state.sql",
+  "core/storage/sqlite/migrations/005-log-session.sql",
   "core/storage/sqlite/vector-migrations/001-baseline.sql",
   "web/client/app.css",
   "web/client/vendor/vue.esm-browser.prod.js",

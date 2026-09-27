@@ -983,7 +983,7 @@ export const LogsTab = {
           <template v-else-if="conversationDetail?.available">
             <div class="logs-session-meta logs-session-header">
               <div><b>{{ conversationTitle(conversationDetail) }}</b><span class="muted tiny">{{ number(conversationDetail.session?.turn_count || conversationDetail.items?.length || 0) }} 轮 · {{ sourceLabel(conversationDetail.session?.source) }} / {{ purposeLabel(conversationDetail.session?.purpose) }}</span></div>
-              <details class="logs-session-id"><summary>sessionId {{ shortId(conversationDetail.session?.key || conversationDetail.conversationKey) }}</summary><code>{{ conversationDetail.session?.key || conversationDetail.conversationKey }}</code></details>
+              <details class="logs-session-id"><summary>sessionId {{ shortId(conversationDetail.session?.key || '旧日志：会话 ID 未记录') }}</summary><code>{{ conversationDetail.session?.key || '旧日志：会话 ID 未记录' }}</code></details>
             </div>
             <div v-if="conversationDetail.items?.length" class="logs-session-workbench">
               <nav class="logs-session-turn-list" aria-label="会话轮次">

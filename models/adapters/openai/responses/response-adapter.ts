@@ -130,12 +130,21 @@ function stopReason(data: UnknownRecord, items: UnknownRecord[], callCount: numb
 /** 将 Responses output items 收敛回现有 Agent Core 的统一响应。 */
 export function parseResponsesResponse(data: unknown): ModelResponse {
   const response = record(data)
-  const items = outputItems(response)
+  const callIds = new Set<string>()
+  const items = outputItems(response).map(item => {
+    if (item.type !== "function_call") return item
+    const callId = text(item.call_id).trim()
+    // item.id 是输出项 ID，不是可回传的 call_id；不得生成一个上游不认识的 ID。
+    if (!callId) throw new Error("RESPONSES_TOOL_CALL_ID_MISSING: 上游工具调用缺少 call_id，未执行工具。")
+    if (callIds.has(callId)) throw new Error("RESPONSES_TOOL_CALL_ID_DUPLICATE: 上游返回重复 call_id，未执行工具。")
+    callIds.add(callId)
+    return { ...item, call_id: callId }
+  })
   const upstreamResponseId = text(response.id).trim()
   const toolCalls = items
     .filter(item => item.type === "function_call")
     .map(item => ({
-      id: text(item.call_id || item.id) || crypto.randomUUID(),
+      id: text(item.call_id),
       name: text(item.name),
       arguments: safeJson(item.arguments),
     }))

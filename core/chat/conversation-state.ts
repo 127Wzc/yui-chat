@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import { configStore } from "../../config/store.js"
 import { hostRuntime } from "../runtime/host-runtime.js"
 import type { UnknownRecord } from "../message/types.js"
@@ -5,6 +6,7 @@ import { conversationScopeMatches, conversationStore, parseConversationKey } fro
 import { scopeFor } from "./chat-support.js"
 
 export interface ConversationEntry extends UnknownRecord {
+  sessionId?: string
   history?: unknown[]
   turns?: unknown[]
   usage?: UnknownRecord
@@ -136,11 +138,18 @@ export class ConversationState {
 
   async getConversation(key: string, version: ConversationVersion | null = null): Promise<ConversationEntry> {
     const value = this.conversations.get(key)
-    if (Array.isArray(value)) return { history: value }
-    if (value) return value
+    if (value) {
+      const entry = Array.isArray(value) ? { history: value } : value
+      if (!entry.sessionId) entry.sessionId = randomUUID()
+      this.conversations.set(key, entry)
+      return entry
+    }
     try {
       const stored = await conversationStore.get(key)
+      // 同一归属的并发首轮可能一起读到空存储，采用已经创建的会话身份。
+      if ((!version || this.isCurrent(version)) && this.conversations.has(key)) return this.getConversation(key, version)
       if (stored && (!version || this.isCurrent(version))) {
+        if (!stored.sessionId) stored.sessionId = randomUUID()
         this.conversations.set(key, stored)
         return stored
       }
@@ -148,7 +157,9 @@ export class ConversationState {
     } catch (error) {
       hostRuntime.logger?.warn?.("[yui-chat] 读取 SQLite 会话失败，使用空历史", error)
     }
-    return { history: [] }
+    const entry = { history: [], sessionId: randomUUID(), lastSeen: Date.now() }
+    if (!version || this.isCurrent(version)) this.conversations.set(key, entry)
+    return entry
   }
 
   async getHistory(key: string, version: ConversationVersion | null = null): Promise<unknown[]> {

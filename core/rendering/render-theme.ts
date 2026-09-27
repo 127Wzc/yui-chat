@@ -89,31 +89,32 @@ export const htmlRenderBaseCss = `
     pointer-events: none;
     background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   }
-  #container { width: fit-content; padding: 50px; position: relative; z-index: 1; }
+  #container { width: fit-content; padding: 10px; position: relative; z-index: 1; }
   .card {
     width: 1200px;
-    min-height: 800px;
-    padding: 40px 45px 30px;
+    min-height: 0;
+    padding: 12px;
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    background: rgba(255,255,255,.76);
+    background: linear-gradient(135deg, #fff0f3 0%, #fff6f7 60%, #f9eff8 100%);
     border: 1.5px solid rgba(244,219,216,.88);
-    border-radius: 40px;
+    border-radius: 18px;
     box-shadow: 0 30px 70px -15px rgba(244,190,190,.27), 0 15px 35px -20px rgba(0,0,0,.08), inset 0 1.5px 2px rgba(255,255,255,.92);
     backdrop-filter: blur(35px) saturate(140%);
   }
-  .window-header { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 5px 0 22px; margin-bottom: 25px; border-bottom: 1.5px dashed rgba(244,219,216,.62); }
-  .window-buttons { width: 100px; display: flex; gap: 8px; }
-  .window-buttons span { width: 12px; height: 12px; border-radius: 50%; box-shadow: inset 0 1px 2px rgba(0,0,0,.12); }
+  .window-header { display: flex; align-items: center; gap: 12px; min-height: 24px; margin-bottom: 10px; }
+  .window-buttons { display: flex; flex-shrink: 0; align-items: center; gap: 6px; }
+  .window-buttons span { width: 10px; height: 10px; border-radius: 50%; box-shadow: inset 0 1px 2px rgba(0,0,0,.1); }
   .window-buttons span:nth-child(1) { background: #ff5f56; }
   .window-buttons span:nth-child(2) { background: #ffbd2e; }
   .window-buttons span:nth-child(3) { background: #27c93f; }
-  .window-title { flex: 1; text-align: center; }
-  .window-title span { display: inline-block; max-width: 780px; padding: 7px 30px; overflow: hidden; color: #c8a7a4; background: rgba(255,255,255,.76); border: 1px solid rgba(255,180,190,.38); border-radius: 24px; box-shadow: 0 6px 15px rgba(255,143,163,.09), inset 0 1px 2px rgba(255,255,255,.92); font-size: 20px; font-weight: 800; letter-spacing: 2px; text-overflow: ellipsis; white-space: nowrap; }
-  .window-tag { width: 100px; color: #c8a7a4; font-size: 11px; font-weight: 800; letter-spacing: .4px; text-align: right; text-transform: uppercase; }
-  .document-subtitle { margin: 0 0 24px; color: ${renderTheme.muted}; font-size: 19px; font-weight: 650; text-align: center; }
-  footer { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: auto; padding-top: 20px; color: #c8a7a4; border-top: 1.5px dashed rgba(244,219,216,.62); font-size: 14px; font-weight: 700; }
+  .window-title { flex: 1; min-width: 0; color: #a98784; font-size: 18px; font-weight: 700; overflow-wrap: anywhere; }
+  .window-tag { margin-left: auto; color: #b99c99; font-size: 11px; }
+  .document-subtitle { margin: 0; color: ${renderTheme.muted}; font-size: 12px; font-weight: 400; }
+  #render-card > #content { flex: 1; padding: 0; min-width: 0; }
+  #render-card > footer { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; margin-top: 10px; padding: 0; color: #b99c99; font-size: 11px; }
+
 `
 
 /** SVG 回退也使用与 Markdown HTML 相同的渐变、白卡、窗口头和脚注。 */

@@ -141,6 +141,8 @@ export const renderInputFormats = ["auto", "html", "markdown", "mindmap", "text"
 /** 对外只接受 format + data.content；内部继续复用各领域渲染器。 */
 export function resolveRenderRequest(args: UnknownRecord = {}): { kind: string; input: UnknownRecord } {
   const input = { ...record(args.data) }
+  delete input.viewport
+  delete input.fullPage
   if (args.template !== undefined || args.kind !== undefined || input.html !== undefined || input.markdown !== undefined || input.formula !== undefined) {
     throw new Error("请使用 format 和 data.content 指定渲染格式及内容。")
   }

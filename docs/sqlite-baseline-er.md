@@ -1,6 +1,6 @@
 # SQLite 从 0 开始基线
 
-本项目的 SQLite 结构从 `001-baseline.sql` 基线开始，状态库继续执行 `002-tool-call-events.sql` 和 `003-model-call-snapshots.sql`：前者包含工具事件、群记忆召回和工具链父子关系，后者把每次实际模型请求的脱敏上下文、模型可见工具定义和请求元数据独立保存，供管理台详情窗口按需读取；向量库仍使用自己的基线。无法识别的历史迁移记录或旧表会被拒绝，迁移在 Worker 内事务执行并保留失败现场。运行、模型调用和工具调用的父级引用支持子代理、工具派生模型调用和后台完成事件的拓扑追踪，会话详情按 `conversation_key` 汇总全部保留的顶层轮次，模型快照请求元数据中的上下文分组用于显示每条消息的来源。
+本项目的 SQLite 结构从 `001-baseline.sql` 基线开始，状态库继续执行 `002-tool-call-events.sql` 和 `003-model-call-snapshots.sql`：前者包含工具事件、群记忆召回和工具链父子关系，后者把每次实际模型请求的脱敏上下文、模型可见工具定义和请求元数据独立保存，供管理台详情窗口按需读取；向量库仍使用自己的基线。无法识别的历史迁移记录或旧表会被拒绝，迁移在 Worker 内事务执行并保留失败现场。运行、模型调用和工具调用的父级引用支持子代理、工具派生模型调用和后台完成事件的拓扑追踪，`005-log-session.sql` 为运行日志增加独立 `session_id` 与索引，会话详情按 `session_id` 汇总同一段会话的顶层轮次；`conversation_key` 仅表示固定归属，模型快照请求元数据中的上下文分组用于显示每条消息的来源。
 
 ## ER 图
 
@@ -177,7 +177,7 @@ flowchart LR
 | state | `knowledge_index_jobs` | 向量重建任务与进度 | `vector_space_id`, 状态、尝试、`progress_json` |
 | state | `capability_rules` | 工具/能力授权规则 | 主体、资源、allow/deny |
 | state | `knowledge_grants` | 知识库授权规则 | 知识库、主体、群域、allow/deny |
-| state | `ai_runs` | 一轮模型工作的汇总 | `parent_run_id`, 来源、用途、作用域、用量、成本、状态 |
+| state | `ai_runs` | 一轮模型工作的汇总 | `session_id`, `conversation_key`, `parent_run_id`, 来源、用途、作用域、用量、成本、状态 |
 | state | `model_call_events` | 实际模型调用明细 | `run_id`, `parent_tool_id`, 序号、模型、用量、输入审计、错误 |
 | state | `model_call_snapshots` | 模型请求详情快照 | `model_call_id`, 上下文 JSON、工具定义 JSON、含上下文来源分组的请求元数据、截断标记 |
 | state | `tool_call_events` | 每次实际工具执行明细 | `run_id`, `model_call_id`, `parent_tool_id`, 轮次、工具、状态、耗时、参数与结果摘要 |

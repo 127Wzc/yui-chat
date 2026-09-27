@@ -2424,6 +2424,26 @@ async function checkAdapterToolProtocol() {
     }
     assert(strictLinkedAttempts === 1 && strictLinkedError.includes("not found"), "strict previous_response_id mode should fail once and leave channel fallback to the caller")
     const { parseResponsesResponse } = await import("../output/runtime/models/adapters/openai/responses/response-adapter.js")
+    for (const invalid of [
+      [{ type: "function_call", id: "fc_only", name: "command_search", arguments: "{}" }],
+      [1, 2].map(() => ({ type: "function_call", call_id: "call_duplicate", name: "command_search", arguments: "{}" })),
+    ]) {
+      let rejected = false
+      try { parseResponsesResponse({ output: invalid }) } catch (error) { rejected = /RESPONSES_TOOL_CALL_ID_/.test(error.message) }
+      assert(rejected, "invalid upstream call ids must be rejected before tool execution")
+    }
+    const normalizedCall = parseResponsesResponse({ output: [{ type: "function_call", id: "fc_distinct", call_id: " call_valid ", name: "command_search", arguments: "{}" }] })
+    assert(normalizedCall.toolCalls[0].id === "call_valid" && normalizedCall.protocol.outputItems[0].call_id === "call_valid", "execution and protocol replay must share the exact call id")
+    const localMessages = [{ role: "user", content: "连续调用两个工具" }]
+    for (let round = 0; round < 2; round++) {
+      const parsed = parseResponsesResponse({ id: `resp_local_${round}`, output: [{ type: "function_call", id: `fc_local_${round}`, call_id: `call_local_${round}`, name: "command_search", arguments: JSON.stringify({ query: `query-${round}` }) }] })
+      localMessages.push({ role: "assistant", content: "", protocol: parsed.protocol }, { role: "tool", tool_call_id: parsed.toolCalls[0].id, content: `result-${round}` })
+      const localRequest = buildResponsesRequest({ channel: { model: "test", responsesRuntime: { stateMode: "local", previousResponseId: "resp_should_not_link" } }, messages: localMessages })
+      assert(!localRequest.previous_response_id, "local mode must not depend on upstream response state")
+      const calls = localRequest.input.filter(item => item.type === "function_call")
+      const results = localRequest.input.filter(item => item.type === "function_call_output")
+      assert(calls.length === round + 1 && calls.every((call, index) => call.call_id === results[index].call_id), "local continuation must replay every complete tool pair")
+    }
     const cited = parseResponsesResponse({
       id: "resp_cited",
       status: "completed",
@@ -2824,7 +2844,7 @@ async function checkSqliteStorage() {
   try {
     assert(sqliteClient.status.available, "SQLite state database should initialize in worker")
     assert(sqliteClient.status.integrity === "ok", "SQLite state database should pass quick_check")
-    assert((sqliteClient.status.migrations || []).map(row => row.id).join(",") === "001-baseline.sql,002-tool-call-events.sql,003-model-call-snapshots.sql,004-conversation-state.sql", "SQLite state database should apply the baseline, combined tool/runtime, model snapshot, and conversation state schema")
+    assert((sqliteClient.status.migrations || []).map(row => row.id).join(",") === "001-baseline.sql,002-tool-call-events.sql,003-model-call-snapshots.sql,004-conversation-state.sql,005-log-session.sql", "SQLite state database should apply the baseline, combined tool/runtime, model snapshot, and conversation state schema")
     const removed = await sqliteClient.get("SELECT name FROM sqlite_master WHERE type='table' AND name='knowledge_sources'")
     assert(!removed, "baseline state database should not recreate removed transitional tables")
   } finally {

@@ -48,13 +48,19 @@ interface RenderRequest {
   abort(reason?: string): Promise<unknown> | unknown
 }
 
+interface RenderFrame {
+  name(): string
+  evaluate<T>(pageFunction: () => T | Promise<T>): Promise<T>
+}
+
 interface RenderPage {
+  frames?(): RenderFrame[]
   setRequestInterception?(enabled: boolean): Promise<unknown>
   on?(event: string, handler: (request: RenderRequest) => Promise<unknown>): void
   setViewport(options: RenderViewport & { deviceScaleFactor: number }): Promise<unknown>
   goto(url: string, options: { timeout: number; waitUntil: string }): Promise<unknown>
   evaluate?<T>(pageFunction: (limit: number) => T | Promise<T>, arg: number): Promise<T>
-  screenshot(options: { fullPage: boolean; type: "png" }): Promise<Uint8Array>
+  screenshot(options: { fullPage: boolean; type: "png"; clip?: { x: number; y: number; width: number; height: number } }): Promise<Uint8Array>
   close(): Promise<unknown>
 }
 
@@ -173,29 +179,57 @@ export function normalizeMarkdownMathDelimiters(value: unknown = ""): string {
 }
 
 function buildDocumentFrame(title: unknown, subtitle: unknown, content: string, footer = renderFooter("html"), format = "HTML"): string {
+  const visibleTitle = !title || /^(?:HTML|Markdown) 渲染$/.test(text(title)) ? "" : text(title)
   return `<div id="container"><main class="card" id="render-card">
-    <header class="window-header">
-      <div class="window-buttons"><span></span><span></span><span></span></div>
-      <div class="window-title"><span>${escapeHtml(title)}</span></div>
-      <div class="window-tag">${escapeHtml(format)}</div>
-    </header>
-    ${subtitle ? `<p class="document-subtitle">${escapeHtml(subtitle)}</p>` : ""}
+    <header class="window-header"><div class="window-buttons" aria-hidden="true"><span></span><span></span><span></span></div><div class="window-title">${escapeHtml(visibleTitle)}</div><div class="window-tag">${escapeHtml(format)}</div></header>
     <article id="content">${content}</article>
-    <footer>${escapeHtml(footer)}</footer>
+    <footer>${subtitle ? `<span class="document-subtitle">${escapeHtml(subtitle)}</span>` : ""}<span>${escapeHtml(footer)}</span></footer>
   </main></div>`
 }
 
-/** 原始 HTML 保留自定义样式；默认复用 Markdown 的主题、窗口和正文排版。 */
+/** 内容使用独立文档保留 CSS 与脚本，不能影响统一外框。 */
 export function buildThemedHtml(html: string, input: RenderInput = {}): string {
-  const styles = `<meta charset="utf-8"><style>${htmlRenderBaseCss}\n${htmlRenderDocumentCss}</style>`
-  const frame = (content: string) => buildDocumentFrame(compactText(input.title || "HTML 渲染", 100), compactText(input.subtitle, 160), content)
-  // 完整文档保留 head 中的 CSS、资源和脚本，只包装 body；片段直接放入统一卡片。
-  if (/<body\b[^>]*>/i.test(html)) {
-    const document = html.replace(/(<body\b[^>]*>)([\s\S]*?)(<\/body\s*>)/i, (_match, open, body, close) => `${open}${frame(body)}${close}`)
-    if (/<head\b[^>]*>/i.test(document)) return document.replace(/<head\b[^>]*>/i, match => `${match}${styles}`)
-    return document.replace(/<body\b/i, `${styles}<body`)
+  const contentStyles = `<meta charset="utf-8"><style>${htmlRenderDocumentCss}
+    html { background: transparent; } body { margin: 0; color: #4a3735; font: 24px/1.72 sans-serif; }
+  </style>`
+  const contentDocument = /<head\b[^>]*>/i.test(html)
+    ? html.replace(/<head\b[^>]*>/i, match => `${match}${contentStyles}`)
+    : `<!doctype html><html><head>${contentStyles}</head><body>${html}</body></html>`
+  const content = `<iframe name="yui-html-content" id="html-content-frame" sandbox="allow-scripts" srcdoc="${escapeHtml(contentDocument)}" style="display:block;width:100%;height:1px;border:0;margin:0"></iframe>`
+  const frame = buildDocumentFrame(compactText(input.title || "HTML 渲染", 100), compactText(input.subtitle, 160), content)
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><style>${htmlRenderBaseCss}\n${htmlRenderDocumentCss}</style></head><body>${frame}</body></html>`
+}
+
+async function fitHtmlContent(page: RenderPage): Promise<void> {
+  const frame = page.frames?.().find(frame => frame.name() === "yui-html-content")
+  if (!frame || !page.evaluate) return
+  // 先扩展内容宽度，再测量重排后的高度；不采用调用方的视口裁切尺寸。
+  for (let pass = 0; pass < 2; pass++) {
+    const size = await frame.evaluate(async () => {
+      await Promise.race([document.fonts.ready, new Promise(resolve => setTimeout(resolve, 1000))])
+      const bounds = [...document.body.querySelectorAll("*")].map(element => element.getBoundingClientRect())
+      return {
+        width: (() => {
+          const roots = [...document.body.children].filter(element => !["STYLE", "SCRIPT", "LINK"].includes(element.tagName))
+          const root = roots.length === 1 ? roots[0].getBoundingClientRect() : null
+          // 单一固定宽度画布可能居中于更宽的 body；收拢宿主后由浏览器重新布局。
+          if (root && root.width >= 240 && root.width < document.body.clientWidth) return Math.ceil(root.width)
+          return Math.ceil(Math.max(document.body.scrollWidth, ...bounds.map(rect => rect.right)))
+        })(),
+        height: Math.ceil(Math.max(document.body.scrollHeight, ...bounds.map(rect => rect.bottom))),
+      }
+    })
+    if (size.width > 16000 || size.height > 16000) throw new Error("HTML 内容尺寸过大，请缩小内容后重试。")
+    await page.evaluate(width => {
+      const card = document.getElementById("render-card")!
+      const content = document.getElementById("html-content-frame")!
+      const frameWidth = card.getBoundingClientRect().width - content.getBoundingClientRect().width
+      card.style.width = `${Math.max(320, Math.ceil(width + frameWidth))}px`
+    }, size.width)
+    await page.evaluate(height => {
+      document.getElementById("html-content-frame")!.style.height = `${Math.max(1, height)}px`
+    }, size.height)
   }
-  return `<!doctype html><html lang="zh-CN"><head>${styles}</head><body>${frame(html)}</body></html>`
 }
 
 export async function renderThemedHtmlToPng(input: RenderInput = {}, config: unknown = {}): Promise<UnknownRecord> {
@@ -205,7 +239,8 @@ export async function renderThemedHtmlToPng(input: RenderInput = {}, config: unk
   if (source.length > Math.max(1000, numberValue(cfg.maxHtmlChars, 200000))) throw new Error("HTML 内容超过 response.render.html.maxHtmlChars 限制。")
   const result = await renderHtmlDocumentToPng(buildThemedHtml(source, input), {
     ...input,
-    viewport: input.viewport || { width: 1300, height: 900 },
+    viewport: { width: 1300, height: 900 },
+    fullPage: true,
   }, config, false)
   return { ...result, meta: { ...record(result.meta), engine: "html", renderer: "html-puppeteer", requestedEngine: "html", fallback: false } }
 }
@@ -519,7 +554,14 @@ async function renderHtmlDocumentToPng(html: string = "", input: RenderInput = {
       const waitMs = numberValue(input.waitMs ?? cfg.waitMs, 0)
       if (waitMs > 0) await new Promise(resolve => setTimeout(resolve, Math.min(waitMs, 3000)))
     }
-    const buffer = await page.screenshot({ fullPage: input.fullPage !== false, type: "png" })
+    await fitHtmlContent(page)
+    const clip = await page.evaluate?.(() => {
+      const container = document.getElementById("container")
+      if (!container) return undefined
+      const rect = container.getBoundingClientRect()
+      return { x: rect.x, y: rect.y, width: Math.ceil(rect.width), height: Math.ceil(rect.height) }
+    }, 0)
+    const buffer = await page.screenshot({ fullPage: clip ? false : input.fullPage !== false, type: "png", ...(clip ? { clip } : {}) })
     const meta = { file, engine: "html-puppeteer" }
     return { buffer, meta }
   } finally {
@@ -571,8 +613,8 @@ export async function renderMarkdownHtmlToPng(input: RenderInput = {}, config: u
   const html = buildMarkdownHtml(input, config)
   return renderHtmlDocumentToPng(html, {
     name: input.name || "markdown-html",
-    viewport: input.viewport || { width: 1300, height: 900 },
-    fullPage: input.fullPage !== false,
+    viewport: { width: 1300, height: 900 },
+    fullPage: true,
     waitMs: input.waitMs ?? 900,
     waitForRenderComplete: true,
   }, config)

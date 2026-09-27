@@ -242,6 +242,9 @@ export async function sendConversation(
       return failTrace(error)
     }
 
+    const sessionId = text(conversation.sessionId) || crypto.randomUUID()
+    if (trace && typeof trace === "object") (trace as unknown as UnknownRecord).sessionId = sessionId
+
     await recentContextStore.buildPromptWithHistory(event)
     if (media && mediaEnabled) {
       // 明确引用/本次附件始终优先；跟进本轮图片时先读取会话里的受管缓存引用。
@@ -371,6 +374,7 @@ export async function sendConversation(
       adapter: final.adapter,
       source: text(options.source),
       conversationKey: key,
+      sessionId,
       prompt,
       media: summarizeMediaForResult(media),
       text: finalText,
@@ -424,6 +428,7 @@ export async function sendConversation(
         const protocolState = updatedProtocolState(previous.protocolState, final.responseState)
         const toolCalls = turns.reduce((sum: number, item) => sum + list(record(item).toolChain).length, 0)
         runtime.conversations.set(key, {
+          sessionId,
           history: nextHistory,
           turns,
           usage,
@@ -432,7 +437,7 @@ export async function sendConversation(
           lastSeen: Date.now(),
         })
         try {
-          await conversationStore.save({ id: key, history: nextHistory, turns, usage, toolCalls, protocolState })
+          await conversationStore.save({ id: key, sessionId, history: nextHistory, turns, usage, toolCalls, protocolState })
         } catch (error) {
           hostRuntime.logger?.warn?.("[yui-chat] 会话写入 SQLite 失败，内存会话继续可用", error)
         }
@@ -449,19 +454,18 @@ export async function sendConversation(
         const previous = record(previousValue)
         const currentHistory = Array.isArray(previousValue) ? previousValue : list(previous.history || history)
         const protocolState = updatedProtocolState(previous.protocolState, final.responseState)
-        const next = { ...previous, history: currentHistory, protocolState, lastSeen: Date.now() }
+        const next = { ...previous, sessionId, history: currentHistory, protocolState, lastSeen: Date.now() }
         runtime.conversations.set(key, next)
         try {
-          if (Object.keys(record(final.responseState)).length) {
-            await conversationStore.save({
-              id: key,
-              history: currentHistory,
-              turns: list(previous.turns),
-              usage: record(previous.usage),
-              toolCalls: previous.toolCalls,
-              protocolState,
-            })
-          } else await conversationStore.touch(key)
+          await conversationStore.save({
+            id: key,
+            sessionId,
+            history: currentHistory,
+            turns: list(previous.turns),
+            usage: record(previous.usage),
+            toolCalls: previous.toolCalls,
+            protocolState,
+          })
         } catch (error) {
           hostRuntime.logger?.warn?.("[yui-chat] 刷新 SQLite 会话活跃时间失败，内存会话继续可用", error)
         }

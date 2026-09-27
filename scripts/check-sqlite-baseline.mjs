@@ -43,7 +43,7 @@ try {
   state = new Database(path.join(root, "state.sqlite3"))
   state.pragma("foreign_keys = ON")
   const stateMigrations = runStateMigrations(state)
-  assert.deepEqual(stateMigrations.map(row => row.id), ["001-baseline.sql", "002-tool-call-events.sql", "003-model-call-snapshots.sql", "004-conversation-state.sql"], "state database must apply the baseline, combined tool/runtime, model snapshot, and conversation state migrations")
+  assert.deepEqual(stateMigrations.map(row => row.id), ["001-baseline.sql", "002-tool-call-events.sql", "003-model-call-snapshots.sql", "004-conversation-state.sql", "005-log-session.sql"], "state database must apply the baseline, combined tool/runtime, model snapshot, and conversation state migrations")
   for (const table of STATE_TABLES) assert(tableNames(state).includes(table), `missing state table: ${table}`)
   for (const table of REMOVED_STATE_TABLES) assert(!tableNames(state).includes(table), `removed state table must not return: ${table}`)
   assert.equal(state.pragma("quick_check", { simple: true }), "ok", "baseline state database must pass quick_check")

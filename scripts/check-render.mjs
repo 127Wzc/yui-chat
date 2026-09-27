@@ -36,18 +36,34 @@ globalThis.__yuiRenderTestBrowser = {
       on(event, handler) { capture.handler = handler; page?.on(event, handler) },
       async setViewport(viewport) { capture.viewport = viewport; await page?.setViewport(viewport) },
       async goto(url, options) { capture.file = fileURLToPath(url); capture.html = await fs.readFile(capture.file, 'utf8'); await page?.goto(url, options) },
-      async evaluate(fn, arg) { return page ? page.evaluate(fn, arg) : true },
+      frames() { return page?.frames() || [] },
+      async evaluate(fn, arg) { return page ? page.evaluate(fn, arg) : undefined },
       async screenshot(options) {
         if (!page) return png
+        const contentFrame = page.frames().find(frame => frame.name() === 'yui-html-content')
+        const contentDom = contentFrame ? await contentFrame.evaluate(() => ({
+          text: document.body.textContent,
+          headingColor: document.querySelector('#custom-heading') ? getComputedStyle(document.querySelector('#custom-heading')).color : '',
+          scene: document.querySelector('.scene')?.getBoundingClientRect().toJSON(),
+        })) : null
+        capture.options = options
         capture.dom = await page.evaluate(() => ({
           text: document.querySelector('#content')?.textContent,
           tag: document.querySelector('.window-tag')?.textContent,
           card: getComputedStyle(document.querySelector('.card')).borderRadius,
+          cardBackground: getComputedStyle(document.querySelector('.card')).backgroundImage,
+          dots: [...document.querySelectorAll('.window-buttons span')].map(dot => ({ width: dot.getBoundingClientRect().width, color: getComputedStyle(dot).backgroundColor })),
           katex: document.querySelectorAll('.katex').length,
           mermaid: document.querySelectorAll('.mermaid svg').length,
           headingColor: document.querySelector('#custom-heading') ? getComputedStyle(document.querySelector('#custom-heading')).color : '',
         }))
+        if (contentDom) Object.assign(capture.dom, contentDom)
+        capture.layout = await page.evaluate(() => {
+          const frame = document.querySelector('#html-content-frame')
+          return { frame: frame?.getBoundingClientRect().toJSON(), card: document.querySelector('#render-card')?.getBoundingClientRect().toJSON(), footer: document.querySelector('footer')?.getBoundingClientRect().toJSON() }
+        })
         const result = await page.screenshot(options)
+        capture.image = await sharp(result).metadata()
         await fs.writeFile(path.join(root, 'cache', `render-qa-${captures.length}.png`), result)
         return result
       },
@@ -126,7 +142,7 @@ try {
   assert.equal(captures.length, 0, 'rejected inputs must not open a browser page')
   assert.match(await call(htmlArgs, { ...master, e: { user_id: '10002' } }), /HTML渲染完成/)
   assert(captures.at(-1).html.includes('&lt;Title&gt;'))
-  assert(captures.at(-1).html.includes('<h1>HTML 正常</h1>'))
+  assert(captures.at(-1).html.includes('&lt;h1&gt;HTML 正常&lt;/h1&gt;'))
   const fullDocument = '<!doctype html><html><head><style>#custom-heading{color:rgb(0,128,0)}</style></head><body><h1 id="custom-heading">完整文档</h1></body></html>'
   const preview = await renderPreview({ format: 'html', data: { content: fullDocument } }, config)
   assert.equal(preview.engine, 'html')
@@ -134,12 +150,39 @@ try {
   assert.equal(Buffer.from(preview.imageBase64, 'base64').subarray(0, 8).toString('hex'), '89504e470d0a1a0a')
   if (realBrowser) {
     assert.equal(captures.at(-1).dom.headingColor, 'rgb(0, 128, 0)')
-    assert.equal(captures.at(-1).dom.card, '40px')
+    assert.equal(captures.at(-1).dom.card, '18px')
+    assert.equal(captures.at(-1).dom.dots.length, 3, 'window controls remain even without a custom title')
+    assert(captures.at(-1).dom.dots.every(dot => dot.width === 10))
+    assert.match(captures.at(-1).dom.cardBackground, /rgb\(255, 240, 243\)/)
     assert.match(captures.at(-1).dom.text, /完整文档/)
+  }
+  const tool = createRenderTools().find(tool => tool.name === 'render_image')
+  assert(!tool.parameters.properties.data.properties.viewport)
+  assert(!tool.parameters.properties.data.properties.fullPage)
+  assert.match(tool.parameters.properties.send.description, /Defaults to true/)
+  const croppedInput = { content: '<html><head><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:cyan} .card{border-radius:0!important} footer{display:none} .scene{width:1500px;height:920px;background:green}</style></head><body><div class="scene">完整场景</div></body></html>', viewport: { width: 900, height: 620 }, fullPage: false }
+  await call({ format: 'html', data: croppedInput })
+  if (realBrowser) {
+    const capture = captures.at(-1)
+    assert.equal(capture.dom.card, '18px', 'content CSS cannot change outer card')
+    assert(capture.options.clip)
+    assert(capture.layout.frame.width >= 1500)
+    assert(capture.layout.frame.height >= 920)
+    assert(capture.layout.footer.height > 0, 'content CSS cannot hide outer footer')
+    assert(capture.image.width >= capture.layout.card.right + 9)
+    assert(capture.image.height >= capture.layout.card.bottom + 9)
+  }
+  await call({ format: 'html', data: { title: '新闻', subtitle: '更新于 00:15', content: '<div style="width:900px;height:620px;margin:auto;background:skyblue">主体</div>' } })
+  if (realBrowser) {
+    const capture = captures.at(-1)
+    assert(capture.image.width < 960, 'fixed canvas should not retain 1200px outer width')
+    assert(capture.image.height < 750, 'compact header and footer should not force 800px minimum height')
+    assert(capture.layout.frame.width >= 900)
+    assert(capture.layout.footer.top >= capture.layout.frame.bottom)
   }
   await call({ format: 'markdown', data: { content: '# 数学与图表\n\n$$a^2+b^2=c^2$$\n\n```mermaid\nflowchart LR\nA --> B\n```' } })
   if (realBrowser) {
-    assert.equal(captures.at(-1).dom.tag, 'Markdown')
+    assert.match(captures.at(-1).html, /Yui Chat/)
     assert(captures.at(-1).dom.katex > 0)
     assert(captures.at(-1).dom.mermaid > 0)
   }

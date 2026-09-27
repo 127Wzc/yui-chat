@@ -29,8 +29,8 @@ export class RenderImageTool {
   risk = "low"
   policy = {}
   tags = ["HTML", "Markdown", "数学公式", "Mermaid", "思维导图", "文本卡片", "排版", "文档转图", "表格", "typesetting", "document-rendering"]
-  description = "Use when the user asks to typeset supplied content as an image: documents, formulas, diagrams, tables or cards. This is document/layout rendering, NOT AI drawing or image generation. For requests to draw a character, illustration, scene, or edit an image, use generate_image. Do not replace requested artwork with a text card, even if generate_image is unavailable; report the limitation. Render HTML, Markdown, math formulas, Mermaid diagrams, mind maps or text cards as a PNG in the shared Yui Chat style. Use format plus data.content: auto (default) detects HTML markup vs Markdown; html renders HTML/CSS fragments or documents; markdown renders rich text, $...$ / $$...$$ / \\(...\\) / \\[...\\] formulas and fenced mermaid diagrams; mindmap renders Markdown hierarchies; text renders plain content or sections. Math and Mermaid belong to markdown, not separate formats. All formats follow render_image permissions. HTML always uses HTML rendering with no SVG fallback. For URL screenshots use render_url_screenshot."
-  descriptionZh = "内容排版成图：将已有 HTML、Markdown、数学公式、Mermaid、思维导图、表格或文本排成图片，保留统一样式。人物、插画和场景创作请使用 generate_image。"
+  description = "Use when the user asks to typeset supplied content as an image: documents, formulas, diagrams, tables or cards. This is document/layout rendering, NOT AI drawing or image generation. For requests to draw a character, illustration, scene, or edit an image, use generate_image. Do not replace requested artwork with a text card, even if generate_image is unavailable; report the limitation. Render HTML, Markdown, math formulas, Mermaid diagrams, mind maps or text cards as a PNG in the shared Yui Chat style. Use format plus data.content: auto (default) detects HTML markup vs Markdown; html renders HTML/CSS fragments or documents; markdown renders rich text, $...$ / $$...$$ / \\(...\\) / \\[...\\] formulas and fenced mermaid diagrams; mindmap renders Markdown hierarchies; text renders plain content or sections. Math and Mermaid belong to markdown, not separate formats. All formats follow render_image permissions. HTML always uses HTML rendering with no SVG fallback. Output is a static PNG, not an animation. Default send=true: render and send in one call. Use send=false only when the user explicitly requests a preview or no sending; it returns a completion status, not a visual preview. Do not perform a preliminary send=false call before sending. For URL screenshots use render_url_screenshot."
+  descriptionZh = "内容排版成图：将已有 HTML、Markdown、数学公式、Mermaid、思维导图、表格或文本排成图片，保留统一样式并自动适配完整内容尺寸。默认一次渲染并发送，仅用户明确要求预览或不发送时使用 send:false；输出为静态 PNG。人物、插画和场景创作请使用 generate_image。"
   execution = { effect: "non_idempotent", repeatPolicy: "dedupe", operationFields: ["format", "data", "send", "targetType", "targetId"], retryPolicy: "no_ambiguous_retry", maxAttempts: 1 }
   parameters = {
     type: "object",
@@ -43,12 +43,10 @@ export class RenderImageTool {
           subtitle: { type: "string" },
           content: { type: "string", description: "HTML/CSS, Markdown (including delimited LaTeX and fenced Mermaid), a Markdown mind map, or plain text according to format." },
           sections: { type: "array", items: { type: "object" }, description: "Optional text-card sections with title and lines." },
-          viewport: { type: "object", properties: { width: { type: "number" }, height: { type: "number" } } },
-          fullPage: { type: "boolean" },
           waitMs: { type: "number", description: "Optional bounded HTML wait." },
         },
       },
-      send: { type: "boolean", description: "Send to current chat by default; false only renders." },
+      send: { type: "boolean", description: "Defaults to true: render and send once. Set false only if the user explicitly requests a preview or no sending; no image is returned to the model. Do not render twice as a routine preview/send sequence." },
       targetType: { type: "string", description: "Optional group or user; requires master and response.render.delivery.allowTargetSend." },
       targetId: { type: "string", description: "Optional target id; requires master and response.render.delivery.allowTargetSend." },
     },

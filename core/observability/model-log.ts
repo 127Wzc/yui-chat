@@ -23,7 +23,7 @@ const RETRY_MAX_MS = 30000
 const DAY_OFFSET_MS = 8 * 60 * 60 * 1000
 const COST_CURRENCY = "CNY"
 const RUN_LIST_COLUMNS = [
-  "id", "source", "purpose", "conversation_key", "scope_type", "user_id", "group_id",
+  "id", "source", "purpose", "conversation_key", "session_id", "scope_type", "user_id", "group_id",
   "status", "started_at", "ended_at", "duration_ms", "input_tokens", "output_tokens", "total_tokens",
   "cached_tokens", "reasoning_tokens", "estimated_tokens", "model_calls", "tool_calls", "failed_tools",
   "estimated_cost",
@@ -47,6 +47,7 @@ interface LogRow extends UnknownRecord {
   parent_run_id?: string
   source?: string
   purpose?: string
+  session_id?: string
   conversation_key?: string
   scope_type?: string
   user_id?: string
@@ -152,6 +153,7 @@ interface TraceRecord {
   source: string
   purpose: string
   promptText: string
+  sessionId: string
   conversationKey: string
   scope: TraceScope
   startedAt: number
@@ -837,12 +839,13 @@ class ModelLogStore {
     return this.captureSync("准备模型调用日志", () => this.createTraceInternal(options))
   }
 
-  createTraceInternal({ event = {}, source = "chat", purpose = source || "chat", parentId = "", conversationKey = "", prompt = "", metadata = {} }: {
+  createTraceInternal({ event = {}, source = "chat", purpose = source || "chat", parentId = "", conversationKey = "", sessionId = "", prompt = "", metadata = {} }: {
     event?: unknown
     source?: unknown
     purpose?: unknown
     parentId?: unknown
     conversationKey?: unknown
+    sessionId?: unknown
     prompt?: unknown
     metadata?: unknown
   } = {}): TraceRecord | null {
@@ -856,6 +859,7 @@ class ModelLogStore {
       purpose: String(purpose || source || "chat"),
       promptText: shouldStoreMemoryConsolidationInput({ source, purpose }) ? "" : redactText(prompt, 30000),
       conversationKey: String(conversationKey || ""),
+      sessionId: String(sessionId || crypto.randomUUID()),
       scope,
       startedAt,
       sequence: 0,
@@ -874,6 +878,7 @@ class ModelLogStore {
       purpose: trace.purpose,
       parent_run_id: trace.parentId || "",
       conversation_key: trace.conversationKey,
+      session_id: trace.sessionId,
       scope_type: scope.scopeType,
       user_id: scope.userId,
       group_id: scope.groupId,
@@ -904,6 +909,7 @@ class ModelLogStore {
     if (!run || run.persisted) return
     // conversationKey 可能在请求解析出渠道后才补齐；写入起始行前同步一次，
     // 让未完成运行也能被会话索引看到。
+    run.startRow.session_id = run.sessionId
     run.startRow.conversation_key = run.conversationKey
     run.startRow.prompt_text = run.promptText
     this.enqueueDetail({ kind: "run", row: run.startRow, terminal: false })
@@ -927,6 +933,7 @@ class ModelLogStore {
       source: trace.source,
       purpose: trace.purpose,
       conversation_key: trace.conversationKey,
+      session_id: trace.sessionId,
       parent_run_id: trace.parentId || "",
       scope_type: trace.scope.scopeType,
       user_id: trace.scope.userId,
@@ -972,6 +979,7 @@ class ModelLogStore {
       source: trace.source,
       purpose: trace.purpose,
       conversation_key: trace.conversationKey,
+      session_id: trace.sessionId,
       parent_run_id: trace.parentId || "",
       scope_type: trace.scope?.scopeType || "",
       user_id: trace.scope?.userId || "",
@@ -1468,10 +1476,10 @@ class ModelLogStore {
   upsertOperation(event: DetailEvent): SqlOperation {
     const row = event.row
     if (event.kind === "run") return {
-      sql: `INSERT INTO ai_runs(id, source, purpose, parent_run_id, conversation_key, scope_type, user_id, group_id, prompt_text, response_text, status, started_at, ended_at, duration_ms, input_tokens, output_tokens, total_tokens, cached_tokens, reasoning_tokens, estimated_tokens, model_calls, tool_calls, failed_tools, estimated_cost, metadata_json)
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET source=excluded.source, purpose=excluded.purpose, conversation_key=excluded.conversation_key, scope_type=excluded.scope_type, user_id=excluded.user_id, group_id=excluded.group_id, response_text=CASE WHEN excluded.response_text<>'' THEN excluded.response_text ELSE ai_runs.response_text END, status=CASE WHEN excluded.ended_at=0 AND ai_runs.ended_at>0 THEN ai_runs.status ELSE excluded.status END, started_at=MIN(ai_runs.started_at, excluded.started_at), ended_at=MAX(ai_runs.ended_at, excluded.ended_at), duration_ms=CASE WHEN excluded.ended_at>0 OR ai_runs.ended_at=0 THEN excluded.duration_ms ELSE ai_runs.duration_ms END, input_tokens=CASE WHEN excluded.ended_at>0 OR ai_runs.ended_at=0 THEN excluded.input_tokens ELSE ai_runs.input_tokens END, output_tokens=CASE WHEN excluded.ended_at>0 OR ai_runs.ended_at=0 THEN excluded.output_tokens ELSE ai_runs.output_tokens END, total_tokens=CASE WHEN excluded.ended_at>0 OR ai_runs.ended_at=0 THEN excluded.total_tokens ELSE ai_runs.total_tokens END, cached_tokens=CASE WHEN excluded.ended_at>0 OR ai_runs.ended_at=0 THEN excluded.cached_tokens ELSE ai_runs.cached_tokens END, reasoning_tokens=CASE WHEN excluded.ended_at>0 OR ai_runs.ended_at=0 THEN excluded.reasoning_tokens ELSE ai_runs.reasoning_tokens END, estimated_tokens=CASE WHEN excluded.ended_at>0 OR ai_runs.ended_at=0 THEN excluded.estimated_tokens ELSE ai_runs.estimated_tokens END, model_calls=CASE WHEN excluded.ended_at>0 OR ai_runs.ended_at=0 THEN excluded.model_calls ELSE ai_runs.model_calls END, tool_calls=CASE WHEN excluded.ended_at>0 OR ai_runs.ended_at=0 THEN excluded.tool_calls ELSE ai_runs.tool_calls END, failed_tools=CASE WHEN excluded.ended_at>0 OR ai_runs.ended_at=0 THEN excluded.failed_tools ELSE ai_runs.failed_tools END, estimated_cost=CASE WHEN excluded.ended_at>0 OR ai_runs.ended_at=0 THEN excluded.estimated_cost ELSE ai_runs.estimated_cost END, metadata_json=CASE WHEN excluded.ended_at>0 OR ai_runs.ended_at=0 THEN excluded.metadata_json ELSE ai_runs.metadata_json END`,
-      params: [row.id, row.source, row.purpose, row.parent_run_id || "", row.conversation_key, row.scope_type, row.user_id, row.group_id, row.prompt_text || "", row.response_text || "", row.status, row.started_at, row.ended_at, row.duration_ms, row.input_tokens, row.output_tokens, row.total_tokens, row.cached_tokens, row.reasoning_tokens, row.estimated_tokens, row.model_calls, row.tool_calls, row.failed_tools, row.estimated_cost, row.metadata_json],
+      sql: `INSERT INTO ai_runs(id, source, purpose, parent_run_id, session_id, conversation_key, scope_type, user_id, group_id, prompt_text, response_text, status, started_at, ended_at, duration_ms, input_tokens, output_tokens, total_tokens, cached_tokens, reasoning_tokens, estimated_tokens, model_calls, tool_calls, failed_tools, estimated_cost, metadata_json)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET source=excluded.source, purpose=excluded.purpose, session_id=excluded.session_id, conversation_key=excluded.conversation_key, scope_type=excluded.scope_type, user_id=excluded.user_id, group_id=excluded.group_id, response_text=CASE WHEN excluded.response_text<>'' THEN excluded.response_text ELSE ai_runs.response_text END, status=CASE WHEN excluded.ended_at=0 AND ai_runs.ended_at>0 THEN ai_runs.status ELSE excluded.status END, started_at=MIN(ai_runs.started_at, excluded.started_at), ended_at=MAX(ai_runs.ended_at, excluded.ended_at), duration_ms=CASE WHEN excluded.ended_at>0 OR ai_runs.ended_at=0 THEN excluded.duration_ms ELSE ai_runs.duration_ms END, input_tokens=CASE WHEN excluded.ended_at>0 OR ai_runs.ended_at=0 THEN excluded.input_tokens ELSE ai_runs.input_tokens END, output_tokens=CASE WHEN excluded.ended_at>0 OR ai_runs.ended_at=0 THEN excluded.output_tokens ELSE ai_runs.output_tokens END, total_tokens=CASE WHEN excluded.ended_at>0 OR ai_runs.ended_at=0 THEN excluded.total_tokens ELSE ai_runs.total_tokens END, cached_tokens=CASE WHEN excluded.ended_at>0 OR ai_runs.ended_at=0 THEN excluded.cached_tokens ELSE ai_runs.cached_tokens END, reasoning_tokens=CASE WHEN excluded.ended_at>0 OR ai_runs.ended_at=0 THEN excluded.reasoning_tokens ELSE ai_runs.reasoning_tokens END, estimated_tokens=CASE WHEN excluded.ended_at>0 OR ai_runs.ended_at=0 THEN excluded.estimated_tokens ELSE ai_runs.estimated_tokens END, model_calls=CASE WHEN excluded.ended_at>0 OR ai_runs.ended_at=0 THEN excluded.model_calls ELSE ai_runs.model_calls END, tool_calls=CASE WHEN excluded.ended_at>0 OR ai_runs.ended_at=0 THEN excluded.tool_calls ELSE ai_runs.tool_calls END, failed_tools=CASE WHEN excluded.ended_at>0 OR ai_runs.ended_at=0 THEN excluded.failed_tools ELSE ai_runs.failed_tools END, estimated_cost=CASE WHEN excluded.ended_at>0 OR ai_runs.ended_at=0 THEN excluded.estimated_cost ELSE ai_runs.estimated_cost END, metadata_json=CASE WHEN excluded.ended_at>0 OR ai_runs.ended_at=0 THEN excluded.metadata_json ELSE ai_runs.metadata_json END`,
+      params: [row.id, row.source, row.purpose, row.parent_run_id || "", row.session_id || "", row.conversation_key, row.scope_type, row.user_id, row.group_id, row.prompt_text || "", row.response_text || "", row.status, row.started_at, row.ended_at, row.duration_ms, row.input_tokens, row.output_tokens, row.total_tokens, row.cached_tokens, row.reasoning_tokens, row.estimated_tokens, row.model_calls, row.tool_calls, row.failed_tools, row.estimated_cost, row.metadata_json],
     }
     if (event.kind === "model") return {
       sql: `INSERT INTO model_call_events(id, run_id, parent_tool_id, sequence, purpose, model_name, model_identifier, provider_name, adapter, status, started_at, ended_at, duration_ms, input_tokens, output_tokens, total_tokens, cached_tokens, reasoning_tokens, estimated_input_tokens, estimated_output_tokens, usage_source, price_in, price_out, estimated_cost, error_message, input_text, metadata_json)
@@ -1845,15 +1853,16 @@ class ModelLogStore {
     const conversationKey = String(anchor.conversation_key || "")
     if (!conversationKey) return { runId: key, conversationKey: "", items: [], available: false, persistence: Boolean(sqliteClient.status.available) }
 
+    const sessionId = String(anchor.session_id || "")
     const rows = new Map<string, LogRow>()
-    if (sqliteClient.status.available) {
+    if (sqliteClient.status.available && sessionId) {
       const persisted = await sqliteClient.all<LogRow>(
-        "SELECT id, source, purpose, conversation_key, scope_type, user_id, group_id, status, started_at, ended_at, duration_ms, response_text, prompt_text, model_calls, tool_calls, failed_tools, total_tokens FROM ai_runs WHERE conversation_key=? AND (parent_run_id='' OR parent_run_id IS NULL) ORDER BY started_at ASC, id ASC",
-        [conversationKey],
+        "SELECT id, source, purpose, session_id, conversation_key, scope_type, user_id, group_id, status, started_at, ended_at, duration_ms, response_text, prompt_text, model_calls, tool_calls, failed_tools, total_tokens FROM ai_runs WHERE session_id=? AND (parent_run_id='' OR parent_run_id IS NULL) ORDER BY started_at ASC, id ASC",
+        [sessionId],
       )
       for (const row of persisted) rows.set(row.id, row)
     }
-    for (const row of this.memoryRuns.values()) if (String(row.conversation_key || "") === conversationKey && !String(row.parent_run_id || "")) rows.set(row.id, row)
+    for (const row of this.memoryRuns.values()) if (sessionId && String(row.session_id || "") === sessionId && !String(row.parent_run_id || "")) rows.set(row.id, row)
     if (!rows.has(key) && !String(anchor.parent_run_id || "")) rows.set(key, anchor)
 
     const runRows = [...rows.values()].sort((a, b) => Number(a.started_at || 0) - Number(b.started_at || 0) || String(a.id).localeCompare(String(b.id)))
@@ -1866,8 +1875,8 @@ class ModelLogStore {
     }
     if (sqliteClient.status.available && ids.length) {
       const persistedModels = await sqliteClient.all<LogRow>(
-        "SELECT model_call_events.id, model_call_events.run_id FROM model_call_events INNER JOIN ai_runs ON ai_runs.id=model_call_events.run_id WHERE ai_runs.conversation_key=? AND (ai_runs.parent_run_id='' OR ai_runs.parent_run_id IS NULL) ORDER BY model_call_events.started_at ASC, model_call_events.sequence ASC, model_call_events.id ASC",
-        [conversationKey],
+        "SELECT model_call_events.id, model_call_events.run_id FROM model_call_events INNER JOIN ai_runs ON ai_runs.id=model_call_events.run_id WHERE ((?<>'' AND ai_runs.session_id=?) OR (?='' AND ai_runs.id=?)) AND (ai_runs.parent_run_id='' OR ai_runs.parent_run_id IS NULL) ORDER BY model_call_events.started_at ASC, model_call_events.sequence ASC, model_call_events.id ASC",
+        [sessionId, sessionId, sessionId, key],
       )
       for (const row of persistedModels) {
         const runKey = String(row.run_id || "")
@@ -1879,8 +1888,9 @@ class ModelLogStore {
     return {
       runId: key,
       conversationKey,
+      sessionId,
       session: {
-        key: conversationKey,
+        key: sessionId,
         scope_type: String(anchor.scope_type || runRows[0]?.scope_type || ""),
         user_id: String(anchor.user_id || runRows[0]?.user_id || ""),
         group_id: String(anchor.group_id || runRows[0]?.group_id || ""),
@@ -1925,7 +1935,7 @@ class ModelLogStore {
     delete result.metadata_json
     if (typeof metadata.error === "string" && metadata.error) result.error_message = metadata.error
     if (metadata.errorDetails && typeof metadata.errorDetails === "object") result.error_details = metadata.errorDetails
-    if (row.conversation_key) result.session_id = row.conversation_key
+    if (row.session_id) result.session_id = row.session_id
     return result
   }
 
@@ -1934,7 +1944,7 @@ class ModelLogStore {
     const metadata = parseJson(row?.metadata_json)
     const error = String(row?.error_message || metadata.error || "")
     if (error) result.error_message = error
-    if (row?.conversation_key) result.session_id = row.conversation_key
+    if (row?.session_id) result.session_id = row.session_id
     Object.assign(result, summary)
     return result
   }
@@ -1951,13 +1961,13 @@ class ModelLogStore {
     }
     const protocol = String(metadata.protocol || protocolForAdapter(row.adapter))
     const stream = Object.hasOwn(metadata, "stream") ? metadata.stream === true : null
-    const sessionId = String(run?.conversation_key || row.conversation_key || "")
+    const sessionId = String(run?.session_id || row.session_id || "")
     return {
       ...row,
       metadata,
       protocol,
       stream,
-      ...(sessionId ? { session_id: sessionId, conversation_key: sessionId } : {}),
+      ...(sessionId ? { session_id: sessionId, conversation_key: String(run?.conversation_key || row.conversation_key || "") } : {}),
       error_message: row.error_message || (typeof metadata.error === "string" ? metadata.error : ""),
       error_details: metadata.errorDetails && typeof metadata.errorDetails === "object" ? metadata.errorDetails : {},
       response_text: typeof metadata.responseText === "string" ? metadata.responseText : "",
