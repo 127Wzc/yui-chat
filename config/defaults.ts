@@ -484,8 +484,8 @@ export const defaults = {
         allowTargetSend: false,
         allowFilePathImages: false,
       },
+      url: { enabled: false },
       html: {
-        enabled: false,
         maxUrlLength: 2048,
         maxHtmlChars: 200000,
         timeoutMs: 30000,

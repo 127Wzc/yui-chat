@@ -353,7 +353,7 @@ async function checkConfigSafety() {
   assert(config.response?.render?.delivery?.allowTargetSend === false, "render cross-target delivery must default false")
   assert(config.response?.render?.delivery?.allowFilePathImages === false, "render local file image delivery must default false")
   assert(!("allowPrivateHosts" in config.response.render.delivery), "media delivery must not keep a separate private-host switch")
-  assert(config.response?.render?.html?.enabled === false, "HTML render backend must default disabled")
+  assert(!("enabled" in config.response.render.html) && config.response.render.url.enabled === false, "HTML follows render_image; URL screenshot must default disabled")
   assert(!("allowPrivateHosts" in config.response.render.html) && !("allowedUrlHosts" in config.response.render.html), "HTML render config must not keep separate link-safety controls")
   assert(config.security?.linkSafety?.screenshotAllowedHosts?.join(",") === "*", "central URL screenshot host policy should default to all domains")
   assert(config.persona?.trigger?.ambient?.enabled === false, "ambient first-person trigger must default disabled")
@@ -999,7 +999,7 @@ async function checkToolPolicy() {
   assert(!inferredPrivateTools.some(tool => tool.name === "set_title"), "group tools must stay hidden in an explicit private temporary session")
   assert(selectPromptTools(inferredGroupTools, "玉玉修改我的头衔为cccc", { enabled: true, maxTools: 1, maxDefinitionTokens: 1200 })[0]?.name === "set_title", "title intent should select set_title after shared group scope recovery")
   assert(!privateTools.some(tool => tool.name === "block_user"), "private users must not see block_user when permission groups are enabled")
-  assert(!privateTools.some(tool => tool.name === "render_html_screenshot"), "private users must not see disabled HTML screenshot tool")
+  assert(!privateTools.some(tool => tool.name === "render_html_screenshot"), "the retired HTML screenshot tool must not be registered")
   assert(!privateTools.some(tool => tool.name === "render_url_screenshot"), "private users must not see disabled URL screenshot tool")
   let titleCall
   const titleEvent = {
@@ -3482,9 +3482,9 @@ async function checkAccessControl() {
 
 async function checkRenderService() {
   const { listImageRenderers, registerImageRenderer, renderChatCard, renderCommandHelp, renderConversationList, renderDynamicPanel, renderFunctionPlot, renderHelpMenu, renderImageByConfiguredEngine, renderImageByKind, renderKindCatalog, renderMarkdownDocument, renderMindMap, renderRendererRegistry, renderTextCard, renderWordCloud, unregisterImageRenderer, withRenderScope } = await import("../output/runtime/core/rendering/render-service.js")
-  const { assertSafeRenderUrl, isAllowedRenderHost, normalizeMarkdownMathDelimiters, renderHtmlToPng, renderMarkdownHtmlToPng, renderMarkmapHtmlToPng, renderUrlToPng } = await import("../output/runtime/core/rendering/render-html-service.js")
+  const { assertSafeRenderUrl, isAllowedRenderHost, normalizeMarkdownMathDelimiters, renderMarkdownHtmlToPng, renderMarkmapHtmlToPng, renderUrlToPng } = await import("../output/runtime/core/rendering/render-html-service.js")
   const { compileFunctionExpression } = await import("../output/runtime/core/rendering/function-plot.js")
-  const { resolveRenderImageEngine } = await import("../output/runtime/tools/builtins/render.js")
+  const { resolveRenderEngine: resolveRenderImageEngine } = await import("../output/runtime/core/rendering/render-engine.js")
   const { renderApiOverview, renderPreview } = await import("../output/runtime/core/rendering/render-api-service.js")
   const { buildNextHelpMenu } = await import("../output/runtime/apps/help-menu.js")
   const { deliverRenderedImage, renderAndDeliverImage } = await import("../output/runtime/core/rendering/render-delivery.js")
@@ -3493,7 +3493,7 @@ async function checkRenderService() {
   assert(normalizeMarkdownMathDelimiters("\\[x^2\\]\n`\\(raw\\)`\n```tex\n\\[raw\\]\n```") === "$$x^2$$\n`\\(raw\\)`\n```tex\n\\[raw\\]\n```", "rich Markdown should normalize common LaTeX delimiters outside code spans and fences")
   assert(Math.abs(compileFunctionExpression("sin(x) + x^2")(2) - (Math.sin(2) + 4)) < 1e-9, "function plot expressions should use the safe math parser")
   const htmlEngineConfig = JSON.parse(JSON.stringify(config))
-  assert(htmlEngineConfig.response.render.html.enabled === false && resolveRenderImageEngine("dynamic-panel", "", htmlEngineConfig) === "html" && resolveRenderImageEngine("markdown", "", htmlEngineConfig) === "html" && resolveRenderImageEngine("mindmap", "auto", htmlEngineConfig) === "html", "unified render_image should keep HTML-first priority independent of the raw HTML screenshot gate")
+  assert(!("enabled" in htmlEngineConfig.response.render.html) && resolveRenderImageEngine("dynamic-panel", "", htmlEngineConfig) === "html" && resolveRenderImageEngine("markdown", "", htmlEngineConfig) === "html" && resolveRenderImageEngine("mindmap", "auto", htmlEngineConfig) === "html", "unified render_image should keep HTML-first priority without a separate HTML gate")
   const svgPriorityConfig = JSON.parse(JSON.stringify(htmlEngineConfig))
   svgPriorityConfig.response.render.engine = "svg"
   assert(resolveRenderImageEngine("dynamic-panel", "", svgPriorityConfig) === "svg" && resolveRenderImageEngine("markdown", "auto", svgPriorityConfig) === "svg", "global SVG priority should override HTML for every template")
@@ -3590,15 +3590,15 @@ async function checkRenderService() {
   assert(renderKindCatalog.every(item => !Object.hasOwn(item, "engine") && item.toolName && item.description), "render catalog entries should use the shared engine strategy")
   assert(renderKindCatalog.every(item => typeof renderRendererRegistry[item.kind]?.render === "function"), "each render catalog kind should have a renderer object")
   assert(listImageRenderers().every(item => Array.isArray(item.aliases) && Array.isArray(item.tags)), "renderer listing should expose cloned aliases and tags")
-  assert(listImageRenderers(true).map(item => item.kind).join(",") === "text-card,markdown,mindmap", "public renderer listing should only expose the three base templates")
+  assert(listImageRenderers(true).map(item => item.kind).join(",") === "text-card,markdown,mindmap,html", "public renderer listing should expose unified content formats")
   assert(renderRendererRegistry.help.kind === "command-help", "render renderer registry should expose aliases")
   const apiOverview = await renderApiOverview(config)
   assert(apiOverview.catalog.some(item => item.kind === "markdown") && !apiOverview.catalog.some(item => item.kind === "dynamic-panel"), "render API overview should expose only public templates")
   assert(apiOverview.system?.engine === config.response.render.system.engine && !Object.hasOwn(apiOverview.system || {}, "chatCardAsImage") && !Object.hasOwn(apiOverview.system || {}, "helpAsImage") && !Object.hasOwn(apiOverview.system || {}, "conversationListAsImage"), "render API overview should expose the independent system rendering strategy")
-  assert(apiOverview.html.enabled === false, "render API overview should expose disabled HTML backend by default")
+  assert(!("enabled" in apiOverview.html) && apiOverview.url.enabled === false, "render API overview should expose only the independent URL screenshot switch")
   assert(apiOverview.html.allowedUrlHosts?.join(",") === "*", "render API overview should expose the default all-domain URL host policy")
   const webPreview = await renderPreview({
-    template: "text-card",
+    format: "text",
     data: { title: "Web 预览", sections: [{ title: "说明", lines: ["Web render preview 正常"] }] },
   }, config)
   assert(webPreview.imageBase64 && Buffer.from(webPreview.imageBase64, "base64").subarray(0, 8).toString("hex") === "89504e470d0a1a0a", "render preview API should return base64 PNG")
@@ -3674,7 +3674,7 @@ async function checkRenderService() {
   const webRenderToolsSource = await readWebToolsSource()
   assert(webAppSource.includes("/api/render/templates") && webAppSource.includes("/api/render/preview"), "web app should expose render template API routes")
   assert(webShellSource.includes("assetVersion") && webShellSource.includes("assets/main.js?v="), "web shell should version the SPA entry to avoid stale browser modules")
-  assert(webRenderToolsSource.includes("/api/render/preview") && webRenderToolsSource.includes("isFoldedRenderTool") && webRenderToolsSource.includes("response.render.engine") && webRenderToolsSource.includes("工具渲染") && webRenderToolsSource.includes("系统渲染策略") && webRenderToolsSource.includes("SystemRenderStrategyPanel") && !webRenderToolsSource.includes("aiMarkdownEngine") && !webRenderToolsSource.includes("chatCardAsImage"), "tools page should expose one independent strategy per render scope")
+  assert(webRenderToolsSource.includes("/api/render/preview") && webRenderToolsSource.includes("isFoldedRenderTool") && webRenderToolsSource.includes("response.render.engine") && webRenderToolsSource.includes("工具引擎") && webRenderToolsSource.includes("系统渲染策略") && webRenderToolsSource.includes("SystemRenderStrategyPanel") && !webRenderToolsSource.includes("aiMarkdownEngine") && !webRenderToolsSource.includes("chatCardAsImage"), "tools page should expose one independent strategy per render scope")
   assert(webRenderToolsSource.includes("render_image"), "tools page should keep the unified render_image entry")
   assert(webRenderToolsSource.includes("PermissionPreviewResult") && webRenderToolsSource.includes("showPreviewDrawer"), "role permission verification should use the shared preview drawer")
   assert(webRenderToolsSource.includes("openRolePreview") && webRenderToolsSource.includes("全部角色对比"), "permission verification should compare roles without expanding the role cards")
@@ -3709,13 +3709,6 @@ async function checkRenderService() {
     disabledBackend = /未启用/.test(err.message)
   }
   assert(disabledBackend, "URL screenshot backend should be disabled by default")
-  disabledBackend = false
-  try {
-    await renderHtmlToPng("<main>hello</main>", {}, config)
-  } catch (err) {
-    disabledBackend = /未启用/.test(err.message)
-  }
-  assert(disabledBackend, "HTML screenshot backend should be disabled by default")
   try {
     const markmap = await renderMarkmapHtmlToPng({ title: "HTML Markmap", markdown: "# hello" }, config)
     assert(markmap?.buffer, "internal Markmap HTML renderer should return an image when available")
@@ -3797,11 +3790,8 @@ async function checkCommandRules() {
   assert(match("#yui工具参数 weather"), "#yui工具参数 should be registered")
   assert(match("#yui测试过滤器 text_transform text=你好 operation=trim"), "#yui测试过滤器 should be registered")
   assert(match("#yui过滤器参数 text_transform"), "#yui过滤器参数 should be registered")
-  assert(match("#yui渲染MarkdownHTML 标题\n# 内容"), "#yui渲染MarkdownHTML should be registered")
   assert(match("#yui渲染Markdown 标题\n# 内容"), "#yui渲染Markdown should be registered")
   assert(match("#yui渲染思维导图 标题\n# 根节点"), "#yui渲染思维导图 should be registered")
-  assert(match("#yui渲染思维导图HTML 标题\n# 根节点"), "#yui渲染思维导图HTML should be registered")
-  assert(match("#yui渲染MarkmapHTML 标题\n# 根节点"), "#yui渲染MarkmapHTML should be registered")
   assert(match("#yui渲染词云 标题\n工具 工具 渲染"), "#yui渲染词云 should be registered")
   assert(match("#yui渲染动态 状态\n工具=7\n缓存=OK"), "#yui渲染动态 should be registered")
   const hiddenConfigCommand = ["#yui", "导入配置"].join("")

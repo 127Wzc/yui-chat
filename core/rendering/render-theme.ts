@@ -21,7 +21,7 @@ export const renderTheme = {
 export const renderFooterToken = "__YUI_RENDER_FOOTER__"
 
 export function renderFooter(engine: unknown = "html", fallback = false): string {
-  const label = String(engine).toLowerCase() === "svg" ? "SVG" : "HTML"
+  const label = ({ svg: "SVG", html: "HTML", markdown: "Markdown", mindmap: "Mindmap", text: "文本卡片" } as Record<string, string>)[String(engine).toLowerCase()] || "HTML"
   return `Yui Chat · ${label}${fallback ? "（HTML 不可用，已回退 SVG）" : ""}`
 }
 
@@ -147,3 +147,40 @@ export function buildSvgFrame({ width, height, title = "Yui Chat", subtitle = ""
     ${svgText(footer, center, safeHeight - 38, { size: 17, fill: "#c8a7a4", weight: 700, anchor: "middle" })}
   </svg>`
 }
+
+/** Markdown 与 HTML 内容共用的正文排版。 */
+export const htmlRenderDocumentCss = `
+  article { flex: 1; padding: 10px 20px; color: #4a3735; font-size: 24px; line-height: 1.72; }
+  h1, h2, h3, h4, h5, h6 { color: #ff8fa3; line-height: 1.28; padding-bottom: 10px; margin: 1.5em 0 .7em; border-bottom: 2px dashed rgba(244,219,216,.58); }
+  h1 { font-size: 42px; }
+  h2 { font-size: 34px; }
+  h3 { font-size: 29px; }
+  h4 { font-size: 25px; }
+  h5, h6 { font-size: 23px; }
+  article > :first-child { margin-top: .45em; }
+  p { margin: 12px 0 18px; }
+  strong { color: #3e2d2c; font-weight: 800; }
+  ul, ol { margin: 12px 0 22px; padding-left: 38px; }
+  li { margin: 9px 0; padding-left: 3px; }
+  li::marker { color: #ff8fa3; font-weight: 800; }
+  blockquote { margin: 22px 0; padding: 16px 22px; color: #715b59; background: rgba(255,255,255,.52); border: 1px solid rgba(244,219,216,.72); border-left: 6px solid #ff8fa3; border-radius: 0 16px 16px 0; }
+  blockquote > :first-child { margin-top: 0; }
+  blockquote > :last-child { margin-bottom: 0; }
+  a { color: #d9657d; text-decoration-color: rgba(217,101,125,.45); text-underline-offset: 4px; }
+  code { padding: 3px 8px; color: #9e4e60; background: rgba(255,255,255,.66); border: 1px solid rgba(244,219,216,.7); border-radius: 8px; font-family: Menlo, Consolas, "Noto Sans Mono CJK SC", monospace; font-size: .82em; }
+  pre { margin: 22px 0; padding: 20px 22px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; color: #f8e9ec; background: #4a3735; border: 1px solid rgba(244,219,216,.65); border-radius: 16px; box-shadow: 0 8px 22px rgba(74,55,53,.1); font-size: 18px; line-height: 1.62; }
+  pre code { padding: 0; color: inherit; background: transparent; border: 0; font-size: inherit; }
+  table { width: 100%; margin: 22px 0; overflow: hidden; border-spacing: 0; border-collapse: separate; border: 1px solid rgba(244,219,216,.8); border-radius: 14px; }
+  th, td { padding: 13px 16px; border-right: 1px solid rgba(244,219,216,.62); border-bottom: 1px solid rgba(244,219,216,.62); text-align: left; }
+  th { color: #b75d70; background: rgba(255,229,231,.55); font-weight: 800; }
+  tr:last-child td { border-bottom: 0; }
+  th:last-child, td:last-child { border-right: 0; }
+  hr { height: 0; margin: 30px 0; border: 0; border-top: 1.5px dashed rgba(244,219,216,.75); }
+  img { max-width: 100%; height: auto; border-radius: 16px; }
+  .katex { font-size: 1.15em; }
+  .katex-block { margin: 24px 0; }
+  .katex-display { margin: 0; padding: 22px 24px; overflow-x: auto; overflow-y: hidden; background: rgba(255,255,255,.58); border: 1px solid rgba(244,219,216,.75); border-radius: 16px; box-shadow: 0 5px 16px rgba(244,190,190,.11); font-size: 1.18em !important; }
+  .katex-error { display: inline-block; padding: 4px 8px; color: #a33d50; background: #fff0f2; border-radius: 8px; font-family: Menlo, Consolas, monospace; font-size: .8em; }
+  .mermaid { display: flex; justify-content: center; margin: 28px 0; padding: 24px; overflow-x: auto; background: rgba(255,255,255,.48); border: 1px dashed rgba(244,219,216,.88); border-radius: 20px; }
+  .render-error { margin: 18px 0; padding: 16px 20px; color: #a33d50; background: #fff0f2; border: 1px solid #efb5bf; border-radius: 12px; }
+`

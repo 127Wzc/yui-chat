@@ -155,7 +155,7 @@ export async function buildDiagnostics(): Promise<UnknownRecord> {
     accessTokenTtlMs: numberValue(record(configValue.web).accessTokenTtlMs),
     linkAllowPrivateHosts: linkSafety.allowPrivateHosts,
     trustedPrivateDnsBypass: linkSafety.trustedPrivateDnsBypass,
-    renderHtmlEnabled: record(record(response.render).html).enabled === true,
+    renderUrlEnabled: record(record(response.render).url).enabled === true,
     screenshotAllowedHostCount: linkSafety.screenshotAllowedHosts.length,
     boundaryAccessEnabled: Boolean(record(record(configValue.tools).boundaryAccess).enabled),
     initiativeGreetingScheduled: Boolean(record(record(configValue.persona).initiativeGreeting).scheduledEnabled),
@@ -200,7 +200,7 @@ export async function buildDiagnostics(): Promise<UnknownRecord> {
   addIssue(issues, safety.loginInGroup, "warn", "web", "面板管理地址允许在群聊发送，请确认不会暴露公网入口")
   addIssue(issues, safety.linkAllowPrivateHosts, "warn", "link-safety", "链接安全策略允许访问任意私网地址，存在 SSRF 风险")
   addIssue(issues, safety.trustedPrivateDnsBypass, "warn", "link-safety", "可信资源允许私网 DNS 结果，请确认 QQ/Bilibili 实际解析环境")
-  addIssue(issues, safety.renderHtmlEnabled && !safety.screenshotAllowedHostCount, "warn", "render", "HTML 后端已启用，但 URL 截图没有配置允许域名")
+  addIssue(issues, safety.renderUrlEnabled && !safety.screenshotAllowedHostCount, "warn", "render", "URL 截图已启用，但没有配置允许域名")
   addIssue(issues, safety.initiativeGreetingScheduled && !safety.initiativeGreetingGroups, "warn", "persona", "主动打招呼定时已开启但没有配置群号")
   addIssue(issues, enabledTools.some(tool => tool.name === "web_search") && !hostedWebSearchCoversReplyTask && !safety.webSearchBaiduConfigured && !safety.webSearchTavilyConfigured, "warn", "web-search", "web_search 已启用，但百度 AI 与 Tavily 均未配置 API Key")
   addIssue(issues, safety.imageSearchPixivR18, "warn", "image-search", "Pixiv R18 图片搜索已开启，请确认当前会话与平台规则允许投递")

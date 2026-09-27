@@ -15,7 +15,7 @@ export class ToolSearchTool {
   policy = { requiresModelContext: true }
   source = "builtin"
   execution = { effect: "read", repeatPolicy: "bounded", polling: false, maxAttempts: 1 }
-  description = "Search available tools by capability and load matching tools for the next round. Use this when the required tool is not currently visible."
+  description = "Search available tools by capability and load matching tools for the next round. Use this when the required tool is not currently visible. For AI drawing, artwork or image editing search generate_image; for typesetting HTML/Markdown/formulas into an image search render_image. These capabilities are not substitutes."
   descriptionZh = "按能力搜索当前有权限使用的工具；需要某个未展示的工具时先调用本工具。"
   tags = ["tool-discovery", "progressive-disclosure"]
   parameters = {

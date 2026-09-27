@@ -1,15 +1,7 @@
-import { commandObserver } from "../../knowledge/command-observer.js"
-import { groupIdFromEvent, isGroupEvent } from "../../core/message/event-scope.js"
+import { resolveRenderRequest, renderInputFormats } from "../../core/rendering/image-renderer-registry.js"
 import { configStore } from "../../config/store.js"
-import {
-  listImageRenderers,
-  renderImageByKind,
-  renderImageByConfiguredEngine,
-  renderKindLabels,
-  normalizeRenderKind,
-  resolveRenderEngine,
-} from "../../core/rendering/render-service.js"
-import { renderHtmlToPng, renderUrlToPng } from "../../core/rendering/render-html-service.js"
+import { renderImageByConfiguredEngine, renderKindLabels } from "../../core/rendering/render-service.js"
+import { renderUrlToPng } from "../../core/rendering/render-html-service.js"
 import { deliverRenderedImage } from "../../core/rendering/render-delivery.js"
 import type { UnknownRecord } from "../../core/message/types.js"
 import type { ToolExecutionContext } from "../support/tool-contract.js"
@@ -18,494 +10,57 @@ interface RenderToolContext extends ToolExecutionContext {
   e?: UnknownRecord
   config?: UnknownRecord
 }
-
 type ToolArgs = UnknownRecord
-
-interface RenderResult extends UnknownRecord {
-  buffer: Uint8Array
-}
-
+interface RenderResult extends UnknownRecord { buffer: Uint8Array }
 function record(value: unknown): UnknownRecord {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value) ? value as UnknownRecord : {}
+  return value && typeof value === "object" && !Array.isArray(value) ? value as UnknownRecord : {}
 }
-
-function text(value: unknown): string {
-  return typeof value === "string" ? value : String(value ?? "")
-}
-
+function text(value: unknown): string { return String(value ?? "") }
 function renderResult(value: unknown): RenderResult {
   const result = record(value)
   return { ...result, buffer: result.buffer instanceof Uint8Array ? result.buffer : new Uint8Array() }
 }
 
-async function renderByConfiguredEngine(kind: string, input: ToolArgs, config: unknown): Promise<RenderResult> {
-  return renderResult(await renderImageByConfiguredEngine(kind, input, config))
-}
-
-export function resolveRenderImageEngine(kind: unknown, requested: unknown, config: unknown = {}): "svg" | "html" {
-  return resolveRenderEngine(kind, requested, config)
-}
-
-/** 渲染工具基类：统一渲染和消息交付；不负责模板算法与权限判断。 */
-class BaseRenderTool {
-  kind!: string
-  message?: string
+/** 所有内容格式共用一个工具权限与投递入口。 */
+export class RenderImageTool {
+  name = "render_image"
   source = "builtin"
   category = "render"
   risk = "low"
-  tags = ["image", "render"]
-  // 渲染通常会把图片交付到会话；同一份输入在一个请求内重复渲染只保留第一次。
-  execution = { effect: "non_idempotent", repeatPolicy: "dedupe", operationFields: ["kind", "title", "content", "sections", "html", "url", "send"], retryPolicy: "no_ambiguous_retry", maxAttempts: 1 }
-
-  constructor(meta: UnknownRecord = {}) {
-    Object.assign(this, meta)
-  }
-
-  async render(args: ToolArgs = {}, context: RenderToolContext = {}): Promise<string> {
-    const config = context.config || record(configStore.get())
-    const result = renderResult(await renderImageByKind(this.kind, this.input(args, context), config))
-    if (args.send === false) {
-      const label = renderKindLabels[this.kind] || this.message || "图片"
-      return `${label}渲染完成：${result.buffer.length} bytes`
-    }
-    return deliverRenderedImage(result, context, {
-      label: this.message || renderKindLabels[this.kind] || "图片",
-      targetType: args.targetType,
-      targetId: args.targetId,
-      groupId: args.groupId,
-      userId: args.userId,
-    })
-  }
-
-  input(args: ToolArgs = {}, _context: RenderToolContext = {}): ToolArgs {
-    return args
-  }
-
-  async execute(args: ToolArgs = {}, context: RenderToolContext = {}): Promise<string> {
-    return this.render(args, context)
-  }
-}
-
-export class RenderTextCardTool extends BaseRenderTool {
-  name = "render_text_card"
-  kind = "text-card"
-  message = "渲染图片"
-  description = "Render text or structured sections as a polished PNG card and optionally send it to the current chat."
+  policy = {}
+  tags = ["HTML", "Markdown", "数学公式", "Mermaid", "思维导图", "文本卡片", "排版", "文档转图", "表格", "typesetting", "document-rendering"]
+  description = "Use when the user asks to typeset supplied content as an image: documents, formulas, diagrams, tables or cards. This is document/layout rendering, NOT AI drawing or image generation. For requests to draw a character, illustration, scene, or edit an image, use generate_image. Do not replace requested artwork with a text card, even if generate_image is unavailable; report the limitation. Render HTML, Markdown, math formulas, Mermaid diagrams, mind maps or text cards as a PNG in the shared Yui Chat style. Use format plus data.content: auto (default) detects HTML markup vs Markdown; html renders HTML/CSS fragments or documents; markdown renders rich text, $...$ / $$...$$ / \\(...\\) / \\[...\\] formulas and fenced mermaid diagrams; mindmap renders Markdown hierarchies; text renders plain content or sections. Math and Mermaid belong to markdown, not separate formats. All formats follow render_image permissions. HTML always uses HTML rendering with no SVG fallback. For URL screenshots use render_url_screenshot."
+  descriptionZh = "内容排版成图：将已有 HTML、Markdown、数学公式、Mermaid、思维导图、表格或文本排成图片，保留统一样式。人物、插画和场景创作请使用 generate_image。"
+  execution = { effect: "non_idempotent", repeatPolicy: "dedupe", operationFields: ["format", "data", "send", "targetType", "targetId"], retryPolicy: "no_ambiguous_retry", maxAttempts: 1 }
   parameters = {
     type: "object",
     properties: {
-      title: { type: "string", description: "Card title." },
-      subtitle: { type: "string", description: "Optional subtitle." },
-      content: { type: "string", description: "Plain text content. Used when sections are not provided." },
-      sections: {
-        type: "array",
-        description: "Optional structured sections.",
-        items: {
-          type: "object",
-          properties: {
-            title: { type: "string" },
-            lines: { type: "array", items: { type: "string" } },
-          },
-        },
-      },
-      send: { type: "boolean", description: "Whether to send the card image. Defaults to true." },
-    },
-    required: ["title"],
-  }
-
-  input(args: ToolArgs = {}): ToolArgs {
-    return {
-      title: args.title,
-      subtitle: args.subtitle,
-      content: args.content,
-      sections: args.sections,
-      footer: "Yui Chat · Render Tool",
-    }
-  }
-}
-
-export class RenderMarkdownDocumentTool extends BaseRenderTool {
-  name = "generate_math_markdown"
-  kind = "markdown"
-  message = "Markdown 图片"
-  source = "builtin"
-  description = "Render a Markdown document as a polished PNG image with local KaTeX formulas and Mermaid diagrams. Auto follows the global HTML-first priority; SVG remains available as a lightweight fallback."
-  tags = ["markdown", "math", "mermaid", "image"]
-  parameters = {
-    type: "object",
-    properties: {
-      title: { type: "string", description: "Document title." },
-      subtitle: { type: "string", description: "Optional subtitle." },
-      markdown: {
-        type: "string",
-        description: "Markdown content. Use $...$ or $$...$$ for formulas and fenced ```mermaid blocks for diagram source.",
-      },
-      send: { type: "boolean", description: "Whether to send the image. Defaults to true." },
-    },
-    required: ["title", "markdown"],
-  }
-
-  async execute(args: ToolArgs = {}, context: RenderToolContext = {}): Promise<string> {
-    const config = context.config || record(configStore.get())
-    const result = await renderByConfiguredEngine("markdown", {
-      title: args.title,
-      subtitle: args.subtitle,
-      markdown: args.markdown,
-      footer: "Yui Chat · Markdown Render Tool",
-    }, config)
-    if (args.send === false) return `Markdown 图片渲染完成：${result.buffer.length} bytes`
-    return deliverRenderedImage(result, context, { label: "Markdown 图片" })
-  }
-
-  input(args: ToolArgs = {}): ToolArgs {
-    return {
-      title: args.title,
-      subtitle: args.subtitle,
-      markdown: args.markdown,
-      footer: "Yui Chat · Markdown Render Tool",
-    }
-  }
-}
-
-export class RenderMindMapTool extends BaseRenderTool {
-  name = "generate_markmap"
-  kind = "mindmap"
-  message = "思维导图图片"
-  source = "builtin"
-  description = "Render a Markdown hierarchy as a mind map PNG image. Auto follows the global HTML-first priority and falls back to SVG."
-  tags = ["mindmap", "markdown", "image"]
-  parameters = {
-    type: "object",
-    properties: {
-      title: { type: "string", description: "Mind map title." },
-      markdown: {
-        type: "string",
-        description: "Standard Markdown hierarchy. Use # for root, ## for branches, ### and list items for details.",
-      },
-      send: { type: "boolean", description: "Whether to send the image. Defaults to true." },
-    },
-    required: ["title", "markdown"],
-  }
-
-  async execute(args: ToolArgs = {}, context: RenderToolContext = {}): Promise<string> {
-    const config = context.config || record(configStore.get())
-    const result = await renderByConfiguredEngine("mindmap", {
-      title: args.title,
-      markdown: args.markdown,
-      footer: "Yui Chat · Mindmap Render Tool",
-    }, config)
-    if (args.send === false) return `思维导图图片渲染完成：${result.buffer.length} bytes`
-    return deliverRenderedImage(result, context, { label: "思维导图图片" })
-  }
-
-  input(args: ToolArgs = {}): ToolArgs {
-    return { title: args.title, markdown: args.markdown }
-  }
-}
-
-export class RenderWordCloudTool extends BaseRenderTool {
-  name = "render_word_cloud"
-  kind = "word-cloud"
-  message = "词云图片"
-  source = "builtin"
-  description = "Render weighted keywords or text as a word cloud PNG image."
-  tags = ["wordcloud", "image"]
-  parameters = {
-    type: "object",
-    properties: {
-      title: { type: "string", description: "Word cloud title." },
-      subtitle: { type: "string", description: "Optional subtitle." },
-      text: { type: "string", description: "Raw text. The renderer extracts repeated words when words is not provided." },
-      words: {
-        type: "array",
-        description: "Weighted words. Items can be { text, weight }.",
-        items: {
-          type: "object",
-          properties: {
-            text: { type: "string" },
-            weight: { type: "number" },
-          },
-        },
-      },
-      send: { type: "boolean", description: "Whether to send the image. Defaults to true." },
-    },
-    required: ["title"],
-  }
-
-  input(args: ToolArgs = {}): ToolArgs {
-    return {
-      title: args.title,
-      subtitle: args.subtitle,
-      text: args.text,
-      words: args.words,
-    }
-  }
-}
-
-export class RenderDynamicPanelTool extends BaseRenderTool {
-  name = "render_dynamic_panel"
-  kind = "dynamic-panel"
-  message = "动态面板图片"
-  source = "builtin"
-  description = "Render a dynamic status/help dashboard PNG from metrics and sections."
-  tags = ["dashboard", "help", "status", "image"]
-  parameters = {
-    type: "object",
-    properties: {
-      title: { type: "string", description: "Panel title." },
-      subtitle: { type: "string", description: "Panel subtitle." },
-      metrics: {
-        type: "array",
-        description: "Metric cards displayed at the top.",
-        items: {
-          type: "object",
-          properties: {
-            label: { type: "string" },
-            value: { type: "string" },
-          },
-        },
-      },
-      sections: {
-        type: "array",
-        description: "Detailed text sections.",
-        items: {
-          type: "object",
-          properties: {
-            title: { type: "string" },
-            lines: { type: "array", items: { type: "string" } },
-          },
-        },
-      },
-      send: { type: "boolean", description: "Whether to send the image. Defaults to true." },
-    },
-    required: ["title"],
-  }
-
-  input(args: ToolArgs = {}): ToolArgs {
-    return {
-      title: args.title,
-      subtitle: args.subtitle,
-      metrics: args.metrics,
-      sections: args.sections,
-    }
-  }
-}
-
-export class RenderCommandHelpTool extends BaseRenderTool {
-  name = "render_command_help"
-  kind = "command-help"
-  message = "指令帮助图片"
-  source = "builtin"
-  description = "Search command knowledge and render recommended Yunzai commands as a PNG help card."
-  parameters = {
-    type: "object",
-    properties: {
-      query: { type: "string", description: "User intent or command question." },
-      limit: { type: "number", description: "Maximum result count." },
-      send: { type: "boolean", description: "Whether to send the card image. Defaults to true." },
-    },
-    required: ["query"],
-  }
-
-  input(args: ToolArgs = {}): ToolArgs {
-    const query = String(args.query || "").trim()
-    const matches = commandObserver.findMatches(query, Number(args.limit) || 8)
-    return { query, matches, stats: commandObserver.stats() }
-  }
-}
-
-export class RenderHelpMenuTool extends BaseRenderTool {
-  name = "render_help_menu"
-  kind = "help-menu"
-  message = "帮助菜单图片"
-  source = "builtin"
-  description = "Render grouped help commands as a PNG menu and optionally send it to the current chat."
-  tags = ["help", "menu", "command", "image"]
-  parameters = {
-    type: "object",
-    properties: {
-      title: { type: "string", description: "Menu title." },
-      subtitle: { type: "string", description: "Optional subtitle." },
-      groups: {
-        type: "array",
-        description: "Help groups. Each group has title/name and commands/lines.",
-        items: {
-          type: "object",
-          properties: {
-            title: { type: "string" },
-            name: { type: "string" },
-            commands: {
-              type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  command: { type: "string" },
-                  description: { type: "string" },
-                  permission: { type: "string" },
-                },
-              },
-            },
-            lines: { type: "array", items: { type: "string" } },
-          },
-        },
-      },
-      sections: {
-        type: "array",
-        description: "Alternative text sections in render_text_card format.",
-        items: { type: "object" },
-      },
-      send: { type: "boolean", description: "Whether to send the image. Defaults to true." },
-    },
-  }
-
-  input(args: ToolArgs = {}): ToolArgs {
-    return {
-      title: args.title,
-      subtitle: args.subtitle,
-      groups: args.groups,
-      sections: args.sections,
-      footer: "Yui Chat · Help Menu Render Tool",
-    }
-  }
-}
-
-export class RenderChatCardTool extends BaseRenderTool {
-  name = "render_chat_card"
-  kind = "chat-card"
-  message = "富聊天卡片"
-  source = "builtin"
-  description = "Render a rich chat card with prompt, answer, quote/media summary, model workflow metadata, and suggested responses."
-  tags = ["chat", "reply", "image", "render"]
-  parameters = {
-    type: "object",
-    properties: {
-      prompt: { type: "string", description: "User prompt or message." },
-      answer: { type: "string", description: "Assistant answer." },
-      sender: { type: "object", description: "Sender metadata, e.g. { userId, name }." },
-      scope: { type: "object", description: "Chat scope metadata, e.g. { type, groupId, groupName }." },
-      quote: { type: "object", description: "Quoted message summary." },
-      media: { type: "object", description: "Media summary, e.g. { images, records, videos, mentions, diagnostics }." },
-      metadata: { type: "object", description: "Model metadata, e.g. { channel, adapter, toolRounds, source }." },
-      steps: { type: "array", description: "Workflow step summaries.", items: { type: "object" } },
-      suggestedResponses: { type: "array", items: { type: "string" } },
-      send: { type: "boolean", description: "Whether to send the image. Defaults to true." },
-    },
-    required: ["answer"],
-  }
-
-  input(args: ToolArgs = {}, context: RenderToolContext = {}): ToolArgs {
-    const sender = record(context.e?.sender)
-    const isGroup = isGroupEvent(context.e)
-    return {
-      prompt: args.prompt,
-      answer: args.answer || args.content,
-      sender: args.sender || {
-        userId: String(context.e?.user_id || ""),
-        name: sender.card || sender.nickname || context.e?.user_id || "",
-      },
-      scope: args.scope || {
-        type: isGroup ? "group" : "private",
-        groupId: isGroup ? groupIdFromEvent(context.e) : "",
-      },
-      quote: args.quote,
-      media: args.media,
-      metadata: args.metadata,
-      steps: args.steps,
-      suggestedResponses: args.suggestedResponses,
-    }
-  }
-}
-
-export class RenderConversationListTool extends BaseRenderTool {
-  name = "render_conversation_list"
-  kind = "conversation-list"
-  message = "会话列表图"
-  source = "builtin"
-  description = "Render conversation rows as a PNG image. Runtime conversation reads are handled by the master-only #yui对话列表 command; this tool only renders rows passed in arguments."
-  tags = ["conversation", "image", "render"]
-  parameters = {
-    type: "object",
-    properties: {
-      rows: {
-        type: "array",
-        description: "Conversation rows to render. Each row can include channel, type, groupId, userId, turns, historyMessages, lastSeenAt, and preview.",
-        items: {
-          type: "object",
-          properties: {
-            channel: { type: "string" },
-            type: { type: "string" },
-            groupId: { type: "string" },
-            userId: { type: "string" },
-            turns: { type: "number" },
-            historyMessages: { type: "number" },
-            lastSeenAt: { type: "string" },
-            preview: { type: "string" },
-          },
-        },
-      },
-      send: { type: "boolean", description: "Whether to send the image. Defaults to true." },
-    },
-    required: ["rows"],
-  }
-
-  input(args: ToolArgs = {}): ToolArgs {
-    return {
-      rows: Array.isArray(args.rows) ? args.rows : [],
-    }
-  }
-}
-
-export class RenderImageTool extends BaseRenderTool {
-  name = "render_image"
-  source = "builtin"
-  description = "Unified image renderer. Public templates are text cards, Markdown and mind maps; system scenarios use the same base card internally. For markdown formulas use $...$, $$...$$, \\(...\\), or \\[...\\]. Raw HTML and URL screenshots remain separately gated."
-  tags = ["image", "render", "template", "dynamic"]
-  parameters = {
-    type: "object",
-    properties: {
-      template: {
-        type: "string",
-        enum: listImageRenderers(true).map(item => item.kind),
-        description: "Renderer template. Defaults to text-card.",
-      },
+      format: { type: "string", enum: [...renderInputFormats], description: "auto, html, markdown, mindmap or text. Defaults to auto. Formulas and Mermaid use markdown." },
       data: {
         type: "object",
-        description: "Template data. Use title/content/sections for text-card, title/markdown for markdown or mindmap.",
+        properties: {
+          title: { type: "string" },
+          subtitle: { type: "string" },
+          content: { type: "string", description: "HTML/CSS, Markdown (including delimited LaTeX and fenced Mermaid), a Markdown mind map, or plain text according to format." },
+          sections: { type: "array", items: { type: "object" }, description: "Optional text-card sections with title and lines." },
+          viewport: { type: "object", properties: { width: { type: "number" }, height: { type: "number" } } },
+          fullPage: { type: "boolean" },
+          waitMs: { type: "number", description: "Optional bounded HTML wait." },
+        },
       },
-      send: { type: "boolean", description: "Whether to send the image. Defaults to true." },
-      targetType: { type: "string", description: "Optional target type: group or user. Defaults to current chat. Requires master and response.render.delivery.allowTargetSend." },
-      targetId: { type: "string", description: "Optional target group/user id. Requires master and response.render.delivery.allowTargetSend." },
+      send: { type: "boolean", description: "Send to current chat by default; false only renders." },
+      targetType: { type: "string", description: "Optional group or user; requires master and response.render.delivery.allowTargetSend." },
+      targetId: { type: "string", description: "Optional target id; requires master and response.render.delivery.allowTargetSend." },
     },
-    required: [],
+    required: ["data"],
   }
-
   async execute(args: ToolArgs = {}, context: RenderToolContext = {}): Promise<string> {
-    const kind = normalizeRenderKind(args.template || args.kind || "text-card")
-    if (!listImageRenderers(true).some(item => item.kind === kind)) return "render_image 仅支持公开模板：text-card、markdown、mindmap。系统场景由内部渲染器处理。"
-    const config = context.config || record(configStore.get())
-    const input: ToolArgs = {
-      ...record(args.data),
-      ...args,
-      kind,
-    }
-    if (kind === "command-help") {
-      const query = text(input.query || input.content).trim()
-      input.query = query
-      input.matches = commandObserver.findMatches(query, Number(input.limit) || 8)
-      input.stats = commandObserver.stats()
-    }
-    const result = await renderByConfiguredEngine(kind, input, config)
+    const { kind, input } = resolveRenderRequest(args)
+    const config = context.config || configStore.get()
+    const result = renderResult(await renderImageByConfiguredEngine(kind, input, config))
     const label = renderKindLabels[kind] || "图片"
-    if (args.send === false) {
-      return `${label}渲染完成：${result.buffer.length} bytes`
-    }
-    return deliverRenderedImage(result, context, {
-      label,
-      targetType: args.targetType,
-      targetId: args.targetId,
-      groupId: args.groupId,
-      userId: args.userId,
-    })
+    if (args.send === false) return `${label}渲染完成：${result.buffer.length} bytes`
+    return deliverRenderedImage(result, context, { label, targetType: args.targetType, targetId: args.targetId })
   }
 }
 
@@ -546,48 +101,6 @@ export class RenderUrlScreenshotTool {
   }
 }
 
-export class RenderHtmlScreenshotTool {
-  name = "render_html_screenshot"
-  source = "builtin"
-  category = "render"
-  risk = "high"
-  execution = { effect: "non_idempotent", repeatPolicy: "dedupe", operationFields: ["html", "name", "fullPage", "waitMs", "viewport", "send"], retryPolicy: "no_ambiguous_retry", maxAttempts: 1 }
-  tags = ["image", "render", "html", "screenshot"]
-  policy = { requiresMaster: true, highRisk: true }
-  description = "Render controlled HTML to a PNG screenshot and send it to the current chat. Disabled by default; intended for master-only rich help cards or dynamic image templates."
-  parameters = {
-    type: "object",
-    properties: {
-      html: { type: "string", description: "HTML document or fragment to render. Length is bounded by response.render.html.maxHtmlChars." },
-      name: { type: "string", description: "Optional safe debug name prefix." },
-      fullPage: { type: "boolean", description: "Capture full page. Defaults to true." },
-      waitMs: { type: "number", description: "Extra wait before screenshot, bounded by config timeout." },
-      viewport: {
-        type: "object",
-        properties: {
-          width: { type: "number" },
-          height: { type: "number" },
-        },
-      },
-      send: { type: "boolean", description: "Whether to send the screenshot image. Defaults to true." },
-    },
-    required: ["html"],
-  }
-
-  async execute(args: ToolArgs = {}, context: RenderToolContext = {}): Promise<string> {
-    const config = context.config || record(configStore.get())
-    const result = renderResult(await renderHtmlToPng(text(args.html), args, config))
-    if (args.send === false) {
-      return `HTML 截图完成：${result.buffer.length} bytes`
-    }
-    return deliverRenderedImage(result, context, { label: "HTML 截图" })
-  }
-}
-
 export function createRenderTools(): unknown[] {
-  return [
-    new RenderImageTool(),
-    new RenderHtmlScreenshotTool(),
-    new RenderUrlScreenshotTool(),
-  ]
+  return [new RenderImageTool(), new RenderUrlScreenshotTool()]
 }

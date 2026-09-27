@@ -1,7 +1,7 @@
+import { resolveRenderRequest } from "./image-renderer-registry.js"
 import {
   listImageRenderers,
   renderImageByConfiguredEngine,
-  normalizeRenderKind,
   resolveRenderEngine,
 } from "./render-service.js"
 import { linkSafetyConfig } from "../network/link-safety-policy.js"
@@ -13,15 +13,13 @@ interface RenderResult extends UnknownRecord {
 }
 
 interface PreviewBody extends UnknownRecord {
-  template?: unknown
-  kind?: unknown
+  format?: unknown
   data?: unknown
-  input?: unknown
   includeImage?: unknown
 }
 
 interface RenderPreviewResult {
-  kind: string
+  format: string
   engine: string
   requestedEngine?: string
   fallback?: boolean
@@ -59,107 +57,11 @@ function renderConfig(config: unknown = {}): UnknownRecord {
   }
 }
 
-function sampleInput(kind = "text-card"): UnknownRecord {
-  if (kind === "chat-card") {
-    return {
-      prompt: "帮我介绍一下 Yui Chat 的统一渲染能力",
-      answer: "业务侧只需要选择 template 并传入 data，渲染服务会统一生成图片并交付到当前会话。",
-      sender: { userId: "10001", name: "控制台预览" },
-      scope: { type: "group", groupId: "20001", groupName: "Preview" },
-      media: { images: 1, mentions: ["123456"] },
-      metadata: { channel: "mock", adapter: "mock", toolRounds: 1 },
-      steps: [{ stepId: "reply", channel: "mock", adapter: "mock", status: "ok", durationMs: 12 }],
-    }
-  }
-  if (kind === "command-help") {
-    return {
-      query: "怎么查体力",
-      matches: [{
-        pluginName: "示例插件",
-        description: "体力查询",
-        suggestedCommand: "#体力",
-        reason: "匹配体力查询意图",
-        permission: "all",
-        event: "message",
-      }],
-      stats: { commands: 1, events: 0 },
-    }
-  }
-  if (kind === "help-menu") {
-    return {
-      title: "Yui Chat 帮助菜单",
-      groups: [
-        {
-          title: "聊天入口",
-          commands: [
-            { command: "#yuichat 帮我总结一下", description: "发起 AI 对话" },
-            { command: "#yuihelp 怎么查体力", description: "检索指令知识库" },
-          ],
-        },
-        {
-          title: "统一渲染",
-          commands: [
-            { command: "render_image({ template, data })", description: "模型工具统一入口", permission: "tool" },
-            { command: "#yui图片模式", description: "聊天输出自动转图", permission: "all" },
-          ],
-        },
-      ],
-    }
-  }
-  if (kind === "conversation-list") {
-    return {
-      rows: [{
-        channel: "mock",
-        type: "group",
-        groupId: "20001",
-        userId: "10001",
-        turns: 3,
-        historyMessages: 6,
-        lastSeenAt: "2026-06-08 12:00:00",
-        preview: "Web 渲染预览生成的会话列表。",
-      }],
-    }
-  }
-  if (kind === "markdown") {
-    return {
-      title: "Markdown 渲染预览",
-      markdown: "# 渲染工具\n\n- 帮助图\n- 动态面板\n\n```mermaid\nflowchart LR\nA[命令] --> B[渲染]\n```",
-    }
-  }
-  if (kind === "mindmap") {
-    return {
-      title: "重构计划",
-      markdown: "# Yui Chat\n## 渲染\n- 帮助图\n- 动态图\n## 扩展\n- Skill\n- MCP",
-    }
-  }
-  if (kind === "word-cloud") {
-    return {
-      title: "能力词云",
-      words: [
-        { text: "渲染", weight: 8 },
-        { text: "工具", weight: 7 },
-        { text: "知识库", weight: 5 },
-        { text: "模型", weight: 4 },
-      ],
-    }
-  }
-  if (kind === "dynamic-panel") {
-    return {
-      title: "动态面板",
-      subtitle: "Web 预览",
-      metrics: [
-        { label: "渲染", value: "ready" },
-        { label: "策略", value: "HTML → SVG" },
-        { label: "后端", value: "sharp" },
-      ],
-      sections: [{ title: "说明", lines: ["动态图片渲染链路正常。"] }],
-    }
-  }
-  return {
-    title: "Yui Chat 渲染预览",
-    subtitle: "Web Render Preview",
-    content: "这是一张由新插件独立渲染服务生成的图片。",
-  }
+function sampleInput(format = "markdown"): UnknownRecord {
+  if (format === "html") return { title: "HTML", content: "<h1>Yui Chat</h1><p>统一主题的 HTML 内容。</p>" }
+  if (format === "mindmap") return { title: "思维导图", content: "# Yui Chat\n## 模型\n## 工具\n## 渲染" }
+  if (format === "text") return { title: "文本卡片", content: "Yui Chat 文本卡片。" }
+  return { title: "Markdown", content: "# Markdown\n\n公式：$a^2+b^2=c^2$\n\n```mermaid\nflowchart LR\nA --> B\n```" }
 }
 
 function clampInput(input: unknown = {}, config: unknown = {}): UnknownRecord {
@@ -170,14 +72,15 @@ function clampInput(input: unknown = {}, config: unknown = {}): UnknownRecord {
 }
 
 export async function renderPreview(body: PreviewBody = {}, config: unknown = {}): Promise<RenderPreviewResult> {
-  const kind = normalizeRenderKind(body.template || body.kind || "text-card")
-  if (!listImageRenderers(true).some(item => item.kind === kind)) throw new Error("预览只支持公开模板：文本卡片、Markdown、思维导图。")
+  const requested = text(body.format || "auto")
   const rawInput = isObject(body.data)
     ? body.data
-    : isObject(body.input)
-      ? body.input
-      : sampleInput(kind)
-  const input = clampInput(rawInput, config)
+    : sampleInput(requested)
+  const resolved = resolveRenderRequest({ ...body, format: requested, data: rawInput })
+  const { kind } = resolved
+  if (!listImageRenderers(true).some(item => item.kind === kind)) throw new Error("预览支持文本卡片、Markdown、数学公式、思维导图和 HTML。")
+  // HTML 不静默截断，以免破坏结构；渲染服务负责长度校验。
+  const input = kind === "html" ? resolved.input : clampInput(resolved.input, config)
   const resolvedEngine = resolveRenderEngine(kind, "", config)
   const result = await renderImageByConfiguredEngine(kind, input, config) as RenderResult
   const buffer = result.buffer instanceof Uint8Array ? Buffer.from(result.buffer) : null
@@ -186,7 +89,7 @@ export async function renderPreview(body: PreviewBody = {}, config: unknown = {}
   const renderer = text(meta.renderer || meta.engine || "")
   const actualEngine = renderer === "html-puppeteer" ? "html" : text(meta.engine || resolvedEngine || "default")
   return {
-    kind,
+    format: kind === "text-card" ? "text" : kind,
     engine: actualEngine,
     requestedEngine: text(meta.requestedEngine || resolvedEngine || "default"),
     fallback: meta.fallback === true,
@@ -208,12 +111,12 @@ export async function renderApiOverview(config: unknown = {}): Promise<UnknownRe
       engine: text(system.engine || "html"),
     },
     html: {
-      enabled: html.enabled === true,
       allowPrivateHosts: safety.allowPrivateHosts,
       allowedUrlHosts: safety.screenshotAllowedHosts.map(text),
       maxHtmlChars: html.maxHtmlChars,
       timeoutMs: html.timeoutMs,
     },
+    url: { enabled: record(cfg.url).enabled === true },
     catalog: listImageRenderers(true),
   }
 }

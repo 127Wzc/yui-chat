@@ -59,10 +59,9 @@ export const SystemRenderStrategyPanel = {
         <button v-if="showSave" class="btn small outline" type="button" @click="saveSettings"><Icon name="save" :size="14" />保存</button>
       </div>
       <div class="form-grid">
-        <Field label="图片引擎" type="select" :options="[{ value: 'html', label: 'HTML（优先）' }, { value: 'svg', label: 'SVG' }]" v-model="settings.engine" tip="HTML 不可用时使用 SVG。" />
+        <Field label="系统引擎" type="select" :options="[{ value: 'html', label: 'HTML' }, { value: 'svg', label: 'SVG' }]" v-model="settings.engine" />
       </div>
       <div v-if="embedded && showSave" class="action-bar"><button class="btn small outline" type="button" @click="saveSettings"><Icon name="save" :size="14" />保存</button></div>
-      <p class="muted tiny">HTML 不可用时使用 SVG。</p>
     </div>
   `,
 }

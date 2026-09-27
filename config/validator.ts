@@ -924,6 +924,7 @@ function validateRuntimeNumbers(config: ConfigRecord, issues: ValidationIssue[])
   if (renderDelivery !== undefined && !isObject(renderDelivery)) {
     add(issues, "error", "response.render.delivery", "response.render.delivery 必须是对象")
   }
+  if (render.url !== undefined && !isObject(render.url)) add(issues, "error", "response.render.url", "URL 截图配置必须是对象")
   const renderHtml = render.html
   if (renderHtml !== undefined) {
     if (!isObject(renderHtml)) add(issues, "error", "response.render.html", "response.render.html 必须是对象")
@@ -933,8 +934,8 @@ function validateRuntimeNumbers(config: ConfigRecord, issues: ValidationIssue[])
       positiveNumber(issues, "response.render.html.timeoutMs", renderHtml.timeoutMs, { min: 1000, max: 120000 })
       positiveNumber(issues, "response.render.html.waitMs", renderHtml.waitMs, { min: 0, max: 3000 })
       positiveNumber(issues, "response.render.html.deviceScaleFactor", renderHtml.deviceScaleFactor, { min: 0.5, max: 3 })
-      if (renderHtml.enabled === true && !asArray(section(section(config.security).linkSafety).screenshotAllowedHosts).length) {
-        add(issues, "warn", "security.linkSafety.screenshotAllowedHosts", "HTML 后端已启用，但 URL 截图没有允许域名；本地 HTML、Markdown 和思维导图渲染仍可使用")
+      if (section(render.url).enabled === true && !asArray(section(section(config.security).linkSafety).screenshotAllowedHosts).length) {
+        add(issues, "warn", "security.linkSafety.screenshotAllowedHosts", "URL 截图已启用，但没有允许域名")
       }
       if (renderHtml.viewport !== undefined) {
         if (!isObject(renderHtml.viewport)) add(issues, "error", "response.render.html.viewport", "viewport 必须是对象")

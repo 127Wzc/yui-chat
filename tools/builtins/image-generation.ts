@@ -215,7 +215,7 @@ export class GenerateImageTool {
     maxAttempts: 1,
     background: true,
   }
-  tags = ["image", "generation", "media"]
+  tags = ["image-generation", "drawing", "illustration", "image-editing", "画图", "绘画", "生图", "文生图", "图生图", "图片编辑", "角色立绘", "插画"]
   configSchema = {
     type: "object",
     properties: {
@@ -255,7 +255,8 @@ export class GenerateImageTool {
       },
     }
   }
-  description = "Generate or edit images with the configured image model. Omit referenceImages for text-to-image; include one or more image URLs/data URLs to edit them. When size, aspectRatio, or imageSize is omitted, the tool applies its configured defaults before the model settings. Generation runs in the background and sends all returned images to the current chat when ready. You may include startMessage for a brief natural acknowledgement that drawing has started; do not claim completion before the images arrive."
+  descriptionZh = "AI 画图与图片编辑：根据描述创作人物、角色立绘、插画、风景，或编辑参考图片。用户说画图、画一个、画一张、生图时使用本工具；完成前不要声称已经画好。内容排版使用 render_image。"
+  description = "Use when the user asks to draw, paint, create artwork, generate a character/illustration/scene, or edit an image (画图、画一个、画一张、绘画、生图、修图). Generate or edit actual visual images with the configured image model. Do not substitute a text card, HTML mockup or written description for requested artwork; render_image only typesets content. If generation is unavailable or fails, report that limitation instead of claiming a rendered card is the drawing. Omit referenceImages for text-to-image; include one or more image URLs/data URLs to edit them. When size, aspectRatio, or imageSize is omitted, the tool applies its configured defaults before the model settings. Generation runs in the background and sends all returned images to the current chat when ready. You may include startMessage for a brief natural acknowledgement that drawing has started; do not claim completion before the images arrive."
   parameters = {
     type: "object",
     properties: {

@@ -127,3 +127,33 @@ export async function renderImageByKind(kind: unknown, input: UnknownRecord = {}
   if (renderer?.render) return renderer.render(input, config && typeof config === "object" && !Array.isArray(config) ? config as UnknownRecord : {})
   throw new Error(`未知图片渲染类型：${kind}`)
 }
+
+function record(value: unknown): UnknownRecord {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as UnknownRecord : {}
+}
+
+function text(value: unknown): string {
+  return String(value ?? "")
+}
+
+export const renderInputFormats = ["auto", "html", "markdown", "mindmap", "text"] as const
+
+/** 对外只接受 format + data.content；内部继续复用各领域渲染器。 */
+export function resolveRenderRequest(args: UnknownRecord = {}): { kind: string; input: UnknownRecord } {
+  const input = { ...record(args.data) }
+  if (args.template !== undefined || args.kind !== undefined || input.html !== undefined || input.markdown !== undefined || input.formula !== undefined) {
+    throw new Error("请使用 format 和 data.content 指定渲染格式及内容。")
+  }
+  let format = text(args.format || "auto").trim().toLowerCase()
+  if (!(renderInputFormats as readonly string[]).includes(format)) throw new Error("支持的格式：auto、html、markdown、mindmap、text。")
+  const content = text(input.content).trim()
+  if (format === "auto") {
+    if (Array.isArray(input.sections)) format = "text"
+    else if (/^(?:<!doctype\s+html|<(?:html|head|body|style|div|main|section|article|header|footer|nav|aside|h[1-6]|p|span|a|img|ul|ol|li|table|thead|tbody|tr|td|th|pre|blockquote|figure|canvas|svg)\b)/i.test(content)) format = "html"
+    else format = "markdown"
+  }
+  if (!content && !(format === "text" && Array.isArray(input.sections) && input.sections.length)) throw new Error("渲染内容不能为空。")
+  if (format === "html") input.html = input.content
+  if (format === "markdown" || format === "mindmap") input.markdown = input.content
+  return { kind: format === "text" ? "text-card" : format, input }
+}

@@ -328,7 +328,7 @@ flowchart TD
 - 渠道开关、顺序、回退、超时和结果上限放在 `tools.builtin.*`；供应商密钥放在工具 `configSchema` 并标记 `secret: true`。不要把密钥、内部端点或管理员选项放入模型参数。
 - 新渠道应实现现有渠道函数的输入输出形态，再加入允许值、默认配置、校验、Web 设置、诊断和回归；不要新增一个同义模型工具。
 
-`render_image` 的公开模板只有文本卡片、Markdown 和思维导图：分别使用 `template=text-card`、`template=markdown`、`template=mindmap`。帮助图、聊天卡片、会话列表、函数图、词云和动态面板属于内部场景，由系统或专用工具填充统一基础样式，不作为独立模板暴露。工具图片由 `response.render.engine` 控制，系统图片由 `response.render.system.engine` 控制；两者互不影响，默认 `html`，异常时回退 SVG，并在脚注标明回退。图片按请求即时生成，不写入渲染缓存。任意 HTML/URL 截图仍需显式开启本地 HTML 后端。函数表达式由受限解析器计算，禁止使用 `eval`。
+`render_image` 统一使用 `format` 与 `data.content`，格式为 `auto`、`html`、`markdown`、`mindmap`、`text`；数学公式和 Mermaid 属于 Markdown。各格式共用工具权限与统一主题，不再提供独立 HTML 工具或开关。帮助图、聊天卡片、会话列表、函数图、词云和动态面板仍为内部场景。工具引擎由 `response.render.engine` 控制，系统引擎由 `response.render.system.engine` 控制，选项统一为 HTML / SVG；HTML 内容固定使用 HTML，不回退 SVG。图片即时生成，不保存渲染缓存。URL 截图保留独立权限与 `response.render.url.enabled` 开关。函数表达式由受限解析器计算，禁止使用 `eval`。
 
 ## 8. 权限、宿主与网络边界
 

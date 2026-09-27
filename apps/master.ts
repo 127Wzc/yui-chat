@@ -28,7 +28,7 @@ export class YuiChatMaster extends YuiChatCommandHandlers {
         masterCommand("工具参数(?:\\s+[a-zA-Z0-9_.-]+)?", "toolParameterCommand"),
         masterCommand("测试过滤器(?:\\s+[a-zA-Z0-9_.-]+)?(?:\\s+[\\s\\S]*)?", "testFilterCommand"),
         masterCommand("过滤器参数(?:\\s+[a-zA-Z0-9_.-]+)?", "filterParameterCommand"),
-        masterCommand("渲染(帮助菜单|菜单|帮助|能力|工具|MarkdownHTML|markdownhtml|Markdown|markdown|思维导图HTML|思维导图html|MarkmapHTML|markmaphtml|思维导图|词云|动态|面板)([\\s\\S]*)", "renderImageCommand"),
+        masterCommand("渲染(帮助菜单|菜单|帮助|能力|工具|Markdown|markdown|思维导图|词云|动态|面板)([\\s\\S]*)", "renderImageCommand"),
         masterCommand("截图URL\\s+([\\s\\S]+)", "screenshotUrl"),
         masterCommand("截图HTML\\s+([\\s\\S]+)", "screenshotHtml"),
         masterCommand("(本群|全局)?(群\\d+)?(闭嘴|关机|休眠|下班)([\\s\\S]*)", "muteChat"),

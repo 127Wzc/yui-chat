@@ -282,7 +282,7 @@ export const OverviewTab = {
         "response.autoUsePicture": wizard.autoPicture === "true",
         "response.autoUsePictureThreshold": Number(wizard.pictureThreshold || 1200),
         "response.render.enabled": true,
-        "response.render.html.enabled": false,
+        "response.render.url.enabled": false,
       }, "setup-guide-output"), "输出方式已保存，高风险截图保持关闭", ["config", "output", "setupGuide", "diagnostics"])
     }
 

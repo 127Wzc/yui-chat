@@ -283,17 +283,17 @@ async function svgToPng(svg: string, kind: string, meta: UnknownRecord, config: 
   const engineKind = kind === "markdown-document" ? "markdown" : kind === "mind-map" ? "mindmap" : kind
   const resolvedEngine = resolveRenderEngine(engineKind, "", config)
   const fallbackFrom = text(cfg.fallbackFrom).toLowerCase() === "html"
-  // 内置模板统一优先使用受控 HTML 页面；通用 HTML/URL 截图仍由独立后端开关保护。
+  // 内置模板统一优先使用受控 HTML 页面；URL 截图仍由独立开关保护。
   if (resolvedEngine === "html") {
     try {
       const { renderSvgToPng } = await import("./render-html-service.js")
-      return await renderSvgToPng(svg.replaceAll(renderFooterToken, renderFooter("html")), kind, meta, config, false)
+      return await renderSvgToPng(svg.replaceAll(renderFooterToken, renderFooter(["markdown", "mindmap"].includes(engineKind) ? engineKind : "html")), kind, meta, config)
     } catch (error) {
       hostRuntime.logger?.warn?.(`[yui-chat] ${kind} HTML 渲染失败，回退 SVG`, error)
     }
   }
   const fallback = resolvedEngine === "html" || fallbackFrom || normalizeConfiguredEngine(cfg.engine, "html") === "html"
-  const buffer = await sharp(Buffer.from(svg.replaceAll(renderFooterToken, renderFooter("svg", fallback)))).png().toBuffer()
+  const buffer = await sharp(Buffer.from(svg.replaceAll(renderFooterToken, renderFooter(["markdown", "mindmap"].includes(engineKind) ? engineKind : "svg", fallback)))).png().toBuffer()
   const fallbackMeta = {
     ...meta,
     engine: "svg",
@@ -304,7 +304,7 @@ async function svgToPng(svg: string, kind: string, meta: UnknownRecord, config: 
   return { buffer, meta: fallbackMeta }
 }
 
-/** 统一处理公开模板的引擎选择；HTML 失败时只在这里切换到 SVG。 */
+/** 普通模板按配置选择引擎并允许 SVG 回退；原始 HTML 固定使用浏览器且不回退。 */
 export async function renderImageByConfiguredEngine(
   kind: unknown,
   input: UnknownRecord = {},
@@ -313,6 +313,7 @@ export async function renderImageByConfiguredEngine(
   scope: RenderStrategyScope = "ai",
 ): Promise<UnknownRecord> {
   const normalized = normalizeRenderKind(kind)
+  if (normalized === "html") return renderImageByKind(normalized, input, config) as Promise<UnknownRecord>
   const engine = resolveRenderEngine(normalized, requested, config, scope)
   if (engine === "html" && (normalized === "markdown" || normalized === "mindmap")) {
     try {
@@ -913,21 +914,21 @@ export async function renderDynamicPanel(input: RenderInput = {}, config: unknow
   },
   {
     kind: "markdown",
-    label: "Markdown 图片",
+    label: "Markdown",
     toolName: "render_image",
     command: "#yui渲染Markdown",
     description: "把 Markdown、公式文本、代码块和 Mermaid 源码卡片渲染成图片。",
-    aliases: ["math", "math-markdown"],
+    aliases: [],
     tags: ["markdown", "math", "mermaid"],
     render: renderMarkdownDocument,
   },
   {
     kind: "mindmap",
-    label: "思维导图图片",
+    label: "思维导图",
     toolName: "render_image",
     command: "#yui渲染思维导图",
     description: "把 Markdown 层级结构渲染成思维导图式图片。",
-    aliases: ["markmap"],
+    aliases: [],
     tags: ["markdown", "mindmap"],
     render: renderMindMap,
   },
@@ -963,6 +964,16 @@ export async function renderDynamicPanel(input: RenderInput = {}, config: unknow
     aliases: ["dynamic"],
     tags: ["dashboard", "status", "help"],
     render: renderDynamicPanel,
+  },
+  {
+    kind: "html", label: "HTML", toolName: "render_image",
+    description: "HTML/CSS 文档或片段，与其他格式共用统一主题和 render_image 权限。",
+    tags: ["html", "image", "render"],
+    render: async (input: UnknownRecord, config: UnknownRecord) => {
+      if (renderConfig(config).enabled === false) throw new Error("图片渲染服务未启用。")
+      const { renderThemedHtmlToPng } = await import("./render-html-service.js")
+      return renderThemedHtmlToPng(input, config)
+    },
   },
 ].forEach(registerImageRenderer)
 

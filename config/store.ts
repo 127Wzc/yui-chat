@@ -454,6 +454,7 @@ function normalizeConfig(config: Config): Config {
   if (response && isObject(response.render)) {
     if (isObject(response.render.delivery)) delete response.render.delivery.allowPrivateHosts
     if (isObject(response.render.html)) {
+      delete response.render.html.enabled
       delete response.render.html.allowPrivateHosts
       delete response.render.html.allowedUrlHosts
     }

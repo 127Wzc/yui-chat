@@ -1,7 +1,7 @@
 import { configStore } from "../../config/store.js"
 import { hostRuntime } from "../../core/runtime/host-runtime.js"
 import { renderDynamicPanel, renderHelpMenu, renderImageByConfiguredEngine, withRenderScope } from "../../core/rendering/render-service.js"
-import { renderHtmlToPng, renderUrlToPng } from "../../core/rendering/render-html-service.js"
+import { renderUrlToPng } from "../../core/rendering/render-html-service.js"
 import { buildNextHelpMenu } from "../help-menu.js"
 import { deliverRenderedImage, renderAndDeliverImage } from "../../core/rendering/render-delivery.js"
 import type { UnknownRecord } from "../../core/message/types.js"
@@ -26,7 +26,7 @@ function errorMessage(error: unknown): string {
 }
 
 function parseRenderPayload(msg: unknown = ""): UnknownRecord {
-  const match = matchPluginCommand(msg, "渲染(帮助菜单|菜单|帮助|能力|工具|MarkdownHTML|markdownhtml|Markdown|markdown|思维导图HTML|思维导图html|MarkmapHTML|markmaphtml|思维导图|词云|动态|面板)([\\s\\S]*)")
+  const match = matchPluginCommand(msg, "渲染(帮助菜单|菜单|帮助|能力|工具|Markdown|markdown|思维导图|词云|动态|面板)([\\s\\S]*)")
   const type = match?.[1] || ""
   const body = String(match?.[2] || "").trim()
   const lines = body.split("\n").map(line => line.trimEnd()).filter(line => line.trim())
@@ -73,7 +73,7 @@ export async function runRenderImageCommand({ e, reply }: CommandOptions): Promi
       title: "Yui Chat 统一渲染",
       subtitle: "业务只选择模板并传 JSON 数据；安全校验和发送由统一服务处理。",
       metrics: [{ label: "默认工具", value: "render_image" }, { label: "模式", value: "即时生成" }, { label: "优先级", value: record(record(renderConfig).response).render ? text(record(record(renderConfig).response).render && record(record(record(renderConfig).response).render).engine) || "html" : "html" }],
-      sections: [{ title: "主入口", lines: ["render_image({ template, data })：模型工具统一入口", `${pluginCommand("图片模式")}：普通聊天自动使用统一图片卡片`, `${pluginCommand("渲染帮助菜单")}：发送默认帮助菜单图`, `${pluginCommand("对话列表")}：渲染当前活跃会话列表`] }, { title: "受控附加能力", lines: [`Markdown、思维导图、词云和动态面板可通过 ${pluginCommand("渲染")} 命令生成。`, "URL/HTML 截图是 master-only 高风险能力，默认关闭。"] }],
+      sections: [{ title: "主入口", lines: ["render_image({ format, data })：模型工具统一入口", `${pluginCommand("图片模式")}：普通聊天自动使用统一图片卡片`, `${pluginCommand("渲染帮助菜单")}：发送默认帮助菜单图`, `${pluginCommand("对话列表")}：渲染当前活跃会话列表`] }, { title: "受控附加能力", lines: [`Markdown、思维导图、词云和动态面板可通过 ${pluginCommand("渲染")} 命令生成。`, "HTML、Markdown、思维导图共用 render_image；URL 截图默认关闭。"] }],
     }, renderConfig)
     return deliverRenderedImage(image, { e, config: renderConfig }, { label: "渲染工具说明图" })
   }
@@ -83,20 +83,10 @@ export async function runRenderImageCommand({ e, reply }: CommandOptions): Promi
     const image = await renderImageByConfiguredEngine("markdown", markdownInput, renderConfig)
     return deliverRenderedImage(image, { e, config: renderConfig }, { label: "Markdown 图片" })
   }
-  if (input.type === "markdownhtml") {
-    const markdownInput = { title: input.title || "Markdown HTML 渲染", markdown: input.content || input.body, footer: "Yui Chat · HTML Command Render" }
-    const image = await renderImageByConfiguredEngine("markdown", markdownInput, renderConfig, "html")
-    return deliverRenderedImage(image, { e, config: renderConfig }, { label: "Markdown HTML 图片" })
-  }
   if (input.type === "思维导图") {
     const mindmapInput = { title: input.title || "思维导图", markdown: input.content || input.body }
     const image = await renderImageByConfiguredEngine("mindmap", mindmapInput, renderConfig)
     return deliverRenderedImage(image, { e, config: renderConfig }, { label: "思维导图图片" })
-  }
-  if (input.type === "思维导图html" || input.type === "markmaphtml") {
-    const mindmapInput = { title: input.title || "HTML 思维导图", markdown: input.content || input.body }
-    const image = await renderImageByConfiguredEngine("mindmap", mindmapInput, renderConfig, "html")
-    return deliverRenderedImage(image, { e, config: renderConfig }, { label: "Markmap HTML 图片" })
   }
   if (input.type === "词云") return renderAndDeliverImage("word-cloud", { title: input.title || "词云", text: input.content || input.body }, { e, config: renderConfig }, { label: "词云图片" })
   if (input.type === "动态" || input.type === "面板") return renderAndDeliverImage("dynamic-panel", parseDynamicPanelPayload(input), { e, config: renderConfig }, { label: "动态面板图片" })
@@ -107,9 +97,9 @@ export async function runUrlScreenshotCommand({ e, reply }: CommandOptions): Pro
   const url = String(matchPluginCommand(e?.msg, "截图URL\\s+([\\s\\S]+)")?.[1] || "").trim()
   const config = await configStore.load()
   const renderConfig = withRenderScope(config, "system")
-  const html = record(record(record(renderConfig).response).render).html ? record(record(record(record(renderConfig).response).render).html) : {}
+  const urlConfig = record(record(record(record(renderConfig).response).render).url)
   const linkSafety = linkSafetyConfig(renderConfig)
-  if (html.enabled !== true) return reply("URL 截图后端默认关闭。请在 response.render.html.enabled 开启后再使用；链接范围由 security.linkSafety 统一控制。", true)
+  if (urlConfig.enabled !== true) return reply("URL 截图后端默认关闭。请在 response.render.url.enabled 开启后再使用；链接范围由 security.linkSafety 统一控制。", true)
   if (!linkSafety.screenshotAllowedHosts.length) return reply("URL 截图尚未配置允许域名，请先设置 security.linkSafety.screenshotAllowedHosts。", true)
   try {
     const image = await renderUrlToPng(url, {}, renderConfig)
@@ -124,10 +114,8 @@ export async function runHtmlScreenshotCommand({ e, reply }: CommandOptions): Pr
   const html = String(matchPluginCommand(e?.msg, "截图HTML\\s+([\\s\\S]+)")?.[1] || "").trim()
   const config = await configStore.load()
   const renderConfig = withRenderScope(config, "system")
-  const htmlConfig = record(record(record(renderConfig).response).render).html ? record(record(record(record(renderConfig).response).render).html) : {}
-  if (htmlConfig.enabled !== true) return reply("HTML 截图后端默认关闭。请在 response.render.html.enabled 开启后再使用。", true)
   try {
-    const image = await renderHtmlToPng(html, { name: "command-html" }, renderConfig)
+    const image = await renderImageByConfiguredEngine("html", { html, name: "command-html" }, renderConfig)
     return deliverRenderedImage(image, { e, config: renderConfig }, { label: "HTML 截图" })
   } catch (err) {
     hostRuntime.logger?.warn?.("[yui-chat] HTML 截图失败", err)
