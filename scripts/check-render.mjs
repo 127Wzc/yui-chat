@@ -20,12 +20,13 @@ const hooks = registerHooks({
     if (url.endsWith('/lib/plugins/loader.js')) return { format: 'module', shortCircuit: true, source: 'export default { priority: [] }' }
     if (url.endsWith('/lib/renderer/loader.js')) return {
       format: 'module', shortCircuit: true,
-      source: 'export default { getRenderer: () => ({ browserInit: async () => globalThis.__yuiRenderTestBrowser }) }',
+      source: 'export default { getRenderer: () => globalThis.__yuiRenderTestRenderer }',
     }
     return next(url, context)
   },
 })
 globalThis.__yuiRenderTestBrowser = {
+  isConnected() { return realBrowser ? browser.isConnected() : true },
   async newPage() {
     if (failBrowser) throw new Error('test browser unavailable')
     const page = realBrowser ? await browser.newPage() : null
@@ -70,6 +71,9 @@ globalThis.__yuiRenderTestBrowser = {
       async close() { capture.closed = true; await page?.close() },
     }
   },
+}
+globalThis.__yuiRenderTestRenderer = {
+  browserInit: async () => globalThis.__yuiRenderTestBrowser,
 }
 try {
   if (realBrowser) {
@@ -198,12 +202,222 @@ try {
   svgConfig.response.render.engine = 'svg'
   failBrowser = true
   await assert.rejects(() => renderImageByConfiguredEngine('html', { html: htmlArgs.data.content }, svgConfig), /test browser unavailable/)
+  await checkBrowserRecovery(renderImageByConfiguredEngine, config)
   console.log(`Render checks passed${realBrowser ? ' (real Chromium, HTML/CSS + KaTeX + Mermaid)' : ''}.`)
 } finally {
   await browser?.close()
   hooks.deregister()
   delete globalThis.__yuiRenderTestBrowser
+  delete globalThis.__yuiRenderTestRenderer
   await fs.rm(runtimeRoot, { recursive: true, force: true })
 }
 
 process.exit(0)
+
+async function checkBrowserRecovery(render, config) {
+  const previousLogger = globalThis.logger
+  const logs = []
+  globalThis.logger = Object.fromEntries(['info', 'warn', 'debug'].map(level => [level, (...args) => logs.push({ level, args })]))
+  const host = globalThis.__yuiRenderTestRenderer
+  let initCalls = 0
+  let restartCalls = 0
+  let replacement
+  host.browserInit = async () => { initCalls++; return host.browser }
+  host.restart = async force => {
+    assert.equal(force, true)
+    restartCalls++
+    host.lock = true
+    host.browser = false
+    await new Promise(resolve => setTimeout(resolve, 20))
+    host.browser = replacement
+    host.lock = false
+    return replacement
+  }
+  const pages = []
+  const makeBrowser = (options = {}) => {
+    const instance = {
+      connected: options.connected ?? true,
+      pageCalls: 0,
+      isConnected() { return this.connected },
+      process() { return { pid: 1234, exitCode: this.connected ? null : 1, signalCode: null } },
+      once(event, listener) { assert.equal(event, 'disconnected'); this.onDisconnected = listener },
+      async newPage() {
+        this.pageCalls++
+        if (options.newPage) return options.newPage(instance)
+        const page = { closed: false, loads: 0, interception: false, handlers: {},
+          async setRequestInterception(enabled) { this.interception = enabled },
+          on(event, listener) { this.handlers[event] = listener },
+          async setViewport() {},
+          async goto(url) {
+            assert(this.interception, 'requests must be guarded before navigation, including after recovery')
+            this.loads++
+            if (options.goto) return options.goto(instance, page, url)
+          },
+          async evaluate() {},
+          async screenshot() { if (options.screenshot) return options.screenshot(instance, page); return png },
+          async close() { this.closed = true },
+        }
+        pages.push(page)
+        return page
+      },
+    }
+    return instance
+  }
+  const closedError = () => Object.assign(new Error('Connection closed.'), { name: 'ConnectionClosedError' })
+  const run = (cfg = config) => render('markdown', { content: '# 恢复测试' }, cfg)
+  try {
+    host.browser = makeBrowser()
+    assert.equal((await run()).meta.fallback, false)
+    const original = host.browser
+    host.browser = makeBrowser()
+    assert.equal((await run()).meta.fallback, false)
+    assert.equal(original.pageCalls, 1, 'do not keep the old browser after the host replaces it')
+    assert.equal(host.browser.pageCalls, 1)
+    assert.equal(initCalls, 2, 'every render acquires the current host browser')
+
+    host.browser = makeBrowser({ connected: false })
+    replacement = makeBrowser()
+    assert.equal((await run()).meta.fallback, false)
+    assert.equal(restartCalls, 1, 'a disconnected instance still held by the host requests host recovery')
+
+    const broken = makeBrowser({ newPage: async () => {
+      await new Promise(resolve => setTimeout(resolve, 5))
+      throw closedError()
+    } })
+    host.browser = broken
+    replacement = makeBrowser()
+    const parallel = await Promise.all(Array.from({ length: 8 }, () => run()))
+    assert(parallel.every(result => !result.meta.fallback))
+    assert.equal(restartCalls, 2, 'concurrent ConnectionClosedError failures share one host restart')
+    assert.equal(broken.pageCalls, 8)
+    assert.equal(replacement.pageCalls, 8, 'each render retries page creation only once')
+
+    replacement = makeBrowser()
+    host.browser = makeBrowser({ newPage: async () => { host.browser = replacement; throw closedError() } })
+    assert.equal((await run()).meta.fallback, false)
+    assert.equal(restartCalls, 2, 'do not restart an already replaced host browser')
+
+    host.lock = true
+    host.browser = false
+    setTimeout(() => { host.browser = makeBrowser(); host.lock = false }, 20)
+    assert.equal((await run()).meta.fallback, false, 'wait for old host initialization locks instead of treating false as permanent failure')
+
+    host.browser = makeBrowser({ newPage: async () => { throw closedError() } })
+    replacement = makeBrowser({ newPage: async () => { throw closedError() } })
+    assert.equal((await run()).meta.fallback, true, 'a second connection failure falls back without looping')
+    assert.equal(restartCalls, 3)
+    assert.equal(replacement.pageCalls, 1)
+    host.browser = makeBrowser()
+    assert.equal((await run()).meta.fallback, false, 'fallback must not poison future HTML renders')
+
+    host.browser = makeBrowser({ goto: async instance => { instance.connected = false; throw closedError() } })
+    replacement = makeBrowser()
+    assert.equal((await run()).meta.fallback, true, 'do not replay a page after navigation starts')
+    assert.equal(pages.at(-1).loads, 1)
+    assert.equal(replacement.pageCalls, 0, 'mid-render recovery is only for subsequent requests')
+    assert.equal((await run()).meta.fallback, false)
+    assert.equal(restartCalls, 4)
+
+    host.browser = makeBrowser({ goto: async () => { throw new Error('Navigation timeout Authorization: Bearer secret-value https://user:pass@example.com/?token=hidden') } })
+    assert.equal((await run()).meta.fallback, true)
+    assert.equal(host.browser.pageCalls, 1)
+    assert.equal(restartCalls, 4, 'ordinary content/loading failures must not restart the shared browser')
+    const diagnostic = logs.find(log => log.args[1]?.stage === 'page-load' && log.args[1]?.error?.includes('Navigation timeout'))
+    assert(diagnostic)
+    assert.equal(diagnostic.args[1].pid, 1234)
+    assert(diagnostic.args[1].renderId && diagnostic.args[1].browserId)
+    assert(!JSON.stringify(logs).includes('secret-value'))
+    assert(!JSON.stringify(logs).includes('hidden'))
+    assert(!JSON.stringify(logs).includes('user:pass'))
+
+    const { renderUrlToPng } = await import('../output/runtime/core/rendering/render-html-service.js')
+    const urlConfig = structuredClone(config)
+    urlConfig.response.render.url.enabled = true
+    urlConfig.security.linkSafety.screenshotAllowedHosts = ['example.com']
+    host.browser = makeBrowser({ newPage: async () => { throw closedError() } })
+    replacement = makeBrowser()
+    await renderUrlToPng('https://example.com/', { waitMs: 0 }, urlConfig)
+    const urlPage = pages.at(-1)
+    let blocked = false
+    await urlPage.handlers.request({ url: () => 'https://not-allowed.example.org/', continue() { assert.fail('disallowed host must not load') }, abort(reason) { blocked = reason === 'blockedbyclient' } })
+    assert(blocked, 'URL host restrictions still apply to recovered pages')
+    assert.equal(restartCalls, 5)
+    host.browser = makeBrowser({ goto: async instance => { instance.connected = false; throw closedError() } })
+    replacement = makeBrowser()
+    await assert.rejects(() => renderUrlToPng('https://example.com/', { waitMs: 0 }, urlConfig), /stage=page-load/)
+    assert.equal(replacement.pageCalls, 0, 'URL navigation is never replayed automatically')
+    assert.equal(restartCalls, 6)
+
+    const shortConfig = structuredClone(config)
+    shortConfig.response.render.html.timeoutMs = 100
+    const ready = makeBrowser()
+    host.browserInit = async () => { await new Promise(resolve => setTimeout(resolve, 200)); return ready }
+    assert.equal((await run(shortConfig)).meta.fallback, true, 'hung initialization has a bounded wait')
+    await new Promise(resolve => setTimeout(resolve, 150))
+    host.browserInit = async () => host.browser
+    host.browser = ready
+    assert.equal((await run()).meta.fallback, false, 'late initialization does not poison the next render')
+
+    let lateClosed = false
+    host.browser = makeBrowser({ newPage: async () => {
+      await new Promise(resolve => setTimeout(resolve, 200))
+      return { async close() { lateClosed = true } }
+    } })
+    assert.equal((await run(shortConfig)).meta.fallback, true)
+    await new Promise(resolve => setTimeout(resolve, 150))
+    assert(lateClosed, 'pages arriving after the creation timeout are closed')
+    assert.equal(restartCalls, 6, 'a slow page creation must not restart a connected shared browser')
+
+    let pendingInits = 0
+    host.browser = false
+    host.browserInitPromise = true
+    host.browserInit = async () => {
+      pendingInits++
+      await new Promise(resolve => setTimeout(resolve, 20))
+      host.browserInitPromise = null
+      return host.browser = makeBrowser()
+    }
+    const waiting = await Promise.all(Array.from({ length: 4 }, () => run()))
+    assert(waiting.every(result => !result.meta.fallback))
+    assert.equal(pendingInits, 1, 'new host initialization promises are shared by concurrent renders')
+    host.browserInit = async () => host.browser
+
+    const restart = host.restart
+    const failed = makeBrowser({ connected: false })
+    host.browser = failed
+    host.restart = async () => { throw new Error('test host restart failed') }
+    assert.equal((await run()).meta.fallback, true, 'host recovery failures keep SVG fallback')
+    assert(logs.some(log => log.args[0].includes('恢复失败') && log.args[1]?.error?.includes('test host restart failed')))
+    host.restart = restart
+    replacement = makeBrowser()
+    assert.equal((await run()).meta.fallback, false, 'a rejected recovery is removed so the same failed instance can recover next time')
+    assert.equal(restartCalls, 7)
+
+    host.browser = makeBrowser({ connected: false })
+    delete host.restart
+    assert.equal((await run()).meta.fallback, true, 'a host without a restart method is not mutated by the plugin')
+    host.browser = makeBrowser()
+    assert.equal((await run()).meta.fallback, false)
+    host.restart = restart
+
+    host.browser = makeBrowser({ screenshot: async instance => { instance.connected = false; throw closedError() } })
+    replacement = makeBrowser()
+    assert.equal((await run()).meta.fallback, true)
+    assert.equal(pages.at(-1).loads, 1)
+    assert.equal(replacement.pageCalls, 0)
+    assert(logs.some(log => log.args[0].includes('浏览器渲染失败') && log.args[1]?.stage === 'screenshot'))
+    assert.equal((await run()).meta.fallback, false)
+    const listener = host.browser.onDisconnected
+    assert(listener)
+    host.browser.connected = false
+    listener()
+    assert(logs.some(log => log.args[0].includes('连接断开') && log.args[1]?.exitCode === 1))
+
+    assert(pages.every(page => page.closed), 'all successful and failed pages are cleaned up')
+    assert(logs.some(log => log.args[0].includes('恢复成功')))
+    const htmlFiles = await fs.readdir(path.join(runtimeRoot, 'cache/temp/render-html'))
+    assert.equal(htmlFiles.length, 0, 'recovery and fallback leave no temporary HTML files')
+  } finally {
+    globalThis.logger = previousLogger
+  }
+}

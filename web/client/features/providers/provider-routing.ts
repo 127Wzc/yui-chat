@@ -389,7 +389,7 @@ export const ModelRoutingBuilder = {
           </div>
           <p class="muted tiny">常规聊天只使用默认回复任务：主回复模型负责对话、工具调用和媒体上下文；多个回复模型请把策略设为 fallback 做失败回退。</p>
         </div>
-        <template #actions>
+        <template #footer>
           <button class="btn primary" type="button" :disabled="saving" @click="saveSimple"><Icon name="save" :size="14" :class="{ 'icon-spin': saving }" />{{ saving ? "保存中..." : "保存回复方案" }}</button>
           <button class="btn outline" type="button" :disabled="previewing" @click="runPreview()"><Icon name="eye" :size="14" :class="{ 'icon-spin': previewing }" />{{ previewing ? "刷新中..." : "刷新预览" }}</button>
         </template>

@@ -5,6 +5,8 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 import { pluginRoot, tempDir, yunzaiRoot } from "../../config/store.js"
 import { fetchSafeHttp } from "../network/safe-http-client.js"
 import { assertSafeHttpUrl, linkSafetyConfig, matchesAllowedHost } from "../network/link-safety-policy.js"
+import { hostRuntime } from "../runtime/host-runtime.js"
+import { errorSummary } from "../shared/error-details.js"
 import { htmlRenderBaseCss, htmlRenderDocumentCss, renderFooter, renderTheme } from "./render-theme.js"
 
 type UnknownRecord = Record<string, unknown>
@@ -56,7 +58,8 @@ interface RenderFrame {
 interface RenderPage {
   frames?(): RenderFrame[]
   setRequestInterception?(enabled: boolean): Promise<unknown>
-  on?(event: string, handler: (request: RenderRequest) => Promise<unknown>): void
+  on?(event: "request", handler: (request: RenderRequest) => Promise<unknown>): void
+  on?(event: "error", handler: (error: unknown) => void): void
   setViewport(options: RenderViewport & { deviceScaleFactor: number }): Promise<unknown>
   goto(url: string, options: { timeout: number; waitUntil: string }): Promise<unknown>
   evaluate?<T>(pageFunction: (limit: number) => T | Promise<T>, arg: number): Promise<T>
@@ -67,10 +70,16 @@ interface RenderPage {
 interface RenderBrowser {
   newPage?(): Promise<RenderPage | null>
   isConnected?(): boolean
+  once?(event: "disconnected", handler: () => void): void
+  process?(): { pid?: number; exitCode?: number | null; signalCode?: string | null } | null
 }
 
 interface PuppeteerRenderer {
   browserInit(): Promise<RenderBrowser | null | false>
+  browser?: RenderBrowser | null | false
+  lock?: boolean
+  browserInitPromise?: unknown
+  restart?(force: boolean): unknown
 }
 
 interface HostRendererLoader {
@@ -97,8 +106,18 @@ function numberValue(value: unknown, fallback: number): number {
 const htmlRenderDir = path.join(tempDir, "render-html")
 const renderResourceDir = path.join(pluginRoot, "resources/render")
 let sharedRendererPromise: Promise<PuppeteerRenderer> | null = null
-let sharedBrowserPromise: Promise<RenderBrowser> | null = null
-let sharedBrowser: RenderBrowser | null = null
+let sharedBrowserPromise: Promise<RenderBrowser | null | false> | null = null
+const browserRecoveries = new WeakMap<RenderBrowser, Promise<RenderBrowser>>()
+const browserIds = new WeakMap<RenderBrowser, number>()
+let nextBrowserId = 0
+
+interface RenderTrace {
+  id: string
+  kind: "html" | "url"
+  stage: string
+  startedAt: number
+  renderer?: PuppeteerRenderer
+}
 
 function htmlConfig(config: unknown = {}): HtmlRenderConfig {
   const root = record(config)
@@ -438,27 +457,176 @@ async function loadHostPuppeteerRenderer(): Promise<PuppeteerRenderer> {
   return sharedRendererPromise
 }
 
-async function loadRenderBrowser(): Promise<RenderBrowser> {
-  if (sharedBrowser && sharedBrowser.isConnected?.() !== false) return sharedBrowser
-  if (sharedBrowser) {
-    sharedBrowser = null
-    sharedRendererPromise = null
+function renderErrorSummary(error: unknown): string {
+  // Chromium 错误可能带页面 URL；不记录正文、URL 查询参数或浏览器端点。
+  return errorSummary(error).replace(/(?:https?|wss?|file):\/\/\S+/gi, "<url>")
+}
+
+function browserState(browser: RenderBrowser | null): UnknownRecord {
+  if (!browser) return { browserId: null }
+  const process = browser.process?.()
+  return {
+    browserId: browserIds.get(browser) ?? null,
+    connected: browser.isConnected?.() ?? "unknown",
+    pid: process?.pid ?? null,
+    exitCode: process?.exitCode ?? null,
+    signalCode: process?.signalCode ?? null,
   }
-  if (!sharedBrowserPromise) {
-    sharedBrowserPromise = (async () => {
-      const renderer = await loadHostPuppeteerRenderer()
-      const browser = await renderer.browserInit()
-      if (!browser) throw new Error("Puppeteer 浏览器初始化失败。")
-      sharedBrowser = browser
+}
+
+function renderLog(level: "info" | "warn" | "debug", message: string, trace: RenderTrace, browser: RenderBrowser | null, error?: unknown): void {
+  hostRuntime.logger?.[level]?.(`[yui-chat] ${message}`, {
+    renderId: trace.id, kind: trace.kind, stage: trace.stage,
+    elapsedMs: Date.now() - trace.startedAt, ...browserState(browser),
+    hostLocked: trace.renderer?.lock ?? "unknown",
+    hostInitPending: Boolean(trace.renderer?.browserInitPromise),
+    hostOwnsBrowser: trace.renderer?.browser === undefined ? "unknown" : trace.renderer.browser === browser,
+    ...(error === undefined ? {} : { error: renderErrorSummary(error) }),
+  })
+}
+
+function observeBrowser(browser: RenderBrowser): void {
+  if (browserIds.has(browser)) return
+  browserIds.set(browser, ++nextBrowserId)
+  browser.once?.("disconnected", () => {
+    hostRuntime.logger?.warn?.("[yui-chat] 渲染浏览器连接断开", browserState(browser))
+  })
+}
+
+async function beforeDeadline<T>(pending: Promise<T>, deadline: number, stage: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      pending,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Puppeteer ${stage}等待超时。`)), Math.max(0, deadline - Date.now()))
+      }),
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+async function loadRenderBrowser(deadline: number): Promise<RenderBrowser> {
+  const renderer = await beforeDeadline(loadHostPuppeteerRenderer(), deadline, "渲染后端")
+  while (Date.now() < deadline) {
+    // 只合并正在进行的获取，每次渲染都向宿主索取当前实例。
+    if (!sharedBrowserPromise) {
+      sharedBrowserPromise = Promise.resolve().then(() => renderer.browserInit()).finally(() => {
+        sharedBrowserPromise = null
+      })
+    }
+    const browser = await beforeDeadline(sharedBrowserPromise, deadline, "浏览器初始化")
+    if (browser) {
+      observeBrowser(browser)
       return browser
-    })().catch(error => {
-      sharedRendererPromise = null
-      throw error
-    }).finally(() => {
-      sharedBrowserPromise = null
-    })
+    }
+    if (!renderer.lock && !renderer.browserInitPromise) throw new Error("Puppeteer 浏览器初始化失败。")
+    // 旧版宿主初始化锁占用时返回 false，新版会直接等待 browserInitPromise。
+    await beforeDeadline(new Promise(resolve => setTimeout(resolve, 100)), deadline, "宿主重启")
   }
-  return sharedBrowserPromise
+  throw new Error("Puppeteer 等待宿主浏览器超时。")
+}
+
+function isBrowserConnectionError(error: unknown, browser: RenderBrowser | null): boolean {
+  return browser?.isConnected?.() === false
+    || text(record(error).name) === "ConnectionClosedError"
+    || /connection (?:is )?closed|browser (?:has )?disconnected/i.test(text(record(error).message))
+}
+
+function recoverRenderBrowser(failedBrowser: RenderBrowser, deadline: number, trace: RenderTrace): Promise<RenderBrowser> {
+  const pending = browserRecoveries.get(failedBrowser)
+  if (pending) return beforeDeadline(pending, deadline, "并发连接恢复")
+  const recovery = (async () => {
+    const renderer = await beforeDeadline(loadHostPuppeteerRenderer(), deadline, "渲染后端")
+    renderLog("warn", "渲染浏览器开始恢复", trace, failedBrowser)
+    // 只请求宿主重启仍由它持有的失效实例；不能关闭已替换的浏览器。
+    if (renderer.browser === failedBrowser && !renderer.lock && !renderer.browserInitPromise && renderer.restart) {
+      await beforeDeadline(Promise.resolve(renderer.restart(true)), deadline, "宿主浏览器重启")
+    }
+    const browser = await loadRenderBrowser(deadline)
+    if (browser === failedBrowser || browser.isConnected?.() === false) {
+      throw new Error("Puppeteer 宿主仍返回失效的浏览器实例。")
+    }
+    renderLog("info", "渲染浏览器恢复成功", trace, browser)
+    return browser
+  })().catch(error => {
+    renderLog("warn", "渲染浏览器恢复失败", trace, failedBrowser, error)
+    throw error
+  }).finally(() => {
+    browserRecoveries.delete(failedBrowser)
+  })
+  browserRecoveries.set(failedBrowser, recovery)
+  return recovery
+}
+
+async function closeRenderPage(page: RenderPage, trace: RenderTrace, browser: RenderBrowser): Promise<void> {
+  try {
+    await beforeDeadline(page.close(), Date.now() + 1000, "页面清理")
+  } catch (error) {
+    renderLog(isBrowserConnectionError(error, browser) ? "debug" : "warn", "渲染页面清理失败", trace, browser, error)
+  }
+}
+
+async function createRenderPage(browser: RenderBrowser, deadline: number, trace: RenderTrace): Promise<RenderPage> {
+  let abandoned = false
+  const pending = Promise.resolve().then(() => browser.newPage?.()).then(async page => {
+    if (!page) throw new Error("Puppeteer 页面创建失败。")
+    // newPage 不能取消，超时后到达的页面仍须回收。
+    if (abandoned) await closeRenderPage(page, trace, browser)
+    return page
+  })
+  try {
+    return await beforeDeadline(pending, deadline, "页面创建")
+  } catch (error) {
+    abandoned = true
+    throw error
+  }
+}
+
+async function withRenderPage<T>(cfg: HtmlRenderConfig, kind: RenderTrace["kind"], render: (page: RenderPage, trace: RenderTrace) => Promise<T>): Promise<T> {
+  const trace: RenderTrace = { id: randomUUID().slice(0, 8), kind, stage: "browser-init", startedAt: Date.now() }
+  const timeout = Math.min(10000, Math.max(100, numberValue(cfg.timeoutMs, 30000)))
+  let browser: RenderBrowser | null = null
+  let page: RenderPage | null = null
+  let recoveryAttempted = false
+  try {
+    const deadline = Date.now() + timeout
+    trace.renderer = await beforeDeadline(loadHostPuppeteerRenderer(), deadline, "渲染后端")
+    browser = await loadRenderBrowser(deadline)
+    trace.stage = "page-create"
+    try {
+      if (browser.isConnected?.() === false) throw new Error("Puppeteer browser disconnected.")
+      page = await createRenderPage(browser, deadline, trace)
+    } catch (error) {
+      if (!isBrowserConnectionError(error, browser)) throw error
+      renderLog("warn", "渲染页面创建时连接失效", trace, browser, error)
+      recoveryAttempted = true
+      const recoveryDeadline = Date.now() + Math.min(3000, timeout)
+      trace.stage = "browser-recovery"
+      browser = await recoverRenderBrowser(browser, recoveryDeadline, trace)
+      trace.stage = "page-create-retry"
+      page = await createRenderPage(browser, recoveryDeadline, trace)
+    }
+    const activeBrowser = browser
+    page.on?.("error", error => renderLog("warn", "渲染页面崩溃", trace, activeBrowser, error))
+    return await render(page, trace)
+  } catch (error) {
+    renderLog("warn", "浏览器渲染失败", trace, browser, error)
+    const failedStage = trace.stage
+    if (browser && !recoveryAttempted && isBrowserConnectionError(error, browser)) {
+      // 已经加载的页面不重放，恢复只为后续调用服务。
+      trace.stage = "browser-recovery"
+      try {
+        await recoverRenderBrowser(browser, Date.now() + Math.min(3000, timeout), trace)
+      } catch {
+        // recoverRenderBrowser 已记录恢复失败；保留原始渲染错误供回退使用。
+      }
+    }
+    throw new Error(`Puppeteer 渲染失败 [renderId=${trace.id} kind=${kind} stage=${failedStage}]: ${renderErrorSummary(error)}`)
+  } finally {
+    if (page && browser) await closeRenderPage(page, trace, browser)
+  }
 }
 
 async function persistHtml(html: string = "", name: unknown = "render"): Promise<string> {
@@ -531,42 +699,43 @@ async function renderHtmlDocumentToPng(html: string = "", input: RenderInput = {
   const source = truncate ? text(html || "").slice(0, Math.max(1000, numberValue(cfg.maxHtmlChars, 200000))) : html
   const file = await persistHtml(source, input.name || "html")
   const fileUrl = pathToFileURL(file).toString()
-  let page: RenderPage | null = null
   try {
-    const browser = await loadRenderBrowser()
-    page = browser.newPage ? await browser.newPage() : null
-    if (!page) {
-      sharedBrowserPromise = null
-      sharedBrowser = null
-      throw new Error("Puppeteer 页面创建失败。")
-    }
-    await guardPageRequests(page, cfg, { allowFileUrl: fileUrl })
-    const viewport = record(input.viewport)
-    await page.setViewport({
-      width: numberValue(viewport.width || cfg.viewport.width, 1280),
-      height: numberValue(viewport.height || cfg.viewport.height, 720),
-      deviceScaleFactor: numberValue(input.deviceScaleFactor || cfg.deviceScaleFactor, 1),
+    return await withRenderPage(cfg, "html", async (page, trace) => {
+      trace.stage = "request-guard"
+      await guardPageRequests(page, cfg, { allowFileUrl: fileUrl })
+      trace.stage = "viewport"
+      const viewport = record(input.viewport)
+      await page.setViewport({
+        width: numberValue(viewport.width || cfg.viewport.width, 1280),
+        height: numberValue(viewport.height || cfg.viewport.height, 720),
+        deviceScaleFactor: numberValue(input.deviceScaleFactor || cfg.deviceScaleFactor, 1),
+      })
+      trace.stage = "page-load"
+      await page.goto(fileUrl, { timeout: cfg.timeoutMs, waitUntil: cfg.waitUntil })
+      trace.stage = "render-wait"
+      if (input.waitForRenderComplete === true) {
+        await waitForRenderComplete(page, 3000)
+      } else {
+        const waitMs = numberValue(input.waitMs ?? cfg.waitMs, 0)
+        if (waitMs > 0) await new Promise(resolve => setTimeout(resolve, Math.min(waitMs, 3000)))
+      }
+      trace.stage = "layout"
+      await fitHtmlContent(page)
+      const clip = await page.evaluate?.(() => {
+        const container = document.getElementById("container")
+        if (!container) return undefined
+        const rect = container.getBoundingClientRect()
+        return { x: rect.x, y: rect.y, width: Math.ceil(rect.width), height: Math.ceil(rect.height) }
+      }, 0)
+      trace.stage = "screenshot"
+      const buffer = await page.screenshot({ fullPage: clip ? false : input.fullPage !== false, type: "png", ...(clip ? { clip } : {}) })
+      const meta = { file, engine: "html-puppeteer" }
+      return { buffer, meta }
     })
-    await page.goto(fileUrl, { timeout: cfg.timeoutMs, waitUntil: cfg.waitUntil })
-    if (input.waitForRenderComplete === true) {
-      await waitForRenderComplete(page, 3000)
-    } else {
-      const waitMs = numberValue(input.waitMs ?? cfg.waitMs, 0)
-      if (waitMs > 0) await new Promise(resolve => setTimeout(resolve, Math.min(waitMs, 3000)))
-    }
-    await fitHtmlContent(page)
-    const clip = await page.evaluate?.(() => {
-      const container = document.getElementById("container")
-      if (!container) return undefined
-      const rect = container.getBoundingClientRect()
-      return { x: rect.x, y: rect.y, width: Math.ceil(rect.width), height: Math.ceil(rect.height) }
-    }, 0)
-    const buffer = await page.screenshot({ fullPage: clip ? false : input.fullPage !== false, type: "png", ...(clip ? { clip } : {}) })
-    const meta = { file, engine: "html-puppeteer" }
-    return { buffer, meta }
   } finally {
-    await page?.close?.().catch(() => {})
-    await fs.unlink(file).catch(() => {})
+    await fs.unlink(file).catch(error => {
+      if (record(error).code !== "ENOENT") hostRuntime.logger?.warn?.("[yui-chat] 渲染临时文件清理失败", renderErrorSummary(error))
+    })
   }
 }
 
@@ -635,26 +804,26 @@ export async function renderUrlToPng(inputUrl: string = "", input: RenderInput =
   const cfg = htmlConfig(config)
   if (!cfg.urlEnabled) throw new Error("URL 图片渲染后端未启用。")
   const safeUrl = await assertSafeRenderUrl(inputUrl, config)
-  const browser = await loadRenderBrowser()
-  const page = await browser.newPage?.()
-  if (!page) throw new Error("Puppeteer 页面创建失败。")
-  try {
+  return withRenderPage(cfg, "url", async (page, trace) => {
+    trace.stage = "request-guard"
     await guardPageRequests(page, cfg, { requireAllowedUrlHost: true })
+    trace.stage = "viewport"
     const viewport = record(input.viewport)
     await page.setViewport({
       width: numberValue(viewport.width || cfg.viewport.width, 1280),
       height: numberValue(viewport.height || cfg.viewport.height, 720),
       deviceScaleFactor: numberValue(input.deviceScaleFactor || cfg.deviceScaleFactor, 1),
     })
+    trace.stage = "page-load"
     await page.goto(safeUrl, { timeout: cfg.timeoutMs, waitUntil: text(input.waitUntil || cfg.waitUntil) })
+    trace.stage = "render-wait"
     const waitMs = numberValue(input.waitMs ?? cfg.waitMs, 0)
     if (waitMs > 0) await new Promise(resolve => setTimeout(resolve, Math.min(waitMs, cfg.timeoutMs)))
+    trace.stage = "screenshot"
     const buffer = await page.screenshot({ fullPage: input.fullPage !== false, type: "png" })
     const meta = { url: safeUrl, engine: "url-puppeteer" }
     return { buffer, meta }
-  } finally {
-    await page.close().catch(() => {})
-  }
+  })
 }
 
 export async function fetchHtmlForRender(inputUrl: string = "", config: unknown = {}): Promise<string> {
