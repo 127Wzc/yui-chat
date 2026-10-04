@@ -20,7 +20,7 @@ export const PermissionRoleGrid = {
   template: `
     <div class="permission-role-grid">
       <article v-for="role in summaries" :key="role.value" class="permission-role-card" :class="{ 'has-denies': role.deniedCount, 'is-previewed': previewedRole === role.value }">
-        <span class="permission-role-head"><strong>{{ role.label }}</strong><small v-if="previewedRole === role.value">已验证</small></span>
+        <span class="permission-role-head"><strong><span class="role-dot role-identity" :data-role="role.value" aria-hidden="true"></span>{{ role.label }}</strong><small v-if="previewedRole === role.value">已验证</small></span>
         <span class="permission-role-summary">{{ role.summary }}</span>
         <PillList :items="metaPills(role)" />
         <span class="permission-role-actions">

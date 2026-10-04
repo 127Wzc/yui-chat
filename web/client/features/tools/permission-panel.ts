@@ -1,15 +1,14 @@
-import { computed, reactive, ref } from "vue"
-import { confirmAction, refreshTab, request, saveConfigPatch, store, toast } from "../../app/store/store.js"
+import { PermissionOverview } from "./permission-overview.js"
+import { computed, reactive, ref, watch, onBeforeUnmount } from "vue"
+import { confirmAction, setDirtyScope, refreshTab, request, saveConfigPatch, store, toast } from "../../app/store/store.js"
 import { isFoldedRenderTool, toolCommon, toolDisplayName, toolSource } from "./shared.js"
 import { asRecord, asRecords, errorMessage } from "../../shared/data.js"
 import {
   BOUNDARY_CATEGORY_ORDER,
   BOUNDARY_ROLE_OPTIONS,
   PREVIEW_ROLE_OPTIONS,
-  draftToolAllowed,
   normalizeBoundaryAccess,
   roleLabel,
-  roleProfile,
   type AccessPreviewTool,
   type MatrixResult,
   type PackageItem,
@@ -20,7 +19,6 @@ import {
   type ToolsSlice,
 } from "./permission-shared.js"
 import { PermissionPreviewDrawer } from "./permission-preview-drawer.js"
-import { PermissionRoleGrid } from "./permission-role-grid.js"
 import { PermissionRoleDrawer } from "./permission-role-drawer.js"
 
 // 兼容既有外部导入；实现以 permission-shared.js 为准。
@@ -28,7 +26,7 @@ export { BOUNDARY_ROLE_OPTIONS } from "./permission-shared.js"
 
 export const BoundaryAccessPanel = {
   name: "BoundaryAccessPanel",
-  components: { PermissionPreviewDrawer, PermissionRoleGrid, PermissionRoleDrawer },
+  components: { PermissionOverview, PermissionPreviewDrawer, PermissionRoleDrawer },
   setup() {
     const current = normalizeBoundaryAccess(asRecord<PermissionConfigRoot>(store.config).tools?.boundaryAccess || {})
     const draft = reactive<PermissionDraft>({
@@ -41,6 +39,17 @@ export const BoundaryAccessPanel = {
       skillPackages: JSON.parse(JSON.stringify(current.skillPackages || {})),
       mcpServers: JSON.parse(JSON.stringify(current.mcpServers || {})),
     })
+    function draftContent() { return JSON.stringify([draft.enabled, draft.roles, draft.customPackages, draft.skillPackages, draft.mcpServers]) }
+    const savedDraft = ref(draftContent())
+    const editingBlocked = computed(() => draftContent() !== savedDraft.value)
+    watch(() => store.config, () => {
+      if (editingBlocked.value) return
+      const next = normalizeBoundaryAccess(asRecord<PermissionConfigRoot>(store.config).tools?.boundaryAccess || {})
+      Object.assign(draft, { enabled: String(Boolean(next.enabled)), roles: next.roles, customPackages: next.customPackages, skillPackages: next.skillPackages, mcpServers: next.mcpServers })
+      savedDraft.value = draftContent()
+    })
+    watch(draftContent, value => setDirtyScope("tool-permissions", value !== savedDraft.value))
+    onBeforeUnmount(() => setDirtyScope("tool-permissions", false))
     const previewResult = ref<PreviewResult | null>(null)
     const previewSurface = ref("")
     const matrixResult = ref<MatrixResult | null>(null)
@@ -78,21 +87,6 @@ export const BoundaryAccessPanel = {
     const mcpServers = computed<PackageItem[]>(() => asRecord<ToolsSlice>(store.tools).mcp?.servers || [])
     const toolFilters = reactive<Record<string, string>>(Object.fromEntries(BOUNDARY_ROLE_OPTIONS.map(item => [item.value, ""])))
 
-    const roleSummaries = computed(() => BOUNDARY_ROLE_OPTIONS.map(role => {
-      const profile = roleProfile(draft.roles, role.value)
-      const allowedCount = selectableTools.value.filter(tool => draftToolAllowed(profile, tool)).length
-      const totalCount = selectableTools.value.length
-      return {
-        ...role,
-        summary: `可使用 ${allowedCount} / ${totalCount} 项已启用能力`,
-        allowedCount,
-        totalCount,
-        deniedCount: profile.deniedTools?.length || 0,
-        external: profile.allowExternalNetwork,
-        highRisk: profile.allowHighRisk,
-        all: profile.allowAllEnabledTools,
-      }
-    }))
     function openRole(role: string) {
       editingRole.value = role
       draft.previewRole = role
@@ -124,6 +118,8 @@ export const BoundaryAccessPanel = {
             mcpServers: draft.mcpServers,
           }),
         })
+        savedDraft.value = draftContent()
+        setDirtyScope("tool-permissions", false)
         toast("边界权限已保存")
         await refreshTab("tools")
       } catch (err) { toast(errorMessage(err)) }
@@ -136,10 +132,6 @@ export const BoundaryAccessPanel = {
     function closePreviewDrawer() {
       showPreviewDrawer.value = false
       clearPreview()
-    }
-    async function openRolePreview(role: string) {
-      await previewAccess(role, "preview")
-      if (previewResult.value?.role === role) showPreviewDrawer.value = true
     }
     async function previewAccess(role: string = draft.previewRole, surface = "card") {
       try {
@@ -173,6 +165,7 @@ export const BoundaryAccessPanel = {
     })
     return {
       store,
+      editingBlocked,
       draft,
       previewResult,
       previewSurface,
@@ -186,7 +179,6 @@ export const BoundaryAccessPanel = {
       previewMatrix,
       clearPreview,
       closePreviewDrawer,
-      openRolePreview,
       BOUNDARY_ROLE_OPTIONS,
       builtinCategories,
       selectableTools,
@@ -195,7 +187,6 @@ export const BoundaryAccessPanel = {
       mcpServers,
       toolFilters,
       roleLabel,
-      roleSummaries,
       openRole,
       selectEditingRole,
       previewAllowedRows,
@@ -203,7 +194,7 @@ export const BoundaryAccessPanel = {
     }
   },
   template: `
-    <Panel title="角色使用范围" icon="key">
+    <Panel title="使用权限" icon="key">
       <template #actions>
         <button class="btn small outline" type="button" @click="openRole(draft.previewRole)"><Icon name="sliders" :size="14" />配置角色权限</button>
       </template>
@@ -243,18 +234,7 @@ export const BoundaryAccessPanel = {
         @close="closePreviewDrawer"
         @preview-matrix="previewMatrix"
       />
-      <PillList :items="[
-        { label: draft.enabled === 'true' ? '角色权限已生效' : '角色权限未生效', active: draft.enabled === 'true' },
-        { label: '角色 ' + BOUNDARY_ROLE_OPTIONS.length },
-        { label: '预览 ' + roleLabel(draft.previewRole), tone: 'accent' }
-      ]" />
-      <div class="capability-relationship compact permission-intro"><span><strong>这里不启停能力</strong><small>只决定能力中心里“已启用”的项目由哪些角色使用。</small></span></div>
-      <PermissionRoleGrid
-        :summaries="roleSummaries"
-        :previewed-role="previewResult?.role || ''"
-        @open-role="openRole"
-        @preview-role="openRolePreview"
-      />
+      <PermissionOverview :editing-blocked="editingBlocked" @open-role="openRole" />
     </Panel>
   `,
 }

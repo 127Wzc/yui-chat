@@ -16,6 +16,7 @@ export interface RoleProfile extends UnknownRecord {
 export interface OverrideEntry extends UnknownRecord {
   enabled?: boolean
   minRole?: string
+  roles?: Record<string, boolean>
 }
 
 export interface BoundaryAccess extends UnknownRecord {
@@ -190,6 +191,8 @@ export function normalizeBoundaryAccess(input: unknown = {}): BoundaryAccess {
       const target = next[bucket as "customPackages" | "skillPackages" | "mcpServers"]
       if (override.enabled === false) target[id] = { enabled: false }
       else if (override.minRole) target[id] = { enabled: true, minRole: String(override.minRole) }
+      const roles = Object.fromEntries(BOUNDARY_ROLE_OPTIONS.filter(role => typeof asRecord(override.roles)[role.value] === "boolean").map(role => [role.value, asRecord(override.roles)[role.value] as boolean]))
+      if (Object.keys(roles).length) target[id] = { ...target[id], roles }
     }
   }
   return next

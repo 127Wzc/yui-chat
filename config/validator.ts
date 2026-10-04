@@ -693,6 +693,12 @@ function validateTools(config: ConfigRecord, issues: ValidationIssue[]): void {
         add(issues, "error", `tools.boundaryAccess.${bucket}.${id}`, "扩展权限项必须是对象")
         continue
       }
+      if (entry.roles !== undefined) {
+        if (!isObject(entry.roles)) add(issues, "error", `tools.boundaryAccess.${bucket}.${id}.roles`, "角色覆盖必须是对象")
+        else for (const [role, allowed] of Object.entries(entry.roles)) {
+          if (!boundaryRoles.has(role) || typeof allowed !== "boolean") add(issues, "error", `tools.boundaryAccess.${bucket}.${id}.roles.${role}`, "角色覆盖必须使用四种角色和布尔值")
+        }
+      }
       if (entry.minRole && !boundaryRoles.has(String(entry.minRole))) {
         add(issues, "error", `tools.boundaryAccess.${bucket}.${id}.minRole`, `未知最小角色：${entry.minRole}`)
       }

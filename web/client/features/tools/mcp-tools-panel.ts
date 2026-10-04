@@ -1,9 +1,12 @@
+import { CapabilityList, CapabilityRisk } from "./capability-list.js"
+import { CapabilityRoleButtons } from "./capability-role-buttons.js"
 import { computed, ref } from "vue"
 import { store, request, refreshTab, toast } from "../../app/store/store.js"
 import { asRecord, asRecords, errorMessage } from "../../shared/data.js"
 
 /** 独立即时保存，修改名单不覆盖连接信息或尚未提交的服务编辑。 */
 export const McpToolsPanel = {
+  components: { CapabilityRoleButtons, CapabilityList, CapabilityRisk },
   props: { serverId: { type: String, required: true } },
   setup(props: { serverId: string }) {
     const busy = ref(false)
@@ -52,7 +55,13 @@ export const McpToolsPanel = {
       else names.delete(name)
       void save([...names])
     }
-    return { busy, all, selected, rows, connection, save, toggle, discover, catalog }
+    function toolRisk(item: Record<string, unknown>) {
+      const loaded = asRecords(store.tools?.tools).find(tool => tool.name === item.name)
+      if (loaded) return loaded
+      const override = asRecord(asRecord(server.value.toolPolicies)[String(item.originalName)] || asRecord(server.value.toolPolicies)[String(item.name)])
+      return { risk: override.risk || server.value.risk || "external", policy: { externalNetwork: true, ...asRecord(server.value.policy), ...asRecord(override.policy) } }
+    }
+    return { toolRisk, busy, all, selected, rows, connection, save, toggle, discover, catalog }
   },
   template: `
     <Collapse title="工具开放配置" hint="查看工具与控制注入；修改立即保存" nested>
@@ -64,14 +73,13 @@ export const McpToolsPanel = {
         <button class="btn small" :disabled="busy" @click="save([])">全部关闭</button>
         <span class="muted tiny">{{ all ? '全部开放模式' : '名单模式：新增工具默认关闭' }}</span>
       </div>
-      <PagedList :rows="rows" :page-size="10" label="工具" empty="尚未发现工具。" v-slot="{ item }">
-        <div class="item subtle">
-          <div class="item-head">
-            <div><div class="item-title">{{ item.originalName }}</div><p class="muted tiny">{{ item.description }}</p><p v-if="item.name" class="muted tiny">{{ item.name }}</p><p v-if="item.status === 'unavailable'" class="danger tiny">当前异常：{{ item.error || '服务连接暂时不可用' }}；后续调用会自动重连。</p></div>
-            <label><input type="checkbox" :disabled="busy" :checked="all || selected.includes(item.originalName)" @change="toggle(item.originalName, $event.target.checked)" /> 开放</label>
-          </div>
-        </div>
-      </PagedList>
+      <CapabilityList :rows="rows" label="工具" empty="尚未发现工具。">
+        <template #identity="{ item }"><strong>{{ item.originalName }}</strong><div class="cell-sub">{{ item.name }}</div><div class="cell-sub">{{ item.description }}</div><p v-if="item.status === 'unavailable'" class="danger tiny">当前异常：{{ item.error || '服务连接暂时不可用' }}；后续调用会自动重连。</p></template>
+        <template #risk="{ item }"><CapabilityRisk :tool="toolRisk(item)" /></template>
+        <template #status="{ item }"><span v-if="item.missing" class="badge">未发现</span></template>
+        <template #actions="{ item }"><label><input type="checkbox" :disabled="busy" :checked="all || selected.includes(item.originalName)" @change="toggle(item.originalName, $event.target.checked)" /> 开放</label></template>
+        <template #roles="{ item }"><CapabilityRoleButtons v-if="item.name" :id="item.name" /></template>
+      </CapabilityList>
     </Collapse>
   `,
 }

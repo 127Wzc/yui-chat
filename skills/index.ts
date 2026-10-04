@@ -277,6 +277,8 @@ class SkillManager {
     if (boundary?.enabled === false) return true
     const override = boundary?.skillPackages?.[skill.id]
     if (override?.enabled === false) return false
+    const roleOverride = override?.roles?.[roleForEvent(e)]
+    if (typeof roleOverride === "boolean") return roleOverride
     if (!override?.minRole) return true
     const minimumRole = String(override.minRole) as keyof typeof ROLE_RANK
     return (ROLE_RANK[roleForEvent(e)] ?? 0) >= (ROLE_RANK[minimumRole] ?? 0)

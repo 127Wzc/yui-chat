@@ -430,7 +430,7 @@ label, .field { display: grid; gap: 4px; min-width: 0; }
 
 /* 能力中心：一条紧凑工作栏，避免重复展示总览和步骤说明。 */
 .capability-workspace, .capability-permission-workspace { gap: 11px; }
-.capability-mode-tabs { display: flex; align-items: center; gap: 3px; overflow-x: auto; padding: 4px; border: 1px solid var(--border); border-radius: 10px; background: var(--muted); scrollbar-width: thin; }
+.capability-mode-tabs { display: flex; flex-wrap: wrap; min-width: 0; align-items: center; gap: 3px; padding: 4px; border: 1px solid var(--border); border-radius: 10px; background: var(--muted); scrollbar-width: thin; }
 .capability-mode-tabs > button { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; flex: 0 0 auto; padding: 5px 9px; border: 0; border-radius: 7px; background: transparent; color: var(--muted-foreground); font: inherit; font-size: 11.5px; white-space: nowrap; cursor: pointer; }
 .capability-mode-tabs > button:hover { color: var(--foreground); background: var(--muted); }
 .capability-mode-tabs > button.active { background: var(--card); color: var(--primary); font-weight: 700; box-shadow: 0 1px 2px rgba(0, 0, 0, .12); }
@@ -442,8 +442,6 @@ label, .field { display: grid; gap: 4px; min-width: 0; }
 .capability-global-settings > b { background: var(--primary-weak) !important; color: var(--primary) !important; }
 .capability-source-stage { animation: capability-stage-in .18s ease-out; }
 @keyframes capability-stage-in { from { opacity: .55; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
-.capability-builtin-layout { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(300px, .85fr); gap: 11px; align-items: start; }
-.capability-builtin-layout > .panel { min-width: 0; }
 .section-entry-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 9px; }
 .section-entry-card { min-width: 0; display: grid; gap: 7px; padding: 13px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); }
 .section-entry-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }

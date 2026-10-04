@@ -1,21 +1,33 @@
-import { ref, computed, nextTick, onMounted } from "vue"
-import { store } from "../../app/store/store.js"
+import { ref, computed, nextTick, onMounted, provide, watch } from "vue"
+import { store, request, toast } from "../../app/store/store.js"
 import { asRecord, asRecords } from "../../shared/data.js"
 import { ExtensionPanel } from "./extension-panel.js"
 import { McpPanel } from "./mcp-panel.js"
 import { ToolDetailModal } from "./tool-detail-modal.js"
 import { BoundaryAccessPanel } from "./permission-panel.js"
 import { ToolListPanel } from "./tools-list-panel.js"
-import { BuiltinCategorySettingsPanel } from "./builtin-category-panel.js"
 import { GlobalToolSettingsPanel } from "./global-tool-settings-panel.js"
 import { isFoldedRenderTool, toolSource, type ToolConfigRoot, type ToolRecord, type ToolsSlice } from "./shared.js"
 
 export const ToolsTab = {
   name: "ToolsTab",
-  components: { ToolListPanel, ExtensionPanel, ToolDetailModal, BoundaryAccessPanel, GlobalToolSettingsPanel, BuiltinCategorySettingsPanel, McpPanel },
+  components: { ToolListPanel, ExtensionPanel, ToolDetailModal, BoundaryAccessPanel, GlobalToolSettingsPanel, McpPanel },
   setup() {
+    const accessMatrix = ref<Record<string, unknown> | null>(null)
+    const accessSaving = ref(false)
+    let matrixGeneration = 0
+    async function reloadAccess() {
+      const generation = ++matrixGeneration
+      try {
+        const result = await request("/api/tools/access-matrix")
+        if (generation === matrixGeneration) accessMatrix.value = asRecord(result.matrix)
+      } catch { if (generation === matrixGeneration) { accessMatrix.value = null; toast("权限验证加载失败，请刷新重试") } }
+    }
+    provide("capabilityAccessMatrix", accessMatrix)
+    provide("capabilityAccessSaving", accessSaving)
+    provide("reloadCapabilityAccess", reloadAccess)
+    watch([() => store.config, () => store.tools], () => { if (!accessSaving.value) void reloadAccess() }, { immediate: true })
     const activeCapabilityView = ref("discover")
-    const activeBuiltinCategory = ref("all")
     const showGlobalSettings = ref(false)
     const showToolDetail = ref(false)
     const selectedTool = ref<ToolRecord | null>(null)
@@ -32,7 +44,6 @@ export const ToolsTab = {
       { value: "extensions", label: "扩展能力", description: "Custom 与 Markdown Skill", icon: "cpu", badge: customCount.value + skillCount.value },
       { value: "mcp", label: "MCP 服务", description: "第三方服务与本地命令", icon: "link", badge: mcpCount.value },
     ])
-    function selectBuiltinCategory(value: string) { activeBuiltinCategory.value = String(value || "all") }
     // 内置能力的查看与运行配置留在内置页；只有 Custom 编辑才进入扩展工作区。
     async function openToolDetail(payload: { name?: string; action?: string }) {
       const tool = asRecords<ToolRecord>(asRecord<ToolsSlice>(store.tools).tools).find(item => item.name === payload?.name)
@@ -58,7 +69,6 @@ export const ToolsTab = {
     return {
       isPermissionPage,
       activeCapabilityView,
-      activeBuiltinCategory,
       showGlobalSettings,
       showToolDetail,
       selectedTool,
@@ -66,11 +76,10 @@ export const ToolsTab = {
       globalToolsEnabled,
       capabilityViewItems,
       openToolDetail,
-      selectBuiltinCategory,
     }
   },
   template: `
-    <div class="stack">
+    <div class="stack capability-page">
       <nav v-if="!isPermissionPage" class="capability-mode-tabs" role="tablist" aria-label="能力类型">
         <button
           v-for="item in capabilityViewItems"
@@ -84,10 +93,10 @@ export const ToolsTab = {
         <span class="capability-mode-spacer" aria-hidden="true"></span>
         <button class="capability-global-settings" type="button" :aria-label="globalToolsEnabled ? '打开全局工具设置' : '打开全局工具设置，当前已关闭'" @click="showGlobalSettings = true"><Icon name="gear" :size="15" /><span>全局配置</span><b>{{ globalToolsEnabled ? '已启用' : '已关闭' }}</b></button>
       </nav>
+      <p v-if="!isPermissionPage" class="muted small">点击角色圆点切换权限；实心表示允许，空心表示禁止，半实心表示部分可用，虚线表示仍有限制。悬停查看角色和原因，↺ 恢复默认。</p>
       <div v-if="!isPermissionPage" class="section-stage capability-workspace">
-        <div v-if="activeCapabilityView === 'discover'" class="section-stage capability-source-stage capability-builtin-layout">
-          <ToolListPanel :selected-category="activeBuiltinCategory" @category-change="selectBuiltinCategory" @open-tool-detail="openToolDetail" />
-          <BuiltinCategorySettingsPanel :selected-category="activeBuiltinCategory" @select-category="selectBuiltinCategory" />
+        <div v-if="activeCapabilityView === 'discover'" class="section-stage capability-source-stage">
+          <ToolListPanel @open-tool-detail="openToolDetail" />
         </div>
         <div v-else-if="activeCapabilityView === 'extensions'" class="section-stage capability-source-stage">
           <ExtensionPanel />

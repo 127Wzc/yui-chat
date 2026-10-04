@@ -1,3 +1,6 @@
+import { CapabilityFilterBar } from "./capability-filter-bar.js"
+import { CapabilityList, CapabilityRisk } from "./capability-list.js"
+import { CapabilityRoleButtons } from "./capability-role-buttons.js"
 import { reactive, computed, watch } from "vue"
 import { confirmAction, store, request, toast, refreshTab } from "../../app/store/store.js"
 import { asRecord, asRecords, errorMessage } from "../../shared/data.js"
@@ -24,6 +27,7 @@ import {
 
 // 工具列表：标签筛选 + 单一清晰表格 + 行内开关。
 export const ToolListPanel = {
+  components: { CapabilityFilterBar, CapabilityRoleButtons, CapabilityList, CapabilityRisk },
   name: "ToolListPanel",
   props: { selectedCategory: { type: String, default: "all" } },
   emits: ["open-tool-detail", "category-change"],
@@ -108,59 +112,35 @@ export const ToolListPanel = {
   template: `
     <Panel title="内置能力" icon="wrench">
       <div class="capability-tool-list">
-        <div class="list-filter">
-          <label class="capability-category-select">
-            <Icon name="list" :size="14" />
-            <select v-model="filter.tag" aria-label="能力分类" @change="emitCategoryChange">
-              <option value="all">全部分类</option>
-              <option v-for="tag in toolTags" :key="tag.name" :value="tag.name">{{ tag.title }}（{{ tag.enabled.length }}/{{ tag.names.length }}）</option>
-            </select>
-          </label>
-          <button v-if="filter.tag !== 'all'" class="icon-btn" type="button" data-tip="清空指令分类" @click="clearTag"><Icon name="x" :size="15" /></button>
-          <div class="filter-search">
-            <Icon name="search" :size="14" />
-            <input :value="filter.query" placeholder="搜索中文名、工具 ID、标签、说明" @input="filter.query = $event.target.value" />
-          </div>
-          <div class="segmented" role="group" aria-label="工具状态筛选">
-            <button v-for="[value, label] in statusOptions" :key="value" :class="{ active: filter.status === value }" type="button" @click="filter.status = value">{{ label }}</button>
-          </div>
-          <button class="icon-btn" type="button" data-tip="清空筛选" @click="reset"><Icon name="x" :size="15" /></button>
-          <span class="filter-count" data-tip="已启用工具定义的估算值；当前角色、模型协议和缓存会使实际输入不同。">已启用预计：{{ formatTokenEstimate(enabledToolTokenEstimate) }} 词元</span>
-          <span class="filter-count">{{ visible.length }}/{{ allTools.length }}</span>
-        </div>
-        <div v-if="!visible.length" class="capability-detail-empty"><p class="muted small">{{ allTools.length ? '没有匹配的内置能力，请清空筛选条件后重试。' : '内置能力数据尚未载入，请刷新当前页。' }}</p><button v-if="!allTools.length" class="btn small outline" type="button" @click="reloadTools"><Icon name="refresh" :size="13" />刷新列表</button></div>
-        <div v-else class="table-wrap capability-table-wrap">
-            <table class="data-table capability-tool-table">
-              <thead><tr><th data-tip="工具名称右侧数字表示启用后预计加入模型上下文的词元数。">工具（预估词元）</th><th data-tip="按工具能力和权限边界给出的概览等级。">风险</th><th>标记</th><th class="col-actions">操作</th></tr></thead>
-              <tbody>
-                <tr v-for="tool in visible" :key="tool.name" :data-tip="toolDescription(tool)">
-                  <td class="cell-title">
-                    <div class="capability-tool-name">
+        <CapabilityList :rows="visible" label="工具（预估词元）" empty="没有匹配的内置能力，请清空筛选或刷新列表。">
+          <template #filters>
+            <CapabilityFilterBar v-model:category="filter.tag" :category-options="[['all','全部分类'], ...toolTags.map(tag => [tag.name, tag.title + '（' + tag.enabled.length + '/' + tag.names.length + '）'])]" @update:category="emitCategoryChange" v-model:query="filter.query" v-model:status="filter.status" :status-options="statusOptions" :count="visible.length" :total="allTools.length" placeholder="搜索中文名、工具 ID、标签、说明" @reset="reset">
+              <template #summary><span class="filter-count" title="已启用工具定义的估算值；当前角色、模型协议和缓存会使实际输入不同。">已启用预计：{{ formatTokenEstimate(enabledToolTokenEstimate) }} 词元</span></template>
+            </CapabilityFilterBar>
+          </template>
+          <template #identity="{ item: tool }"><div class="capability-tool-name">
                       <span>{{ toolDisplayName(tool) }}</span>
-                      <span v-if="tool.modelTokenEstimate" class="tool-token-estimate" :class="tool.enabled ? 'enabled' : 'disabled'" :data-tip="'启用后预计占用 ' + formatTokenEstimate(tool.modelTokenEstimate) + ' 词元；点“查看”可看到实际发送结构。'">{{ formatTokenEstimate(tool.modelTokenEstimate) }}</span>
+                      <span v-if="tool.modelTokenEstimate" class="tool-token-estimate" :class="tool.enabled ? 'enabled' : 'disabled'" :title="'启用后预计占用 ' + formatTokenEstimate(tool.modelTokenEstimate) + ' 词元；点“查看”可看到实际发送结构。'">{{ formatTokenEstimate(tool.modelTokenEstimate) }}</span>
                     </div>
-                    <div v-if="toolEnglishName(tool)" class="cell-sub truncate" style="max-width:280px">{{ toolEnglishName(tool) }}</div>
-                    <div class="cell-sub truncate" style="max-width:280px">{{ toolDescription(tool) }}</div>
-                    <div v-if="toolDescriptionExtra(tool)" class="cell-sub truncate" style="max-width:280px;opacity:.72">{{ toolDescriptionExtra(tool) }}</div>
-                  </td>
-                  <td><span class="badge" :class="riskBadgeClass(toolCommon(tool).risk)">{{ riskLabel(tool) }}</span></td>
-                  <td>
-                    <span v-if="hasWebConfig(tool)" class="badge" :data-tip="tool.name === 'render_image' ? '调整工具和系统渲染策略' : '该工具有可配置的运行变量（如密钥、超时）'">可配置</span>
-                    <span v-if="toolHasRepeatProtection(tool)" class="badge" :data-tip="toolRepeatabilityLabel(tool)">重复保护</span>
-                    <span v-if="tool.name === 'dispatch_subagent' && !subAgentEnabled" class="badge risk-medium" data-tip="工具已在列表启用，但需在「模型渠道 · 对话流程 · 子代理」开启后才会真正对 AI 生效">待开启子代理</span>
-                  </td>
-                  <td class="col-actions">
-                    <div class="capability-row-actions">
-                      <button class="btn small outline" type="button" data-tip="查看工具详情" @click="openToolDetail(tool)"><Icon name="info" :size="13" />查看</button>
-                      <button v-if="toolSource(tool) === 'custom'" class="btn small outline" type="button" data-tip="编辑 Custom 工具" @click="openToolDetail(tool, 'edit')"><Icon name="pencil" :size="13" />编辑</button>
-                      <button v-if="hasWebConfig(tool)" class="btn small outline" type="button" :data-tip="tool.name === 'render_image' ? '调整工具和系统渲染策略' : '设置密钥等运行变量'" @click="openToolDetail(tool, 'config')"><Icon name="sliders" :size="13" />配置</button>
+                    <div v-if="toolEnglishName(tool)" class="cell-sub">{{ toolEnglishName(tool) }}</div>
+                    <div class="cell-sub">{{ toolDescription(tool) }}</div>
+                    <div v-if="toolDescriptionExtra(tool)" class="cell-sub">{{ toolDescriptionExtra(tool) }}</div>
+                  </template>
+          <template #risk="{ item }"><CapabilityRisk :tool="item" /></template>
+          <template #status="{ item: tool }"><span v-if="hasWebConfig(tool)" class="badge" :title="tool.name === 'render_image' ? '调整工具和系统渲染策略' : '该工具有可配置的运行变量（如密钥、超时）'">可配置</span>
+                    <span v-if="toolHasRepeatProtection(tool)" class="badge" :title="toolRepeatabilityLabel(tool)">重复保护</span>
+                    <span v-if="tool.name === 'dispatch_subagent' && !subAgentEnabled" class="badge risk-medium" title="工具已在列表启用，但需在「模型渠道 · 对话流程 · 子代理」开启后才会真正对 AI 生效">待开启子代理</span>
+                  </template>
+          <template #actions="{ item: tool }"><div class="capability-row-actions">
+                      <button class="btn small outline" type="button" title="查看工具详情" @click="openToolDetail(tool)"><Icon name="info" :size="13" />查看</button>
+                      <button v-if="toolSource(tool) === 'custom'" class="btn small outline" type="button" title="编辑 Custom 工具" @click="openToolDetail(tool, 'edit')"><Icon name="pencil" :size="13" />编辑</button>
+                      <button v-if="hasWebConfig(tool)" class="btn small outline" type="button" :title="tool.name === 'render_image' ? '调整工具和系统渲染策略' : '设置密钥等运行变量'" @click="openToolDetail(tool, 'config')"><Icon name="sliders" :size="13" />配置</button>
                     </div>
                     <Switch :model-value="tool.enabled" @update:model-value="toggleTool(tool.name, $event)" />
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-        </div>
+                  </template>
+          <template #roles="{ item }"><CapabilityRoleButtons :id="item.name" /></template>
+          <template #empty-actions><button v-if="!allTools.length" class="btn small outline" @click="reloadTools">刷新列表</button></template>
+        </CapabilityList>
       </div>
     </Panel>
   `,

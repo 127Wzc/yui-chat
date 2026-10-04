@@ -1,3 +1,6 @@
+import { CapabilityFilterBar } from "./capability-filter-bar.js"
+import { CapabilityList, CapabilityRisk, capabilityRisk } from "./capability-list.js"
+import { CapabilityRoleButtons } from "./capability-role-buttons.js"
 import { asRecord, type UnknownRecord } from "../../shared/data.js"
 import { toolCommon } from "./shared.js"
 
@@ -49,8 +52,16 @@ function catalogStatus(item: ExtensionRow) {
   return { label: item.enabled ? "已启用" : "未启用", active: item.enabled }
 }
 
+function packageRisk(item: ExtensionRow) {
+  const tools = item.loadedTools?.length ? item.loadedTools : (item.tools || [])
+  const risks = tools.map(capabilityRisk)
+  const order = ["高风险", "外网访问", "中风险", "待确认", "低风险"]
+  return risks.sort((a, b) => order.indexOf(a.label) - order.indexOf(b.label))[0] || { label: "待确认", tone: "" }
+}
+
 // 扩展列表：筛选条 + 目录表格 + 空态；行操作全部上浮给父组件。
 export const ExtensionLibraryPanel = {
+  components: { CapabilityFilterBar, CapabilityRoleButtons, CapabilityList, CapabilityRisk },
   name: "ExtensionLibraryPanel",
   props: {
     rows: { type: Array, default: () => [] },
@@ -62,50 +73,46 @@ export const ExtensionLibraryPanel = {
   },
   emits: ["reload", "reset-filter", "open-create", "edit", "toggle", "update-remote", "remove"],
   setup() {
-    return { catalogStatus, packageToolSummary, skillSourceText, frameworkResourceSummary }
+    return { packageRisk, toolCommon, catalogStatus, packageToolSummary, skillSourceText, frameworkResourceSummary }
   },
   template: `
     <div class="section-heading-row compact">
         <div class="section-title"><Icon name="cpu" :size="13" />当前自定义扩展</div>
-        <IconButton icon="refresh" tip="重新扫描扩展目录" @click="$emit('reload')" />
+        <button class="icon-btn" title="重新扫描扩展目录" @click="$emit('reload')"><Icon name="refresh" :size="14" /></button>
       </div>
-      <div class="list-filter extension-library-filter">
-        <div class="filter-search"><Icon name="search" :size="14" /><input :value="filter.query" placeholder="搜索扩展名称、ID 或能力" @input="filter.query = $event.target.value" /></div>
-        <div class="segmented" role="group" aria-label="扩展类型筛选">
-          <button v-for="item in [['all','全部'],['custom','Custom'],['skill','Skill']]" :key="item[0]" :class="{ active: filter.type === item[0] }" type="button" @click="filter.type = item[0]">{{ item[1] }}</button>
-        </div>
-        <select v-model="filter.status" aria-label="扩展状态筛选"><option value="all">全部状态</option><option value="enabled">已启用</option><option value="disabled">未启用</option><option value="issues">有问题</option></select>
-        <span class="filter-count">Custom {{ customCount }} · Skill {{ skillCount }} · {{ rows.length }}/{{ total }}</span>
-      </div>
-      <div v-if="rows.length" class="table-wrap capability-table-wrap">
-        <table class="data-table extension-tool-table">
-          <thead><tr><th>扩展</th><th>类型</th><th>状态</th><th>包含能力</th><th class="col-actions">操作</th></tr></thead>
-          <tbody>
-            <tr v-for="item in rows" :key="item.extensionType + ':' + item.id">
-              <td class="cell-title">
-                {{ item.displayNameZh || item.name || item.id }}
-                <div class="cell-sub truncate" style="max-width:300px">{{ item.extensionType === 'skill' ? skillSourceText(item) : (item.descriptionZh || item.description || '暂未填写说明') }}</div>
-                <div class="cell-sub">ID：{{ item.id }}</div>
-              </td>
-              <td><span class="badge">{{ item.extensionType === 'skill' ? 'Skill' : 'Custom' }}</span></td>
-              <td><Pill v-bind="catalogStatus(item)" /></td>
-              <td class="cell-sub">
-                <template v-if="item.extensionType === 'skill'">$调用：{{ item.name || item.id }} · SKILL.md {{ item.bodyChars || 0 }} 字符</template>
-                <template v-else>{{ packageToolSummary(item) }}<div class="cell-sub">资源：{{ frameworkResourceSummary(item) }}</div></template>
-              </td>
-              <td class="col-actions">
-                <div class="row-actions">
-                  <button class="btn small outline" type="button" @click="$emit('edit', item)"><Icon name="pencil" :size="13" />编辑</button>
-                  <button class="btn small outline" type="button" @click="$emit('toggle', item)"><Icon :name="item.enabled ? 'power' : 'check'" :size="13" />{{ item.enabled ? '停用' : '启用' }}</button>
-                  <button v-if="item.extensionType === 'skill' && item.remote?.repo" class="btn small outline" type="button" @click="$emit('update-remote', item)"><Icon name="download" :size="13" />更新</button>
-                  <button class="btn small warn" type="button" @click="$emit('remove', item)"><Icon name="trash" :size="13" />删除</button>
-                </div>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <div v-else class="extension-empty-state">
+      <CapabilityList :rows="rows" label="扩展" empty="没有匹配的扩展。">
+        <template #filters>
+          <CapabilityFilterBar v-model:category="filter.type" :category-options="[['all','全部类型'],['custom','Custom'],['skill','Skill']]" category-label="扩展类型筛选" v-model:query="filter.query" v-model:status="filter.status" :status-options="[['all','全部'],['enabled','已启用'],['disabled','未启用'],['issues','有问题']]" :count="rows.length" :total="total" placeholder="搜索扩展名称、ID 或能力" @reset="$emit('reset-filter')">
+            <template #summary><span class="filter-count">Custom {{ customCount }} · Skill {{ skillCount }}</span></template>
+          </CapabilityFilterBar>
+        </template>
+        <template #identity="{ item }">
+          <strong>{{ item.displayNameZh || item.name || item.id }}</strong>
+          <div class="cell-sub">{{ item.id }}</div>
+          <div class="cell-sub">{{ item.extensionType === 'skill' ? skillSourceText(item) : (item.descriptionZh || item.description || '暂未填写说明') }}</div>
+          <div class="cell-sub" v-if="item.extensionType === 'skill'">$调用：{{ item.name || item.id }} · SKILL.md {{ item.bodyChars || 0 }} 字符</div>
+          <div class="cell-sub" v-else>资源：{{ frameworkResourceSummary(item) }}</div>
+        </template>
+        <template #risk="{ item }"><span class="badge" :class="item.extensionType === 'skill' ? '' : packageRisk(item).tone" :title="item.extensionType === 'skill' ? 'Skill 提供指令，工具调用仍按工具风险和权限检查' : '按已知工具的最高风险显示，展开查看各项风险'">{{ item.extensionType === 'skill' ? '指令扩展' : packageRisk(item).label }}</span></template>
+        <template #status="{ item }"><span class="badge">{{ item.extensionType === 'skill' ? 'Skill' : 'Custom' }}</span><Pill v-bind="catalogStatus(item)" /></template>
+        <template #actions="{ item }">
+          <button class="btn small outline" @click="$emit('edit', item)">编辑</button>
+          <button v-if="item.extensionType === 'skill' && item.remote?.repo" class="btn small outline" @click="$emit('update-remote', item)">更新</button>
+          <button class="icon-btn danger" title="删除扩展" @click="$emit('remove', item)"><Icon name="trash" :size="14" /></button>
+          <Switch :model-value="item.enabled" @update:model-value="$emit('toggle', item)" />
+        </template>
+        <template #roles="{ item }"><CapabilityRoleButtons :scope="item.extensionType === 'skill' ? 'skillPackages' : 'customPackages'" :id="item.id" /></template>
+        <template #details="{ item }">
+          <details v-if="item.extensionType !== 'skill'" class="capability-list-details"><summary>包含工具 · {{ packageToolSummary(item) }}</summary>
+            <CapabilityList :rows="item.loadedTools?.length ? item.loadedTools : (item.tools || [])" label="工具" empty="未声明工具或尚未加载。">
+              <template #identity="{ item: tool }"><strong>{{ toolCommon(tool).displayNameZh || tool.name }}</strong><div class="cell-sub">{{ tool.name }}</div><div class="cell-sub">{{ toolCommon(tool).descriptionZh || toolCommon(tool).description }}</div></template>
+              <template #risk="{ item: tool }"><CapabilityRisk :tool="tool" /></template>
+              <template #roles="{ item: tool }"><CapabilityRoleButtons v-if="tool.name" :id="tool.name" /></template>
+            </CapabilityList>
+          </details>
+        </template>
+      </CapabilityList>
+      <div v-if="!rows.length" class="extension-empty-state">
         <Icon name="package" :size="22" />
         <strong>{{ total ? '没有匹配的扩展' : '当前还没有 Custom 或 Skill 扩展' }}</strong>
         <p>{{ total ? '当前筛选隐藏了已有扩展，可以清空筛选后查看全部。' : '点击右上角“新建扩展”，选择一种创建路线开始。' }}</p>

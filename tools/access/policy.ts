@@ -156,11 +156,13 @@ function boundaryDecision(config: unknown, tool: unknown, context: ToolAccessCon
   if (individual === "deny") return { allowed: false, reason: `当前主体已单独禁止工具 ${name}。`, groups: [], role }
   if (base.denied) return { allowed: false, reason: `当前角色 ${role} 已单独禁止工具 ${name}。`, groups: [], role }
 
-  const overrideAllowed = override?.enabled === false
+  const roleOverride = record(override?.roles)[role]
+  if (roleOverride === false) return { allowed: false, reason: `当前角色 ${role} 已禁止使用此扩展。`, groups: [], role }
+  const overrideAllowed = roleOverride === true || (override?.enabled === false
     ? false
     : override?.minRole
       ? roleAtLeast(role, override.minRole)
-      : false
+      : false)
   // 个人 allow 仅补充常规、已全局启用的工具；高风险/外网和工具自身硬策略仍由后续规则裁决。
   const individualAllowed = individual === "allow"
     && common.risk !== "high"

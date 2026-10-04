@@ -468,17 +468,17 @@ export const PagedList = defineComponent({
   },
   template: `
     <div>
-      <div v-if="rows.length > pageSize" class="pager">
-        <span class="pager-info">{{ label }} {{ info.start + 1 }}-{{ info.end }} / {{ rows.length }}</span>
-        <div class="pager-controls">
-          <button type="button" class="icon-btn sm" :disabled="info.current <= 1" @click="go(info.current - 1)"><Icon name="chevron-left" :size="15" /></button>
-          <span class="pager-page">{{ info.current }}/{{ info.pages }}</span>
-          <button type="button" class="icon-btn sm" :disabled="info.current >= info.pages" @click="go(info.current + 1)"><Icon name="chevron-right" :size="15" /></button>
-        </div>
-      </div>
       <p v-if="!rows.length" class="muted small">{{ empty }}</p>
       <div v-else :class="listClass">
         <slot v-for="(item, i) in visible" :item="item" :index="info.start + i" :key="info.start + i" />
+      </div>
+      <div v-if="rows.length > pageSize" class="pager">
+        <span class="pager-info">{{ label }} {{ info.start + 1 }}-{{ info.end }} / {{ rows.length }}</span>
+        <div class="pager-controls">
+          <button type="button" class="icon-btn sm" aria-label="上一页" title="上一页" :disabled="info.current <= 1" @click="go(info.current - 1)"><Icon name="chevron-left" :size="15" /></button>
+          <span class="pager-page">{{ info.current }}/{{ info.pages }}</span>
+          <button type="button" class="icon-btn sm" aria-label="下一页" title="下一页" :disabled="info.current >= info.pages" @click="go(info.current + 1)"><Icon name="chevron-right" :size="15" /></button>
+        </div>
       </div>
     </div>
   `,

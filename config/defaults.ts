@@ -356,6 +356,7 @@ export const defaults = {
           allowAllEnabledTools: true,
         },
       },
+      // 包和服务可用 roles 按四个角色独立覆盖；未设置时保留既有来源与 minRole 规则。
       customPackages: {},
       skillPackages: {},
       mcpServers: { "imagTag-mcp": { enabled: true, minRole: "user" } },

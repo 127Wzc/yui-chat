@@ -1,3 +1,6 @@
+import { CapabilityFilterBar } from "./capability-filter-bar.js"
+import { CapabilityList, CapabilityRisk } from "./capability-list.js"
+import { CapabilityRoleButtons } from "./capability-role-buttons.js"
 import { computed, reactive, ref } from "vue"
 import { McpToolsPanel } from "./mcp-tools-panel.js"
 import { confirmAction, store, request, toast, refreshTab, saveConfigPatch } from "../../app/store/store.js"
@@ -107,15 +110,13 @@ function importedServerConfig(value: unknown): { id: string; server: McpServer }
     return { id, server: asRecord<McpServer>(server) }
   }
   const server = asRecord<McpServer>(source.server)
-  if (Object.keys(server).length) {
-    return { id: String(source.id || source.name || server.id || server.name || ""), server }
-  }
+  if (Object.keys(server).length) return { id: String(source.id || source.name || server.id || server.name || ""), server }
   return { id: String(source.id || source.name || ""), server: asRecord<McpServer>(source) }
 }
 // MCP Server 管理。
 export const McpPanel = {
   name: "McpPanel",
-  components: { McpToolsPanel },
+  components: { CapabilityFilterBar, McpToolsPanel, CapabilityRoleButtons, CapabilityList, CapabilityRisk },
   setup() {
     const draft = reactive({
       mcpEnabled: String((asRecord<McpSlice>(store.mcp).config?.enabled ?? asRecord<{ mcp?: { enabled?: boolean } }>(store.config).mcp?.enabled ?? true) !== false),
@@ -131,6 +132,10 @@ export const McpPanel = {
       id,
       ...(server || {}),
     })).sort((a, b) => String(a.id || "").localeCompare(String(b.id || ""), "zh-Hans-CN")))
+    const filter = reactive({ query: "", status: "all" })
+    const visibleServers = computed(() => serverList.value.filter(item =>
+      [item.id, item.description, item.descriptionZh].join(" ").toLowerCase().includes(filter.query.trim().toLowerCase())
+      && (filter.status === "all" || (item.enabled !== false) === (filter.status === "enabled"))))
     const editorTitle = computed(() => `${editor.mode === "create" ? "新增" : "编辑"} MCP 服务`)
     const editorSubtitle = computed(() => editor.mode === "create"
       ? "快速填写连接信息，或导入已有 MCP 配置。"
@@ -294,7 +299,7 @@ export const McpPanel = {
       editorMode,
       importJsonText,
       editor,
-      serverList,
+      serverList, filter, visibleServers,
       editorTitle,
       editorSubtitle,
       openCreate,
@@ -317,27 +322,19 @@ export const McpPanel = {
     <Panel title="MCP 能力" icon="link">
       <template #actions>
         <div class="row mcp-panel-actions">
-          <label class="mcp-global-switch"><span>MCP 总开关</span><Switch :model-value="draft.mcpEnabled === 'true'" tip="关闭后模型完全看不到 MCP 工具，但服务配置会保留。" @update:model-value="toggleGlobal" /></label>
+          <label class="mcp-global-switch"><span>MCP 总开关</span><Switch :model-value="draft.mcpEnabled === 'true'" title="关闭后模型完全看不到 MCP 工具，但服务配置会保留。" @update:model-value="toggleGlobal" /></label>
           <button class="btn primary small" type="button" @click="openCreate"><Icon name="plus" :size="14" />新增 MCP</button>
         </div>
       </template>
-      <PagedList :rows="serverList" :page-size="6" label="MCP 服务" empty="还没有 MCP 服务。点击右上角“新增 MCP”开始配置。" v-slot="{ item }">
-        <div class="item subtle mcp-server-item">
-          <div class="item-head">
-            <div class="mcp-server-copy">
-              <div class="item-title">{{ item.id }}</div>
-              <p v-if="item.description" class="muted tiny">{{ item.description }}</p>
-              <p class="muted tiny">{{ serverTransport(item) }}</p>
-            </div>
-            <div class="row mcp-server-actions">
-              <Pill v-bind="serverStatus(item)" />
-              <Switch :model-value="item.enabled !== false" :tip="item.enabled === false ? '启用服务' : '停用服务'" @update:model-value="toggleServer(item.id, $event)" />
-              <button class="btn small" type="button" @click="openEdit(item.id)"><Icon name="pencil" :size="14" />编辑</button>
-            </div>
-          </div>
-          <McpToolsPanel :server-id="item.id" />
-        </div>
-      </PagedList>
+      <CapabilityList :rows="visibleServers" label="MCP 服务" empty="没有匹配的 MCP 服务，可调整筛选或新增服务。">
+        <template #filters><CapabilityFilterBar v-model:query="filter.query" v-model:status="filter.status" :count="visibleServers.length" :total="serverList.length" placeholder="搜索服务名称、ID 或说明" @reset="filter.query = ''; filter.status = 'all'" /></template>
+        <template #identity="{ item }"><strong>{{ item.id }}</strong><div class="cell-sub">{{ item.description || item.descriptionZh }}</div><div class="cell-sub">{{ serverTransport(item) }}</div></template>
+        <template #risk="{ item }"><CapabilityRisk :tool="{ ...item, risk: item.risk || 'external', policy: { externalNetwork: true, ...item.policy } }" /></template>
+        <template #status="{ item }"><Pill v-bind="serverStatus(item)" /><span class="badge">{{ item.transport || item.type || (item.command ? 'stdio' : 'sse') }}</span></template>
+        <template #actions="{ item }"><button class="btn small outline" @click="openEdit(item.id)">编辑</button><Switch :model-value="item.enabled !== false" @update:model-value="toggleServer(item.id, $event)" /></template>
+        <template #roles="{ item }"><CapabilityRoleButtons scope="mcpServers" :id="item.id" /></template>
+        <template #details="{ item }"><div class="capability-list-details"><McpToolsPanel :server-id="item.id" /></div></template>
+      </CapabilityList>
       <SideDrawer
         :open="showEditor"
         :title="editorTitle"
@@ -381,7 +378,7 @@ export const McpPanel = {
             <Field v-if="editor.connection !== 'stdio'" label="环境变量" type="textarea" rows="4" v-model="editor.env" placeholder="KEY=value\nANOTHER_KEY=value" tip="每行一个 KEY=value；仅供当前 MCP 连接内部引用，不会修改 Yunzai 主进程环境。" />
             <Field v-if="editor.connection !== 'stdio'" label="HTTP 请求头 JSON" type="textarea" rows="5" v-model="editor.headers" placeholder='{"Authorization":"Bearer \${env:IMG_TAG_API_KEY}"}' tip="例如 Authorization 或 X-API-Key；用 \${env:变量名} 引用 Yunzai 进程环境变量，密钥不会写入配置接口。" />
             <Field label="服务策略 JSON" type="textarea" rows="5" v-model="editor.policy" tip="给整个 MCP 服务设置默认策略，例如 externalNetwork、requiresMaster 等。" />
-              <Field label="工具策略 JSON" type="textarea" rows="6" v-model="editor.toolPolicies" tip="可按工具名覆盖权限、requiresFinalReply、hiddenFromModel、execution 和 executionByAction；包装能力只需隐藏原始搜图工具时可写 {\"search_images\":{\"hiddenFromModel\":true}}。" />
+              <Field label="工具策略 JSON" type="textarea" rows="6" v-model="editor.toolPolicies" tip="可按工具名覆盖权限、requiresFinalReply、hiddenFromModel、execution 和 executionByAction；包装能力只需隐藏原始搜图工具时可写 {&quot;search_images&quot;:{&quot;hiddenFromModel&quot;:true}}。" />
           </Collapse>
         </template>
         <template #actions>

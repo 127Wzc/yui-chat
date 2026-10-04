@@ -5,6 +5,7 @@ import { createSkillPackage, createSkillTemplate, deleteSkillPackage, getSkillPa
 import { customToolManager } from "../../../../tools/custom/manager.js"
 import { applyToolPreset, toolPresets } from "../../../../tools/custom/presets.js"
 import { toolRegistry } from "../../../../tools/support/registry.js"
+import { boundaryRoles } from "../../../../tools/access/roles.js"
 import { toolSource } from "../../../../tools/support/contract.js"
 import { backgroundTaskService } from "../../../../core/scheduling/background-task-service.js"
 import { applyToolRuntimeConfigUpdate } from "../../../../extensions/runtime-config.js"
@@ -119,6 +120,54 @@ export function registerExtensionRoutes(app: RouteApp): void {
       tools: await toolRegistry.list({ e }),
     })
   }))
+  app.post("/api/tools/access-role", auth, handleRoute(async (req, res) => {
+    const { scope, id, role, allowed } = req.body || {}
+    if (typeof scope !== "string" || !["tool", "customPackages", "mcpServers", "skillPackages"].includes(scope)
+      || typeof id !== "string" || !id.trim() || ["__proto__", "prototype", "constructor"].includes(id)
+      || (role !== null && (typeof role !== "string" || !boundaryRoles.some(item => item === role)))
+      || (allowed !== null && typeof allowed !== "boolean") || (role === null && allowed !== null)) {
+      throw new Error("无效的能力或角色权限设置")
+    }
+    const { saved } = await updateConfigAndApply(config => {
+      const tools = record(config.tools)
+      const boundary = record(tools.boundaryAccess)
+      if (boundary.enabled !== true) throw new Error("请先在使用权限页启用角色权限")
+      if (scope === "tool") {
+        if (!toolRegistry.get(id)) throw new Error("工具尚未加载，请先启用并加载工具")
+        const roles = record(boundary.roles)
+        for (const key of role === null ? boundaryRoles : [role]) {
+          const profile = record(roles[key])
+          for (const field of ["allowedTools", "deniedTools"]) {
+            profile[field] = stringList(profile[field]).filter(name => name !== id)
+          }
+          if (allowed !== null) (profile[allowed ? "allowedTools" : "deniedTools"] as string[]).push(id)
+          roles[key] = profile
+        }
+        boundary.roles = roles
+      } else {
+        if (scope === "mcpServers") {
+          if (!Object.hasOwn(record(record(config.mcp).servers), id)) throw new Error("MCP 服务不存在")
+        } else {
+          const catalog = (scope === "customPackages" ? toolRegistry.customStatus() : toolRegistry.skillStatus()).catalog
+          if (!Array.isArray(catalog) || !catalog.some(item => record(item).id === id)) throw new Error("扩展不存在，请刷新列表")
+        }
+        const entries = record(boundary[scope])
+        const entry = record(entries[id])
+        if (role === null) delete entries[id]
+        else {
+          const roles = { ...record(entry.roles) }
+          if (allowed === null) delete roles[role]
+          else roles[role] = allowed
+          entries[id] = { ...entry, roles }
+        }
+        boundary[scope] = entries
+      }
+      tools.boundaryAccess = boundary
+      config.tools = tools as typeof config.tools
+      return config
+    })
+    res.json({ ok: true, config: redactConfigSecrets(saved) })
+  }, { errorStatus: 400 }))
   app.get("/api/tools/access-matrix", auth, handleRoute(async (req, res) => {
     res.json({
       ok: true,

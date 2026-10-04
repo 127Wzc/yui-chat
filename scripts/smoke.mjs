@@ -2855,7 +2855,7 @@ async function checkSqliteStorage() {
 async function checkMedia() {
   const { configStore } = await import("../output/runtime/config/store.js")
   const { prepareMediaForVision } = await import("../output/runtime/core/media/media-cache.js")
-  const { buildMediaUserContent, recentImageRecallModeForPrompt, resolveMediaContext, summarizeMediaContext, visionInputModeForPrompt } = await import("../output/runtime/core/message/media-context.js")
+  const { buildMediaUserContent, mediaToMessageContext, recentImageRecallModeForPrompt, resolveMediaContext, summarizeMediaContext, visionInputModeForPrompt } = await import("../output/runtime/core/message/media-context.js")
   const { buildOpenAiUserContent, contentToText } = await import("../output/runtime/core/message/message-context.js")
   const { buildUserMessage } = await import("../output/runtime/core/persona/persona-chain.js")
   const { MessageSendTool } = await import("../output/runtime/tools/builtins/media.js")
@@ -2867,11 +2867,21 @@ async function checkMedia() {
   assert(prepared.attachments[0].preparedUrl === "data:image/png;base64,AAAA", "data URL should be kept")
   assert(prepared.attachments[0].thumbnailDataUrl === "" || prepared.attachments[0].thumbnailDataUrl.startsWith("data:image/"), "data URL media should expose a safe thumbnail field")
   assert(!summary.includes("AAAA"), "media summary must not leak base64 payload")
-  const oversizedVision = buildMediaUserContent("看图", {
-    attachments: [{ kind: "image", preparedUrl: `data:image/png;base64,${"A".repeat(400000)}`, thumbnailDataUrl: tinyPngDataUrl, visionEligible: true }],
-  }, true)
-  const oversizedVisionParts = Array.isArray(oversizedVision) ? oversizedVision.filter(part => part.type === "image_url") : []
-  assert(oversizedVisionParts.length === 1 && oversizedVisionParts[0].image_url.url === tinyPngDataUrl, "oversized inline vision images should use the prepared thumbnail")
+  const originalVisionUrl = `data:image/png;base64,${"A".repeat(400000)}`
+  for (const source of ["current", "quote", "recent-self"]) {
+    const visionMedia = { attachments: [{ kind: "image", source, preparedUrl: originalVisionUrl, thumbnailDataUrl: tinyPngDataUrl, visionEligible: true }] }
+    const firstPerson = buildUserMessage({ user_id: 10001 }, "埋埋看图", {}, { media: visionMedia, vision: true })
+    for (const content of [buildMediaUserContent("看图", visionMedia, true), firstPerson.content]) {
+      const images = Array.isArray(content) ? content.filter(part => part.type === "image_url") : []
+      assert(images.length === 1 && images[0].image_url.url === originalVisionUrl, "conversation and first-person input must preserve large prepared images")
+    }
+    assert(mediaToMessageContext(visionMedia).images[0]?.url === originalVisionUrl, "message context must preserve the prepared original")
+    assert(visionMedia.attachments[0].thumbnailDataUrl === tinyPngDataUrl, "display thumbnail should remain available")
+  }
+  const thumbnailOnly = { attachments: [{ kind: "image", thumbnailDataUrl: tinyPngDataUrl, visionEligible: true, prepareError: "原图读取失败" }] }
+  const missingOriginal = buildMediaUserContent("看图", thumbnailOnly, true)
+  assert(!Array.isArray(missingOriginal) && missingOriginal.includes("图片读取失败"), "failed image preparation must not fall back to a display thumbnail")
+  assert(mediaToMessageContext(thumbnailOnly).images.length === 0, "thumbnail-only input must not become a model image")
   const content = buildOpenAiUserContent("看图", {
     images: [
       { url: "file:///etc/passwd" },
@@ -3697,7 +3707,7 @@ async function checkRenderService() {
   assert(webRenderToolsSource.includes("/api/render/preview") && webRenderToolsSource.includes("isFoldedRenderTool") && webRenderToolsSource.includes("response.render.engine") && webRenderToolsSource.includes("工具引擎") && webRenderToolsSource.includes("系统渲染策略") && webRenderToolsSource.includes("SystemRenderStrategyPanel") && !webRenderToolsSource.includes("aiMarkdownEngine") && !webRenderToolsSource.includes("chatCardAsImage"), "tools page should expose one independent strategy per render scope")
   assert(webRenderToolsSource.includes("render_image"), "tools page should keep the unified render_image entry")
   assert(webRenderToolsSource.includes("PermissionPreviewResult") && webRenderToolsSource.includes("showPreviewDrawer"), "role permission verification should use the shared preview drawer")
-  assert(webRenderToolsSource.includes("openRolePreview") && webRenderToolsSource.includes("全部角色对比"), "permission verification should compare roles without expanding the role cards")
+  assert(webRenderToolsSource.includes("PermissionOverview") && webRenderToolsSource.includes("全部角色对比"), "permission verification should compare roles without expanding the role cards")
   assert(!webAppSource.includes("data-tab=\"renderers\"") && !webRenderToolsSource.includes("function renderRenderers"), "web UI should not expose a standalone renderers page")
   assert(isAllowedRenderHost("assets.example.com", ["*.example.com"]), "URL screenshot allowlist should support wildcard subdomains")
   assert(isAllowedRenderHost("anything.example", ["*"]), "URL screenshot host policy should support an explicit all-domain wildcard")
@@ -6507,7 +6517,7 @@ async function checkWebAndBoot() {
   assert(webProvidersSource.includes("推理 / 思考强度") && webProvidersSource.includes("reasoningEffort"), "providers page should expose unified reasoning controls")
   assert(
     webToolsSource.includes("toggleTool")
-      && webToolsSource.includes("capability-category-select")
+      && webToolsSource.includes("category-options")
       && webToolsSource.includes("capability-mode-tabs")
       && webToolsSource.includes("selectedTag")
       && webToolsSource.includes("clearTag")
@@ -6516,7 +6526,7 @@ async function checkWebAndBoot() {
       && webToolsSource.includes("新增扩展")
       && webToolsSource.includes("配置角色权限")
       && webToolsSource.includes("验证此角色")
-      && webToolsSource.includes("capability-tool-table")
+      && webToolsSource.includes("CapabilityList")
       && webToolsSource.includes("capability-row-actions")
       && webToolsSource.includes("openToolDetail(tool, 'config')")
       && webToolsSource.includes("hasWebConfig(tool)")
@@ -6554,7 +6564,7 @@ async function checkWebAndBoot() {
       && webMcpSource.includes("JSON 导入")
       && webMcpSource.includes("importedServerConfig")
       && webMcpSource.includes("mcp-panel-actions")
-      && webMcpSource.includes("mcp-server-actions")
+      && webMcpSource.includes("#actions=\"{ item }\"")
       && webMcpSource.includes("streamableHttp")
       && webMcpSource.includes("服务器发送事件 (sse)")
       && webMcpSource.includes("可流式传输的 HTTP (streamableHttp)")
@@ -6567,7 +6577,7 @@ async function checkWebAndBoot() {
   )
   assert(
     webToolsSource.includes("当前自定义扩展")
-      && webToolsSource.includes("extension-tool-table")
+      && webToolsSource.includes("CapabilityList")
       && webToolsSource.includes("ExtensionCreateDrawer")
       && webToolsSource.includes("新建扩展")
       && webToolsSource.includes("导入 Skill")
