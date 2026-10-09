@@ -1,3 +1,4 @@
+import { personaIgnored } from "./persona-punishments.js"
 import type { UnknownRecord } from "../message/types.js"
 import { groupIdFromEvent, isGroupEvent } from "../message/event-scope.js"
 
@@ -11,6 +12,9 @@ type MuteRow = Scope & {
 }
 interface BlockedRow {
   type: "user"
+  scope: "group" | "private" | "global"
+  groupId: string
+  origin: "self" | "management"
   userId: string
   key: string
   reason: string
@@ -38,7 +42,7 @@ function normalizeList(value: unknown): string[] {
 
 function userId(event: unknown): string {
   const e = record(event)
-  return text(record(e.sender).user_id || e.user_id)
+  return text(e.user_id || record(e.sender).user_id)
 }
 
 function groupId(event: unknown): string {
@@ -70,9 +74,8 @@ function formatRemaining(until: number): string {
   return `${seconds}秒`
 }
 
-function blockedUserKey(value: unknown): string {
-  const id = text(value).trim()
-  return id ? `user:${id}` : ""
+function blockedUserKey(value: unknown, group = "", origin = "management", scope = group ? "group" : "private"): string {
+  return JSON.stringify([text(value).trim(), group, origin, scope])
 }
 
 function scopeKey(scope: Scope): string {
@@ -160,17 +163,23 @@ function mutedScopeFor(event: unknown): MuteRow | null {
 
 function blockedUserFor(event: unknown): BlockedRow | null {
   pruneBlockedUsers()
-  return blockedUsers.get(blockedUserKey(userId(event))) || null
+  return [...blockedUsers.values()].find(row => row.userId === userId(event) && (row.scope === "global" || (row.scope === "group" ? row.groupId === groupId(event) : !isGroupEvent(event)))) || null
 }
 
 export function blockUser(event: unknown = {}, options: UnknownRecord = {}): BlockedRow {
   pruneBlockedUsers()
   const targetUserId = text(options.userId || userId(event)).trim()
   if (!targetUserId) throw new Error("缺少要屏蔽的用户 ID。")
+  const targetGroup = options.global === true ? "" : text(options.groupId ?? groupId(event))
+  const scope = options.global === true ? "global" : targetGroup ? "group" : "private"
+  const origin = options.origin === "self" ? "self" : "management"
   const row: BlockedRow = {
     type: "user",
     userId: targetUserId,
-    key: blockedUserKey(targetUserId),
+    groupId: targetGroup,
+    scope,
+    origin,
+    key: blockedUserKey(targetUserId, targetGroup, origin, scope),
     reason: text(options.reason),
     operatorId: text(options.operatorId || userId(event)),
     blockedAt: new Date().toISOString(),
@@ -182,13 +191,12 @@ export function blockUser(event: unknown = {}, options: UnknownRecord = {}): Blo
 
 export function unblockUser(event: unknown = {}, options: UnknownRecord = {}): boolean {
   pruneBlockedUsers()
-  return blockedUsers.delete(blockedUserKey(options.userId || userId(event)))
+  const targetGroup = options.global === true ? "" : text(options.groupId ?? groupId(event))
+  return blockedUsers.delete(blockedUserKey(options.userId || userId(event), targetGroup, options.origin === "self" ? "self" : "management", options.global === true ? "global" : targetGroup ? "group" : "private"))
 }
 
-export function getBlockedUser(value: unknown): (BlockedRow & { remaining: string; untilAt: string }) | null {
-  pruneBlockedUsers()
-  const row = blockedUsers.get(blockedUserKey(value))
-  return row ? { ...row, remaining: formatRemaining(row.until), untilAt: row.until === Infinity ? "长期" : new Date(row.until).toISOString() } : null
+export function getBlockedUser(value: unknown, group = ""): (BlockedRow & { remaining: string; untilAt: string }) | null {
+  return listBlockedUsers().find(row => row.userId === text(value) && (row.scope === "global" || (group ? row.scope === "group" && row.groupId === group : row.scope === "private"))) || null
 }
 
 export function listBlockedUsers(): Array<BlockedRow & { remaining: string; untilAt: string }> {
@@ -207,6 +215,7 @@ export function checkAccess(event: unknown = {}, config: unknown = {}): { ok: bo
   const chat = record(record(config).chat)
   const access = record(chat.access)
   if (access.masterBypass !== false && e.isMaster === true) return { ok: true }
+  if (personaIgnored(e)) return { ok: false, silent: true, reason: "人物暂时不回复，到期自动恢复。" }
   const blocked = blockedUserFor(e)
   if (blocked) return { ok: false, silent: true, reason: `用户 ${blocked.userId} 已被临时屏蔽，剩余 ${formatRemaining(blocked.until)}` }
   const muted = mutedScopeFor(e)

@@ -125,7 +125,7 @@ export async function buildToolAccessMatrix(tools: unknown[] = [], options: Acce
       tool: item,
       decisions: Object.fromEntries(roles.map(role => [
         role,
-        explainToolPolicy(tool, { e: events[role], config }),
+        explainToolPolicy(tool, { e: events[role], config, ignoreUserOverrides: !options.userId }),
       ])) as Partial<Record<BoundaryRole, ToolAccessDecision>>,
     }
   })

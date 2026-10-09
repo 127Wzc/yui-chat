@@ -27,7 +27,6 @@ try {
   const config = structuredClone(defaults)
   config.tools.enabled = true
   config.tools.policy.allowCustomTools = true
-  config.tools.boundaryAccess.enabled = false
   config.tools.promptSelection.enabled = false
   config.chat.execution.background = { enabled: true, maxConcurrent: 4, maxQueue: 10 }
   configStore.get = () => config

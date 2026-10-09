@@ -36,7 +36,7 @@ export const builtinToolGroups: BuiltinToolGroup[] = [
   { id: "schedule", label: "定时任务", risk: "medium", tags: ["schedule", "message"], deferLoading: false, factory: createScheduleTools },
   { id: "admin", label: "群管", risk: "high", tags: ["group", "permission"], deferLoading: true, policy: { highRisk: true, requiresGroup: true }, factory: createGroupAdminTools },
   { id: "entertainment", label: "娱乐", risk: "medium", tags: ["message", "fun"], deferLoading: true, factory: createEntertainmentTools },
-  { id: "agent", label: "子代理", risk: "high", tags: ["agent", "orchestration"], deferLoading: true, policy: { highRisk: true, requiresMaster: true }, factory: createAgentTools },
+  { id: "agent", label: "子代理", risk: "high", tags: ["agent", "orchestration"], deferLoading: true, policy: { highRisk: true }, factory: createAgentTools },
 ]
 
 /** 创建并统一归一化所有内置工具，供 ToolRegistry 注册。 */

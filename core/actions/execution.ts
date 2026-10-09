@@ -21,7 +21,7 @@ export function resolveActionTool(action: ActionDefinition) { return action.kind
 
 export function defaultActionRole(tool: unknown, config = configStore.get()) {
   const enabledConfig = { ...config, tools: { ...actionRecord(config.tools), enabled: true } }
-  return boundaryRoles.find(role => explainToolPolicy(tool, { e: previewToolEvent(role), config: enabledConfig, allowDisabledTool: true }).allowed) || "master"
+  return boundaryRoles.find(role => explainToolPolicy(tool, { e: previewToolEvent(role), config: enabledConfig, allowDisabledTool: true, ignoreUserOverrides: true }).allowed) || "master"
 }
 
 export function actionAccess(action: ActionDefinition, e: ActionRecord, config: RuntimeConfigObject): { allowed: boolean; reason: string } {

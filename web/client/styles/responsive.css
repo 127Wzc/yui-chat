@@ -145,7 +145,7 @@
   .backup-row { grid-template-columns: 16px minmax(0, 1fr) auto; }
   .backup-row > .muted { display: none; }
   .routing-model-picker { grid-template-columns: 1fr; }
-  .permission-role-grid, .permission-preview-result { grid-template-columns: 1fr; }
+  .permission-preview-result { grid-template-columns: 1fr; }
   .permission-role-switcher { grid-template-columns: repeat(2, 1fr); }
   .render-template-gallery { grid-template-columns: 1fr; }
   .permission-preview-heading { grid-template-columns: auto minmax(0, 1fr) 30px; }

@@ -1,3 +1,4 @@
+import { explainResourceAccess } from "../tools/access/resource-policy.js"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -167,14 +168,7 @@ async function countFiles(dir: string): Promise<number> {
   }
 }
 
-function roleForEvent(e: AnyRecord = {}): keyof typeof ROLE_RANK {
-  if (e.isMaster) return "master"
-  if (e.sender?.role === "owner") return "groupOwner"
-  if (e.sender?.role === "admin") return "groupAdmin"
-  return "user"
-}
 
-const ROLE_RANK = { user: 0, groupAdmin: 1, groupOwner: 2, master: 3 }
 
 class SkillManager {
   catalog: SkillCatalogItem[] = []
@@ -273,15 +267,7 @@ class SkillManager {
   }
 
   allowedByPackage(skill: SkillItem, e: AnyRecord, config: AnyRecord): boolean {
-    const boundary = record(config.tools).boundaryAccess as AnyRecord
-    if (boundary?.enabled === false) return true
-    const override = boundary?.skillPackages?.[skill.id]
-    if (override?.enabled === false) return false
-    const roleOverride = override?.roles?.[roleForEvent(e)]
-    if (typeof roleOverride === "boolean") return roleOverride
-    if (!override?.minRole) return true
-    const minimumRole = String(override.minRole) as keyof typeof ROLE_RANK
-    return (ROLE_RANK[roleForEvent(e)] ?? 0) >= (ROLE_RANK[minimumRole] ?? 0)
+    return explainResourceAccess(config, e, "skillPackages", skill.id).allowed
   }
 
   matchScore(skill: SkillItem, prompt = ""): number {

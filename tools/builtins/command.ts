@@ -42,7 +42,8 @@ export class CommandSearchTool {
     required: ["query"],
   }
 
-  async execute(args: ToolArgs = {}, _context: CommandToolContext = {}): Promise<string> {
+  async execute(args: ToolArgs = {}, context: CommandToolContext = {}): Promise<string> {
+    if (!(await knowledgeStore.list(context.e || {})).some(base => base.id === BUILTIN_COMMANDS_ID)) return "没有访问内置指令库的权限。"
     const recommendation = await commandObserver.recommendCommandsHybrid(args.query || "", { limit: args.limit || 5 })
     const results = records(recommendation.results)
     if (!results.length) return "没有找到匹配的指令。可以换一种说法，或先发送 #yuihelp 查看已索引能力。"
@@ -82,7 +83,8 @@ export class CommandRecommendTool {
     required: ["query"],
   }
 
-  async execute(args: ToolArgs = {}, _context: CommandToolContext = {}): Promise<string> {
+  async execute(args: ToolArgs = {}, context: CommandToolContext = {}): Promise<string> {
+    if (!(await knowledgeStore.list(context.e || {})).some(base => base.id === BUILTIN_COMMANDS_ID)) return "没有访问内置指令库的权限。"
     const limit = Math.max(1, Math.min(10, Number(args.limit) || 5))
     const recommendation = await commandObserver.recommendCommandsHybrid(args.query || "", { limit })
     const result: UnknownRecord = {
@@ -130,6 +132,7 @@ export class CommandRecommendTool {
 /** 指令转交工具：只在允许当前会话发送时投递已确认的宿主指令。 */
 export class CommandHandoffTool {
   name = "command_handoff"
+  risk = "high"
   source = "builtin"
   execution = { effect: "non_idempotent", repeatPolicy: "dedupe", operationFields: ["command", "reason", "send"], retryPolicy: "no_ambiguous_retry", maxAttempts: 1 }
   description = "Send or suggest a Yunzai command discovered from the command knowledge base. Use when another plugin command should handle the task."
@@ -144,6 +147,7 @@ export class CommandHandoffTool {
   }
 
   async execute(args: ToolArgs = {}, context: CommandToolContext = {}): Promise<string> {
+    if (!(await knowledgeStore.list(context.e || {})).some(base => base.id === BUILTIN_COMMANDS_ID)) return "没有访问内置指令库的权限。"
     const config = record(configStore.get())
     const tools = record(config.tools)
     const builtin = record(tools.builtin)
@@ -167,6 +171,7 @@ export class CommandHandoffTool {
 
 /** 指令知识审计工具：报告扫描知识的完整度，不修改知识库。 */
 export class CommandKnowledgeAuditTool {
+  name = "command_knowledge_audit"
   source = "builtin"
   description = "Audit command knowledge quality and report missing examples, trigger heads, parameter hints, and dynamically observed commands."
   parameters = {
@@ -176,7 +181,8 @@ export class CommandKnowledgeAuditTool {
     },
   }
 
-  async execute(args: ToolArgs = {}, _context: CommandToolContext = {}): Promise<string> {
+  async execute(args: ToolArgs = {}, context: CommandToolContext = {}): Promise<string> {
+    if (!(await knowledgeStore.list(context.e || {})).some(base => base.id === BUILTIN_COMMANDS_ID)) return "没有访问内置指令库的权限。"
     const report = record(commandObserver.qualityReport({ limit: Number(args.limit) || 10 }))
     const summary = record(report.summary)
     const issueSummary = Object.entries(record(summary.issues))
@@ -196,28 +202,21 @@ export class CommandKnowledgeAuditTool {
   }
 }
 
-// 模型侧只保留一个入口；内部仍复用原有实现，避免改变已有的指令知识库行为。
-/** 知识管理聚合工具：先校验授权知识库，再分派搜索、推荐、转交或审计。 */
+// 知识查询、宿主指令投递和知识审计分别授权。
+/** 知识管理聚合工具：先校验授权知识库，再分派搜索或推荐。 */
 export class KnowledgeManageTool {
   name = "knowledge_manage"
   deferLoading = false
   source = "builtin"
   execution = { effect: "read", repeatPolicy: "bounded", retryPolicy: "safe", maxAttempts: 2 }
-  executionByAction = {
-    handoff: { effect: "non_idempotent", repeatPolicy: "dedupe", operationFields: ["knowledgeBaseIds", "command", "reason", "send"], retryPolicy: "no_ambiguous_retry", maxAttempts: 1 },
-  }
-  description = "Query only knowledge bases authorized for the current user. Use search for documents, and recommend/handoff/audit only for one authorized command knowledge base."
+  description = "Query only knowledge bases authorized for the current user. Use search for documents, and recommend only for one authorized command knowledge base."
   parameters = {
     type: "object",
     properties: {
-      action: { type: "string", enum: ["list", "search", "recommend", "handoff", "audit"], description: "Operation to perform." },
+      action: { type: "string", enum: ["list", "search", "recommend"], description: "Operation to perform." },
       knowledgeBaseIds: { type: "array", items: { type: "string" }, description: "Optional authorized knowledge base IDs. Unauthorized IDs reject the request." },
       query: { type: "string", description: "User intent or command question, required by search and recommend." },
-      command: { type: "string", description: "Command text for handoff." },
-      reason: { type: "string", description: "Reason for a handoff suggestion." },
-      send: { type: "boolean", description: "Whether handoff should send the command immediately." },
       limit: { type: "number", description: "Maximum result count." },
-      includeAudit: { type: "boolean", description: "Include quality hints with recommend results." },
     },
     required: ["action"],
   }
@@ -231,11 +230,11 @@ export class KnowledgeManageTool {
       return JSON.stringify(bases.map(base => ({ id: base.id, name: base.name, type: base.type, description: base.description, autoRetrieve: Boolean(base.auto_retrieve) })), null, 2)
     }
     const commandIds = ids.length ? ids : [BUILTIN_COMMANDS_ID]
-    const commandAction = ["recommend", "handoff", "audit"].includes(action)
+    const commandAction = action === "recommend"
     if (commandAction) {
       const bases = await knowledgeStore.list(event)
       const wanted = bases.filter(base => commandIds.includes(text(base.id)))
-      if (wanted.length !== 1 || wanted[0].type !== "command") return "recommend / handoff / audit 仅支持一个已授权的 command 类型知识库。"
+      if (wanted.length !== 1 || wanted[0].type !== "command") return "recommend 仅支持一个已授权的 command 类型知识库。"
     }
     switch (action) {
       case "search": {
@@ -254,14 +253,12 @@ export class KnowledgeManageTool {
         if (selectedIds.includes(BUILTIN_COMMANDS_ID)) sections.push(await new CommandSearchTool().execute(args, context))
         return sections.filter(Boolean).join("\n\n") || "没有找到匹配的已授权知识。"
       }
-      case "recommend": return new CommandRecommendTool().execute(args, context)
-      case "handoff": return new CommandHandoffTool().execute(args, context)
-      case "audit": return new CommandKnowledgeAuditTool().execute(args, context)
-      default: return "未知 action，可用：list / search / recommend / handoff / audit。"
+      case "recommend": return new CommandRecommendTool().execute({ ...args, includeAudit: false }, context)
+      default: return "未知 action，可用：list / search / recommend。"
     }
   }
 }
 
 export function createCommandTools(): unknown[] {
-  return [new KnowledgeManageTool()]
+  return [new KnowledgeManageTool(), new CommandHandoffTool(), new CommandKnowledgeAuditTool()]
 }

@@ -291,6 +291,8 @@ export class ToolRegistry {
     const validation = validateToolArguments(tool, toolArgs)
     if (!validation.ok) throw new ToolArgumentError(`工具参数无效：${validation.issues.join("；")}`)
 
+    assertToolAllowed(tool, { ...context, args: toolArgs })
+
     // 派发标记时机由契约声明，而不是按工具名白名单：deferred 的工具自己
     // 在真正把请求交给宿主前调用 markDispatched，这样纯参数错误仍可被
     // 安全纠正一次，而结果不确定的副作用不会被重复执行。
@@ -301,7 +303,7 @@ export class ToolRegistry {
       await runContext.execution?.beforeInvoke?.()
       const activeConfig = runContext.execution?.beforeInvoke ? configStore.get() : config
       const activeToolConfig = runContext.execution?.beforeInvoke ? resolveToolRuntimeConfig(tool, activeConfig) : toolConfig
-      if (runContext.execution?.beforeInvoke) assertToolAllowed(tool, { ...runContext, config: activeConfig })
+      if (runContext.execution?.beforeInvoke) assertToolAllowed(tool, { ...runContext, config: activeConfig, args: toolArgs })
       const runObservation = record(runContext.observability)
       const runTrace = runObservation.trace || observation.trace || null
       return tool.execute(toolArgs, {
@@ -331,7 +333,7 @@ export class ToolRegistry {
               await context.execution?.beforeInvoke?.()
               signal.throwIfAborted()
               if (this.get(name) !== tool) throw new Error("后台工具已停用或重新加载")
-              assertToolAllowed(tool, { ...context, config: configStore.get() })
+              assertToolAllowed(tool, { ...context, config: configStore.get(), args: toolArgs })
             }
             const run = async () => {
               await ensureAllowed()

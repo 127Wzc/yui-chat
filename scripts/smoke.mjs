@@ -73,7 +73,7 @@ const webToolsSourceFiles = [
   "web/client/features/tools/custom-builder.js",
   "web/client/features/tools/mcp-panel.js",
   "web/client/features/tools/permission-panel.js",
-  "web/client/features/tools/permission-role-grid.ts",
+  "web/client/features/tools/permission-user-panel.ts",
   "web/client/features/tools/permission-role-drawer.ts",
   "web/client/features/tools/permission-preview-drawer.ts",
   "web/client/features/tools/permission-preview.ts",
@@ -318,7 +318,7 @@ async function checkConfigSafety() {
   assert(config.tools?.builtin?.imageSearch?.cacheSelectedImages === false, "image_media should send original image URLs unless local caching is explicitly enabled")
   assert(config.tools?.builtin?.webSearch?.enabledSources?.join(",") === "baidu-ai,tavily", "web search should expose configurable Baidu AI and Tavily channels")
   assert(config.tools?.builtin?.toolSearch?.localEnabled === true, "tool search should expose its local Registry implementation separately from the hosted implementation")
-  assert(config.tools?.boundaryAccess?.enabled === true, "boundary access should default enabled")
+  assert(config.tools?.boundaryAccess?.enabled === undefined, "role access must not expose a bypass switch")
   assert(config.tools?.boundaryAccess?.roles?.groupOwner, "boundary access should expose group owner role")
   assert(Array.isArray(config.tools?.boundaryAccess?.roles?.user?.deniedTools), "boundary access roles should expose explicit deny exceptions")
   const redacted = redactConfigSecrets({
@@ -378,7 +378,7 @@ async function checkConfigSafety() {
       && config.persona.runtimePrompt.includes("本轮实际提供给模型的图片")
       && config.persona.runtimePrompt.includes("使用可用的消息投递能力")
       && config.persona.runtimePrompt.includes("<EMPTY>")
-      && config.persona.runtimePrompt.length < 1000
+      && config.persona.runtimePrompt.length < 1800
       && composePersonaSystemPrompt(config.persona.characterPrompt, config.persona.runtimePrompt).includes("【角色设定】")
       && composePersonaSystemPrompt("自定义角色", "自定义运行规则").includes("自定义运行规则"),
     "persona should expose separate configurable character and runtime prompts with one source default",
@@ -883,6 +883,9 @@ async function checkToolPolicy() {
   const original = await configStore.load()
   const config = JSON.parse(JSON.stringify(original))
   config.tools.enabledTools = [...new Set([...(config.tools.enabledTools || []), "mute_user", "message_manage", "set_title", "block_user"])]
+  config.tools.boundaryAccess.roles.user.allowedTools = config.tools.enabledTools.filter(name => !["mute_user", "message_manage", "set_title", "block_user"].includes(name))
+  config.tools.boundaryAccess.roles.groupAdmin.allowedTools = [...config.tools.enabledTools]
+  config.tools.boundaryAccess.roles.groupOwner.allowedTools = [...config.tools.enabledTools]
   try {
     await configStore.save(config)
     await toolRegistry.init()
@@ -952,7 +955,7 @@ async function checkToolPolicy() {
   assert(listedTools.find(tool => tool.name === "message_send")?.common?.execution?.effect === "non_idempotent" && listedTools.find(tool => tool.name === "message_send")?.common?.execution?.repeatPolicy === "dedupe", "message_send should protect the ordered chain from duplicate delivery")
   assert(listedTools.find(tool => tool.name === "memory_manage")?.common?.execution?.repeatPolicy === "bounded", "memory reads should remain repeatable")
   assert(listedTools.find(tool => tool.name === "memory_manage")?.common?.executionByAction?.write?.repeatPolicy === "dedupe", "memory writes should protect against duplicate persistence")
-  assert(listedTools.find(tool => tool.name === "knowledge_manage")?.common?.executionByAction?.handoff?.repeatPolicy === "dedupe", "knowledge handoff should protect against duplicate dispatch")
+  assert(listedTools.find(tool => tool.name === "command_handoff")?.common?.execution?.repeatPolicy === "dedupe", "knowledge handoff should protect against duplicate dispatch")
   assert(listedTools.find(tool => tool.name === "schedule_task")?.common?.executionByAction?.schedule?.repeatPolicy === "dedupe", "schedule creation should protect against duplicate reminders")
   assert(normalizeTool({ name: "smoke-search", source: "mcp", description: "search", async execute() { return "ok" } }, { source: "mcp" }).common.requiresFinalReply === true, "new silent tools should require a final model reply by default")
   assert(normalizeTool({ name: "smoke-direct", source: "custom", delivery: "media", description: "send", async execute() { return "ok" } }).common.requiresFinalReply === true, "delivery mode should not implicitly disable the final model reply")
@@ -1032,7 +1035,7 @@ async function checkToolPolicy() {
   assert(matrix.summaries.user.deniedEnabled > 0, "user access matrix should count denied enabled tools")
   assert(Object.keys(matrix.summaries.user.deniedReasons).length > 0, "access matrix should group denied reasons")
   const muteRow = matrix.rows.find(row => row.tool.name === "mute_user")
-  assert(muteRow?.decisions?.user?.allowed === false, "access matrix should deny mute_user to normal users")
+  assert(muteRow?.decisions?.user?.allowed === true && muteRow.decisions.user.reason === "仅限本人自助操作", "access matrix should expose mute_user only for self service to normal users")
   assert(muteRow?.decisions?.groupAdmin?.allowed === true, "access matrix should allow mute_user to group admins")
   assert(muteRow?.decisions?.groupOwner?.allowed === true, "access matrix should allow mute_user to group owners")
     const mcpTool = normalizeTool({
@@ -1095,7 +1098,7 @@ async function checkToolPolicy() {
     e: { isGroup: true, isMaster: false, user_id: "u5", group_id: "g2", sender: { role: "member" } },
     config: deniedConfig,
   })
-  assert(deniedDecision.allowed === false && deniedDecision.reason.includes("单独禁止"), "explicit deny should override category, source, and explicit allow rules")
+  assert(deniedDecision.allowed === false && deniedDecision.reason.includes("明确禁止"), "explicit role deny must override allow rules")
   } finally {
     await configStore.save(original)
     await toolRegistry.init()
@@ -1108,6 +1111,7 @@ async function checkScheduleTaskTool() {
   const { ScheduleTaskService, formatScheduleTaskList, scheduleTaskService, sendTaskMessage } = await import("../output/runtime/core/scheduling/schedule-task-service.js")
   const { toolRegistry } = await import("../output/runtime/tools/support/registry.js")
   const config = JSON.parse(JSON.stringify(await configStore.load()))
+  config.tools.boundaryAccess.roles.user.allowedTools = ["schedule_task"]
   config.tools.builtin.scheduleTask.maxPerUser = 1
   config.tools.builtin.scheduleTask.cronMaxPerUser = 1
   config.tools.builtin.scheduleTask.cronMinIntervalMinutes = 60
@@ -1435,15 +1439,15 @@ configSchema:
 `, "utf8")
     await toolRegistry.init()
     assert(!(await toolRegistry.list()).some(tool => getToolCommon(tool).source === "skill"), "Markdown skills must not register executable tools")
-    const explicitPrompt = await skillManager.buildPrompt(`请使用 $${smokeSkillId}`, { config: await configStore.load(), e: { isGroup: false, user_id: "u1" } })
+    const explicitPrompt = await skillManager.buildPrompt(`请使用 $${smokeSkillId}`, { config: await configStore.load(), e: { isGroup: false, isMaster: true, user_id: "u1" } })
     assert(explicitPrompt.includes("Smoke workflow") && explicitPrompt.includes(`<skill name="${smokeSkillId}"`), "explicit skill invocation should load the full SKILL.md body")
     const varsConfig = await configStore.load()
     varsConfig.skills.runtimeVariables = { [smokeSkillId]: { tone: "活泼", apiToken: "smoke-super-secret", rogue: "smoke-leak-me" } }
-    const configPrompt = await skillManager.buildPrompt(`请使用 $${smokeSkillId}`, { config: varsConfig, e: { isGroup: false, user_id: "u1" } })
+    const configPrompt = await skillManager.buildPrompt(`请使用 $${smokeSkillId}`, { config: varsConfig, e: { isGroup: false, isMaster: true, user_id: "u1" } })
     assert(configPrompt.includes("<skill-config>") && configPrompt.includes("活泼"), "declared skill runtime variables should be injected into the prompt")
     assert(!configPrompt.includes("smoke-super-secret") && !configPrompt.includes("smoke-leak-me"), "secret and undeclared skill variables must never reach the prompt")
     await setSkillEnabled(smokeSkillId, false)
-    const disabledPrompt = await skillManager.buildPrompt(`请使用 $${smokeSkillId}`, { config: await configStore.load(), e: { isGroup: false, user_id: "u1" } })
+    const disabledPrompt = await skillManager.buildPrompt(`请使用 $${smokeSkillId}`, { config: await configStore.load(), e: { isGroup: false, isMaster: true, user_id: "u1" } })
     assert(!disabledPrompt.includes("Smoke workflow"), "disabled markdown skill should not be injected")
     await setSkillEnabled(smokeSkillId, true)
     await updateSkillPackage(smokeSkillId, { manifest: { name: smokeSkillId, description: "更新后的 smoke workflow。", enabled: true }, source: "# Smoke workflow\n\n返回 smoke markdown skill 已加载。" })
@@ -1515,7 +1519,7 @@ async function checkExtensionValidation() {
     parameters: { type: "object", properties: {} },
     async execute() { return "ok" },
   }, { source: "custom" })
-  assert(highRiskSkill.common.policy.requiresMaster === true, "high-risk extension tools should default to master-only when no elevated policy is declared")
+  assert(highRiskSkill.common.policy.requiresMaster !== true, "risk labels must not create an immutable master-only requirement")
   const groupAdminSkill = normalizeTool({
     name: "smoke_group_admin_skill",
     risk: "high",
@@ -1648,8 +1652,7 @@ async function checkExtensionCreateFlow() {
     config.tools.enabled = true
     config.tools.enabledTools = []
     config.tools.policy.allowCustomTools = true
-    config.tools.boundaryAccess.enabled = true
-    config.tools.boundaryAccess.roles.user.allowedSources = ["custom"]
+    config.tools.boundaryAccess.customPackages[created.id] = { roles: { user: true } }
     const e = { isGroup: true, user_id: "custom-user", group_id: "custom-group", sender: { role: "member" } }
     const available = async () => (await registry.getAllowedTools({ config, e })).some(tool => tool.name === "smoke_stock_query")
     await customToolManager.setPackageEnabled(created.id, true)
@@ -1712,7 +1715,7 @@ async function checkMusicPlay() {
   config.tools.enabled = true
   config.tools.enabledTools = [...new Set([...config.tools.enabledTools, "music_play", "message_send"])]
   config.tools.policy.allowExternalNetwork = true
-  config.tools.boundaryAccess.enabled = false
+  config.tools.boundaryAccess.roles.user.allowedTools = ["music_play", "message_send"]
   const originalFetch = global.fetch
   const sent = []
   let failAt = 0
@@ -4276,6 +4279,7 @@ async function checkConversations() {
     mockConfig.apiProviders = [{ name: "mock", type: "mock", authType: "none", baseURL: "", apiKey: "" }]
     mockConfig.models = [{ name: "mock", modelIdentifier: "mock", apiProvider: "mock", adapter: "mock", visual: true, toolUse: true, params: {} }]
     mockConfig.channels = [{ id: "mock", name: "Mock Assistant", type: "mock", enabled: true, model: "mock" }]
+    mockConfig.tools.boundaryAccess.roles.user.allowedTools = [...mockConfig.tools.enabledTools]
     mockConfig.chat.defaultChannel = "mock"
     mockConfig.chat.defaultTask = "replyer"
     delete mockConfig.chat.defaultWorkflow
@@ -5450,6 +5454,7 @@ async function checkConversations() {
     const progressiveToolName = "smoke_progressive_tool"
     const progressiveConfig = JSON.parse(JSON.stringify(mockConfig))
     progressiveConfig.tools.enabledTools = ["tool_search", progressiveToolName]
+    progressiveConfig.tools.boundaryAccess.roles.user.allowedTools = ["tool_search"]
     const progressiveTool = normalizeTool({
       name: progressiveToolName,
       source: "custom",
@@ -6521,7 +6526,7 @@ async function checkWebAndBoot() {
       && webToolsSource.includes("capability-mode-tabs")
       && webToolsSource.includes("selectedTag")
       && webToolsSource.includes("clearTag")
-      && webToolsSource.includes("permission-role-grid")
+      && webToolsSource.includes("用户单独权限")
       && webToolsSource.includes("previewBlockedRows")
       && webToolsSource.includes("新增扩展")
       && webToolsSource.includes("配置角色权限")
@@ -7362,7 +7367,7 @@ async function checkSubAgent() {
   const subTools = toolRegistry.getToolsByNames(defaults.subAgent.allowedTools, { e: { isMaster: true, isGroup: false, sender: { role: "member" } } })
   assert(!subTools.some(tool => tool.name === "dispatch_subagent"), "sub-agent tool whitelist must exclude dispatch_subagent")
   assert(toolRegistry.getToolsByNames(["dispatch_subagent"], { e: { isMaster: true } }).length === 1, "master can access dispatch_subagent")
-  assert(toolRegistry.getToolsByNames(["dispatch_subagent"], { e: { isMaster: false, isGroup: true, sender: { role: "member" } } }).length === 0, "non-master must be blocked from dispatch_subagent (requiresMaster)")
+  assert(toolRegistry.getToolsByNames(["dispatch_subagent"], { e: { isMaster: false, isGroup: true, sender: { role: "member" } } }).length === 0, "ungranted users must be blocked from dispatch_subagent by default")
   assert(tool.parameters?.properties?.tasks, "dispatch_subagent should support parallel tasks array")
   assert(typeof chatService.listSubAgentRuns === "function", "chatService should expose listSubAgentRuns for trace")
   const activeBefore = chatService.activeSubAgentRuns

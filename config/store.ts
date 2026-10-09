@@ -481,12 +481,27 @@ function normalizeConfig(config: Config): Config {
     }
     tools.enabledTools = [...new Set((Array.isArray(tools.enabledTools) ? tools.enabledTools : []).map(String).filter(Boolean))]
     const boundary = isObject(tools.boundaryAccess) ? tools.boundaryAccess : {}
+    delete boundary.enabled
+    if (isObject(tools.runtimeVariables) && isObject(tools.runtimeVariables.persona_punish)) delete tools.runtimeVariables.persona_punish.cooldownSeconds
+    if (isObject(tools.policy)) delete tools.policy.highRiskRequiresMaster
+    if (isObject(tools.builtin)) {
+      delete tools.builtin.groupAdmin
+      delete tools.builtin.personaPunishment
+    }
+    for (const bucket of ["customPackages", "skillPackages", "mcpServers"]) {
+      if (!isObject(boundary[bucket])) continue
+      for (const entry of Object.values(boundary[bucket])) {
+        if (!isObject(entry)) continue
+        delete entry.enabled
+        delete entry.minRole
+      }
+    }
     const roles = isObject(boundary.roles) ? boundary.roles : {}
     for (const profileValue of Object.values(roles)) {
       if (!isObject(profileValue)) continue
       profileValue.allowedTools = [...new Set((Array.isArray(profileValue.allowedTools) ? profileValue.allowedTools : []).map(String).filter(Boolean))]
       profileValue.deniedTools = [...new Set((Array.isArray(profileValue.deniedTools) ? profileValue.deniedTools : []).map(String).filter(Boolean))]
-      if (Array.isArray(profileValue.enabledCategories) && !profileValue.enabledCategories.includes("output")) profileValue.enabledCategories.push("output")
+      for (const key of ["enabledCategories", "allowedSources", "allowHighRisk", "allowExternalNetwork", "allowAllEnabledTools"]) delete profileValue[key]
     }
   }
   if (isObject(config.subAgent)) config.subAgent.allowedTools = [...new Set((Array.isArray(config.subAgent.allowedTools) ? config.subAgent.allowedTools : []).map(String).filter(Boolean))]

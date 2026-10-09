@@ -86,8 +86,6 @@ export async function buildSetupGuide(config: RuntimeConfigObject = configStore.
   const modelTasks = record(configValue.modelTasks)
   const replyer = record(modelTasks.replyer)
   const persona = record(configValue.persona)
-  const toolsConfig = record(configValue.tools)
-  const boundaryAccess = record(toolsConfig.boundaryAccess)
   const subAgent = record(configValue.subAgent)
   const knowledgeConfig = record(configValue.knowledge)
   const response = record(configValue.response)
@@ -188,18 +186,18 @@ export async function buildSetupGuide(config: RuntimeConfigObject = configStore.
       "tools",
       "工具与权限",
       enabledTools.length
-        ? (highRiskTools.length && boundaryAccess.enabled !== true ? "warn" : "ready")
+        ? "ready"
         : "todo",
       enabledTools.length
-        ? `已启用 ${enabledTools.length} 个工具。${highRiskTools.length ? `高风险工具 ${highRiskTools.length} 个${boundaryAccess.enabled === true ? "，边界权限已开启。" : "，建议开启边界权限。"}` : "高风险工具未突出暴露。"}`
+        ? `已启用 ${enabledTools.length} 个工具。${highRiskTools.length ? `高风险工具 ${highRiskTools.length} 个，按角色授权，默认仅主人可用。` : "高风险工具未突出暴露。"}`
         : "需要选择内置工具、Custom/Skill/MCP 或工具预设。",
       { label: "管理工具", tab: "tools" },
       {
-        recommendation: "首次配置只启用“核心”预设；联网、群管理等能力确认权限后再开。建议保持边界权限开启。",
+        recommendation: "首次配置只启用“核心”预设；联网、群管理等能力确认权限后再开。能力默认仅主人可用，可按角色或用户单独开放。",
         defaults: {
           工具预设: "核心",
-          边界权限: "开启",
-          高风险能力: "仅机器人主人使用",
+          角色权限: "始终生效",
+          高风险能力: "默认仅主人，可手动开放",
         },
       },
     ),

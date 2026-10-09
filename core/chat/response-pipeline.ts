@@ -1,3 +1,4 @@
+import { loadPersonaPunishments } from "./persona-punishments.js"
 import { renderChatCard, renderTextCard, withRenderScope } from "../rendering/render-service.js"
 import { checkAccess } from "./access-control.js"
 import { hostRuntime } from "../runtime/host-runtime.js"
@@ -57,6 +58,7 @@ export async function preflight(event: unknown, prompt: unknown, config: unknown
   const root = record(config)
   const chat = record(root.chat)
   const response = record(root.response)
+  await loadPersonaPunishments()
   const access = checkAccess(e, root)
   if (!access.ok) return { ok: false, message: access.reason || "当前不允许对话。", silent: access.silent !== false }
   if (includesAny(prompt, response.promptBlockWords)) return { ok: false, message: `${text(record(root.persona).firstPerson)}不想回答这个问题。` }

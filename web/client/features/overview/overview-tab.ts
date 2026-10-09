@@ -34,7 +34,6 @@ interface OverviewConfig extends UnknownRecord {
   apiProviders?: ApiProvider[]
   chat?: { defaultChannel?: string }
   persona?: { firstPerson?: string; characterPrompt?: string; respondToAt?: boolean }
-  tools?: { boundaryAccess?: { enabled?: boolean } }
   knowledge?: { enabled?: boolean }
   response?: { defaultMode?: string; autoUsePicture?: boolean; autoUsePictureThreshold?: number }
   modelTasks?: { replyer?: ReplyTask }
@@ -101,7 +100,6 @@ export const OverviewTab = {
       personaPrompt: initialConfig.persona?.characterPrompt || "你是[first_person]，一个友好、可靠的中文 AI 助手。先给结论，再给清晰步骤；不确定时主动说明。",
       respondToAt: String(initialConfig.persona?.respondToAt !== false),
       toolPreset: "core",
-      boundaryAccess: String(initialConfig.tools?.boundaryAccess?.enabled !== false),
       knowledgeEnabled: String(initialConfig.knowledge?.enabled !== false),
       outputMode: initialConfig.response?.defaultMode || "text",
       autoPicture: String(initialConfig.response?.autoUsePicture !== false),
@@ -264,7 +262,6 @@ export const OverviewTab = {
     async function saveTools() {
       return runWizardAction(async () => {
         await request("/api/tools/apply-preset", { method: "POST", body: JSON.stringify({ preset: wizard.toolPreset }) })
-        await saveConfigPatch({ "tools.boundaryAccess.enabled": wizard.boundaryAccess === "true" }, "setup-guide-tools")
       }, "常用能力与权限已保存", ["config", "tools", "setupGuide", "diagnostics"])
     }
 
@@ -504,9 +501,7 @@ export const OverviewTab = {
             <div v-else-if="currentGuideId === 'tools'" class="wizard-inline-body">
               <div class="form-grid">
                 <Field label="能力场景" type="select" :options="TOOL_PRESET_OPTIONS" v-model="wizard.toolPreset" tip="首次使用推荐基础助手；这些能力只会追加，不会关闭现有能力。" />
-                <Field label="边界权限" type="select" :options="BOOL_OPTIONS" v-model="wizard.boundaryAccess" tip="推荐开启，普通用户默认无法使用高风险管理能力。" />
               </div>
-              <div class="wizard-warning-note" v-if="wizard.boundaryAccess !== 'true'"><Icon name="alert" :size="16" /><span>关闭边界权限后，高风险工具主要依赖主人权限兜底。普通部署建议保持开启。</span></div>
               <div class="wizard-inline-actions"><button class="btn primary" type="button" :disabled="wizardBusy" @click="saveTools"><Icon name="zap" :size="14" />应用能力并保存权限</button></div>
             </div>
 

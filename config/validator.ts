@@ -638,6 +638,15 @@ function validateTools(config: ConfigRecord, issues: ValidationIssue[]): void {
       positiveNumber(issues, "tools.builtin.scheduleTask.tickMs", scheduleTask.tickMs, { min: 10000, max: 300000 })
     }
   }
+  const punishment = (config.tools?.runtimeVariables as ConfigSection | undefined)?.persona_punish
+  if (punishment !== undefined) {
+    if (!isObject(punishment)) add(issues, "error", "tools.runtimeVariables.persona_punish", "人物处罚配置必须是对象")
+    else {
+      for (const key of ["enabled", "allowIgnore", "allowMute"]) if (punishment[key] !== undefined && typeof punishment[key] !== "boolean") add(issues, "error", `tools.runtimeVariables.persona_punish.${key}`, "必须为布尔值")
+      positiveNumber(issues, "tools.runtimeVariables.persona_punish.maxIgnoreSeconds", punishment.maxIgnoreSeconds, { min: 1, max: 2592000, integer: true })
+      positiveNumber(issues, "tools.runtimeVariables.persona_punish.maxMuteSeconds", punishment.maxMuteSeconds, { min: 1, max: 2592000, integer: true })
+    }
+  }
   const blockUser = config.tools?.builtin?.blockUser
   if (blockUser !== undefined) {
     if (!isObject(blockUser)) add(issues, "error", "tools.builtin.blockUser", "blockUser 必须是对象")
@@ -673,8 +682,6 @@ function validateTools(config: ConfigRecord, issues: ValidationIssue[]): void {
       add(issues, "error", `tools.boundaryAccess.roles.${role}`, "角色权限配置必须是对象")
       continue
     }
-    if (entry.enabledCategories !== undefined) requireArray(issues, `tools.boundaryAccess.roles.${role}.enabledCategories`, entry.enabledCategories)
-    if (entry.allowedSources !== undefined) requireArray(issues, `tools.boundaryAccess.roles.${role}.allowedSources`, entry.allowedSources)
     if (entry.allowedTools !== undefined) requireArray(issues, `tools.boundaryAccess.roles.${role}.allowedTools`, entry.allowedTools)
     if (entry.deniedTools !== undefined) requireArray(issues, `tools.boundaryAccess.roles.${role}.deniedTools`, entry.deniedTools)
   }
@@ -698,9 +705,6 @@ function validateTools(config: ConfigRecord, issues: ValidationIssue[]): void {
         else for (const [role, allowed] of Object.entries(entry.roles)) {
           if (!boundaryRoles.has(role) || typeof allowed !== "boolean") add(issues, "error", `tools.boundaryAccess.${bucket}.${id}.roles.${role}`, "角色覆盖必须使用四种角色和布尔值")
         }
-      }
-      if (entry.minRole && !boundaryRoles.has(String(entry.minRole))) {
-        add(issues, "error", `tools.boundaryAccess.${bucket}.${id}.minRole`, `未知最小角色：${entry.minRole}`)
       }
     }
   }

@@ -171,12 +171,11 @@ export const schema: SchemaGroup[] = [
       { path: "tools.policy", label: "工具调用策略", type: "json" },
       { path: "tools.hosted", label: "OpenAI 托管工具策略", type: "json" },
       { path: "tools.promptSelection", label: "工具提示词选择预算", type: "json" },
-      { path: "tools.boundaryAccess", label: "工具边界权限", type: "json" },
+      { path: "tools.boundaryAccess", label: "能力角色权限", type: "json" },
       { path: "tools.builtin.websiteFetch", label: "网页读取配置", type: "json" },
       { path: "tools.builtin.imageSearch", label: "图片搜索渠道配置", type: "json" },
       { path: "tools.builtin.webSearch", label: "实时网络搜索渠道配置", type: "json" },
       { path: "tools.builtin.commandHandoff", label: "指令转交配置", type: "json" },
-      { path: "tools.builtin.groupAdmin", label: "群管工具配置", type: "json" },
     ],
   },
   {

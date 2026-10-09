@@ -1,6 +1,7 @@
-import { configStore } from "../../config/store.js"
+import { PersonaPunishTool, PersonaPunishmentReleaseTool } from "./persona-punishment.js"
+import { assertMemberOperation, assertSelfRestrictionRequest, memberTarget } from "../access/member-policy.js"
 import { isGroupEvent } from "../../core/message/event-scope.js"
-import { arrayFrom, currentGroup, currentUser, getMemberMap, isGroupAdmin, numberOrDefault, pickGroup, requireMethod } from "./shared.js"
+import { arrayFrom, currentGroup, currentUser, getMemberMap, numberOrDefault, pickGroup, requireMethod } from "./shared.js"
 import type { UnknownRecord } from "../../core/message/types.js"
 import type { ToolExecutionContext } from "../support/tool-contract.js"
 
@@ -48,18 +49,6 @@ const emotionMapping = {
   love: [66],
 }
 
-function requireAdmin(e: GroupAdminEvent = {}, action = "执行群管操作"): void {
-  const config = record(configStore.get())
-  const tools = record(config.tools)
-  const builtin = record(tools.builtin)
-  const cfg = record(builtin.groupAdmin)
-  const boundaryAccess = record(tools.boundaryAccess)
-  if (boundaryAccess.enabled !== true && cfg.requireMaster === true && !e.isMaster) {
-    throw new Error(`${action} 需要主人权限。`)
-  }
-  if (!isGroupAdmin(e)) throw new Error(`${action} 需要主人或群管理员权限。`)
-}
-
 async function ensureBotCanManage(e: GroupAdminEvent, group: unknown): Promise<void> {
   const members = await getMemberMap(group)
   const bot = record(e.bot)
@@ -73,27 +62,31 @@ export class MuteUserTool {
   name = "mute_user"
   source = "builtin"
   execution = { effect: "non_idempotent", repeatPolicy: "dedupe", targetFields: ["qq", "groupId"], operationFields: ["qq", "groupId", "seconds"], retryPolicy: "no_ambiguous_retry", maxAttempts: 1 }
-  policy = { highRisk: true, requiresGroup: true, requiresGroupAdmin: true }
-  description = "Mute a group member for a number of seconds. Requires master or group admin permission."
+  policy = { highRisk: true, requiresGroup: true, memberOperation: "mute" }
+  description = "群成员禁言：处理用户明确的自助请求，如‘禁言我一分钟’‘把我禁言’，或管理员的成员禁言/解除禁言请求。人物自主处罚应使用独立工具。Managing others or unmuting requires group admin or master permission."
   parameters = {
     type: "object",
     properties: {
       qq: { type: "string", description: "Target QQ. Defaults to current sender." },
       groupId: { type: "string", description: "Group id. Defaults to current group." },
-      seconds: { type: "number", description: "Mute duration in seconds. Use 0 to unmute." },
+      seconds: { type: "integer", minimum: 0, maximum: 2592000, description: "Mute duration in seconds. Use 0 to unmute." },
     },
     required: ["seconds"],
   }
 
   async execute(args: ToolArgs = {}, context: GroupAdminContext = {}): Promise<string> {
     const e = context.e || {}
-    requireAdmin(e, "禁言")
+    assertMemberOperation("mute", args, e)
+    if (memberTarget(args, e) === String(e.user_id || (e.sender as UnknownRecord | undefined)?.user_id) && Number(args.seconds) > 0) assertSelfRestrictionRequest("mute", e, context.config)
     const groupId = numberOrDefault(args.groupId, currentGroup(e))
-    const qq = text(args.qq || currentUser(e)).trim()
+    const qq = memberTarget(args, e)
     const seconds = Math.max(0, Math.min(Number(args.seconds ?? 600), 86400 * 30))
     const group = await pickGroup(e, groupId)
     await ensureBotCanManage(e, group)
-    if (qq === "all") return "已拒绝全员禁言：该操作风险过高。"
+    if (qq === String(e.user_id || (e.sender as UnknownRecord | undefined)?.user_id) && !e.isMaster) {
+      const member = (await getMemberMap(group))?.get(Number(qq))
+      if (!member || Number(member.shutup_time || 0) * 1000 > Date.now()) throw new Error("无法确认本人未被禁言，不能通过自助禁言覆盖已有管理处罚。")
+    }
     await requireMethod(group, "muteMember", "禁言成员")(Number(qq), seconds)
     return seconds === 0 ? `已解除 ${qq} 的禁言。` : `已禁言 ${qq} ${seconds} 秒。`
   }
@@ -117,7 +110,7 @@ export class KickOutTool {
 
   async execute(args: ToolArgs = {}, context: GroupAdminContext = {}): Promise<string> {
     const e = context.e || {}
-    requireAdmin(e, "踢出成员")
+    assertMemberOperation("manage", args, e)
     const groupId = numberOrDefault(args.groupId, currentGroup(e))
     const qq = Number(args.qq || currentUser(e))
     const group = await pickGroup(e, groupId)
@@ -132,7 +125,7 @@ export class EditCardTool {
   name = "edit_card"
   source = "builtin"
   execution = { effect: "non_idempotent", repeatPolicy: "dedupe", targetFields: ["qq", "groupId"], operationFields: ["qq", "groupId", "card"], retryPolicy: "no_ambiguous_retry", maxAttempts: 1 }
-  policy = { highRisk: true, requiresGroup: true }
+  policy = { highRisk: true, requiresGroup: true, memberOperation: "card" }
   description = "Edit a group member card. Admin can edit others; normal user can only request self card edit if adapter permits."
   parameters = {
     type: "object",
@@ -146,8 +139,8 @@ export class EditCardTool {
 
   async execute(args: ToolArgs = {}, context: GroupAdminContext = {}): Promise<string> {
     const e = context.e || {}
-    const qq = Number(args.qq || currentUser(e))
-    if (qq !== currentUser(e)) requireAdmin(e, "修改他人群名片")
+    assertMemberOperation("card", args, e)
+    const qq = Number(memberTarget(args, e))
     const card = text(args.card).trim().slice(0, 60)
     if (!card) return "缺少新的群名片。"
     const groupId = numberOrDefault(args.groupId, currentGroup(e))
@@ -163,8 +156,8 @@ export class SetTitleTool {
   name = "set_title"
   source = "builtin"
   execution = { effect: "non_idempotent", repeatPolicy: "dedupe", targetFields: ["qq", "groupId"], operationFields: ["qq", "groupId", "title"], retryPolicy: "no_ambiguous_retry", maxAttempts: 1 }
-  policy = { highRisk: true, requiresGroup: true, requiresGroupAdmin: true }
-  description = "Set a group special title. Usually requires bot owner role and master/admin permission."
+  policy = { highRisk: true, requiresGroup: true, memberOperation: "title" }
+  description = "Set a group special title. Normal users may set their own title; managing others requires admin or master permission. The bot must have platform permission (usually group owner)."
   parameters = {
     type: "object",
     properties: {
@@ -177,11 +170,11 @@ export class SetTitleTool {
 
   async execute(args: ToolArgs = {}, context: GroupAdminContext = {}): Promise<string> {
     const e = context.e || {}
-    requireAdmin(e, "设置群头衔")
+    assertMemberOperation("title", args, e)
     const title = text(args.title).trim().slice(0, 30)
     if (!title) return "缺少群头衔。"
     const groupId = numberOrDefault(args.groupId, currentGroup(e))
-    const qq = Number(args.qq || currentUser(e))
+    const qq = Number(memberTarget(args, e))
     const group = await pickGroup(e, groupId)
     const ok = await requireMethod(group, "setTitle", "设置群头衔")(qq, title)
     return ok === false ? "设置群头衔失败。" : `已将 ${qq} 的群头衔设为 ${title}。`
@@ -300,7 +293,7 @@ export class MessageManageTool {
 
   async execute(args: ToolArgs = {}, context: GroupAdminContext = {}): Promise<string> {
     const e = context.e || {}
-    requireAdmin(e, "处理消息")
+    assertMemberOperation("manage", args, e)
     if (!isGroupEvent(e)) return "消息管理只能在群聊中使用。"
     const groupTarget = await pickGroup(e)
     const messageId = text(args.messageId || e.source_message_id || e.reply_id || e.message_id).trim()
@@ -331,12 +324,12 @@ export class MessageManageTool {
 
 export function createGroupAdminTools(): unknown[] {
   return [
+    new PersonaPunishTool(),
+    new PersonaPunishmentReleaseTool(),
     new MuteUserTool(),
     new KickOutTool(),
     new EditCardTool(),
     new SetTitleTool(),
-    new EmojiLikeTool(),
-    new GroupPokeTool(),
     new MessageManageTool(),
   ]
 }

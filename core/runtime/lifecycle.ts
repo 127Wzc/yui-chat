@@ -1,3 +1,4 @@
+import { loadPersonaPunishments } from "../chat/persona-punishments.js"
 import { applyActionCommands } from "../../apps/actions.js"
 import { actionCommandStatus } from "./host-command-registry.js"
 import { chatService } from "../chat/chat-service.js"
@@ -76,6 +77,7 @@ export async function applyRuntimeConfig(config: UnknownRecord = {}, opts: Runti
     groupCapture: false,
     logs: false,
   }
+  await loadPersonaPunishments()
   const logRetentionChanged = opts.startLogs !== false ? modelLogStore.start(config) : modelLogStore.configure(config)
   if (logRetentionChanged) modelLogStore.cleanupExpired().catch(err => modelLogStore.noteError(err))
   result.logs = true

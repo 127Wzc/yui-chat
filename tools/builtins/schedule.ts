@@ -16,7 +16,7 @@ export class ScheduleTaskTool {
     cancel: { effect: "non_idempotent", repeatPolicy: "dedupe", targetFields: ["taskId", "id"], operationFields: ["taskId", "id"], retryPolicy: "no_ambiguous_retry", maxAttempts: 1 },
     cron_remove: { effect: "non_idempotent", repeatPolicy: "dedupe", targetFields: ["taskId", "id"], operationFields: ["taskId", "id"], retryPolicy: "no_ambiguous_retry", maxAttempts: 1 },
   }
-  description = "Create, list, or cancel lightweight reminder tasks for the current user. Store only what to remind them about; delivery identifies the recipient automatically. Everyone may use it; per-user limits are enforced by config."
+  description = "Create, list, or cancel lightweight reminder tasks for the current user. Store only what to remind them about; delivery identifies the recipient automatically. Tool access is controlled by role or individual authorization; per-user limits are enforced by config. Query existing tasks before cancellation and use their real task IDs. Clarify ambiguous times before creating a reminder."
   parameters = {
     type: "object",
     properties: {

@@ -33,6 +33,8 @@ export function buildNextHelpMenu(config: unknown = {}, event: UnknownRecord = {
         command("他的记忆 [@成员或QQ号]", "查看指定成员记忆，也支持她的记忆、TA的记忆", "master"),
         command("管理记忆 [@成员] 修改 [序号] [新内容]", "按最近列表维护他人记忆", "master"),
         command("面板", "打开管理台", "master"),
+        command("处罚列表", "查看人物处罚人员、原因、范围和剩余时间", "master"),
+        command("解除处罚 [记录编号]", "提前解除指定人物处罚", "master"),
         command("诊断", "查看运行与配置状态", "master"),
         command("工具参数 [工具名]", "查看工具参数及示例", "master"),
         command("测试工具 [工具名] [参数=值]", "直接试跑工具", "master"),

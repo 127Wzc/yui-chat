@@ -1,10 +1,11 @@
+import { PermissionPresetPanel } from "./permission-preset-panel.js"
+import { PermissionUserPanel } from "./permission-user-panel.js"
 import { PermissionOverview } from "./permission-overview.js"
-import { computed, reactive, ref, watch, onBeforeUnmount } from "vue"
+import { computed, inject, reactive, ref, watch, onBeforeUnmount } from "vue"
 import { confirmAction, setDirtyScope, refreshTab, request, saveConfigPatch, store, toast } from "../../app/store/store.js"
-import { isFoldedRenderTool, toolCommon, toolDisplayName, toolSource } from "./shared.js"
+import { isFoldedRenderTool, toolDisplayName, toolSource } from "./shared.js"
 import { asRecord, asRecords, errorMessage } from "../../shared/data.js"
 import {
-  BOUNDARY_CATEGORY_ORDER,
   BOUNDARY_ROLE_OPTIONS,
   PREVIEW_ROLE_OPTIONS,
   normalizeBoundaryAccess,
@@ -26,11 +27,10 @@ export { BOUNDARY_ROLE_OPTIONS } from "./permission-shared.js"
 
 export const BoundaryAccessPanel = {
   name: "BoundaryAccessPanel",
-  components: { PermissionOverview, PermissionPreviewDrawer, PermissionRoleDrawer },
+  components: { PermissionPresetPanel, PermissionUserPanel, PermissionOverview, PermissionPreviewDrawer, PermissionRoleDrawer },
   setup() {
     const current = normalizeBoundaryAccess(asRecord<PermissionConfigRoot>(store.config).tools?.boundaryAccess || {})
     const draft = reactive<PermissionDraft>({
-      enabled: String(Boolean(current.enabled)),
       previewRole: "user",
       previewGroupId: "20001",
       previewUserId: "10001",
@@ -39,13 +39,13 @@ export const BoundaryAccessPanel = {
       skillPackages: JSON.parse(JSON.stringify(current.skillPackages || {})),
       mcpServers: JSON.parse(JSON.stringify(current.mcpServers || {})),
     })
-    function draftContent() { return JSON.stringify([draft.enabled, draft.roles, draft.customPackages, draft.skillPackages, draft.mcpServers]) }
+    function draftContent() { return JSON.stringify([draft.roles, draft.customPackages, draft.skillPackages, draft.mcpServers]) }
     const savedDraft = ref(draftContent())
     const editingBlocked = computed(() => draftContent() !== savedDraft.value)
     watch(() => store.config, () => {
       if (editingBlocked.value) return
       const next = normalizeBoundaryAccess(asRecord<PermissionConfigRoot>(store.config).tools?.boundaryAccess || {})
-      Object.assign(draft, { enabled: String(Boolean(next.enabled)), roles: next.roles, customPackages: next.customPackages, skillPackages: next.skillPackages, mcpServers: next.mcpServers })
+      Object.assign(draft, { roles: next.roles, customPackages: next.customPackages, skillPackages: next.skillPackages, mcpServers: next.mcpServers })
       savedDraft.value = draftContent()
     })
     watch(draftContent, value => setDirtyScope("tool-permissions", value !== savedDraft.value))
@@ -57,23 +57,8 @@ export const BoundaryAccessPanel = {
     const showPreviewDrawer = ref(false)
     const editingRole = ref("user")
 
-    const builtinCategories = computed(() => {
-      const rows = asRecords<ToolItem>(asRecord<ToolsSlice>(store.tools).tools)
-        .filter(tool => toolSource(tool) === "builtin" && !isFoldedRenderTool(tool))
-      const byCategory = new Map<string, { id: string; label: string }>()
-      for (const tool of rows) {
-        const common = toolCommon(tool)
-        if (!common.category || byCategory.has(common.category)) continue
-        byCategory.set(String(common.category), { id: String(common.category), label: String(common.categoryLabel || common.category) })
-      }
-      return [...byCategory.values()].sort((a, b) => {
-        const ai = BOUNDARY_CATEGORY_ORDER.indexOf(a.id)
-        const bi = BOUNDARY_CATEGORY_ORDER.indexOf(b.id)
-        return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi)
-      })
-    })
     const selectableTools = computed<ToolItem[]>(() => {
-      const rows = asRecords<ToolItem>(asRecord<ToolsSlice>(store.tools).tools).filter(tool => !isFoldedRenderTool(tool) && tool.enabled)
+      const rows = asRecords<ToolItem>(asRecord<ToolsSlice>(store.tools).tools).filter(tool => !isFoldedRenderTool(tool))
       return [...rows].sort((a, b) => {
         const sourceOrder: Record<string, number> = { builtin: 0, custom: 1, skill: 2, mcp: 3 }
         const left = sourceOrder[toolSource(a)] ?? 99
@@ -105,24 +90,28 @@ export const BoundaryAccessPanel = {
       const tool = asRecords<ToolItem>(asRecord<ToolsSlice>(store.tools).tools).find(row => row.name === item.name)
       return { ...item, label: tool ? toolDisplayName(tool) : item.name }
     }))
+    const saving = ref(false)
+    const reload = inject<() => Promise<void>>("reloadCapabilityAccess", async () => {})
     async function save() {
+      if (saving.value) return
+      const submitted = draftContent()
+      const [roles, customPackages, skillPackages, mcpServers] = JSON.parse(submitted)
+      saving.value = true
       try {
         const accepted = await confirmAction({ title: "保存角色与扩展权限？", message: "新的使用范围会立即影响所有用户、管理员和主人可见的工具与 Skill。", confirmText: "确认保存权限", tone: "warn", icon: "key" })
         if (!accepted) return
         await saveConfigPatch({
           "tools.boundaryAccess": normalizeBoundaryAccess({
-            enabled: draft.enabled === "true",
-            roles: draft.roles,
-            customPackages: draft.customPackages,
-            skillPackages: draft.skillPackages,
-            mcpServers: draft.mcpServers,
+            roles, customPackages, skillPackages, mcpServers,
           }),
         })
-        savedDraft.value = draftContent()
-        setDirtyScope("tool-permissions", false)
-        toast("边界权限已保存")
+        savedDraft.value = submitted
+        setDirtyScope("tool-permissions", draftContent() !== submitted)
+        toast("角色权限已保存")
         await refreshTab("tools")
+        await reload()
       } catch (err) { toast(errorMessage(err)) }
+      finally { saving.value = false }
     }
     function clearPreview() {
       previewResult.value = null
@@ -180,7 +169,6 @@ export const BoundaryAccessPanel = {
       clearPreview,
       closePreviewDrawer,
       BOUNDARY_ROLE_OPTIONS,
-      builtinCategories,
       selectableTools,
       customPackages,
       skillPackages,
@@ -204,7 +192,6 @@ export const BoundaryAccessPanel = {
         :draft="draft"
         :tool-filters="toolFilters"
         :selectable-tools="selectableTools"
-        :builtin-categories="builtinCategories"
         :custom-packages="customPackages"
         :skill-packages="skillPackages"
         :mcp-servers="mcpServers"
@@ -234,6 +221,8 @@ export const BoundaryAccessPanel = {
         @close="closePreviewDrawer"
         @preview-matrix="previewMatrix"
       />
+      <PermissionPresetPanel :editing-blocked="editingBlocked" />
+      <PermissionUserPanel />
       <PermissionOverview :editing-blocked="editingBlocked" @open-role="openRole" />
     </Panel>
   `,

@@ -1,4 +1,6 @@
-import { pluginCommandRule } from "../core/message/command-prefixes.js"
+import { listPersonaPunishments } from "../core/chat/persona-punishments.js"
+import { toolRegistry } from "../tools/support/registry.js"
+import { stripPluginCommand, pluginCommand, pluginCommandRule } from "../core/message/command-prefixes.js"
 import { YuiChatCommandHandlers } from "./chat.js"
 
 function masterCommand(reg: string, fnc: string) {
@@ -10,6 +12,26 @@ function masterCommand(reg: string, fnc: string) {
  * 所有 Master 指令必须只在这里注册，并经 masterCommand() 强制附加宿主权限。
  */
 export class YuiChatMaster extends YuiChatCommandHandlers {
+  async personaPunishmentList() {
+    if (this.e.isMaster !== true) return this.reply("仅主人可查看处罚列表。", true)
+    const rows = await listPersonaPunishments()
+    if (!rows.length) return this.reply("当前没有生效或待核实的人物处罚。", true)
+    const page = Math.max(1, Math.min(Math.ceil(rows.length / 20), Number(stripPluginCommand(this.e.msg, "处罚列表")) || 1))
+    return this.reply([
+      `第 ${page}/${Math.ceil(rows.length / 20)} 页。人物处罚 ${rows.length} 条（QQ 禁言状态为执行记录，外部人工变更需在群管理中核实）：`,
+      ...rows.slice((page - 1) * 20, page * 20).map(row => `${row.id}\n用户 ${row.userId}｜${row.groupId ? `群 ${row.groupId}` : "私聊"}｜机器人 ${row.botId}\n${row.kind === "ignore" ? "暂停回复" : "禁言"}｜${row.status === "uncertain" ? "结果待核实" : "生效中"}｜剩余 ${Math.max(1, Math.ceil((row.until - Date.now()) / 1000))} 秒\n原因：${row.reason}`),
+      `提前解除：${pluginCommand("解除处罚 [记录编号]")}`,
+    ].join("\n\n"), true)
+  }
+
+  async personaPunishmentRelease() {
+    if (this.e.isMaster !== true) return this.reply("仅主人可使用此指令。", true)
+    try {
+      const result = await toolRegistry.execute("persona_punishment_release", { id: stripPluginCommand(this.e.msg, "解除处罚") }, { e: this.e, allowDisabledTool: true })
+      return this.reply(String(result), true)
+    } catch (error) { return this.reply(error instanceof Error ? error.message : "解除失败，请稍后重试。", true) }
+  }
+
   constructor() {
     super({
       name: "Yui Chat Master",
@@ -24,6 +46,8 @@ export class YuiChatMaster extends YuiChatCommandHandlers {
         masterCommand("(结束|新开|摧毁|毁灭|完结)全部(模式|模型)?对话", "endAllConversations"),
         masterCommand("(面板|登录|登陆)", "webLogin"),
         masterCommand("诊断", "diagnostics"),
+        masterCommand("处罚列表(?:\\s+\\d+)?", "personaPunishmentList"),
+        masterCommand("解除处罚\\s+[a-f0-9-]+", "personaPunishmentRelease"),
         masterCommand("测试工具(?:\\s+[a-zA-Z0-9_.-]+)?(?:\\s+[\\s\\S]*)?", "testToolCommand"),
         masterCommand("工具参数(?:\\s+[a-zA-Z0-9_.-]+)?", "toolParameterCommand"),
         masterCommand("测试过滤器(?:\\s+[a-zA-Z0-9_.-]+)?(?:\\s+[\\s\\S]*)?", "testFilterCommand"),

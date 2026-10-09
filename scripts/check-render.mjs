@@ -100,6 +100,7 @@ try {
   assert.equal(normalized.response.render.url.enabled, false, 'retired HTML gate must not enable URL screenshots')
   const config = structuredClone(defaults)
   config.tools.enabled = true
+  config.tools.boundaryAccess.roles.user.allowedTools = ['render_image']
   config.response.render.html.waitMs = 0
   config.response.render.html.waitUntil = 'load'
   const master = { config, e: { isMaster: true, user_id: '10001' } }

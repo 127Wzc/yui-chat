@@ -69,8 +69,8 @@ export class RenderUrlScreenshotTool {
   risk = "high"
   execution = { effect: "non_idempotent", repeatPolicy: "dedupe", targetFields: ["url"], operationFields: ["url", "fullPage", "waitMs", "viewport", "send"], retryPolicy: "no_ambiguous_retry", maxAttempts: 1 }
   tags = ["image", "render", "url", "screenshot", "external"]
-  policy = { requiresMaster: true, highRisk: true, externalNetwork: true }
-  description = "Render an explicitly allowlisted http/https URL to a PNG screenshot and send it to the current chat. Disabled by default and restricted to master users."
+  policy = { highRisk: true, externalNetwork: true }
+  description = "Render an explicitly allowlisted http/https URL to a PNG screenshot and send it to the current chat. Disabled by default; role or individual authorization is required."
   parameters = {
     type: "object",
     properties: {

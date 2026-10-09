@@ -157,7 +157,7 @@ export async function buildDiagnostics(): Promise<UnknownRecord> {
     trustedPrivateDnsBypass: linkSafety.trustedPrivateDnsBypass,
     renderUrlEnabled: record(record(response.render).url).enabled === true,
     screenshotAllowedHostCount: linkSafety.screenshotAllowedHosts.length,
-    boundaryAccessEnabled: Boolean(record(record(configValue.tools).boundaryAccess).enabled),
+    boundaryAccessEnabled: true,
     initiativeGreetingScheduled: Boolean(record(record(configValue.persona).initiativeGreeting).scheduledEnabled),
     initiativeGreetingGroups: array(record(record(configValue.persona).initiativeGreeting).groups).length,
     privateChatEnabled: record(record(configValue.chat).access).privateChatEnabled !== false,

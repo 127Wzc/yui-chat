@@ -74,7 +74,7 @@ readline.createInterface({input:process.stdin}).on('line', line => {
   publicGalleryConfig.mcp.servers["imagTag-mcp"].enabled = true
   const publicGalleryTool = normalizeTool(new McpToolAdapter("imagTag-mcp", null, { name: "search_images", inputSchema: { type: "object" } }, publicGalleryConfig.mcp.servers["imagTag-mcp"]))
   for (const event of [{ isPrivate: true, user_id: "reader" }, { isGroup: true, group_id: "group", user_id: "reader" }, { isGroup: true, group_id: "group", sender: { role: "admin" } }, { isMaster: true }]) {
-    assert.equal(explainToolPolicy(publicGalleryTool, { config: publicGalleryConfig, e: event }).allowed, true, "默认图库对所有用户开放")
+    assert.equal(explainToolPolicy(publicGalleryTool, { config: publicGalleryConfig, e: event }).allowed, event.isMaster === true, "默认图库仅主人可用，可另外开放角色")
   }
 
   process.env.MCP_SELECTION_TEST_TOKEN = "selection-secret"
@@ -117,7 +117,6 @@ readline.createInterface({input:process.stdin}).on('line', line => {
   const config = structuredClone(defaults)
   config.mcp.enabled = true
   config.mcp.servers = { gallery: { command: process.execPath, args: [fixture], transport: "stdio", allowedTools: ["search_images"] } }
-  config.tools.boundaryAccess.enabled = false
   const originalLoad = configStore.load
   const originalGet = configStore.get
   configStore.load = async () => structuredClone(config)

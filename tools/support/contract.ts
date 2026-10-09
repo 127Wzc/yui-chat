@@ -22,7 +22,7 @@ const builtinToolDisplayNamesZh: Record<string, string> = {
   knowledge_manage: "知识库", memory_manage: "记忆与画像", voice_output: "语音输出", text_transform: "文本整理",
   keyword_filter: "关键词过滤", regex_replace: "正则替换", weather: "天气查询", website_fetch: "网页读取", github_api: "GitHub 查询",
   bilibili_media: "B站媒体", image_media: "图片媒体", web_search: "实时网络搜索", render_image: "内容排版", render_url_screenshot: "网页截图",
-  music_play: "音乐播放", message_send: "消息发送", generate_image: "AI 绘画", query_userinfo: "查询用户信息", block_user: "拉黑用户",
+  command_handoff: "执行宿主指令", command_knowledge_audit: "指令知识审计", music_play: "音乐播放", message_send: "消息发送", generate_image: "AI 绘画", query_userinfo: "查询用户信息", block_user: "拉黑用户", persona_punish: "人物自主处罚", persona_punishment_release: "解除人物处罚",
   schedule_task: "定时任务", send_dice: "发骰子", send_rps: "猜拳", mute_user: "禁言成员", kick_out: "踢出成员", edit_card: "修改群名片",
   set_title: "设置头衔", emoji_like: "贴表情", group_poke: "戳一戳", message_manage: "群消息管理", dispatch_subagent: "派发子代理",
 }
@@ -325,7 +325,6 @@ export function normalizeTool(tool: unknown, defaults: unknown = {}): Normalized
   const delivery = isToolDeliveryMode(requestedDelivery) ? requestedDelivery : "silent"
   const execution = normalizeExecutionPolicy(inputCommon.execution ?? defaultCommon.execution, { source, effect: source === "builtin" ? toolExecutionEffects.read : toolExecutionEffects.unknown })
   const executionByAction = normalizeExecutionByAction(inputCommon.executionByAction ?? defaultCommon.executionByAction, execution)
-  if (["custom", "skill", "mcp"].includes(source) && risk === "high" && policy.requiresMaster !== true && policy.requiresGroupAdmin !== true) policy.requiresMaster = true
   const provenance: UnknownRecord = { ...record(defaultCommon.provenance), ...record(inputCommon.provenance) }
   for (const key of ["packageId", "packageName", "skillId", "serverName", "serverDescription"]) {
     if (defaultCommon[key] !== undefined) provenance[key] = defaultCommon[key]

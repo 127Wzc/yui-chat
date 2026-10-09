@@ -31,7 +31,7 @@ export function currentGroup(e: UnknownRecord = {}): number {
 
 export function isGroupAdmin(e: UnknownRecord = {}): boolean {
   const sender = e.sender && typeof e.sender === "object" ? e.sender as UnknownRecord : {}
-  return Boolean(e.isMaster || ["owner", "admin"].includes(String(sender.role || "")))
+  return Boolean(e.isMaster || (isGroupEvent(e) && ["owner", "admin"].includes(String(sender.role || ""))))
 }
 
 export async function pickGroup(e: UnknownRecord = {}, groupId = currentGroup(e)): Promise<unknown> {

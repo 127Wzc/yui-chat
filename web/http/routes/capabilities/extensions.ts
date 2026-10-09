@@ -5,6 +5,7 @@ import { createSkillPackage, createSkillTemplate, deleteSkillPackage, getSkillPa
 import { customToolManager } from "../../../../tools/custom/manager.js"
 import { applyToolPreset, toolPresets } from "../../../../tools/custom/presets.js"
 import { toolRegistry } from "../../../../tools/support/registry.js"
+import { applyBuiltinRolePreset, builtinRoleRecommendations } from "../../../../tools/access/role-presets.js"
 import { boundaryRoles } from "../../../../tools/access/roles.js"
 import { toolSource } from "../../../../tools/support/contract.js"
 import { backgroundTaskService } from "../../../../core/scheduling/background-task-service.js"
@@ -117,9 +118,27 @@ export function registerExtensionRoutes(app: RouteApp): void {
     res.json({
       ok: true,
       role,
-      tools: await toolRegistry.list({ e }),
+      tools: await toolRegistry.list({ e, ignoreUserOverrides: !req.query.userId }),
     })
   }))
+  app.get("/api/tools/role-preset", auth, handleRoute(async (_req, res) => {
+    res.json({ ok: true, recommendations: builtinRoleRecommendations })
+  }))
+  app.post("/api/tools/role-preset", auth, handleRoute(async (req, res) => {
+    const role = boundaryRoles.find(item => item === req.body?.role)
+    if (!role) throw new Error("无效角色")
+    const { saved } = await updateConfigAndApply(config => {
+      const tools = record(config.tools)
+      const boundary = record(tools.boundaryAccess)
+      const roles = record(boundary.roles)
+      roles[role] = applyBuiltinRolePreset(record(roles[role]), role, Object.keys(builtinRoleRecommendations))
+      boundary.roles = roles
+      tools.boundaryAccess = boundary
+      config.tools = tools as typeof config.tools
+      return config
+    })
+    res.json({ ok: true, hotApplied: true, config: redactConfigSecrets(saved) })
+  }, { errorStatus: 400 }))
   app.post("/api/tools/access-role", auth, handleRoute(async (req, res) => {
     const { scope, id, role, allowed } = req.body || {}
     if (typeof scope !== "string" || !["tool", "customPackages", "mcpServers", "skillPackages"].includes(scope)
@@ -131,7 +150,6 @@ export function registerExtensionRoutes(app: RouteApp): void {
     const { saved } = await updateConfigAndApply(config => {
       const tools = record(config.tools)
       const boundary = record(tools.boundaryAccess)
-      if (boundary.enabled !== true) throw new Error("请先在使用权限页启用角色权限")
       if (scope === "tool") {
         if (!toolRegistry.get(id)) throw new Error("工具尚未加载，请先启用并加载工具")
         const roles = record(boundary.roles)

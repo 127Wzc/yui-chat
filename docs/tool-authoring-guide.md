@@ -78,7 +78,7 @@ export class ExampleLookupTool {
 | `category` | 否 | `network`、`media`、`admin` 等；内置分组会补齐。 |
 | `tags` | 否 | 用于工具筛选和搜索意图识别，保持少量稳定词。 |
 | `deferLoading` | 否 | Responses 原生 `tool_search` 是否延期加载。Custom、MCP 和低频 Builtin 默认 `true`；每轮高频核心工具显式设为 `false`。Chat Completions 忽略此字段。 |
-| `risk` | 否 | `low`、`medium`、`high`、`external`。高风险工具必须配权限。 |
+| `risk` | 否 | `low`、`medium`、`high`、`external`，仅作标签。工具默认仅主人可用，可通过角色或用户授权开放；不会因高风险自动增加 `requiresMaster`。 |
 | `policy` | 否 | 权限和边界声明，例如 `requiresMaster`、`requiresGroup`、`requiresGroupAdmin`、`externalNetwork`。 |
 | `parameters` | 是 | 发给模型的调用参数 JSON Schema。只放模型需要决定的输入。 |
 | `configSchema` | 否 | 管理员运行配置 Schema；值经 `context.toolConfig` 注入，不发送给模型。密钥必须标记 `secret: true`。 |

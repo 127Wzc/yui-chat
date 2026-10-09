@@ -57,7 +57,6 @@ try {
     config.web.authToken = "actions-test-local"
     config.chat.rateLimit.enabled = false
     config.tools.enabled = true
-    config.tools.boundaryAccess.enabled = false
     config.tools.enabledTools = ["action_echo", "action_master", "action_background", "generate_image"]
     config.tools.policy.allowExternalNetwork = true
     config.actions.items = { echo: base, figurine: figurineAction() }

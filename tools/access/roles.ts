@@ -7,7 +7,7 @@ export const boundaryRoles = ["user", "groupAdmin", "groupOwner", "master"] as c
 export type BoundaryRole = (typeof boundaryRoles)[number]
 
 export const boundaryRoleLabels: Record<BoundaryRole, string> = {
-  user: "所有用户",
+  user: "普通用户",
   groupAdmin: "管理员",
   groupOwner: "群主",
   master: "主人",

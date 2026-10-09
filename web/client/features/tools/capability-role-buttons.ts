@@ -36,14 +36,20 @@ export const CapabilityRoleButtons = {
       let total = decisions.length
       if (props.scope === "skillPackages") {
         total = 1
-        const minimum = BOUNDARY_ROLE_OPTIONS.findIndex(item => item.value === entry.value.minRole)
         const catalog = asRecords(asRecord(store.tools?.skills).catalog)
         const skill = catalog.find(item => item.id === props.id)
-        count = asRecord(store.config?.skills).enabled !== false && skill?.enabled === true && asRecord(skill.validation).ok !== false && (boundary.value.enabled === false || (entry.value.enabled !== false && (typeof override === "boolean" ? override : index >= minimum))) ? 1 : 0
+        count = asRecord(store.config?.skills).enabled !== false && skill?.enabled === true && asRecord(skill.validation).ok !== false && (typeof override === "boolean" ? override : role.value === "master") ? 1 : 0
       }
       const allowed = total > 0 && count === total
       const partial = count > 0 && count < total
-      const selected = typeof override === "boolean" ? override : allowed
+      const firstTool = asRecord(rows.value[0]?.tool)
+      const common = asRecord(firstTool.common)
+      const provenance = asRecord(common.provenance)
+      const parentBucket = common.source === "custom" ? "customPackages" : common.source === "mcp" ? "mcpServers" : ""
+      const parentId = String(common.source === "custom" ? provenance.packageId || "" : provenance.serverName || "")
+      const inherited = asRecord(asRecord(asRecord(boundary.value[parentBucket])[parentId]).roles)[role.value]
+      const selected = typeof override === "boolean" ? override
+        : props.scope === "tool" && typeof inherited === "boolean" ? inherited : role.value === "master"
       const reasons = [...new Set(decisions.filter(item => !item.allowed).map(item => String(item.reason || "权限限制")))]
       const status = !total ? "尚未加载，暂不能验证" : partial ? `部分可用 ${count}/${total}` : allowed ? "可用" : "不可用"
       return { value: role.value, label: index === 0 ? "普通用户" : role.label, selected, partial,
@@ -78,13 +84,12 @@ export const CapabilityRoleButtons = {
         <button v-for="role in states" :key="role.value" type="button" class="role-dot-button" :data-role="role.value"
           :class="{ active: role.selected, 'role-partial': role.partial, 'role-limited': role.warning }"
           :aria-pressed="role.selected" :aria-label="role.label + '：' + role.title" :title="role.label + '：' + role.title"
-          :disabled="saving || !matrix || boundary.enabled !== true || (scope === 'tool' && !rows.length)" @click="change(role.value, !role.selected)">
+          :disabled="saving || !matrix || (scope === 'tool' && !rows.length)" @click="change(role.value, !role.selected)">
           <span class="role-dot" aria-hidden="true"></span>
         </button>
-        <button class="role-reset-button" type="button" aria-label="恢复默认权限" :disabled="saving || !matrix || boundary.enabled !== true || (scope === 'tool' && !rows.length)" title="清除此项单独设置，重新跟随角色默认权限" @click="change(null, null)"><span aria-hidden="true">↺</span></button>
+        <button class="role-reset-button" type="button" aria-label="恢复默认权限" :disabled="saving || !matrix || (scope === 'tool' && !rows.length)" title="清除此项单独设置，重新跟随角色默认权限" @click="change(null, null)"><span aria-hidden="true">↺</span></button>
       </div>
-      <small v-if="boundary.enabled !== true" class="muted">角色权限未启用，请在使用权限页开启。</small>
-      <small v-else-if="!matrix" class="muted">权限验证尚未完成</small>
+      <small v-if="!matrix" class="muted">权限验证尚未完成</small>
       <small v-else-if="scope === 'tool' && !rows.length" class="muted">工具尚未开放或加载，可先设置所属包或服务的角色权限。</small>
       <small v-if="feedback" class="muted" aria-live="polite">{{ feedback }}</small>
       <details v-if="details && rows.length" class="capability-role-details">

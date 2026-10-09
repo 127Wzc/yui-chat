@@ -1,3 +1,4 @@
+import { EmojiLikeTool, GroupPokeTool } from "./group-admin.js"
 import { hostRuntime } from "../../core/runtime/host-runtime.js"
 import type { UnknownRecord } from "../../core/message/types.js"
 
@@ -71,6 +72,8 @@ export class SendRpsTool {
 
 export function createEntertainmentTools(): unknown[] {
   return [
+    new EmojiLikeTool(),
+    new GroupPokeTool(),
     new SendDiceTool(),
     new SendRpsTool(),
   ]
