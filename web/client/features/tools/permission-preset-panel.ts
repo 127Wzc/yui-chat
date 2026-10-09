@@ -39,7 +39,7 @@ export const PermissionPresetPanel = {
   },
   template: `
     <Collapse title="内置工具推荐权限" hint="先预览，再按角色应用；不会自动启用工具">
-      <p class="muted small">出厂默认仅主人可用，禁言、群名片和头衔例外：开启后默认允许本人操作，明确禁止可关闭。每个角色独立配置；推荐方案不会自动应用，也不作为继承规则。保存权限立即生效，具体操作仍受功能开关、对象身份和平台权限限制。</p>
+      <p class="muted small">内置工具按下表作为默认角色范围：允许项默认开放，按需项默认不开放。禁言、群名片和头衔：开启后默认允许本人操作，明确禁止可关闭。每个角色独立配置；未单独设置时遵循下表；应用方案会写入明确的角色规则。保存权限立即生效，具体操作仍受功能开关、对象身份和平台权限限制。</p>
       <Field label="预览角色" type="select" :options="BOUNDARY_ROLE_OPTIONS" v-model="role" />
       <PagedList :rows="rows" :page-size="40" label="内置工具" empty="正在加载推荐方案" v-slot="{item}">
         <div class="permission-edit-item"><div><strong>{{item.title}} · {{item.choice}}</strong><small>{{item.group}} · {{item.name}}</small><p class="muted small">{{item.description}}</p></div></div>

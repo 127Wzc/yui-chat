@@ -1541,3 +1541,6 @@
   .permission-edit-item { grid-template-columns: minmax(0, 1fr); gap: 8px; }
   .permission-edit-layout .permission-role-switcher { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+.permission-inline-select { display: block; margin: 0 auto 6px; width: min(100%, 110px); min-height: 32px; cursor: pointer; }
+.permission-decision:has(.permission-inline-select) { cursor: default; text-align: center; }

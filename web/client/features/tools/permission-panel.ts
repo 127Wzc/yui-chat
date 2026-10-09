@@ -77,6 +77,16 @@ export const BoundaryAccessPanel = {
       draft.previewRole = role
       showDrawer.value = true
     }
+    async function closeRole() {
+      if (editingBlocked.value) {
+        if (!await confirmAction({ title: "丢弃角色权限修改？", message: "未保存的角色草稿将被丢弃，已保存权限不变。", confirmText: "丢弃并返回", cancelText: "继续编辑", tone: "warn", icon: "key" })) return
+        const next = normalizeBoundaryAccess(asRecord<PermissionConfigRoot>(store.config).tools?.boundaryAccess || {})
+        Object.assign(draft, { roles: next.roles, customPackages: next.customPackages, skillPackages: next.skillPackages, mcpServers: next.mcpServers })
+        savedDraft.value = draftContent()
+        setDirtyScope("tool-permissions", false)
+      }
+      showDrawer.value = false
+    }
     function selectEditingRole(role: string) {
       editingRole.value = role
       draft.previewRole = role
@@ -176,6 +186,7 @@ export const BoundaryAccessPanel = {
       toolFilters,
       roleLabel,
       openRole,
+      closeRole,
       selectEditingRole,
       previewAllowedRows,
       previewBlockedRows,
@@ -202,7 +213,7 @@ export const BoundaryAccessPanel = {
         :matrix-result="matrixResult"
         :matrix-rows="matrixRows"
         :developer-mode="store.developerMode"
-        @close="showDrawer = false"
+        @close="closeRole"
         @save="save"
         @select-role="selectEditingRole"
         @preview-role="previewAccess($event, 'drawer')"

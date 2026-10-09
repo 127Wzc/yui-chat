@@ -193,6 +193,36 @@ try {
   assert(configStore.get().tools.boundaryAccess.roles.user.allowedTools.includes('weather'))
   assert.equal(configStore.get().tools.boundaryAccess.mcpServers['fixture.with.dot'].roles.user,true)
   await configStore.update(value => {value.tools.boundaryAccess.roles.user = structuredClone(defaults.tools.boundaryAccess.roles.user)})
+  const publicConfig = structuredClone(defaults)
+  const publicNames = ['bilibili_media','image_media','message_send','tool_search']
+  for (const name of publicNames) {
+    const builtin = createBuiltinTools().find(t => t.name === name)
+    for (const role of ['user','groupAdmin','groupOwner','master']) assert.equal(explainToolPolicy(builtin,{config:publicConfig,e:previewToolEvent(role)}).allowed,true,`${name} defaults public for ${role}`)
+    publicConfig.tools.boundaryAccess.roles.user.deniedTools.push(name)
+    assert.equal(explainToolPolicy(builtin,{config:publicConfig,e:previewToolEvent('user')}).allowed,false,'explicit deny overrides public default')
+    publicConfig.tools.boundaryAccess.roles.user.deniedTools = []
+    publicConfig.tools.enabledTools = publicConfig.tools.enabledTools.filter(n => n !== name)
+    assert.equal(explainToolPolicy(builtin,{config:publicConfig,e:previewToolEvent('user')}).allowed,false,'disabled still denied')
+    publicConfig.tools.enabledTools.push(name)
+    await userRule({...personal,resourceType:'tool',resourceId:name,effect:'deny'})
+    assert.equal(explainToolPolicy(builtin,{config:publicConfig,e:previewToolEvent('user')}).allowed,false,'personal deny overrides public default')
+    await userRule({...personal,resourceType:'tool',resourceId:name,effect:'default'})
+  }
+  for (const name of ['knowledge_manage','memory_manage','schedule_task','music_play','weather','web_search','query_userinfo','render_image','send_dice','send_rps']) {
+    const cfg = structuredClone(defaults)
+    cfg.tools.enabledTools.push(name)
+    const builtin = createBuiltinTools().find(t=>t.name===name)
+    assert.equal(explainToolPolicy(builtin,{config:cfg,e:previewToolEvent('user')}).allowed,true,`${name} daily builtin default`)
+  }
+  for (const name of ['kick_out','message_manage','persona_punishment_release']) {
+    const cfg = structuredClone(defaults)
+    cfg.tools.enabledTools.push(name)
+    const builtin = createBuiltinTools().find(t=>t.name===name)
+    assert.equal(explainToolPolicy(builtin,{config:cfg,e:previewToolEvent('user')}).allowed,false)
+    assert.equal(explainToolPolicy(builtin,{config:cfg,e:previewToolEvent('groupAdmin')}).allowed,true)
+  }
+  const mediaMatrix = await buildToolAccessMatrix(createBuiltinTools().filter(t => publicNames.includes(t.name)))
+  assert(mediaMatrix.rows.every(row => row.tool.common.defaultRoleLabel === '默认所有角色'))
   const highConfig = structuredClone(defaults)
   highConfig.tools.enabledTools.push('render_url_screenshot')
   highConfig.response.render.url.enabled = true
@@ -230,7 +260,7 @@ try {
   await run('mute_user',{seconds:60},{...self,msg:'禁言我一分钟'})
   await assert.rejects(()=>run('set_title',{title:'他人',qq:'10002'}),/管理他人/)
   await assert.rejects(()=>run('set_title',{title:'跨群',groupId:'20002'}),/当前群/)
-  await assert.rejects(()=>run('set_title',{title:'他人',qq:'10001'},admin),/尚未开放/)
+  await run('set_title',{title:'管理员默认管理',qq:'10001'},admin)
   await assert.rejects(()=>run('mute_user',{seconds:0}),/解除禁言/)
   selfConfig.tools.boundaryAccess.roles.user.deniedTools.push('set_title')
   await assert.rejects(()=>run('set_title',{title:'禁止'}),/明确禁止/)
@@ -459,6 +489,16 @@ try {
   const { renderToString } = await import('vue/server-renderer')
   const { compile } = await import('vue')
   const { store } = await import('../output/runtime/web/client/app/store/store.js')
+  const { setDirtyScope, setTab, discardPendingNavigation } = await import('../output/runtime/web/client/app/store/store.js')
+  global.history = {replaceState(){}}
+  store.activeTab = 'tools'
+  setDirtyScope('tool-permissions',true)
+  setDirtyScope('permission-single',true)
+  assert.equal(setTab('overview'),false)
+  discardPendingNavigation()
+  assert.equal(store.activeTab,'overview','discard leaves page even with child form dirty scopes')
+  assert.equal(Object.keys(store.dirtyScopes).length,0)
+
   const { CapabilityRoleButtons } = await import('../output/runtime/web/client/features/tools/capability-role-buttons.js')
   store.config = { tools: { boundaryAccess: { enabled: true, roles: {}, customPackages: { fixture: { roles: { user: true } } } } } }
   const matrix = ref({ rows: [
@@ -484,8 +524,39 @@ try {
   const overviewHtml = await renderToString(overviewView)
   assert(overviewHtml.includes('权限总览') && overviewHtml.includes('权限查询') && overviewHtml.includes('one') && overviewHtml.includes('two'))
   assert(overviewHtml.includes('工具需要主人') && overviewHtml.includes('只看角色差异'))
+  assert(overviewHtml.includes('permission-inline-select') && !overviewHtml.includes('保存此项'), 'matrix edits inline without a save drawer')
   assert(overviewHtml.includes('permission-role-column') && overviewHtml.includes('aria-pressed="false"'))
   assert(!overviewHtml.includes('type="checkbox"'), 'difference filtering uses a compact button')
+  // Exercise inline selection against success/failure responses without opening a confirmation dialog.
+  let inline
+  const editProps = {editingBlocked:false}
+  const inlineSaving = ref(false)
+  const inlineView = createSSRApp({setup(){inline = PermissionOverview.setup(editProps); return ()=>null}})
+  inlineView.provide('capabilityAccessMatrix',matrix)
+  inlineView.provide('capabilityAccessSaving',inlineSaving)
+  inlineView.provide('reloadCapabilityAccess',async()=>{})
+  await renderToString(inlineView)
+  const originalFetch = global.fetch
+  try {
+    let posted
+    global.fetch = async (_url, options) => {
+      posted = JSON.parse(options.body)
+      return new Response(JSON.stringify({ok:true,config:{tools:{boundaryAccess:{roles:{user:{allowedTools:['one'],deniedTools:[]}}}}}}),{status:200})
+    }
+    const selection = {value:'allow'}
+    await inline.changeItem(matrix.value.rows[0],'user',{target:selection})
+    assert.deepEqual(posted,{scope:'tool',id:'one',role:'user',allowed:true})
+    assert.equal(inline.savedOverride('one','user'),'allow')
+    global.fetch = async()=>{throw new Error('fixture save failure')}
+    selection.value = 'deny'
+    await inline.changeItem(matrix.value.rows[0],'user',{target:selection})
+    assert.equal(selection.value,'allow','failed immediate save restores committed choice')
+    assert.equal(inlineSaving.value,false)
+    editProps.editingBlocked = true
+    selection.value = 'default'
+    await inline.changeItem(matrix.value.rows[0],'user',{target:selection})
+    assert.equal(selection.value,'allow','dirty role draft blocks inline edits')
+  } finally {global.fetch = originalFetch}
   const { CapabilityFilterBar } = await import('../output/runtime/web/client/features/tools/capability-filter-bar.js')
   const filterView = createSSRApp({ render: () => h(CapabilityFilterBar, { query: '天气', status: 'disabled', category: 'custom', categoryOptions: [['all', '全部类型'], ['custom', 'Custom']], count: 1, total: 12 }, { extra: () => h('select', { 'aria-label': '分类' }), summary: () => h('span', '词元统计') }) })
   filterView.component('Icon', { render: () => null })

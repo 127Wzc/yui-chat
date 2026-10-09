@@ -1001,7 +1001,7 @@ async function checkToolPolicy() {
   assert(inferredGroupTools.some(tool => tool.name === "set_title"), "group tools should remain visible when the adapter exposes message_type/group_id without isGroup")
   assert(!inferredPrivateTools.some(tool => tool.name === "set_title"), "group tools must stay hidden in an explicit private temporary session")
   assert(selectPromptTools(inferredGroupTools, "玉玉修改我的头衔为cccc", { enabled: true, maxTools: 1, maxDefinitionTokens: 1200 })[0]?.name === "set_title", "title intent should select set_title after shared group scope recovery")
-  assert(!privateTools.some(tool => tool.name === "block_user"), "private users must not see block_user when permission groups are enabled")
+  assert(privateTools.some(tool => tool.name === "block_user"), "private users may discover block_user for explicit self requests under builtin defaults")
   assert(!privateTools.some(tool => tool.name === "render_html_screenshot"), "the retired HTML screenshot tool must not be registered")
   assert(!privateTools.some(tool => tool.name === "render_url_screenshot"), "private users must not see disabled URL screenshot tool")
   let titleCall

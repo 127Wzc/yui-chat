@@ -5,7 +5,7 @@ interface Recommendation { group: string; description: string; roles: Record<Bou
 const all: Record<BoundaryRole, Choice> = { user: "allow", groupAdmin: "allow", groupOwner: "allow", master: "allow" }
 const optional: Record<BoundaryRole, Choice> = { user: "optional", groupAdmin: "optional", groupOwner: "optional", master: "allow" }
 const management: Record<BoundaryRole, Choice> = { user: "deny", groupAdmin: "allow", groupOwner: "allow", master: "allow" }
-/** 推荐方案是显式操作，不参与运行时继承，也不自动启用工具。 */
+/** 内置工具的默认角色范围，也是面板推荐方案的唯一来源；不自动启用工具。 */
 export const builtinRoleRecommendations: Record<string, Recommendation> = {
   tool_search: { group: "基础能力", description: "只发现已有权限的工具。", roles: all },
   knowledge_manage: { group: "基础能力", description: "只查询、推荐已授权知识库内容。", roles: all },
@@ -38,6 +38,18 @@ export const builtinRoleRecommendations: Record<string, Recommendation> = {
   persona_punish: { group: "人物行为", description: "授权表示允许人物处罚当前普通发言者，不赋予用户处罚他人的能力。", roles: { user: "optional", groupAdmin: "protected", groupOwner: "protected", master: "protected" } },
   persona_punishment_release: { group: "人物行为", description: "管理员与群主仅本群，主人可按记录解除。", roles: management },
   dispatch_subagent: { group: "高级能力", description: "保留功能开关、并发、深度与 token 限额。", roles: optional },
+}
+
+export const builtinPublicTools = new Set(Object.entries(builtinRoleRecommendations)
+  .filter(([, item]) => boundaryRoles.every(role => item.roles[role] === "allow"))
+  .map(([name]) => name))
+
+export function builtinDefaultAllowed(name: string, role: BoundaryRole): boolean | undefined {
+  const item = Object.hasOwn(builtinRoleRecommendations, name) ? builtinRoleRecommendations[name] : undefined
+  if (!item) return undefined
+  // 三项本人自助在执行策略中按参数收窄，不能默认授予普通用户管理操作。
+  if (role === "user" && ["mute_user", "edit_card", "set_title"].includes(name)) return false
+  return item.roles[role] === "allow"
 }
 
 /** 只覆盖已展示的内置项，保留扩展工具、包授权和用户例外。 */

@@ -137,7 +137,7 @@ export const PermissionRoleDrawer = {
           <button v-for="tab in [['exceptions','工具角色授权'],['packages','扩展与 MCP']]" :key="tab[0]" :class="{ active: section === tab[0] }" :aria-pressed="section === tab[0]" @click="section = tab[0]">{{ tab[1] }}</button>
         </div>
         <template v-if="section === 'exceptions'">
-          <p class="muted small">未设置时仅主人可用；风险仅作标签，授权不会赋予群管理身份。</p>
+          <p class="muted small">内置工具未设置时按默认角色表开放，扩展继承包或服务；风险仅作标签，授权不会赋予群管理身份。</p>
           <p class="muted small">禁言、群名片、头衔未设置规则时默认允许本人操作；明确禁止可关闭本人操作。单独允许 {{ profile(editingRole).allowedTools.length }} · 单独禁止 {{ profile(editingRole).deniedTools.length }}。单独允许仍受能力开关和工具硬性要求限制。</p>
           <div class="filter-search"><Icon name="search" :size="14" /><input :value="toolFilters[editingRole]" aria-label="搜索单项工具" placeholder="搜索名称、ID、说明或来源" @input="toolFilters[editingRole] = $event.target.value" /></div>
           <PagedList :rows="toolFilterRows(editingRole)" :page-size="8" label="工具" empty="没有匹配的工具。" list-class="permission-edit-items" v-slot="{ item: tool }">

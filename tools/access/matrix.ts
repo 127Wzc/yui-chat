@@ -1,3 +1,4 @@
+import { builtinPublicTools, builtinRoleRecommendations } from "./role-presets.js"
 import { configStore } from "../../config/store.js"
 import { explainToolPolicy, type ToolAccessDecision } from "./policy.js"
 import { boundaryRoles, type BoundaryRole } from "./roles.js"
@@ -116,6 +117,10 @@ export async function buildToolAccessMatrix(tools: unknown[] = [], options: Acce
       enabled: isToolEnabledByConfig(config, tool),
       common: {
         ...common,
+        defaultRoleLabel: common.source !== "builtin" ? "继承包／服务"
+          : ["mute_user", "edit_card", "set_title"].includes(text(record(tool).name)) ? "默认本人／管理角色"
+          : builtinPublicTools.has(text(record(tool).name)) ? "默认所有角色"
+          : Object.hasOwn(builtinRoleRecommendations, text(record(tool).name)) ? "默认按角色" : "默认仅主人",
         tags: stringList(common.tags),
         policy: { ...record(common.policy) },
         provenance: { ...toolProvenance(tool) },

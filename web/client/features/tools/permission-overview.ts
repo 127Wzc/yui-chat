@@ -1,5 +1,5 @@
-import { computed, inject, onBeforeUnmount, reactive, ref, watch, type Ref } from "vue"
-import { store, request, toast, confirmAction, setDirtyScope } from "../../app/store/store.js"
+import { computed, inject, reactive, ref, watch, type Ref } from "vue"
+import { store, request, toast } from "../../app/store/store.js"
 import { asRecord, asRecords, errorMessage } from "../../shared/data.js"
 import { CapabilityFilterBar } from "./capability-filter-bar.js"
 import { CapabilityRisk } from "./capability-list.js"
@@ -28,18 +28,11 @@ export const PermissionOverview = {
     const matrix = computed(() => mode.value === "overview" ? saved.value : stale.value ? null : queried.value)
     const roles = computed(() => mode.value === "query" ? BOUNDARY_ROLE_OPTIONS.filter(r => r.value === context.role) : BOUNDARY_ROLE_OPTIONS)
     const boundary = computed(() => asRecord(asRecord(store.config?.tools).boundaryAccess))
-    const selected = ref<{ name: string; role: string } | null>(null)
-    const override = ref("default")
-    const feedback = ref("")
     function savedOverride(name: string, role: string) {
       const profile = asRecord(asRecord(boundary.value.roles)[role])
       return Array.isArray(profile.deniedTools) && profile.deniedTools.includes(name) ? "deny"
         : Array.isArray(profile.allowedTools) && profile.allowedTools.includes(name) ? "allow" : "default"
     }
-    watch(() => selected.value ? `${selected.value.name}:${selected.value.role}:${override.value}:${savedOverride(selected.value.name, selected.value.role)}` : "", () => {
-      setDirtyScope("permission-single", !!selected.value && override.value !== savedOverride(selected.value.name, selected.value.role))
-    })
-    onBeforeUnmount(() => setDirtyScope("permission-single", false))
     const rows = computed(() => asRecords<MatrixRow>(matrix.value?.rows).filter(row => {
       const decisions = roles.value.map(role => row.decisions?.[role.value])
       const query = filter.query.trim().toLowerCase()
@@ -48,9 +41,6 @@ export const PermissionOverview = {
         && (!filter.differences || new Set(BOUNDARY_ROLE_OPTIONS.map(role => row.decisions?.[role.value]?.allowed)).size > 1)
         && (filter.status === "all" || (filter.status === "blocked" ? decisions.some(d => !d?.allowed) : roles.value.some(r => savedOverride(row.tool.name, r.value) !== "default")))
     }))
-    const selectedRow = computed(() => asRecords<MatrixRow>(matrix.value?.rows).find(r => r.tool.name === selected.value?.name))
-    const selectedDecision = computed(() => selected.value ? selectedRow.value?.decisions?.[selected.value.role] : null)
-    const selectedLabel = computed(() => BOUNDARY_ROLE_OPTIONS.find(r => r.value === selected.value?.role)?.label || "")
     async function queryAccess() {
       const token = ++generation
       const key = contextKey()
@@ -63,35 +53,42 @@ export const PermissionOverview = {
       finally { if (token === generation) busy.value = false }
     }
     watch([() => store.config, () => saved.value], () => { generation++; busy.value = false; queried.value = null; submitted.value = "" })
-    function open(row: MatrixRow, role: string) {
-      selected.value = { name: row.tool.name, role }
-      override.value = savedOverride(row.tool.name, role)
-      feedback.value = ""
-    }
-    async function saveItem() {
-      const target = selected.value
-      if (!target || saving.value || props.editingBlocked || !selectedRow.value) return
-      const allowed = override.value === "default" ? null : override.value === "allow"
-      const accepted = await confirmAction({ title: "保存单项角色权限？", message: `仅调整 ${selectedLabel.value} 对 ${toolDisplayName(selectedRow.value.tool)} 的权限：${override.value === 'default' ? '不单独设置' : allowed ? '单独允许' : '单独禁止'}。此设置作用于该角色的所有用户，不是仅对查询中的 QQ 或群号授权。工具硬性要求仍会检查。`, confirmText: "保存此项", tone: "warn", icon: "key" })
-      if (!accepted) return
+    const feedback = ref("")
+    const pending = ref("")
+    async function changeItem(row: MatrixRow, role: string, event: Event) {
+      const input = event.target as HTMLSelectElement
+      const value = input.value
+      if (saving.value || props.editingBlocked || !["default", "allow", "deny"].includes(value)) {
+        input.value = savedOverride(row.tool.name, role)
+        return
+      }
+      if (value === savedOverride(row.tool.name, role)) return
       saving.value = true
+      pending.value = `${row.tool.name}:${role}`
+      feedback.value = "正在保存…"
+      let committed = false
       try {
-        const result = await request("/api/tools/access-role", { method: "POST", body: JSON.stringify({ scope: "tool", id: target.name, role: target.role, allowed }) })
+        const result = await request("/api/tools/access-role", { method: "POST", body: JSON.stringify({ scope: "tool", id: row.tool.name, role, allowed: value === "default" ? null : value === "allow" }) })
         store.config = asRecord(result.config)
+        committed = true
+        feedback.value = `${toolDisplayName(row.tool)} · ${BOUNDARY_ROLE_OPTIONS.find(r => r.value === role)?.label}：已${value === "default" ? "恢复默认" : value === "allow" ? "允许" : "禁止"}`
         await reload()
-        if (mode.value === "query") await queryAccess()
-        feedback.value = "已保存；下方为重新验证后的实际结果。"
-        toast("单项权限已保存")
-      } catch (err) { feedback.value = errorMessage(err); toast(feedback.value) }
-      finally { saving.value = false }
+      } catch (err) {
+        feedback.value = committed ? `权限已保存，结果刷新失败：${errorMessage(err)}` : `保存失败，已恢复原设置：${errorMessage(err)}`
+        toast(feedback.value)
+      } finally {
+        input.value = savedOverride(row.tool.name, role)
+        pending.value = ""
+        saving.value = false
+      }
     }
     function reset() { filter.query = ""; filter.status = "all"; filter.source = "all"; filter.differences = false }
-    return { mode, filter, context, matrix, rows, roles, stale, busy, error, queryAccess, reset, savedOverride, open, selected, selectedRow, selectedDecision, selectedLabel, override, saveItem, feedback, saving, boundary, toolDisplayName, toolSource, sourceLabel, BOUNDARY_ROLE_OPTIONS }
+    return { mode, filter, context, matrix, rows, roles, stale, busy, error, queryAccess, reset, savedOverride, changeItem, pending, feedback, saving, boundary, toolDisplayName, toolSource, sourceLabel, BOUNDARY_ROLE_OPTIONS }
   },
   template: `
     <section class="permission-overview">
       <div class="permission-overview-toolbar">
-        <div class="segmented" aria-label="权限查看方式"><button :class="{ active: mode === 'overview' }" @click="mode = 'overview'; selected = null">权限总览</button><button :class="{ active: mode === 'query' }" @click="mode = 'query'; selected = null">权限查询</button></div>
+        <div class="segmented" aria-label="权限查看方式"><button :class="{ active: mode === 'overview' }" @click="mode = 'overview'">权限总览</button><button :class="{ active: mode === 'query' }" @click="mode = 'query'">权限查询</button></div>
         <div class="permission-overview-options"><span class="permission-boundary-status active">角色规则 + 用户例外</span><button class="btn small outline permission-difference-toggle" :class="{ active: filter.differences }" :aria-pressed="filter.differences" @click="filter.differences = !filter.differences"><Icon name="sliders" :size="13" />只看角色差异</button></div>
       </div>
       <div v-if="mode === 'query'" class="permission-context-fields">
@@ -109,27 +106,21 @@ export const PermissionOverview = {
         <PagedList :rows="rows" :page-size="10" label="能力" empty="没有匹配的权限结果。" list-class="permission-comparison-items" v-slot="{ item }">
           <div class="permission-comparison-row" :class="{ 'single-role': roles.length === 1 }">
             <div class="permission-comparison-copy"><strong>{{ toolDisplayName(item.tool) }}</strong><small>{{ sourceLabel(toolSource(item.tool)) }} · {{ item.tool.name }}</small><CapabilityRisk :tool="item.tool" /><span v-if="!item.tool.enabled" class="badge">未启用</span></div>
-            <button v-for="role in roles" :key="role.value" class="permission-decision" :class="{ allowed: item.decisions?.[role.value]?.allowed }" :title="String(item.decisions?.[role.value]?.reason || '符合当前规则')" @click="open(item, role.value)">
+            <div v-for="role in roles" :key="role.value" class="permission-decision" :class="{ allowed: item.decisions?.[role.value]?.allowed }" :title="String(item.decisions?.[role.value]?.reason || '符合当前规则')">
+              <select v-if="mode === 'overview'" class="permission-inline-select" :aria-label="toolDisplayName(item.tool) + ' · ' + role.label + '权限'" :value="savedOverride(item.tool.name, role.value)" :disabled="saving || editingBlocked" @change="changeItem(item, role.value, $event)">
+                <option value="default">默认</option><option value="allow">允许</option><option value="deny">禁止</option>
+              </select>
+              <small v-if="pending === item.tool.name + ':' + role.value">保存中…</small>
               <span class="permission-mobile-role">{{ role.label }}</span><span>{{ item.decisions?.[role.value]?.allowed ? '✓ 可用' : '○ 不可用' }}{{ savedOverride(item.tool.name, role.value) !== 'default' ? ' ·' : '' }}</span>
-              <small>{{ savedOverride(item.tool.name, role.value) === 'allow' ? '角色允许' : savedOverride(item.tool.name, role.value) === 'deny' ? '角色禁止' : ['mute_user','edit_card','set_title'].includes(item.tool.name) ? '默认仅本人' : toolSource(item.tool) === 'builtin' ? '默认仅主人' : '继承包／服务' }}</small>
+              <small>{{ savedOverride(item.tool.name, role.value) === 'allow' ? '角色允许' : savedOverride(item.tool.name, role.value) === 'deny' ? '角色禁止' : item.tool.common?.defaultRoleLabel || '未单独设置' }}</small>
               <small v-if="mode === 'query'">{{ item.decisions?.[role.value]?.reason }}</small>
-            </button>
+            </div>
           </div>
         </PagedList>
       </template>
-      <p class="muted tiny">点击状态调整单项权限，点击角色列头配置默认范围。· 为单独设置。总览按示例群聊验证；具体对象请用权限查询。Skill 范围在角色配置中管理。</p>
-      <SideDrawer :open="!!selected" title="单项权限" :subtitle="selected ? selected.name + ' · ' + selectedLabel : ''" width="520px" @close="selected = null">
-        <template v-if="selected">
-          <div class="item subtle"><strong>实际结果：{{ !selectedRow ? '等待重新查询' : selectedDecision?.allowed ? '可用' : '不可用' }}</strong><p class="muted small">{{ selectedDecision?.reason || (selectedRow ? '符合当前规则' : '查询条件或配置已变化，请重新查询。') }}</p></div>
-          <p class="muted small">不单独设置：禁言、群名片和头衔默认允许本人操作；其他内置工具默认仅主人可用；扩展工具继承所属包或服务的角色设置，包或服务未设置时也仅主人可用。各角色独立，不继承其他角色。</p>
-          <p class="muted small">只调整此角色对此工具的权限。单独允许仍受能力启停、全局规则和工具硬性要求限制。</p>
-          <Field label="单项规则" type="select" :options="[{value:'default',label:'不单独设置'},{value:'allow',label:'允许此角色使用'},{value:'deny',label:'禁止此角色使用'}]" v-model="override" />
-          <p v-if="editingBlocked" class="danger small">角色配置有未保存更改，请先保存后再编辑单项，避免覆盖。</p>
-          <p class="muted small">这里修改的是角色规则，适用于该角色的所有用户；查询中的 QQ 和群号仅用于验证。</p>
-          <p aria-live="polite" class="muted small">{{ feedback }}</p>
-        </template>
-        <template #actions><button class="btn outline" @click="selected = null">关闭</button><button class="btn primary" :disabled="saving || editingBlocked || !selectedRow" @click="saveItem">{{ saving ? '保存中…' : '保存此项' }}</button></template>
-      </SideDrawer>
+      <p class="muted tiny">总览中选择默认／允许／禁止即保存，作用于该角色的所有用户；默认表示清除单项覆盖。实际可用性仍受启停、个人规则和操作限制影响，悬停状态查看原因。查询仅用于验证；Skill 在角色配置中管理。</p>
+      <p v-if="editingBlocked" class="danger small">角色草稿尚未保存，请先保存或丢弃，再快捷修改。</p>
+      <p role="status" aria-live="polite" class="muted small">{{ feedback }}</p>
     </section>
   `,
 }

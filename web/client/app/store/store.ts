@@ -304,7 +304,8 @@ export function cancelPendingNavigation() {
 export function discardPendingNavigation() {
   const target = store.pendingTab
   if (!target) return
-  setDirtyScope(`tab:${store.activeTab}`, false)
+  // 当前页面卸载时丢弃所有局部表单；只清 tab 标记会被子表单再次拦截。
+  store.dirtyScopes = {}
   store.pendingTab = ""
   setTab(target)
 }

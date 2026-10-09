@@ -78,7 +78,7 @@ function boundaryDecision(config: unknown, tool: unknown, context: ToolAccessCon
   const provenance = toolProvenance(tool)
   const bucket = common.source === "custom" ? "customPackages" : common.source === "mcp" ? "mcpServers" : ""
   const parentId = text(bucket === "customPackages" ? provenance.packageId : provenance.serverName)
-  const result = explainResourceAccess(config, context.e, "tool", toolName(tool), bucket, parentId, context.ignoreUserOverrides)
+  const result = explainResourceAccess(config, context.e, "tool", toolName(tool), bucket, parentId, context.ignoreUserOverrides, common.source === "builtin")
   return { ...result, groups: [] }
 }
 
