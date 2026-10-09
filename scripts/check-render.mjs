@@ -195,6 +195,7 @@ try {
   if (realBrowser) assert(captures.at(-1).dom.katex > 0)
   await call({ format: 'mindmap', data: { content: '# 根节点\n## 子节点' } })
   await call({ format: 'text', data: { title: '文本', content: '保留卡片' } }, { ...master, config: { ...config, response: { ...config.response, render: { ...config.response.render, engine: 'svg' } } } })
+  await checkAutomaticReplyRendering(config)
   for (const capture of captures) {
     assert(capture.closed && capture.interception)
     await assert.rejects(() => fs.access(capture.file), /ENOENT/)
@@ -214,6 +215,73 @@ try {
 }
 
 process.exit(0)
+
+async function checkAutomaticReplyRendering(config) {
+  const { buildReplyPayload } = await import('../output/runtime/core/chat/response-pipeline.js')
+  const { sendChatOutput } = await import('../output/runtime/core/chat/output-service.js')
+  const { userSettingsStore } = await import('../output/runtime/user/settings.js')
+  const answer = '# 回复标题\n\n**回复重点**与[链接](https://example.com/answer)\n\n$ x^2 $'
+  const e = {
+    isGroup: true, user_id: 'private-user-id', group_id: 'private-group-id',
+    group_name: 'private-group-name', sender: { nickname: 'private-user-name' },
+  }
+  const result = {
+    text: answer, channel: 'private-model-channel', adapter: 'private-model-adapter',
+    prompt: 'private-user-prompt', toolRounds: 2,
+    steps: [{ stepId: 'private-model-step', channel: 'private-step-channel', status: 'ok' }],
+    media: { diagnostics: ['private-media-diagnostic'], quote: { text: 'private-quoted-text' } },
+  }
+  const privateValues = [e.user_id, e.group_id, e.group_name, e.sender.nickname, result.channel, result.adapter,
+    result.prompt, result.steps[0].stepId, result.steps[0].channel, result.media.diagnostics[0], result.media.quote.text]
+  const checkContent = () => {
+    const capture = captures.at(-1)
+    const data = capture.html.match(/<script type="application\/json" id="markdown-data">([\s\S]*?)<\/script>/)?.[1]
+    assert.equal(JSON.parse(data), answer, 'automatic images render only the final reply as Markdown')
+    for (const value of privateValues) assert(!capture.html.includes(value), `automatic reply image leaks ${value}`)
+    if (realBrowser) {
+      assert.match(capture.dom.text, /回复标题/)
+      assert(!capture.dom.text.includes('**回复重点**'), 'automatic images parse Markdown emphasis')
+      assert(capture.dom.katex > 0, 'automatic images render Markdown formulas')
+    }
+  }
+  const forced = await buildReplyPayload(answer, config, { forceImage: true, e, result })
+  assert(forced.asImage && Buffer.isBuffer(forced.image), 'picture mode uses the reply renderer')
+  checkContent()
+  const automaticConfig = structuredClone(config)
+  automaticConfig.response.autoUsePicture = true
+  automaticConfig.response.autoUsePictureThreshold = answer.length
+  const automatic = await buildReplyPayload(answer, automaticConfig, { e, result })
+  assert(automatic.asImage, 'long replies use the same Markdown renderer')
+  checkContent()
+  const sent = []
+  const deliveryEvent = { ...e, reply: async payload => { sent.push(payload); return true } }
+  await userSettingsStore.set(e, { mode: 'picture' })
+  const deliveryConfig = structuredClone(config)
+  deliveryConfig.response.messageFilters.enabled = false
+  for (const source of ['', 'firstPerson']) {
+    await sendChatOutput(deliveryEvent, result, deliveryConfig, { source, armContinuation: false })
+    checkContent()
+  }
+  assert.equal(sent.length, 2, 'ordinary and first-person picture replies each send once')
+  const before = captures.length
+  const disabledConfig = structuredClone(config)
+  disabledConfig.response.render.enabled = false
+  assert.equal((await buildReplyPayload(answer, disabledConfig, { forceImage: true })).asImage, false)
+  assert.equal((await buildReplyPayload('<EMPTY>', config, { forceImage: true })).empty, true)
+  assert.equal((await buildReplyPayload('[CQ:at,qq=123456] 提醒', config, { forceImage: true })).asImage, false)
+  const svgConfig = structuredClone(config)
+  svgConfig.response.render.system.engine = 'svg'
+  const svg = await buildReplyPayload(answer, svgConfig, { forceImage: true, e, result })
+  assert.equal(svg.image.subarray(0, 8).toString('hex'), '89504e470d0a1a0a', 'system SVG strategy still renders a PNG')
+  assert.equal(captures.length, before, 'disabled, empty, mention and system SVG replies do not open a browser')
+  failBrowser = true
+  try {
+    const fallback = await buildReplyPayload(answer, config, { forceImage: true, e, result })
+    assert.equal(fallback.image.subarray(0, 8).toString('hex'), '89504e470d0a1a0a', 'automatic replies retain HTML-to-SVG fallback')
+  } finally {
+    failBrowser = false
+  }
+}
 
 async function checkBrowserRecovery(render, config) {
   const previousLogger = globalThis.logger

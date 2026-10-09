@@ -629,7 +629,7 @@ export const PersonaTab = {
                   </section>
 
                   <section v-else-if="replyMenu === 'picture'" class="form-section persona-direct-section">
-                    <div class="section-heading-row"><div><div class="section-title"><Icon name="eye" :size="14" />图片输出</div><p class="muted small">图片卡片和长文本自动转图策略。</p></div><span v-if="draft.responseMode === 'picture'" class="badge on">默认</span></div>
+                    <div class="section-heading-row"><div><div class="section-title"><Icon name="eye" :size="14" />图片输出</div><p class="muted small">图片模式和自动转图只展示 AI 回复，支持 Markdown 排版。</p></div><span v-if="draft.responseMode === 'picture'" class="badge on">默认</span></div>
                     <div class="settings-toggle-grid">
                       <div class="settings-toggle-item"><div><strong>长文本自动转图</strong><small>文本超过阈值时改用图片交付。</small></div><Switch :model-value="draft.pictureAutoEnabled" @update:model-value="draft.pictureAutoEnabled = $event" /></div>
                     </div>

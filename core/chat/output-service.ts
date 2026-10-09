@@ -349,9 +349,7 @@ export async function sendChatOutput(event: unknown, result: unknown, config: un
   const rawText = omitPrefix ? displayText : `[${text(resultValue.channel)}] ${displayText}`
   const payload = await buildReplyPayload(rawText, rootConfig, {
     forceImage: settings.mode === "picture",
-    e: event,
-    result: resultValue,
-    source,
+    imageText: displayText,
   })
   markReplied(event)
   if (payload.empty) return true

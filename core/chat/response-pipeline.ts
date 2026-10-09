@@ -1,5 +1,5 @@
 import { loadPersonaPunishments } from "./persona-punishments.js"
-import { renderChatCard, renderTextCard, withRenderScope } from "../rendering/render-service.js"
+import { renderImageByConfiguredEngine, withRenderScope } from "../rendering/render-service.js"
 import { checkAccess } from "./access-control.js"
 import { hostRuntime } from "../runtime/host-runtime.js"
 import { hasCQAtCode, stripUnsupportedCQCodes } from "../message/cq-code.js"
@@ -126,36 +126,9 @@ export async function sendConfirm(event: unknown, config: unknown): Promise<void
   }
 }
 
-function eventSender(event: unknown): { userId: string; name: string } {
-  const e = record(event)
-  const sender = record(e.sender)
-  return { userId: text(e.user_id || sender.user_id || "unknown"), name: text(sender.card || sender.nickname || sender.user_id || e.user_id || "User") }
-}
-
-function eventScope(event: unknown): { type: "group" | "private"; groupId: string; groupName: string } {
-  const e = record(event)
-  const group = record(e.group)
-  const isGroup = isGroupEvent(e)
-  return { type: isGroup ? "group" : "private", groupId: isGroup ? groupIdFromEvent(e) : "", groupName: text(e.group_name || group.name) }
-}
-
-async function textToImage(value: string, config: unknown, options: UnknownRecord = {}): Promise<unknown> {
-  const root = record(withRenderScope(config, "system"))
-  const persona = record(root.persona)
-  const event = options.e
-  try {
-    const result = await renderChatCard({
-      prompt: text(record(options.result).prompt || options.prompt), answer: value, sender: eventSender(event), scope: eventScope(event),
-      quote: record(options.result).media && record(record(options.result).media).quote,
-      media: record(options.result).media,
-      metadata: { channel: record(options.result).channel, adapter: record(options.result).adapter, toolRounds: record(options.result).toolRounds, source: options.source || record(options.result).source },
-      steps: record(options.result).steps,
-    }, root)
-    return record(result).buffer
-  } catch (error) {
-    hostRuntime.logger?.warn?.("[yui-chat] 富聊天卡片渲染失败，回退文本卡片", error)
-  }
-  const result = await renderTextCard({ title: text(record(persona).assistantLabel || "Yui Chat"), subtitle: "自动转图回复", content: value, footer: "Yui Chat · Auto Render" }, root)
+/** 自动转图只接收回复正文，不把会话信息传给图片模板。 */
+async function textToImage(value: string, config: unknown): Promise<unknown> {
+  const result = await renderImageByConfiguredEngine("markdown", { content: value }, withRenderScope(config, "system"))
   return record(result).buffer
 }
 
@@ -173,7 +146,9 @@ export async function buildReplyPayload(value: unknown, config: unknown, options
   const hasCQAt = hasCQAtCode(output)
   const render = record(response.render)
   if (!hasCQAt && (options.forceImage === true || (response.autoUsePicture && output.length >= Number(response.autoUsePictureThreshold || 1200))) && render.enabled !== false) {
-    return { image: await textToImage(output, root, options), text: output, asImage: true }
+    // 投递层提供经过输出过滤和引用处理的正文，文本仍保留原有渠道前缀。
+    const imageText = normalizeResponseText(response.removeCQCode ? stripUnsupportedCQCodes(options.imageText ?? output) : options.imageText ?? output)
+    return { image: await textToImage(imageText, root), text: output, asImage: true }
   }
   const max = Number(response.maxTextChunkLength) || 1800
   if (!hasCQAt && output.length > max) return { chunks: output.match(new RegExp(`[\\s\\S]{1,${max}}`, "g")) || [output], text: output, asImage: false }
