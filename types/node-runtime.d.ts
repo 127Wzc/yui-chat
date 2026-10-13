@@ -38,12 +38,14 @@ declare module "node:fs/promises" {
 
   const fs: {
     open(path: string, flags: string, mode?: number): Promise<FileHandle>
-    mkdir(path: string, options?: { recursive?: boolean }): Promise<void>
+    mkdir(path: string, options?: { recursive?: boolean; mode?: number }): Promise<void>
     stat(path: string): Promise<FileStat>
+    lstat(path: string): Promise<FileStat>
+    chmod(path: string, mode: number): Promise<void>
     access(path: string): Promise<void>
     readFile(path: string, encoding: "utf8"): Promise<string>
     readFile(path: string): Promise<Uint8Array>
-    writeFile(path: string, contents: string | Uint8Array, encoding?: "utf8"): Promise<void>
+    writeFile(path: string, contents: string | Uint8Array, encoding?: "utf8" | { flag?: string; mode?: number }): Promise<void>
     appendFile(path: string, contents: string | Uint8Array, options?: { encoding?: "utf8"; mode?: number }): Promise<void>
     readdir(path: string, options: { withFileTypes: true }): Promise<DirectoryEntry[]>
     realpath(path: string): Promise<string>
@@ -57,7 +59,7 @@ declare module "node:fs/promises" {
 
 declare module "node:crypto" {
   interface Hash {
-    update(value: string): Hash
+    update(value: string | Uint8Array): Hash
     digest(encoding: "hex"): string
   }
 
@@ -65,7 +67,9 @@ declare module "node:crypto" {
     toString(encoding: "hex" | "base64url"): string
   }
 
-  export function randomBytes(size: number): RandomBytes
+  export function randomBytes(size: number): Buffer
+  export function createCipheriv(algorithm: string, key: Uint8Array, nonce: Uint8Array): { setAAD(value: Uint8Array): void; update(value: string, encoding: string): Buffer; final(): Buffer; getAuthTag(): Buffer }
+  export function createDecipheriv(algorithm: string, key: Uint8Array, nonce: Uint8Array): { setAAD(value: Uint8Array): void; setAuthTag(value: Uint8Array): void; update(value: Uint8Array): Buffer; final(): Buffer }
   export function randomUUID(): string
   export function createHash(algorithm: string): Hash
 }
@@ -127,6 +131,8 @@ declare module "node:http" {
   interface IncomingMessage {
     headers: Record<string, string | string[] | undefined>
     statusCode?: number
+    pause(): void
+    once(event: "close", listener: () => void): this
     on(event: "data", listener: (chunk: Uint8Array) => void): this
     once(event: "aborted" | "end", listener: () => void): this
     once(event: "error", listener: (error: unknown) => void): this
@@ -135,15 +141,21 @@ declare module "node:http" {
   }
 
   interface ClientRequest {
+    write(body: string | Uint8Array): void
+    destroy(error?: unknown): void
+    setTimeout(ms: number, listener: () => void): this
     once(event: "error", listener: (error: unknown) => void): this
     end(): void
   }
 
   interface RequestOptions {
+    ca?: string
+    rejectUnauthorized?: boolean
+    agent?: boolean
     method?: string
     headers?: Record<string, string>
     signal?: AbortSignal
-    lookup?: (hostname: string, options: unknown, callback: (...args: unknown[]) => void) => void
+    lookup?: (hostname: string, options: any, callback: (...args: unknown[]) => void) => void
     allowPrivateHosts?: boolean
     maxBytes?: number
   }
@@ -157,6 +169,8 @@ declare module "node:https" {
 }
 
 declare const process: {
+  pid: number
+  kill(pid: number, signal: number): void
   execPath: string
   execArgv: string[]
   pid: number

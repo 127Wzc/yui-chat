@@ -1,5 +1,9 @@
+import { isMcpDefinitionSelected, mcpToolSchemaDigest } from "./managed-tools.js"
+import { installationStore } from "../extensions/installation/store.js"
+import { sqliteClient } from "../core/storage/sqlite/client.js"
 import path from "node:path"
-import { isMcpToolSelected } from "./tool-selection.js"
+import { managedMcpFetch } from "../extensions/installation/network.js"
+import { extensionIsolated } from "../extensions/installation/guard.js"
 import { resolveMcpEnv, resolveMcpHeaders, resolveMcpUrl } from "./transport-auth.js"
 import { configStore, pluginRoot } from "../config/store.js"
 import type { JsonValue } from "../core/message-chain/types.js"
@@ -39,7 +43,10 @@ export interface McpDiscoveredTool {
   originalName: string
   name: string
   description: string
+  inputSchema?: Record<string, unknown>
+  annotations?: Record<string, unknown>
   exposed: boolean
+  schemaDigest?: string
   /** 发现结果保留在目录中；断线时只标记不可用，不从目录抹掉。 */
   status?: "available" | "unavailable"
   error?: string
@@ -63,8 +70,11 @@ function text(value: unknown): string {
   return typeof value === "string" ? value : String(value ?? "")
 }
 
-function errorMessage(error: unknown): string {
-  return redactErrorText(error instanceof Error ? error.message : String(error), 1000)
+function errorMessage(error: unknown, managed = false): string {
+  const message = error instanceof Error ? error.message : String(error)
+  // Remote protocol errors may echo a bound authentication value. Managed connections expose codes only.
+  if (managed) return message.match(/(?:NETWORK|CREDENTIAL|MANAGED_MCP|MCP_CONFIGURATION|MCP_TOOL_AUTHORIZATION)_[A-Z_]+/)?.[0] || "MANAGED_MCP_OPERATION_FAILED"
+  return redactErrorText(message, 1000)
 }
 
 class McpUnavailableError extends Error {
@@ -112,16 +122,22 @@ async function loadSdk(): Promise<McpSdkModule> {
   }
 }
 
-async function connectServer(serverName: string, serverConfig: UnknownRecord, version: string, sdk: McpSdkModule): Promise<{ client: McpClient; transport: McpTransport }> {
+async function connectServer(serverName: string, serverConfig: UnknownRecord, version: string, sdk: McpSdkModule, probing = false): Promise<{ client: McpClient; transport: McpTransport }> {
   if (!sdk.Client) throw new Error("MCP SDK 缺少 Client")
   const client = new sdk.Client(
     { name: "yui-chat", version: version || "0.1.0" },
     { capabilities: {} },
   )
   const kind = transportKind(serverConfig)
-  const configuredEnv = resolveMcpEnv(serverConfig.env)
-  const scopedEnvironment = { ...process.env, ...configuredEnv }
-  const headers = resolveMcpHeaders(serverConfig.headers, scopedEnvironment)
+  const receipt = sqliteClient.status.available ? await installationStore.receipt("mcp", serverName) : undefined
+  if (receipt && serverConfig.installationId !== receipt.installationId) throw new Error("MANAGED_MCP_CONFIGURATION_REQUIRED")
+  if (receipt && (record(receipt.connection).url !== serverConfig.url || record(receipt.connection).transport !== serverConfig.transport)) throw new Error("MANAGED_MCP_ENDPOINT_CHANGED")
+  if (receipt && !Array.isArray(serverConfig.allowedTools)) throw new Error("MANAGED_MCP_EXPLICIT_TOOL_LIST_REQUIRED")
+  const managed = Boolean(serverConfig.installationId)
+  const controlledFetch = managed ? managedMcpFetch(serverName, serverConfig, probing) : undefined
+  const configuredEnv = managed ? {} : resolveMcpEnv(serverConfig.env)
+  const scopedEnvironment = managed ? {} : { ...process.env, ...configuredEnv }
+  const headers = managed ? {} : resolveMcpHeaders(serverConfig.headers, scopedEnvironment)
   const requestInit = Object.keys(headers).length ? { headers } : undefined
   let transport: McpTransport | null = null
   if (kind === "streamableHttp") {
@@ -129,12 +145,10 @@ async function connectServer(serverName: string, serverConfig: UnknownRecord, ve
     const module = await importSdk("@modelcontextprotocol/sdk/client/streamableHttp.js")
     const Constructor = module.StreamableHTTPClientTransport as McpSdkModule["StreamableHTTPClientTransport"]
     if (!Constructor) throw new Error("MCP SDK 缺少 StreamableHTTPClientTransport")
-    transport = new Constructor(new URL(resolveMcpUrl(serverConfig.url)), requestInit ? { requestInit } : undefined)
+    transport = new Constructor(new URL(resolveMcpUrl(serverConfig.url)), { requestInit, ...(controlledFetch ? { fetch: controlledFetch } : {}) })
   } else if (kind === "sse") {
     if (!serverConfig.url || !sdk.SSEClientTransport) throw new Error("SSE MCP server must define url")
-    transport = new sdk.SSEClientTransport(new URL(resolveMcpUrl(serverConfig.url)), requestInit
-      ? { requestInit, eventSourceInit: { headers } }
-      : undefined)
+    transport = new sdk.SSEClientTransport(new URL(resolveMcpUrl(serverConfig.url)), { requestInit, eventSourceInit: { headers, ...(controlledFetch ? { fetch: controlledFetch } : {}) }, ...(controlledFetch ? { fetch: controlledFetch } : {}) })
   } else {
     if (!serverConfig.command || !sdk.StdioClientTransport) throw new Error("stdio MCP server must define command")
     const args = Array.isArray(serverConfig.args)
@@ -153,7 +167,7 @@ async function connectServer(serverName: string, serverConfig: UnknownRecord, ve
     await client.connect(transport)
   } catch (error) {
     try { await transport.close?.() } catch { /* 连接失败时仅清理临时传输。 */ }
-    throw error
+    throw managed ? new Error(errorMessage(error, true)) : error
   }
   return { client, transport }
 }
@@ -163,8 +177,11 @@ async function discoverClientTools(serverName: string, client: McpClient, server
   const definitions: McpToolDefinition[] = []
   let cursor: string | undefined
   const seenCursors = new Set<string>()
+  let discoveryBytes = 0
   do {
     const list = await client.listTools(cursor ? { cursor } : undefined)
+    discoveryBytes += JSON.stringify(list).length
+    if (seenCursors.size > 20 || definitions.length + (list.tools || []).length > 1000 || discoveryBytes > 4 * 1024 * 1024) throw new Error("MCP_DISCOVERY_LIMIT")
     for (const tool of list.tools || []) {
       const adapter = new McpToolAdapter(serverName, client, tool, serverConfig)
       catalog.push({
@@ -172,7 +189,10 @@ async function discoverClientTools(serverName: string, client: McpClient, server
         originalName: tool.name,
         name: adapter.name,
         description: adapter.description,
-        exposed: isMcpToolSelected(serverConfig, tool.name),
+        inputSchema: adapter.parameters,
+        annotations: adapter.annotations,
+        exposed: isMcpDefinitionSelected(serverConfig, tool),
+        schemaDigest: mcpToolSchemaDigest(tool),
       })
       definitions.push(tool)
     }
@@ -236,10 +256,12 @@ export class McpToolAdapter {
   readonly stickerExpressionChannel: UnknownRecord | null
   readonly pipeline: UnknownRecord | null
   readonly mcp: { serverName: string; originalName: string }
+  private readonly managed: boolean
   private readonly hooks: McpAdapterHooks
   private unavailableReason = ""
 
   constructor(serverName: string, client: McpClient | null, tool: McpToolDefinition, serverConfig: UnknownRecord = {}, hooks: McpAdapterHooks = {}) {
+    this.managed = Boolean(serverConfig.installationId)
     this.serverName = serverName
     this.client = client
     this.hooks = hooks
@@ -319,6 +341,8 @@ export class McpToolAdapter {
 
   private async callTool(args: Record<string, unknown>, context: ToolExecutionContext): Promise<unknown> {
     const client = await this.ensureClient()
+    const server = record(record(configStore.get().mcp).servers)[this.serverName]
+    if (record(server).installationId && (!record(server).enabled || !(record(server).allowedTools as unknown[])?.includes(this.originalName))) throw new Error("MCP_TOOL_AUTHORIZATION_REVOKED")
     // 按需重连可能更新参数定义，发送前必须校验最新 schema。
     const validation = validateToolArguments(this, args)
     if (!validation.ok) throw new Error(`工具参数无效：${validation.issues.join("；")}`)
@@ -352,12 +376,12 @@ export class McpToolAdapter {
           }
         } catch (retryError) {
           if (isTransportFailure(retryError)) this.hooks.onFailure?.(retryError)
-          throw formatUnavailableError(this.serverName, this.originalName, errorMessage(retryError))
+          throw formatUnavailableError(this.serverName, this.originalName, errorMessage(retryError, this.managed))
         }
       } else {
         throw transportFailure
-          ? formatUnavailableError(this.serverName, this.originalName, errorMessage(error))
-          : new Error(`MCP 工具 ${this.serverName}/${this.originalName} 调用失败：${errorMessage(error)}`)
+          ? formatUnavailableError(this.serverName, this.originalName, errorMessage(error, this.managed))
+          : new Error(`MCP 工具 ${this.serverName}/${this.originalName} 调用失败：${errorMessage(error, this.managed)}`)
       }
     }
     // 原文直通：接入哪些 MCP 服务器由管理员审查决定，运行时不做内容改写、
@@ -413,7 +437,7 @@ export class McpManager {
       // 下一次调用仍可通过 recoverServer 重新尝试，而不会永久丢失注入状态。
       for (const [name, rawServerConfig] of Object.entries(servers)) {
         const serverConfig = record(rawServerConfig)
-        if (serverConfig.enabled === false) {
+        if (extensionIsolated("mcp", name) || serverConfig.enabled === false) {
           this.clearServerCache(name)
           continue
         }
@@ -426,7 +450,7 @@ export class McpManager {
 
     for (const [name, rawServerConfig] of Object.entries(servers)) {
       const serverConfig = record(rawServerConfig)
-      if (serverConfig.enabled === false) {
+      if (extensionIsolated("mcp", name) || serverConfig.enabled === false) {
         this.clearServerCache(name)
         continue
       }
@@ -443,7 +467,7 @@ export class McpManager {
         const discovered = await discoverClientTools(name, client, serverConfig)
         this.registerAvailableServer(name, client, discovered, serverConfig)
       } catch (error) {
-        const message = errorMessage(error)
+        const message = errorMessage(error, Boolean(serverConfig.installationId))
         this.clients.delete(name)
         this.transports.delete(name)
         this.restoreUnavailableServer(name, serverConfig, message, phase)
@@ -455,6 +479,18 @@ export class McpManager {
     this.initialized = true
   }
 
+  async disconnectServer(serverName: string): Promise<void> {
+    const client = this.clients.get(serverName)
+    const transport = this.transports.get(serverName)
+    this.clients.delete(serverName)
+    this.transports.delete(serverName)
+    this.clearServerCache(serverName)
+    this.tools = this.tools.filter(tool => tool.serverName !== serverName)
+    this.toolsRevision++
+    try { await client?.close?.() } catch { /* Revocation remains effective when the remote close fails. */ }
+    try { await transport?.close?.() } catch { /* Best effort connection cleanup. */ }
+  }
+
   getTools(): McpToolAdapter[] {
     return [...this.tools]
   }
@@ -464,7 +500,7 @@ export class McpManager {
     const startedAt = Date.now()
     const config = await configStore.load()
     const sdk = await loadSdk()
-    const connection = await connectServer(serverName, serverConfig, text(config.version), sdk)
+    const connection = await connectServer(serverName, serverConfig, text(config.version), sdk, true)
     try {
       const { catalog } = await discoverClientTools(serverName, connection.client, serverConfig)
       return {
@@ -473,6 +509,8 @@ export class McpManager {
         exposed: catalog.filter(item => item.exposed).map(item => item.originalName),
         elapsedMs: Date.now() - startedAt,
       }
+    } catch (error) {
+      throw new Error(errorMessage(error, Boolean(serverConfig.installationId)))
     } finally {
       try { await connection.client.close?.() } catch { /* 测试连接结束时尽力关闭客户端。 */ }
       try { await connection.transport.close?.() } catch { /* 测试连接结束时尽力关闭传输。 */ }
@@ -532,7 +570,7 @@ export class McpManager {
 
   private setError(server: string, error: string, phase: McpServerStatus["phase"] = "connect"): void {
     this.errors = this.errors.filter(item => item.server !== server)
-    this.errors.push({ server, error, phase, updatedAt: new Date().toISOString() })
+    this.errors.push({ server, error: errorMessage(error, Boolean(record(record(record(configStore.get().mcp).servers)[server]).installationId)), phase, updatedAt: new Date().toISOString() })
   }
 
   private clearError(server: string): void {
@@ -556,7 +594,7 @@ export class McpManager {
     this.definitionsCache.set(serverName, discovered.definitions.slice())
     this.catalogCache.set(serverName, catalog.map(item => ({ ...item })))
     this.catalog.push(...catalog)
-    for (const tool of discovered.definitions.filter(item => isMcpToolSelected(serverConfig, item.name))) {
+    for (const tool of discovered.definitions.filter(item => isMcpDefinitionSelected(serverConfig, item))) {
       this.tools.push(new McpToolAdapter(serverName, client, tool, serverConfig, this.adapterHooks(serverName, tool.name)))
     }
     this.clearError(serverName)
@@ -574,13 +612,14 @@ export class McpManager {
           originalName: tool.name,
           name: adapter.name,
           description: adapter.description,
-          exposed: isMcpToolSelected(serverConfig, tool.name),
+          exposed: isMcpDefinitionSelected(serverConfig, tool),
+        schemaDigest: mcpToolSchemaDigest(tool),
           status: "unavailable" as const,
           error: reason,
         }
       })
     this.catalog.push(...catalog)
-    for (const tool of definitions.filter(item => isMcpToolSelected(serverConfig, item.name))) {
+    for (const tool of definitions.filter(item => isMcpDefinitionSelected(serverConfig, item))) {
       const adapter = new McpToolAdapter(serverName, null, tool, serverConfig, this.adapterHooks(serverName, tool.name))
       adapter.markUnavailable(reason)
       this.tools.push(adapter)
@@ -610,7 +649,7 @@ export class McpManager {
   }
 
   private noteRuntimeFailure(serverName: string, error: unknown, phase: McpServerStatus["phase"] = "execute"): void {
-    const reason = errorMessage(error)
+    const reason = errorMessage(error, Boolean(record(record(record(configStore.get().mcp).servers)[serverName]).installationId))
     this.setError(serverName, reason, phase)
     for (const tool of this.tools) {
       if (tool.serverName === serverName) tool.markUnavailable(reason)
@@ -663,7 +702,7 @@ export class McpManager {
       this.catalogCache.set(serverName, catalog.map(item => ({ ...item })))
       this.catalog = [...this.catalog.filter(item => item.server !== serverName), ...catalog]
       const selected = new Map(discovered.definitions
-        .filter(item => isMcpToolSelected(serverConfig, item.name))
+        .filter(item => isMcpDefinitionSelected(serverConfig, item))
         .map(item => [item.name, item]))
       const current = this.tools.filter(tool => tool.serverName === serverName)
       for (const tool of current) {

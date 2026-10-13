@@ -44,6 +44,7 @@ interface ToolDetailItem extends UnknownRecord {
 }
 
 interface ExtensionEditorDraft {
+  managed: boolean
   type: "custom" | "skill"
   mode: "create" | "edit"
   id: string
@@ -134,6 +135,7 @@ export const ExtensionPanel = {
       enabled: false,
     })
     const editor = reactive<ExtensionEditorDraft>({
+      managed: false,
       type: "custom",
       mode: "edit",
       id: "",
@@ -174,7 +176,7 @@ export const ExtensionPanel = {
     const createModeMeta = computed(() => ({
       custom: { title: "新建单个工具", subtitle: "适合一个输入、一个结果的明确动作，例如查库存、生成链接或调用本地函数。", icon: "cpu", result: "创建 Custom 工具骨架，并立即进入名称、说明和源码编辑。" },
       skill: { title: "新建 Markdown Skill", subtitle: "按照 OpenAI 原生格式创建 SKILL.md，用自然语言定义可重复工作流。", icon: "sparkles", result: "创建包含 name、description 和 Markdown 指令的 SKILL.md，并立即进入编辑。" },
-      remote: { title: "安装原生 Skill", subtitle: "从 Git 仓库导入包含 SKILL.md 的 OpenAI / Agent Skills 目录。", icon: "download", result: "复制完整 Skill 目录，并加载其中的 SKILL.md、scripts、references 和 assets。" },
+      remote: { title: "安装原生 Skill", subtitle: "提交持久化安装任务，进度与补充输入在安装记录中查看。", icon: "download", result: "固定并检查 Skill 内容，成功后保持停用，启用另行授权。" },
     })[createMode.value as "custom" | "skill" | "remote"])
     const extensionLibraryRows = computed(() => [
       ...customCatalog.value.map(item => ({ ...item, extensionType: "custom" })),
@@ -251,6 +253,7 @@ export const ExtensionPanel = {
 
     function applyEditor(result: ExtensionResponse, type: "custom" | "skill", mode: "create" | "edit" = "edit") {
       const manifest = asRecord(result.manifest)
+      editor.managed = Boolean(result.installationId)
       editor.type = type
       editor.mode = mode
       editor.id = String(result.id || manifest.id || "")
@@ -337,10 +340,7 @@ export const ExtensionPanel = {
     async function installRemoteSkill() {
       try {
         if (!remoteDraft.repo.trim()) throw new Error("请填写 Git 仓库地址或 owner/repo")
-        if (remoteDraft.overwrite === "true") {
-          const accepted = await confirmAction({ title: "覆盖同名 Markdown Skill？", message: "同名 Skill 目录及其中的本地修改会被远程仓库内容替换。", detail: remoteDraft.skillId.trim() || remoteDraft.repo.trim(), confirmText: "确认覆盖安装", tone: "warn", icon: "download" })
-          if (!accepted) return
-        }
+        if (remoteDraft.overwrite === "true" || remoteDraft.skillId.trim()) throw new Error("安装不覆盖目标，目录 ID 从 SKILL.md 推导；请使用安装记录")
         const result = asRecord<ExtensionResponse>(await request("/api/skills/install", {
           method: "POST",
           body: JSON.stringify({
@@ -352,7 +352,7 @@ export const ExtensionPanel = {
           }),
         }))
         const id = result.result?.id
-        toast(`已安装远程 Skill ${id}`)
+        toast(`安装任务 ${String(asRecord(result.task).id || "")} 已受理，请到 AI 能力 → 安装记录查看进度`)
         await refreshTab("tools")
         if (id) {
           showCreateDrawer.value = false
@@ -370,11 +370,15 @@ export const ExtensionPanel = {
     }
 
     async function toggleSkill(id: string, enabled: boolean) {
+      if (enabled) {
+        const accepted = await confirmAction({ title: `启用 Markdown Skill“${id}”？`, message: "Skill 正文及使用中需要的内容可能进入当前配置的模型上下文。请先检查来源、配置与依赖，私有内容也可能发送给模型。", confirmText: "确认启用并允许内容披露", tone: "warn", icon: "power" })
+        if (!accepted) return
+      }
       if (!enabled) {
         const accepted = await confirmAction({ title: `停用 Markdown Skill“${id}”？`, message: "停用后，该工作流不会再参与本轮 Skill 匹配。", confirmText: "确认停用", tone: "warn", icon: "power" })
         if (!accepted) return
       }
-      return act(() => request(`/api/skills/${encodeURIComponent(id)}/enabled`, { method: "POST", body: JSON.stringify({ enabled }) }), `${enabled ? "已启用" : "已停用"} ${id}`)
+      return act(() => request(`/api/skills/${encodeURIComponent(id)}/enabled`, { method: "POST", body: JSON.stringify({ enabled, privateContentAcknowledged: enabled }) }), `${enabled ? "已启用" : "已停用"} ${id}`)
     }
 
     async function requestRemove(type: "skill" | "custom", id: string) {

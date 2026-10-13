@@ -94,10 +94,9 @@ export const ExtensionLibraryPanel = {
           <div class="cell-sub" v-else>资源：{{ frameworkResourceSummary(item) }}</div>
         </template>
         <template #risk="{ item }"><span class="badge" :class="item.extensionType === 'skill' ? '' : packageRisk(item).tone" :title="item.extensionType === 'skill' ? 'Skill 提供指令，工具调用仍按工具风险和权限检查' : '按已知工具的最高风险显示，展开查看各项风险'">{{ item.extensionType === 'skill' ? '指令扩展' : packageRisk(item).label }}</span></template>
-        <template #status="{ item }"><span class="badge">{{ item.extensionType === 'skill' ? 'Skill' : 'Custom' }}</span><Pill v-bind="catalogStatus(item)" /></template>
+        <template #status="{ item }"><span class="badge">{{ item.extensionType === 'skill' ? 'Skill' : 'Custom' }}</span><span v-if="item.extensionType === 'skill'" class="badge">{{ item.sourceState === 'recorded' ? '有安装收据' : '来源未知' }}</span><Pill v-bind="catalogStatus(item)" /></template>
         <template #actions="{ item }">
           <button class="btn small outline" @click="$emit('edit', item)">编辑</button>
-          <button v-if="item.extensionType === 'skill' && item.remote?.repo" class="btn small outline" @click="$emit('update-remote', item)">更新</button>
           <button class="icon-btn danger" title="删除扩展" @click="$emit('remove', item)"><Icon name="trash" :size="14" /></button>
           <Switch :model-value="item.enabled" @update:model-value="$emit('toggle', item)" />
         </template>

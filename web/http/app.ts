@@ -1,5 +1,6 @@
 import { registerActionRoutes } from "./routes/actions.js"
 import express from "express"
+import { requireWebAuth } from "./auth.js"
 import crypto from "node:crypto"
 import { registerConfigRoutes } from "./routes/configuration.js"
 import { registerExtensionRoutes } from "./routes/capabilities/extensions.js"
@@ -49,6 +50,8 @@ function webContentSecurityPolicy(nonce: string): string {
 export function createWebApp(): WebApp {
   const app = express.Router() as unknown as WebApp
   app.use(applySecurityHeaders)
+  // Authenticate before accepting the bounded base64 upload body (20 MiB expands to <28 MiB).
+  app.use("/api/extensions/installations", requireWebAuth, express.json({ limit: "28mb" }))
   app.use(express.json({ limit: "1mb" }))
   // 子模块使用原生 ESM 相对导入，无法继承入口文件的版本查询参数；要求浏览器每次重验，避免升级后一小时仍加载旧页面。
   app.use("/assets", express.static(staticRoot, { dotfiles: "deny", index: false, maxAge: 0, etag: true }))

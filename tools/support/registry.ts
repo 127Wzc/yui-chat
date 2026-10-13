@@ -108,6 +108,11 @@ export class ToolRegistry {
   registryErrors: RegistryError[] = []
   private mcpToolsRevision = mcpManager.toolsRevision
 
+  async refreshSkills(): Promise<void> {
+    await skillManager.refresh()
+    this.skillErrors = skillManager.errors
+  }
+
   async init(): Promise<void> {
     this.tools.clear()
     this.registryErrors = []

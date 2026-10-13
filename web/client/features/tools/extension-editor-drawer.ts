@@ -43,7 +43,7 @@ export const ExtensionEditorDrawer = {
         <div class="form-grid">
           <Field v-if="editor.mode !== 'create'" label="目录 ID" v-model="editor.id" :disabled="true" tip="这是项目内的稳定目录标识，创建后不可修改。" />
           <Field label="Skill name" v-model="editor.name" tip="YAML frontmatter 中的 name，也是 $调用名；只能使用小写字母、数字和横线。" />
-          <Field label="启用状态" type="select" :options="boolOptions" v-model="editor.enabled" tip="停用状态保存在项目配置中，不修改 SKILL.md 原文。" />
+          <Field label="启用状态" type="select" :disabled="editor.managed" :options="boolOptions" v-model="editor.enabled" tip="受管理安装的启停请使用列表中的独立开关；停用状态保存在项目配置中，不修改 SKILL.md 原文。" />
         </div>
         <Field label="Description（触发说明）" type="textarea" rows="4" v-model="editor.descriptionZh" tip="这是自动选择 Skill 的关键。明确写出什么时候应该用、什么时候不该用。" />
         <Collapse title="运行变量" hint="由 configSchema 声明，保存到统一配置">

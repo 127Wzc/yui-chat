@@ -1,3 +1,4 @@
+import { createExtensionInstallationTools } from "./extension-install.js"
 import { createCommandTools } from "./command.js"
 import { createEntertainmentTools } from "./entertainment.js"
 import { createGroupAdminTools } from "./group-admin.js"
@@ -26,6 +27,7 @@ interface BuiltinToolGroup {
 
 /** 内置工具分组目录；分组元数据只负责公共属性，具体工具仍由各模块自行声明。 */
 export const builtinToolGroups: BuiltinToolGroup[] = [
+  { id: "extensions", label: "扩展安装", risk: "high", tags: ["installation"], factory: createExtensionInstallationTools },
   { id: "command", label: "指令", risk: "low", tags: ["knowledge"], deferLoading: true, factory: createCommandTools },
   { id: "discovery", label: "工具发现", risk: "low", tags: ["tool-discovery"], deferLoading: false, factory: createDiscoveryTools },
   { id: "memory", label: "记忆", risk: "low", tags: ["memory"], deferLoading: true, factory: createMemoryTools },

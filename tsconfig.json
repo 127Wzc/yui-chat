@@ -13,6 +13,8 @@
   },
   "include": [
     "skills/index.ts",
+    "extensions/installation/**/*.ts",
+    "extensions/credentials.ts",
     "apps/chat.ts",
     "apps/help-menu.ts",
     "extensions/testing/execution-runtime.ts",

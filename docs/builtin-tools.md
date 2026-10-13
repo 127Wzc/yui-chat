@@ -32,9 +32,14 @@
 | `emoji_like` / `group_poke` | 表情回应、戳一戳 |
 | `message_manage` | 群消息管理 |
 | `send_dice` / `send_rps` | 掷骰子、猜拳 |
+| `extension_install` | 主人当前消息明确要求时，检查、安装、提交计划、查询或取消扩展；默认关闭，不可绑定动作 |
 | `dispatch_subagent` | 派发子代理任务，默认关闭 |
 
 Responses 的 `file_search` 是供应商托管能力，需配置 Vector Store；托管搜索与本地搜索的选择见 [Responses 协议](responses-api.md)。
+
+## 扩展安装
+
+`extension_install` 仅用于真实主人当前对话的明确安装授权，支持 `install / inspect / apply / status / cancel`。网页、引用消息、Skill 指令、子代理、动作或伪造 `isMaster` 不能产生安装授权。模型工具关闭时，主人命令和已登录 Web 仍可使用。`inspect` 只生成计划；`apply` 必须指定原计划编号。成功仅表示静态安装，默认停用、默认仅主人，未执行运行验证。详见 [扩展安装](extension-installation.md)。
 
 ## 音乐播放
 
@@ -173,6 +178,7 @@ URL 截图仍使用 `render_url_screenshot`，保留独立工具权限及 `respo
 | `set_title` | 允许 | 允许 | 允许 | 允许 | 普通用户仅本人；管理他人需管理员以上，机器人通常需为群主。 |
 | `persona_punish` | 按需，默认不授权 | 保护对象，不授权 | 保护对象，不授权 | 保护对象，不授权 | 授权表示允许人物处罚当前普通发言者，不赋予用户处罚他人的能力。 |
 | `persona_punishment_release` | 禁止 | 允许 | 允许 | 允许 | 管理员与群主仅本群，主人可按记录解除。 |
+| `extension_install` | 主人当前消息明确要求时，检查、安装、提交计划、查询或取消扩展；默认关闭，不可绑定动作 |
 | `dispatch_subagent` | 按需，默认不授权 | 按需，默认不授权 | 按需，默认不授权 | 允许 | 保留功能开关、并发、深度与 token 限额。 |
 
 禁言（`mute_user`）、群名片（`edit_card`）和头衔（`set_title`）支持默认本人自助：工具开启且没有明确角色/个人禁止时，无需另行授权本人操作。工具发现时显示本人可用，执行时重新检查真实目标、当前群和参数。操作他人仍需工具授权及管理身份；普通成员不可自行解禁。禁言须本人明确请求且不能覆盖已有禁言；头衔仍受宿主平台权限限制（通常机器人须为群主）。

@@ -19,6 +19,7 @@ export const toolRepeatPolicies = { allow: "allow", bounded: "bounded", dedupe: 
 export const toolRetryPolicies = { safe: "safe", executor: "executor", noAmbiguousRetry: "no_ambiguous_retry", none: "none" } as const
 
 const builtinToolDisplayNamesZh: Record<string, string> = {
+  extension_install: "扩展安装",
   knowledge_manage: "知识库", memory_manage: "记忆与画像", voice_output: "语音输出", text_transform: "文本整理",
   keyword_filter: "关键词过滤", regex_replace: "正则替换", weather: "天气查询", website_fetch: "网页读取", github_api: "GitHub 查询",
   bilibili_media: "B站媒体", image_media: "图片媒体", web_search: "实时网络搜索", render_image: "内容排版", render_url_screenshot: "网页截图",

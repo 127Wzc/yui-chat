@@ -328,6 +328,33 @@ function validateLinkSafety(config: ConfigRecord, issues: ValidationIssue[]): vo
   if (safety.allowPrivateHosts === true) add(issues, "warn", "security.linkSafety.allowPrivateHosts", "链接安全策略允许访问任意私网地址，请仅在受控网络中启用")
 }
 
+function validateInstallation(config: ConfigRecord, issues: ValidationIssue[]): void {
+  const installation = section(config.installation)
+  const bounds: Record<string, [number, number]> = { maxQueue: [1, 100], maxDownloadBytes: [1024, 20971520], maxExpandedBytes: [1024, 83886080], maxFiles: [1, 1000], maxDepth: [1, 12], planTtlMs: [60000, 1800000] }
+  for (const [key, [min, max]] of Object.entries(bounds)) {
+    const value = installation[key]
+    if (!Number.isInteger(value) || Number(value) < min || Number(value) > max) add(issues, "error", `installation.${key}`, `必须为 ${min}–${max} 的整数`)
+  }
+  if (!Array.isArray(installation.providers) || installation.providers.length > 10) add(issues, "error", "installation.providers", "来源平台必须为最多 10 项的数组")
+  else for (const [index, entry] of installation.providers.entries()) {
+    const provider = section(entry)
+    try {
+      const origin = new URL(String(provider.origin)), base = new URL(String(provider.apiBase))
+      if (!["github", "gitlab", "gitee"].includes(String(provider.provider)) || origin.origin !== provider.origin || !["http:", "https:"].includes(origin.protocol) || !["http:", "https:"].includes(base.protocol) || base.username || base.password || base.search || base.hash) throw new Error("invalid")
+    } catch { add(issues, "error", `installation.providers.${index}`, "必须指定平台、精确来源 origin 和不含凭据的 API 基址") }
+  }
+  if (!isObject(installation.sourceGrants)) add(issues, "error", "installation.sourceGrants", "必须为来源身份到网络授权编号的映射")
+  const grants = section(section(config.security).linkSafety).extensionGrants
+  if (!Array.isArray(grants) || grants.length > 100) add(issues, "error", "security.linkSafety.extensionGrants", "必须为最多 100 个目标授权的数组")
+  else for (const [index, entry] of grants.entries()) {
+    const grant = section(entry)
+    try {
+      const url = new URL(String(grant.origin))
+      if (url.origin !== grant.origin || !["http:", "https:"].includes(url.protocol) || !["repository-fetch", "mcp-connect"].includes(String(grant.purpose)) || typeof grant.id !== "string" || typeof grant.targetId !== "string" || !Number.isInteger(grant.version) || typeof grant.revoked !== "boolean" || typeof grant.allowHttpCredentials !== "boolean" || !Array.isArray(grant.addresses) || !grant.addresses.length || grant.addresses.length > 16 || grant.addresses.some(item => typeof item !== "string") || !Array.isArray(grant.paths) || !grant.paths.length || grant.paths.length > 16 || grant.paths.some(item => typeof item !== "string" || !item.startsWith("/") || item.includes("?")) || grant.ca !== undefined && (typeof grant.ca !== "string" || grant.ca.length > 65536)) throw new Error("invalid")
+    } catch { add(issues, "error", `security.linkSafety.extensionGrants.${index}`, "服务网络授权格式无效") }
+  }
+}
+
 function validateSkills(config: ConfigRecord, issues: ValidationIssue[]): void {
   if (config.skills === undefined) return
   const skills = section(config.skills)
@@ -1246,6 +1273,7 @@ export function validateConfig(config: unknown): ValidationResult {
   validateLinkSafety(root, issues)
   try { parseActions(root.actions) } catch (error) { add(issues, "error", "actions", error instanceof Error ? error.message : String(error)) }
   validateSkills(root, issues)
+  validateInstallation(root, issues)
   validateChatAccess(root, issues)
   validateProviders(root, issues)
   validateTools(root, issues)

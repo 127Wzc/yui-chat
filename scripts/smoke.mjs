@@ -2847,7 +2847,7 @@ async function checkSqliteStorage() {
   try {
     assert(sqliteClient.status.available, "SQLite state database should initialize in worker")
     assert(sqliteClient.status.integrity === "ok", "SQLite state database should pass quick_check")
-    assert((sqliteClient.status.migrations || []).map(row => row.id).join(",") === "001-baseline.sql,002-tool-call-events.sql,003-model-call-snapshots.sql,004-conversation-state.sql,005-log-session.sql", "SQLite state database should apply the baseline, combined tool/runtime, model snapshot, and conversation state schema")
+    assert((sqliteClient.status.migrations || []).map(row => row.id).join(",") === "001-baseline.sql,002-tool-call-events.sql,003-model-call-snapshots.sql,004-conversation-state.sql,005-log-session.sql,006-extension-installations.sql", "SQLite state database should apply the baseline, combined tool/runtime, model snapshot, conversation state, and extension installation schema")
     const removed = await sqliteClient.get("SELECT name FROM sqlite_master WHERE type='table' AND name='knowledge_sources'")
     assert(!removed, "baseline state database should not recreate removed transitional tables")
   } finally {

@@ -1,5 +1,5 @@
 import { YuiActionBootstrap } from "./apps/actions.js"
-import { configStore } from "./config/store.js"
+import { configStore, yunzaiRoot } from "./config/store.js"
 import { createWebApp, registerWebSocket } from "./web/http/app.js"
 import { toolRegistry } from "./tools/support/registry.js"
 import { filterRegistry } from "./filters/core/registry.js"
@@ -19,6 +19,7 @@ import { knowledgeStore } from "./knowledge/store.js"
 import { knowledgeIndexJobs } from "./knowledge/index-jobs.js"
 import { capabilityStore } from "./tools/access/capability-store.js"
 import { modelLogStore } from "./core/observability/model-log.js"
+import { installationInstaller } from "./extensions/installation/installer.js"
 import { groupCaptureStore } from "./memory/group-capture.js"
 
 const globalKey = Symbol.for("yui-chat.initialized")
@@ -31,6 +32,7 @@ function record(value: unknown): Record<string, unknown> {
 async function boot(): Promise<void> {
   if (runtimeGlobals[globalKey]) return
   runtimeGlobals[globalKey] = true
+  hostRuntime.registerInboundMessages(yunzaiRoot)
   const bootstrapConfig = await configStore.load()
   const sqliteStatus = await sqliteClient.init(bootstrapConfig)
   if (!sqliteStatus.available && configStore.meta().runtimeConfigBackend === "sqlite") {
@@ -39,6 +41,7 @@ async function boot(): Promise<void> {
   const config = sqliteStatus.available
     ? await configStore.attachRuntimeConfigRepository(new SqliteRuntimeConfigRepository(sqliteClient))
     : bootstrapConfig
+  if (sqliteStatus.available) await installationInstaller.init()
   modelLogStore.start(config)
   modelLogStore.cleanupExpired().catch(err => modelLogStore.noteError(err))
   await knowledgeStore.init(config)
@@ -46,6 +49,7 @@ async function boot(): Promise<void> {
   knowledgeIndexJobs.start()
   await toolRegistry.init()
   await filterRegistry.init()
+  if (sqliteStatus.available) installationInstaller.start()
   // 指令来源只由管理台的“重新扫描”显式同步。启动时保留已有知识投影，
   // 避免重启、运行时加载顺序或第三方临时规则意外触发向量重建。
   await commandObserver.init({ scanOnReady: false })

@@ -51,6 +51,7 @@ export const defaults = {
       allowPrivateHosts: true,
       trustedPrivateDnsBypass: true,
       screenshotAllowedHosts: ["*"],
+      extensionGrants: [],
     },
   },
   storage: {
@@ -383,6 +384,16 @@ export const defaults = {
         requireMasterForPrivateTarget: true,
       },
     },
+  },
+  installation: {
+    maxQueue: 10,
+    maxDownloadBytes: 20971520,
+    maxExpandedBytes: 83886080,
+    maxFiles: 1000,
+    maxDepth: 12,
+    planTtlMs: 1800000,
+    providers: [],
+    sourceGrants: {},
   },
   skills: {
     disabled: [],

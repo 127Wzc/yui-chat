@@ -1,3 +1,4 @@
+import { installationStore } from "../../extensions/installation/store.js"
 import { actionCommandStatus } from "./host-command-registry.js"
 import { parseActions } from "../actions/contract.js"
 import fs from "node:fs/promises"
@@ -297,6 +298,12 @@ export async function buildDiagnostics(): Promise<UnknownRecord> {
       mcp: mcpManager.status(),
       commandKnowledge: knowledgeDigest,
       storage: sqliteClient.status,
+      installations: sqliteClient.status.available ? {
+        active: (await installationStore.active()).map(task => ({ id: task.id, kind: task.kind, status: task.status, currentStep: task.currentStep, reasonCode: task.reasonCode })),
+        limits: config.installation,
+        recoveryWorkspace: path.join(dataDir, "extensions", ".install-work"),
+        credentialsExported: false,
+      } : { available: false },
       logs: modelLogStore.stats(),
     },
   }

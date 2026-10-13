@@ -7,6 +7,7 @@ const optional: Record<BoundaryRole, Choice> = { user: "optional", groupAdmin: "
 const management: Record<BoundaryRole, Choice> = { user: "deny", groupAdmin: "allow", groupOwner: "allow", master: "allow" }
 /** 内置工具的默认角色范围，也是面板推荐方案的唯一来源；不自动启用工具。 */
 export const builtinRoleRecommendations: Record<string, Recommendation> = {
+  extension_install: { group: "扩展管理", description: "仅真实主人主对话中的明确安装请求；默认停用，不支持子代理或动作。", roles: { user: "deny", groupAdmin: "deny", groupOwner: "deny", master: "allow" } },
   tool_search: { group: "基础能力", description: "只发现已有权限的工具。", roles: all },
   knowledge_manage: { group: "基础能力", description: "只查询、推荐已授权知识库内容。", roles: all },
   command_handoff: { group: "高级能力", description: "向当前会话投递宿主指令，独立授权。", roles: optional },

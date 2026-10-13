@@ -1,3 +1,7 @@
+import { withExtensionLock, assertExtensionWritable } from "../../../../extensions/installation/guard.js"
+import { installationStore } from "../../../../extensions/installation/store.js"
+import { installationWebActor } from "./installation.js"
+import { recordExtensionManagement } from "../../../../extensions/installation/management.js"
 import { configStore, mergeRedactedConfigSecrets, redactConfigSecrets } from "../../../../config/store.js"
 import { mcpManager } from "../../../../mcp/index.js"
 import { toolRegistry } from "../../../../tools/support/registry.js"
@@ -68,13 +72,20 @@ export function registerMcpRoutes(app: RouteApp): void {
   app.post("/api/mcp/test", auth, handleRoute(async (req, res) => {
     const body = req.body || {}
     const id = sanitizeId(body.id || body.name || "mcp-test")
+    await withExtensionLock("mcp", id, async () => {
+      assertExtensionWritable("mcp", id)
+    if (await installationStore.receipt("mcp", id)) throw new Error("受管理服务请使用已保存服务的发现入口")
     const probe = await mcpManager.testServer(id, buildServerConfig(body))
     res.json({ ok: true, probe })
+    })
   }, { errorStatus: 400 }))
   app.post("/api/mcp/server", auth, handleRoute(async (req, res) => {
     const body = req.body || {}
     const id = sanitizeId(body.id || body.name || "mcp-server")
+    await withExtensionLock("mcp", id, async () => {
+      assertExtensionWritable("mcp", id)
     const current = record(record(configStore.get().mcp).servers)[id]
+    if (record(current).installationId || await installationStore.receipt("mcp", id)) throw new Error("受管理服务端点修改需要新安装计划；启停、凭据与工具开放使用独立入口")
     const server = buildServerConfig(body, record(current))
     const { saved, runtime } = await updateConfigAndApply(config => configValue({
       ...config,
@@ -85,28 +96,48 @@ export function registerMcpRoutes(app: RouteApp): void {
       },
     }))
     res.json({ ok: true, id, server: redactConfigSecrets(record(record(saved.mcp).servers)[id]), config: redactConfigSecrets(saved.mcp), runtime, status: toolRegistry.mcpStatus() })
+    })
   }, { errorStatus: 400 }))
   app.post("/api/mcp/:id/discover", auth, handleRoute(async (req, res) => {
     const id = sanitizeId(req.params.id)
+    await withExtensionLock("mcp", id, async () => {
+      assertExtensionWritable("mcp", id)
     const server = record(record(configStore.get().mcp).servers)[id]
     if (!server || typeof server !== "object" || Array.isArray(server)) throw new Error("MCP 服务不存在")
-    const probe = await mcpManager.testServer(id, record(server))
+    const probe = await recordExtensionManagement("mcp", id, "discover", installationWebActor(req), () => mcpManager.testServer(id, record(server)))
+    if (record(server).installationId) await configStore.update(config => {
+      const current = (config.mcp!.servers as Record<string, Record<string, any>>)[id]
+      if (current.url !== record(server).url) throw new Error("服务配置已改变")
+      current.discoveredToolSchemas = Object.fromEntries(probe.catalog.map(tool => [tool.originalName, tool.schemaDigest]))
+    })
     res.json({ ok: true, probe, status: toolRegistry.mcpStatus() })
+    })
   }, { errorStatus: 400 }))
   app.post("/api/mcp/:id/tools", auth, handleRoute(async (req, res) => {
     const id = sanitizeId(req.params.id)
+    await withExtensionLock("mcp", id, async () => {
+      assertExtensionWritable("mcp", id)
     const allowedTools = normalizeAllowedTools(req.body?.allowedTools)
-    const { saved, runtime } = await updateConfigAndApply(config => {
+    const managed = record(record(record(configStore.get().mcp).servers)[id]).installationId
+    if (managed && allowedTools === null) throw new Error("受管理服务必须明确选择已发现工具，不允许全开放")
+    const { saved, runtime } = await recordExtensionManagement("mcp", id, "update", installationWebActor(req), () => updateConfigAndApply(config => {
       const mcp = record(config.mcp)
       const servers = record(mcp.servers)
       if (!Object.hasOwn(servers, id)) throw new Error("MCP 服务不存在")
-      return configValue({ ...config, mcp: { ...mcp, servers: { ...servers, [id]: { ...record(servers[id]), allowedTools } } } })
-    })
+      const current = record(servers[id])
+      const reviewed = record(current.discoveredToolSchemas)
+      if (managed && allowedTools?.some(name => typeof reviewed[name] !== "string")) throw new Error("请先发现并审阅工具，再选择开放名单")
+      return configValue({ ...config, mcp: { ...mcp, servers: { ...servers, [id]: { ...current, allowedTools, ...(managed ? { reviewedToolSchemas: Object.fromEntries((allowedTools || []).map(name => [name, reviewed[name]])) } : {}) } } } })
+    }))
     res.json({ ok: true, config: redactConfigSecrets(saved.mcp), runtime, status: toolRegistry.mcpStatus() })
+    })
   }, { errorStatus: 400 }))
   app.post("/api/mcp/:id/enabled", auth, handleRoute(async (req, res) => {
     const id = sanitizeId(req.params.id)
-    const { saved, runtime } = await updateConfigAndApply(config => {
+    await withExtensionLock("mcp", id, async () => {
+      assertExtensionWritable("mcp", id)
+    const operation = req.body.enabled === false ? "disable" : "activate"
+    const { saved, runtime } = await recordExtensionManagement("mcp", id, operation, installationWebActor(req), () => updateConfigAndApply(config => {
       const mcp = record(config.mcp)
       const servers = record(mcp.servers)
       const current = record(servers[id])
@@ -119,17 +150,25 @@ export function registerMcpRoutes(app: RouteApp): void {
           servers: { ...servers, [id]: { ...current, enabled: req.body?.enabled !== false } },
         },
       })
-    })
+    }))
     res.json({ ok: true, id, config: redactConfigSecrets(saved.mcp), runtime, status: toolRegistry.mcpStatus() })
+    })
   }, { errorStatus: 400 }))
   app.delete("/api/mcp/:id", auth, handleRoute(async (req, res) => {
     const id = sanitizeId(req.params.id)
-    const { saved, runtime } = await updateConfigAndApply(config => {
+    await withExtensionLock("mcp", id, async () => {
+      assertExtensionWritable("mcp", id)
+    const { saved, runtime } = await recordExtensionManagement("mcp", id, "uninstall", installationWebActor(req), async () => {
+      const result = await updateConfigAndApply(config => {
       const mcp = record(config.mcp)
       const servers = { ...record(mcp.servers) }
       delete servers[id]
       return configValue({ ...config, mcp: { ...mcp, servers } })
     })
+      await installationStore.retireReceipt("mcp", id)
+      return result
+    })
     res.json({ ok: true, id, config: redactConfigSecrets(saved.mcp), runtime, status: toolRegistry.mcpStatus() })
+    })
   }, { errorStatus: 400 }))
 }

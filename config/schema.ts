@@ -14,6 +14,17 @@ interface SchemaGroup {
 }
 
 export const schema: SchemaGroup[] = [
+  { group: "Extension Installation", fields: [
+    { path: "installation.maxQueue", label: "安装等待队列上限", type: "number" },
+    { path: "installation.maxDownloadBytes", label: "单包下载上限（字节）", type: "number", advanced: true },
+    { path: "installation.maxExpandedBytes", label: "解包体积上限（字节）", type: "number", advanced: true },
+    { path: "installation.maxFiles", label: "包文件数量上限", type: "number", advanced: true },
+    { path: "installation.maxDepth", label: "包路径深度上限", type: "number", advanced: true },
+    { path: "installation.planTtlMs", label: "安装计划有效期（毫秒）", type: "number", advanced: true },
+    { path: "installation.providers", label: "自托管来源平台", type: "json", advanced: true },
+    { path: "installation.sourceGrants", label: "来源网络授权绑定", type: "json", advanced: true },
+    { path: "security.linkSafety.extensionGrants", label: "扩展精确网络授权", type: "json", advanced: true, description: "在 AI 能力的安装记录中创建、绑定和撤销；通用配置编辑只可保留原值" },
+  ] },
   {
     group: "Actions",
     fields: [

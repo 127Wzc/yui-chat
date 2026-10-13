@@ -154,9 +154,16 @@ export function validateWebToken(token: unknown): boolean {
 
 export function requireWebAuth(req: WebRequest, res: WebResponse, next: () => unknown): unknown {
   const headerToken = readWebHeaderToken(req)
-  if (validateWebToken(headerToken)) return next()
+  if (validateWebToken(headerToken)) {
+    const ticket = accessTokens.get(headerToken)
+    req.webPrincipal = Object.freeze({ id: ticket?.userId || "configured-token", method: ticket ? "session" : "header" })
+    return next()
+  }
   const sessionToken = readWebSessionToken(req)
-  if (validateWebToken(sessionToken) && allowCookieRequest(req)) return next()
+  if (validateWebToken(sessionToken) && allowCookieRequest(req)) {
+    req.webPrincipal = Object.freeze({ id: accessTokens.get(sessionToken)?.userId || "configured-token", method: "cookie" })
+    return next()
+  }
   res.status(401).json({ ok: false, error: "Unauthorized" })
 }
 

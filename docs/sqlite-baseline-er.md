@@ -2,12 +2,16 @@
 
 本项目的 SQLite 结构从 `001-baseline.sql` 基线开始，状态库继续执行 `002-tool-call-events.sql` 和 `003-model-call-snapshots.sql`：前者包含工具事件、群记忆召回和工具链父子关系，后者把每次实际模型请求的脱敏上下文、模型可见工具定义和请求元数据独立保存，供管理台详情窗口按需读取；向量库仍使用自己的基线。无法识别的历史迁移记录或旧表会被拒绝，迁移在 Worker 内事务执行并保留失败现场。运行、模型调用和工具调用的父级引用支持子代理、工具派生模型调用和后台完成事件的拓扑追踪，`005-log-session.sql` 为运行日志增加独立 `session_id` 与索引，会话详情按 `session_id` 汇总同一段会话的顶层轮次；`conversation_key` 仅表示固定归属，模型快照请求元数据中的上下文分组用于显示每条消息的来源。
 
+`006-extension-installations.sql` 增加持久化安装任务、事件、收据和加密凭据。任务版本 CAS 与 SQLite 触发器使状态更新和事件追加原子完成。收据没有依赖任务的级联外键，任务清理不删除来源证明；显式卸载只退休旧收据，活动目标使用部分唯一索引，允许之后重新安装。配置包白名单不包含这些表或本地主密钥。
+
 ## ER 图
 
 实线是数据库外键；虚线是同库内的投影或以业务键关联的关系（不以外键强制）。`memory_fts`、`knowledge_fts` 和每个 `vec_<space>` 均是可重建索引。
 
 ```mermaid
 erDiagram
+  EXTENSION_INSTALLATIONS ||--o{ EXTENSION_INSTALLATION_EVENTS : "operation_id"
+  EXTENSION_INSTALLATIONS |o..o| EXTENSION_INSTALLATION_RECEIPTS : "installation_id (logical)"
   MEMORY_ITEMS ||--o{ MEMORY_EVIDENCE : "memory_id"
   KNOWLEDGE_BASES ||--o{ KNOWLEDGE_DOCUMENTS : "knowledge_base_id"
   KNOWLEDGE_DOCUMENTS ||--o{ KNOWLEDGE_CHUNKS : "(id, knowledge_base_id)"
@@ -196,3 +200,5 @@ flowchart LR
 - 人格持久化表：人物行为只由运行配置驱动，不保留独立 profile/binding 表。
 - 工具调用与用量事件流水：旧版 `ai_usage_events` 不再使用；当前工具执行明细统一由 `tool_call_events` 保存，模型用量由 `model_call_events` 和日汇总保存。
 - 群采集的泛化 scope、来源适配器和小时分窗列；第一版只支持 `group_id` 和自然日提炼窗口。
+
+安装表：`extension_installations`（任务 JSON、版本、状态、幂等键）、`extension_installation_events`（任务编号、单调序号、时间与脱敏事件）、`extension_installation_receipts`（固定来源、文件摘要、安装时停用状态、退休时间）、`extension_credentials`（独立加密内容或显式环境引用）。任务与事件默认保留 90 天，活动收据长期保留。

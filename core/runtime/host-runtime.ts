@@ -1,4 +1,6 @@
 import { applyHostActionEntries, type HostCommandEntry, type actionCommandStatus } from "./host-command-registry.js"
+import { pathToFileURL } from "node:url"
+import path from "node:path"
 /** 宿主事件的最小静态边界；具体 Yunzai 字段仍必须在业务边界自行收窄。 */
 export interface HostEvent extends Record<string, unknown> {
   msg?: string
@@ -44,6 +46,9 @@ export interface HostQuotedMessageResult<T> {
 export type HostQuotedMessageSelector<T> = (value: unknown) => HostQuotedMessageSelection<T>
 
 export interface HostRuntime {
+  registerInboundMessages(root: string): void
+  inboundMessage(event: unknown): InboundMessage | undefined
+  isMasterUser(botId: string, userId: string): Promise<boolean>
   applyActionEntries(root: string, entries: HostCommandEntry[]): Promise<typeof actionCommandStatus>
   readonly bot?: YuiChatHostBot
   readonly logger?: YuiChatHostLogger
@@ -53,6 +58,31 @@ export interface HostRuntime {
 }
 
 type HostRecord = Record<string, unknown>
+interface InboundMessage { userId: string; botId: string; groupId: string; messageId: string; text: string }
+const inboundMessages = new WeakMap<object, InboundMessage>()
+let hostRoot = ""
+let ingressRegistered = false
+function registerInboundMessages(root: string): void {
+  hostRoot = root
+  const bot = hostRuntime.bot
+  if (ingressRegistered || typeof bot?.prependListener !== "function") return
+  const listener = (event: unknown): void => {
+    const value = record(event)
+    if (!value.user_id || !value.self_id || !value.message_id) return
+    const text = Array.isArray(value.message) ? value.message.filter(part => record(part).type === "text").map(part => String(record(part).text || "")).join("") : String(value.raw_message || value.msg || "")
+    inboundMessages.set(value, Object.freeze({ userId: String(value.user_id), botId: String(value.self_id), groupId: String(value.group_id || ""), messageId: String(value.message_id), text }))
+  }
+  ;(bot.prependListener as (name: string, fn: (event: unknown) => void) => unknown).call(bot, "message", listener)
+  ingressRegistered = true
+}
+async function isMasterUser(botId: string, userId: string): Promise<boolean> {
+  if (!hostRoot) return false
+  try {
+    const module = await import(pathToFileURL(path.join(hostRoot, "lib/config/config.js")).href) as { default?: HostRecord }
+    const master = record(module.default?.master)
+    return Array.isArray(master[botId]) && (master[botId] as unknown[]).map(String).includes(userId)
+  } catch { return false /* Missing host identity authority fails closed. */ }
+}
 
 function record(value: unknown): HostRecord {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value) ? value as HostRecord : {}
@@ -134,6 +164,13 @@ async function readQuotedMessage<T>(event: unknown, sequence: unknown, select: H
 
 /** 宿主适配层：领域模块通过这里读取 Yunzai 全局对象，避免新增直接全局引用。 */
 export const hostRuntime: HostRuntime = Object.freeze({
+  registerInboundMessages,
+  isMasterUser,
+  inboundMessage(event: unknown) {
+    const value = record(event)
+    const original = inboundMessages.get(value)
+    return original && String(value.user_id) === original.userId && String(value.self_id) === original.botId && String(value.message_id) === original.messageId ? original : undefined
+  },
   applyActionEntries: applyHostActionEntries,
   get bot() {
     return globalThis.Bot

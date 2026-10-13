@@ -207,3 +207,39 @@ export function lookupSafeHttpAddress(hostname: string, options: unknown, callba
     callback(null, ...(all ? [eligible] : [eligible[0].address, eligible[0].family]))
   }).catch(callback)
 }
+
+export interface ScopedNetworkGrant {
+  id: string
+  purpose: "repository-fetch" | "mcp-connect"
+  targetId: string
+  origin: string
+  paths: string[]
+  addresses: string[]
+  allowHttpCredentials: boolean
+  ca?: string
+  version: number
+  revoked: boolean
+}
+
+/** Private grants are exact targets; metadata/link-local/multicast ranges cannot be granted. */
+export function isGrantablePrivateAddress(address: string): boolean {
+  if (net.isIPv4(address)) {
+    const [a, b] = address.split(".").map(Number)
+    return a === 127 || a === 10 || a === 172 && b >= 16 && b <= 31 || a === 192 && b === 168
+  }
+  const value = normalizeHost(address)
+  return net.isIPv6(value) && (value === "::1" || value.startsWith("fc") || value.startsWith("fd"))
+}
+
+export async function scopedNetworkAddresses(url: URL, grant?: ScopedNetworkGrant): Promise<Array<{ address: string; family: number }>> {
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new Error("NETWORK_URL_INVALID")
+  if (grant && (grant.revoked || url.origin !== grant.origin || !grant.paths.includes(url.pathname))) throw new Error("NETWORK_GRANT_SCOPE_MISMATCH")
+  const host = normalizeHost(url.hostname)
+  const records = net.isIP(host) ? [{ address: host, family: net.isIP(host) }] : await dns.lookup(host, { all: true, verbatim: true })
+  if (!records.length) throw new Error("NETWORK_DNS_EMPTY")
+  for (const item of records) {
+    if (isPrivateIp(item.address) && (!grant || !isGrantablePrivateAddress(item.address) || !grant.addresses.includes(item.address))) throw new Error("NETWORK_GRANT_REQUIRED")
+    if (grant && !grant.addresses.includes(item.address)) throw new Error("NETWORK_ADDRESS_CHANGED")
+  }
+  return records
+}

@@ -1,3 +1,7 @@
+import { hostRuntime } from "../core/runtime/host-runtime.js"
+import { installationInstaller, installationSummary } from "../extensions/installation/installer.js"
+import { issueOwnerInstallationActor } from "../extensions/installation/authorization.js"
+import type { SourceInput } from "../extensions/installation/types.js"
 import { listPersonaPunishments } from "../core/chat/persona-punishments.js"
 import { toolRegistry } from "../tools/support/registry.js"
 import { stripPluginCommand, pluginCommand, pluginCommandRule } from "../core/message/command-prefixes.js"
@@ -12,6 +16,35 @@ function masterCommand(reg: string, fnc: string) {
  * 所有 Master 指令必须只在这里注册，并经 masterCommand() 强制附加宿主权限。
  */
 export class YuiChatMaster extends YuiChatCommandHandlers {
+  async extensionInstallationCommand() {
+    try {
+      const actor = await issueOwnerInstallationActor(this.e, "owner_command")
+      const originalText = hostRuntime.inboundMessage(this.e)?.text.trim() || ""
+      const progress = stripPluginCommand(originalText, "扩展进度")
+      const cancel = stripPluginCommand(originalText, "扩展取消")
+      if (progress !== String(originalText)) return this.reply(JSON.stringify(installationSummary(await installationInstaller.get(progress.trim(), actor))), true)
+      if (cancel !== String(originalText)) return this.reply(JSON.stringify(installationSummary(await installationInstaller.cancel(cancel.trim(), actor))), true)
+      if (stripPluginCommand(originalText, "扩展安装") === originalText) throw new Error("需要当前主人原始消息中的扩展安装指令")
+      const tokens = stripPluginCommand(originalText, "扩展安装").trim().split(/\s+/)
+      const input: SourceInput = { source: tokens.shift() || "", kind: "skill" }
+      let serviceId = "", transport = "streamableHttp"
+      for (const token of tokens) {
+        const match = /^(ref|subdir|type|id|transport)=([^\s]+)$/.exec(token)
+        if (!match) throw new Error("用法：扩展安装 <仓库或归档 URL> [ref=版本] [subdir=目录]；MCP 使用 type=mcp id=服务名 [transport=sse]。")
+        if (match[1] === "type") { if (!["skill", "mcp"].includes(match[2])) throw new Error("无效扩展类型"); input.kind = match[2] as SourceInput["kind"]; }
+        else if (match[1] === "id") serviceId = match[2]
+        else if (match[1] === "transport") transport = match[2]
+        else input[match[1] as "ref" | "subdir"] = match[2]
+      }
+      if (input.kind === "mcp") {
+        if (input.ref || input.subdir || !serviceId || !["sse", "streamableHttp"].includes(transport)) throw new Error("MCP 需要 id=服务名 和合法传输，不接受 ref/subdir")
+        input.mcp = { id: serviceId, url: input.source, transport }
+      } else if (serviceId || transport !== "streamableHttp") throw new Error("Skill 不接受 MCP 参数")
+      const task = await installationInstaller.submit(input, actor)
+      return this.reply(`已受理扩展安装：${task.id}\n安装后保持停用；进度与补充输入请在 Web 安装记录中查看。`, true)
+    } catch (error) { return this.reply(error instanceof Error ? error.message : "安装请求失败", true) }
+  }
+
   async personaPunishmentList() {
     if (this.e.isMaster !== true) return this.reply("仅主人可查看处罚列表。", true)
     const rows = await listPersonaPunishments()
@@ -39,6 +72,7 @@ export class YuiChatMaster extends YuiChatCommandHandlers {
       event: "message",
       priority: 1138,
       rule: [
+        masterCommand("扩展(?:安装|进度|取消)\\s+[\\s\\S]+", "extensionInstallationCommand"),
         masterCommand("(?:他的|她的|TA的|ta的)记忆(?:\\s+[\\s\\S]*)?", "mentionMemoryCommand"),
         masterCommand("管理记忆(?:\\s+[\\s\\S]*)?", "manageMemoryCommand"),
         masterCommand("(?:全部|所有)定时任务(?:列表)?", "allScheduleTaskList"),

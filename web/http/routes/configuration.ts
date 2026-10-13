@@ -1,3 +1,4 @@
+import { assertManagedConfigWrite } from "../../../extensions/installation/configuration-guard.js"
 import { getReasoningOptions } from "../../../models/configuration/reasoning.js"
 import { configStore, mergeRedactedConfigSecrets, redactConfigSecrets } from "../../../config/store.js"
 import { getSchemaManifest, schema } from "../../../config/schema.js"
@@ -82,15 +83,20 @@ export function registerConfigRoutes(app: RouteApp): void {
   app.post("/api/config", auth, handleRoute(async (req, res) => {
     const next = bodyOf(req)
     const incoming = configValue(next.config || next)
-    const { saved, runtime } = await updateConfigAndApply(current => configValue(mergeRedactedConfigSecrets(incoming, current)))
+    const { saved, runtime } = await updateConfigAndApply(async current => {
+      const nextConfig = configValue(mergeRedactedConfigSecrets(incoming, current))
+      await assertManagedConfigWrite(current, nextConfig)
+      return nextConfig
+    })
     res.json({ ok: true, config: publicConfig(saved), runtime, meta: configStore.meta(), backups: await configStore.listBackups({ limit: 0 }) })
   }, { errorStatus: 400 }))
   app.patch("/api/config", auth, handleRoute(async (req, res) => {
     const body = bodyOf(req)
     const patch = record(body.patch || body)
     let changedPaths: string[] = []
-    const { saved, runtime } = await updateConfigAndApply(current => {
+    const { saved, runtime } = await updateConfigAndApply(async current => {
       const result = applyConfigPatch(current, patch)
+      await assertManagedConfigWrite(current, configValue(result.next))
       changedPaths = result.changedPaths
       return configValue(result.next)
     })

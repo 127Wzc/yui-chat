@@ -62,14 +62,8 @@ const MCP_CONNECTION_OPTIONS = [
 ]
 function defaultMcpEditor(): McpEditorDraft {
   return {
-    mode: "create",
-    id: "",
-    description: "",
-    enabled: "true",
-    connection: "stdio",
-    url: "",
-    command: "",
-    args: "",
+    mode: "create", id: "", description: "", enabled: "true",
+    connection: "stdio", url: "", command: "", args: "",
     category: "mcp",
     risk: "external",
     requiresFinalReply: "true",
@@ -82,9 +76,6 @@ function defaultMcpEditor(): McpEditorDraft {
     toolPolicies: "{}",
     allowedTools: null,
   }
-}
-function serverRequiresFinalReply(server: McpServer = {}) {
-  return server.requiresFinalReply !== false
 }
 function envToLines(value: unknown): string {
   if (typeof value === "string") return value
@@ -136,6 +127,7 @@ export const McpPanel = {
     const visibleServers = computed(() => serverList.value.filter(item =>
       [item.id, item.description, item.descriptionZh].join(" ").toLowerCase().includes(filter.query.trim().toLowerCase())
       && (filter.status === "all" || (item.enabled !== false) === (filter.status === "enabled"))))
+    const managedEditor = computed(() => editor.mode === "edit" && Boolean(serverMap.value[editor.id]?.installationId))
     const editorTitle = computed(() => `${editor.mode === "create" ? "新增" : "编辑"} MCP 服务`)
     const editorSubtitle = computed(() => editor.mode === "create"
       ? "快速填写连接信息，或导入已有 MCP 配置。"
@@ -156,7 +148,7 @@ export const McpPanel = {
         args: Array.isArray(server.args) ? server.args.join("\n") : (server.argsText || ""),
         category: server.category || "mcp",
         risk: server.risk || "external",
-        requiresFinalReply: String(serverRequiresFinalReply(server)),
+        requiresFinalReply: String((server.requiresFinalReply !== false)),
         execution: typeof server.execution === "string" ? server.execution : toJson(server.execution || {}),
         executionByAction: typeof server.executionByAction === "string" ? server.executionByAction : toJson(server.executionByAction || {}),
         tags: Array.isArray(server.tags) ? server.tags.join(", ") : (server.tags || "mcp, external"),
@@ -223,6 +215,13 @@ export const McpPanel = {
     }
     async function saveEditor(discover = false) {
       try {
+        if (managedEditor.value) {
+          if (!discover) throw new Error("受管理服务通过安装记录修改绑定，端点变更需要新计划")
+          const result = await request(`/api/mcp/${encodeURIComponent(editor.id)}/discover`, { method: "POST", body: "{}" })
+          toast(`发现 ${asRecords(asRecord(result.probe).catalog).length} 个工具；请在工具开放配置中选择`)
+          await refreshTab("tools")
+          return
+        }
         if (editorMode.value === "json" && editor.mode === "create") return importJsonToEditor()
         const id = String(editor.id || "").trim()
         if (!id) throw new Error("请输入 MCP 服务名称或 ID")
@@ -264,8 +263,8 @@ export const McpPanel = {
       } catch (err) { toast(errorMessage(err)) }
     }
     async function toggleServer(id: string, enabled: boolean) {
-      if (!enabled) {
-        const accepted = await confirmAction({ title: `停用 MCP 服务“${id}”？`, message: "来自该服务的工具将不再提供给模型调用。", confirmText: "确认停用", tone: "warn", icon: "power" })
+      if (!enabled || serverMap.value[id]?.installationId) {
+        const accepted = await confirmAction({ title: `${enabled ? "启用" : "停用"} MCP 服务“${id}”？`, message: enabled ? "将连接已授权端点；仅明确选择且定义未变化的工具可用。" : "来自该服务的工具将不再提供给模型调用。", confirmText: enabled ? "确认启用" : "确认停用", tone: "warn", icon: "power" })
         if (!accepted) return
       }
       try {
@@ -300,6 +299,7 @@ export const McpPanel = {
       importJsonText,
       editor,
       serverList, filter, visibleServers,
+      managedEditor,
       editorTitle,
       editorSubtitle,
       openCreate,
@@ -330,7 +330,7 @@ export const McpPanel = {
         <template #filters><CapabilityFilterBar v-model:query="filter.query" v-model:status="filter.status" :count="visibleServers.length" :total="serverList.length" placeholder="搜索服务名称、ID 或说明" @reset="filter.query = ''; filter.status = 'all'" /></template>
         <template #identity="{ item }"><strong>{{ item.id }}</strong><div class="cell-sub">{{ item.description || item.descriptionZh }}</div><div class="cell-sub">{{ serverTransport(item) }}</div></template>
         <template #risk="{ item }"><CapabilityRisk :tool="{ ...item, risk: item.risk || 'external', policy: { externalNetwork: true, ...item.policy } }" /></template>
-        <template #status="{ item }"><Pill v-bind="serverStatus(item)" /><span class="badge">{{ item.transport || item.type || (item.command ? 'stdio' : 'sse') }}</span></template>
+        <template #status="{ item }"><Pill v-bind="serverStatus(item)" /><span class="badge">{{ item.installationId ? '受管理' : '来源未知' }}</span><span class="badge">{{ item.transport || item.type || (item.command ? 'stdio' : 'sse') }}</span></template>
         <template #actions="{ item }"><button class="btn small outline" @click="openEdit(item.id)">编辑</button><Switch :model-value="item.enabled !== false" @update:model-value="toggleServer(item.id, $event)" /></template>
         <template #roles="{ item }"><CapabilityRoleButtons scope="mcpServers" :id="item.id" /></template>
         <template #details="{ item }"><div class="capability-list-details"><McpToolsPanel :server-id="item.id" /></div></template>
@@ -354,6 +354,7 @@ export const McpPanel = {
           </div>
           <Field label="MCP 配置 JSON" type="textarea" rows="16" v-model="importJsonText" placeholder='{\n  "id": "demo",\n  "url": "http://127.0.0.1:3000/sse"\n}' tip="只读取配置，不会执行 JSON 中的命令；保存前仍可在表单中检查和修改。" />
         </template>
+        <div v-else-if="managedEditor" class="stack"><p>此服务由安装计划管理，端点和传输已固定。</p><p>{{ editor.id }} · {{ editor.connection }}<br/>{{ editor.url }}</p><p class="muted">凭据、网络与 CA 在安装记录中绑定。启停和工具开放使用服务列表中的独立入口。</p></div>
         <template v-else>
           <p class="muted small">先填写名称和连接方式；环境变量、策略和工具级覆盖都放在高级设置里，普通场景不用管。</p>
           <div class="form-grid">
@@ -386,7 +387,7 @@ export const McpPanel = {
           <button class="btn outline" type="button" @click="showEditor = false"><Icon name="x" :size="14" />关闭</button>
           <button v-if="editor.mode === 'create' && editorMode === 'json'" class="btn primary small" type="button" @click="importJsonToEditor"><Icon name="download" :size="14" />读取 JSON</button>
           <button v-else-if="editor.mode === 'create'" class="btn outline small" type="button" @click="saveEditor(true)"><Icon name="refresh" :size="14" />保存并发现</button>
-          <button v-else-if="editor.mode === 'edit'" class="btn outline small" type="button" @click="saveEditor(true)"><Icon name="refresh" :size="14" />保存并发现</button>
+          <button v-else-if="editor.mode === 'edit'" class="btn outline small" type="button" @click="saveEditor(true)"><Icon name="refresh" :size="14" />{{ managedEditor ? '测试 / 发现' : '保存并发现' }}</button>
           <button v-else class="btn primary small" type="button" @click="saveEditor"><Icon name="save" :size="14" />保存服务</button>
         </template>
       </SideDrawer>

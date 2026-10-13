@@ -1,8 +1,9 @@
 import * as http from "node:http"
 import * as https from "node:https"
-import { assertSafeHttpUrl, lookupSafeHttpAddress } from "./link-safety-policy.js"
+import { assertSafeHttpUrl, lookupSafeHttpAddress, scopedNetworkAddresses, type ScopedNetworkGrant } from "./link-safety-policy.js"
 
 export interface SafeHttpOptions {
+  networkGrant?: ScopedNetworkGrant
   method?: string
   headers?: HeadersInit
   allowPrivateHosts?: boolean
@@ -127,14 +128,17 @@ function readResponse(response: IncomingMessage, maxBytes: number): Promise<Buff
   })
 }
 
-function requestOnce(url: URL, options: RequestOptions, signal: AbortSignal): Promise<RedirectResult> {
+async function requestOnce(url: URL, options: RequestOptions & { networkGrant?: ScopedNetworkGrant }, signal: AbortSignal): Promise<RedirectResult> {
+  const addresses = options.networkGrant ? await scopedNetworkAddresses(url, options.networkGrant) : undefined
   return new Promise((resolve, reject) => {
     const transport: HttpTransport = url.protocol === "https:" ? https.request : http.request
     const request: ClientRequest = transport(url, {
       method: options.method,
       headers: options.headers,
       signal,
-      ...(options.allowPrivateHosts ? {} : { lookup: lookupSafeHttpAddress }),
+      agent: false, rejectUnauthorized: true,
+      ...(options.networkGrant?.ca ? { ca: options.networkGrant.ca } : {}),
+      ...(addresses ? { lookup: (_hostname: string, opts: { all?: boolean }, callback: (...args: unknown[]) => void) => callback(null, ...(opts?.all ? [addresses] : [addresses[0].address, addresses[0].family])) } : options.allowPrivateHosts ? {} : { lookup: lookupSafeHttpAddress }),
     }, async response => {
       const location = response.headers.location
       if ([301, 302, 303, 307, 308].includes(Number(response.statusCode)) && location) {
@@ -182,7 +186,7 @@ export async function fetchSafeHttp(inputUrl: unknown, options: SafeHttpOptions 
   const timeoutMs = Math.max(100, Number(options.timeoutMs) || 15000)
   const maxBytes = Math.max(1, Number(options.maxBytes) || 2 * 1024 * 1024)
   const maxRedirects = Math.max(0, Math.min(10, Number(options.maxRedirects ?? 5)))
-  const allowPrivateHosts = options.allowPrivateHosts === true
+  const allowPrivateHosts = options.networkGrant ? true : options.allowPrivateHosts === true
   const controller = new AbortController()
   const abortFromExternal = (): void => controller.abort(options.signal?.reason)
   if (options.signal?.aborted) controller.abort(options.signal.reason)
@@ -194,12 +198,13 @@ export async function fetchSafeHttp(inputUrl: unknown, options: SafeHttpOptions 
   try {
     current = new URL(await assertSafeHttpUrl(inputUrl, { allowPrivateHosts, maxUrlLength: options.maxUrlLength }))
     for (let count = 0; ; count += 1) {
-      const result = await requestOnce(current, { allowPrivateHosts, headers, maxBytes, method }, controller.signal)
+      if (options.networkGrant && current.protocol === "http:" && Object.keys(headers).some(key => !["accept", "accept-encoding", "user-agent"].includes(key)) && !options.networkGrant.allowHttpCredentials) throw new Error("HTTP_CREDENTIAL_GRANT_REQUIRED")
+      const result = await requestOnce(current, { allowPrivateHosts, headers, maxBytes, method, networkGrant: options.networkGrant }, controller.signal)
       if (!result.location) return toSafeResponse(result, current, redirected)
       if (count >= maxRedirects) throw new Error(`重定向次数超过限制：${maxRedirects}`)
       const next = new URL(await assertSafeHttpUrl(new URL(result.location, current).toString(), { allowPrivateHosts, maxUrlLength: options.maxUrlLength }))
       if (next.origin !== current.origin) {
-        headers = Object.fromEntries(Object.entries(headers).filter(([key]) => !["authorization", "cookie", "host", "proxy-authorization"].includes(key)))
+        headers = Object.fromEntries(Object.entries(headers).filter(([key]) => ["accept", "accept-encoding", "user-agent"].includes(key)))
       }
       current = next
       redirected = true

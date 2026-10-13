@@ -40,7 +40,7 @@ type BackupRow = {
 }
 type LoadError = Record<string, string>
 type ReloadOptions = { force?: boolean; persistDefaults?: boolean; keepCurrent?: boolean }
-type BackupOptions = { beforeSave?: (sqliteConfig: unknown) => Promise<void> | void }
+type BackupOptions = { validateCandidate?: (current: RuntimeConfigSnapshot, candidate: RuntimeConfigObject) => Promise<void> | void; beforeSave?: (sqliteConfig: unknown) => Promise<void> | void }
 
 const pluginRootOverride = String(process.env.YUI_CHAT_PLUGIN_ROOT || "").trim()
 /** 插件源码与资源根目录；编译产物通过环境变量保持与源码相同的数据定位。 */
@@ -1002,6 +1002,7 @@ export class ConfigStore implements ConfigStoreContract {
       const restored = packaged && isObject(payload) ? payload.config : payload
       migrateStoredReasoning(restored)
       const candidate = prepareConfig(restored)
+      if (options.validateCandidate) await options.validateCandidate(this.get(), candidate as RuntimeConfigObject)
       if (packaged && options.beforeSave && isObject(payload)) await options.beforeSave(clone(payload.sqliteConfig))
       return this.performSave(candidate) as Promise<RuntimeConfigSnapshot>
     })

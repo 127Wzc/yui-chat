@@ -1,8 +1,9 @@
+import { installationStore } from "../extensions/installation/store.js"
+import { sqliteClient } from "../core/storage/sqlite/client.js"
+import { withExtensionLock, extensionIsolated, assertExtensionWritable } from "../extensions/installation/guard.js"
 import { explainResourceAccess } from "../tools/access/resource-policy.js"
 import fs from "node:fs/promises"
-import os from "node:os"
 import path from "node:path"
-import { spawn } from "node:child_process"
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml"
 import { configStore } from "../config/store.js"
 import { createUserExtensionStorage } from "../extensions/storage.js"
@@ -59,39 +60,6 @@ async function createSkillDir(dir: string, id: string): Promise<void> {
     if (errorCode(err) === "EEXIST") throw new Error(`Skill name “${id}” 已存在`)
     throw err
   }
-}
-
-function normalizeRepoUrl(value: unknown = ""): string {
-  const raw = String(value || "").trim()
-  if (!raw) throw new Error("repo is required")
-  if (/^[\w.-]+\/[\w.-]+$/.test(raw)) return `https://github.com/${raw}.git`
-  if (/^https:\/\/.+/.test(raw)) {
-    const url = new URL(raw)
-    if (url.username || url.password) throw new Error("repo URL 不允许内嵌用户名或凭证")
-    return raw
-  }
-  if (/^git@[\w.-]+:.+/.test(raw)) return raw
-  throw new Error("repo 必须是 HTTPS/SSH Git 地址或 owner/repo；不允许 file:// 和明文 HTTP")
-}
-
-function repoNameFromUrl(value: unknown = ""): string {
-  const clean = String(value || "").trim().replace(/[#?].*$/, "").replace(/\.git$/, "")
-  return sanitizeSkillId(clean.split(/[/:]/).filter(Boolean).pop() || "remote-skill")
-}
-
-function runGit(args: string[] = [], opts: AnyRecord = {}): Promise<{ stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    const child = spawn("git", args, { cwd: opts.cwd, stdio: ["ignore", "pipe", "pipe"] })
-    let stdout = ""
-    let stderr = ""
-    child.stdout.on("data", chunk => { stdout += String(chunk) })
-    child.stderr.on("data", chunk => { stderr += String(chunk) })
-    child.on("error", reject)
-    child.on("close", code => {
-      if (code === 0) resolve({ stdout, stderr })
-      else reject(new Error((stderr || stdout || `git exited with ${code}`).trim()))
-    })
-  })
 }
 
 function validationResult(errors: SkillIssue[] = [], warnings: SkillIssue[] = []): SkillValidation {
@@ -205,11 +173,12 @@ class SkillManager {
     await this.ensureDir()
     const disabled = await this.disabledSet()
     const sources = await this.sourceMap()
+    const managedIds = new Set(sqliteClient.status.available ? (await sqliteClient.all<{ target_id: string }>("SELECT target_id FROM extension_installation_receipts WHERE kind='skill' AND retired_at IS NULL")).map(row => row.target_id) : [])
     const entries = await fs.readdir(skillsDir, { withFileTypes: true })
     const skills: SkillItem[] = []
     const errors: AnyRecord[] = []
     for (const entry of entries) {
-      if (!entry.isDirectory()) continue
+      if (!entry.isDirectory() || entry.name.startsWith(".")) continue
       const id = sanitizeSkillId(entry.name)
       const dir = path.join(skillsDir, entry.name)
       const skillFile = path.join(dir, "SKILL.md")
@@ -224,7 +193,7 @@ class SkillManager {
           description: parsed.metadata.description,
           metadata: parsed.metadata,
           body: parsed.body,
-          enabled: !disabled.has(id),
+          enabled: !disabled.has(id) && !extensionIsolated("skill", id) && !new Set((record(configStore.get().skills).disabled || []).map(String)).has(id),
           validation: parsed.validation,
           resources: {
             scripts: await countFiles(path.join(dir, "scripts")),
@@ -255,6 +224,7 @@ class SkillManager {
       format: "openai-skill-md",
       tools: [],
       remote: sources[item.id] || null,
+      sourceState: managedIds.has(item.id) ? "recorded" : "unknown",
       configSchema: item.metadata?.configSchema || { type: "object", properties: {} },
       runtimeConfig: maskToolRuntimeConfig({ name: item.id, configSchema: item.metadata?.configSchema }, record(record(configStore.get() as unknown as AnyRecord).skills).runtimeVariables?.[item.id]),
     }))
@@ -295,7 +265,7 @@ class SkillManager {
       .sort((a, b) => b.score - a.score)
       .slice(0, 3)
       .map(row => row.item)
-    const selectedText = selected.map(item => {
+    const selectedText = selected.filter(item => !extensionIsolated("skill", item.id) && !new Set((record(configStore.get().skills).disabled || []).map(String)).has(item.id)).map(item => {
       const schema = item.metadata?.configSchema || {}
       const runtimeConfig = resolveToolRuntimeConfig({ name: item.id, configSchema: schema }, { tools: { runtimeVariables: config.skills?.runtimeVariables || {} } })
       // 白名单注入：只有 schema 显式声明、且非 secret、未标记 exposeToModel:false 的变量才进 prompt。
@@ -324,7 +294,7 @@ export function listSkills() {
   return skillManager.listSkills()
 }
 
-export async function createSkillTemplate(skillId = "my-skill", opts: AnyRecord = {}): Promise<AnyRecord> {
+async function createSkillTemplateUnlocked(skillId = "my-skill", opts: AnyRecord = {}): Promise<AnyRecord> {
   const id = sanitizeSkillId(skillId) || "my-skill"
   const metadata = {
     name: id,
@@ -341,7 +311,7 @@ export async function createSkillTemplate(skillId = "my-skill", opts: AnyRecord 
 }
 
 // 新建：目录 ID 由 SKILL.md 自身特征推导，控制台不需要也不展示它。
-export async function createSkillPackage(payload: AnyRecord = {}): Promise<AnyRecord> {
+async function createSkillPackageUnlocked(payload: AnyRecord = {}): Promise<AnyRecord> {
   const manifest = record(payload.manifest)
   await skillManager.ensureDir()
   const metadata = { ...manifest }
@@ -358,72 +328,34 @@ export async function createSkillPackage(payload: AnyRecord = {}): Promise<AnyRe
   const validation = parseSkillMarkdown(markdown).validation
   if (!validation.ok) throw new Error(validation.errors[0]?.message || "SKILL.md validation failed")
   const { dir, skillFile } = skillManager.skillPaths(id)
+  return withExtensionLock("skill", id, async () => {
+    assertExtensionWritable("skill", id)
   await createSkillDir(dir, id)
   await fs.writeFile(skillFile, markdown, "utf8")
-  if (manifest.enabled === false) await setSkillEnabled(id, false)
+  if (manifest.enabled === false) await setSkillEnabledUnlocked(id, false)
   await skillManager.refresh()
   return getSkillPackage(id)
+  })
 }
 
-export async function installRemoteSkill(payload: AnyRecord = {}): Promise<AnyRecord> {
-  await skillManager.ensureDir()
-  const repo = normalizeRepoUrl(payload.repo || payload.url || payload.repository)
-  const ref = String(payload.ref || payload.branch || "").trim()
-  const subdir = String(payload.subdir || "").trim().replace(/^\/+|\/+$/g, "")
-  const fallbackId = repoNameFromUrl(repo)
-  const overwrite = payload.overwrite === true
-  const tmpRoot = await (fs as any).mkdtemp(path.join(os.tmpdir(), "yui-chat-skill-")) as string
-  const cloneDir = path.join(tmpRoot, "repo")
-  try {
-    const args = ["clone", "--depth", "1"]
-    if (ref) args.push("--branch", ref)
-    args.push(repo, cloneDir)
-    await runGit(args)
-    const sourceDir = subdir ? path.resolve(cloneDir, subdir) : cloneDir
-    const relativeSource = path.relative(cloneDir, sourceDir)
-    if (relativeSource.startsWith("..") || path.isAbsolute(relativeSource)) throw new Error("subdir 必须位于仓库目录内")
-    const sourceFile = path.join(sourceDir, "SKILL.md")
-    const parsed = parseSkillMarkdown(await fs.readFile(sourceFile, "utf8"), { file: sourceFile })
-    if (!parsed.validation.ok) throw new Error(parsed.validation.errors[0]?.message || "SKILL.md validation failed")
-    const id = sanitizeSkillId(payload.skillId || payload.id || parsed.metadata.name || fallbackId) || fallbackId
-    const target = skillManager.skillPaths(id)
-    try {
-      await fs.access(target.dir)
-      if (!overwrite) throw new Error(`Skill ${id} already exists`)
-      await fs.rm(target.dir, { recursive: true, force: true })
-    } catch (err) {
-      if (errorCode(err) !== "ENOENT") throw err
-    }
-    await fs.mkdir(target.dir, { recursive: true })
-    await fs.cp(sourceDir, target.dir, { recursive: true, force: true, filter: (source: string) => !source.split(path.sep).includes(".git") } as any)
-    await configStore.update(config => {
-      const draft = config as unknown as AnyRecord
-      const skills = record(draft.skills)
-      draft.skills = {
-        ...skills,
-        sources: {
-          ...record(skills.sources),
-          [id]: { repo, ref, subdir },
-        },
-      }
-    })
-    await skillManager.refresh()
-    return { id, repo, ref, subdir, skillFile: target.skillFile, metadata: parsed.metadata }
-  } finally {
-    await fs.rm(tmpRoot, { recursive: true, force: true }).catch(() => {})
-  }
+export async function createSkillTemplate(skillId = "my-skill", opts: AnyRecord = {}): Promise<AnyRecord> {
+  const id = sanitizeSkillId(skillId) || "my-skill"
+  return withExtensionLock("skill", id, async () => { assertExtensionWritable("skill", id); return createSkillTemplateUnlocked(id, opts) })
+}
+export async function createSkillPackage(payload: AnyRecord = {}): Promise<AnyRecord> { return createSkillPackageUnlocked(payload) }
+
+/** Old remote copying is closed; authenticated entry points submit persistent installation tasks. */
+export async function installRemoteSkill(_payload: AnyRecord = {}): Promise<AnyRecord> {
+  throw new Error("请通过安装记录提交安装任务；不支持直接复制或覆盖远程目录。")
+}
+export async function updateRemoteSkill(_skillId: unknown): Promise<AnyRecord> {
+  throw new Error("自动覆盖更新尚未开放；请保留现有目录，在安装记录中检查新版本。")
 }
 
-export async function updateRemoteSkill(skillId: unknown): Promise<AnyRecord> {
-  const id = sanitizeSkillId(skillId)
-  const source = (await skillManager.sourceMap())[id]
-  if (!source?.repo) throw new Error(`Skill ${id} 没有远程来源记录，请重新安装并覆盖同名`)
-  return installRemoteSkill({ ...source, skillId: id, overwrite: true })
-}
-
-export async function setSkillEnabled(skillId: unknown, enabled: unknown): Promise<AnyRecord> {
+async function setSkillEnabledUnlocked(skillId: unknown, enabled: unknown): Promise<AnyRecord> {
   const { id, skillFile } = skillManager.skillPaths(skillId)
-  await fs.access(skillFile)
+  const parsed = parseSkillMarkdown(await fs.readFile(skillFile, "utf8"))
+  if (enabled && !parsed.validation.ok) throw new Error("Skill 结构校验失败")
   await configStore.update(config => {
     const draft = config as unknown as AnyRecord
     const skills = record(draft.skills)
@@ -452,13 +384,16 @@ export async function getSkillPackage(skillId: unknown): Promise<AnyRecord> {
     metadata: parsed.metadata,
     source: parsed.body,
     markdown: source,
+    installationId: sqliteClient.status.available ? (await installationStore.receipt("skill", id))?.installationId : undefined,
     validation: parsed.validation,
   }
 }
 
-export async function updateSkillPackage(skillId: unknown, payload: AnyRecord = {}): Promise<AnyRecord> {
+async function updateSkillPackageUnlocked(skillId: unknown, payload: AnyRecord = {}): Promise<AnyRecord> {
   const { id, skillFile } = skillManager.skillPaths(skillId)
   const manifest = record(payload.manifest)
+  const managed = sqliteClient.status.available && Boolean(await installationStore.receipt("skill", id))
+  if (managed && manifest.enabled !== undefined && Boolean(manifest.enabled) !== !(await skillManager.disabledSet()).has(id)) throw new Error("受管理 Skill 的启停请使用独立启用入口")
   const current = parseSkillMarkdown(await fs.readFile(skillFile, "utf8"), { file: skillFile })
   const metadata: AnyRecord = {
     ...current.metadata,
@@ -473,12 +408,12 @@ export async function updateSkillPackage(skillId: unknown, payload: AnyRecord = 
   const validation = parseSkillMarkdown(formatSkillMarkdown(metadata, body)).validation
   if (!validation.ok) throw new Error(validation.errors[0]?.message || "SKILL.md validation failed")
   await fs.writeFile(skillFile, formatSkillMarkdown(metadata, body), "utf8")
-  if (manifest.enabled !== undefined) await setSkillEnabled(id, manifest.enabled !== false)
+  if (!managed && manifest.enabled !== undefined) await setSkillEnabledUnlocked(id, manifest.enabled !== false)
   await skillManager.refresh()
   return getSkillPackage(id)
 }
 
-export async function deleteSkillPackage(skillId: unknown): Promise<AnyRecord> {
+async function deleteSkillPackageUnlocked(skillId: unknown): Promise<AnyRecord> {
   const { id, dir } = skillManager.skillPaths(skillId)
   await fs.rm(dir, { recursive: true, force: true })
   await configStore.update(config => {
@@ -488,6 +423,20 @@ export async function deleteSkillPackage(skillId: unknown): Promise<AnyRecord> {
     delete sources[id]
     draft.skills = { ...skills, disabled: (skills.disabled || []).filter((item: unknown) => item !== id), sources }
   })
+  if (sqliteClient.status.available) await installationStore.retireReceipt("skill", id)
   await skillManager.refresh()
   return { id, deleted: true }
+}
+
+export async function setSkillEnabled(skillId: unknown, enabled: unknown): Promise<AnyRecord> {
+  const id = sanitizeSkillId(skillId)
+  return withExtensionLock("skill", id, async () => { assertExtensionWritable("skill", id); return setSkillEnabledUnlocked(id, enabled) })
+}
+export async function updateSkillPackage(skillId: unknown, payload: AnyRecord = {}): Promise<AnyRecord> {
+  const id = sanitizeSkillId(skillId)
+  return withExtensionLock("skill", id, async () => { assertExtensionWritable("skill", id); return updateSkillPackageUnlocked(id, payload) })
+}
+export async function deleteSkillPackage(skillId: unknown): Promise<AnyRecord> {
+  const id = sanitizeSkillId(skillId)
+  return withExtensionLock("skill", id, async () => { assertExtensionWritable("skill", id); return deleteSkillPackageUnlocked(id) })
 }

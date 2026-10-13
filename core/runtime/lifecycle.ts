@@ -1,3 +1,4 @@
+import { installationInstaller } from "../../extensions/installation/installer.js"
 import { loadPersonaPunishments } from "../chat/persona-punishments.js"
 import { applyActionCommands } from "../../apps/actions.js"
 import { actionCommandStatus } from "./host-command-registry.js"
@@ -128,6 +129,7 @@ export async function endAllConversationsRuntime(opts: RuntimeLifecycleOptions =
   if (opts.shutdown) await groupCaptureStore.stop({ flush: true })
   else if (opts.flushMemory) await groupCaptureStore.flush()
   if (opts.shutdown) {
+    await installationInstaller.stop()
     await applyActionCommands({ actions: { enabled: false } })
     await modelLogStore.stop({ flush: true, timeoutMs: 1500 })
     await filterRegistry.destroy()

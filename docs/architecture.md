@@ -55,6 +55,9 @@
 | 可重建向量索引 | `data/yui-chat/storage/vectors.sqlite3` |
 | Custom Tool、Filter、Skill | `data/yui-chat/extensions/` |
 | 手动配置包 | `data/yui-chat/backups/` |
+| 安装任务、事件、收据、加密凭据 | `state.sqlite3` 的 `extension_*` 表 |
+| 安装凭据本地主密钥 | `data/yui-chat/installation-secrets/key`（目录 0700、文件 0600） |
+| 未提交 / 待恢复安装材料 | `data/yui-chat/extensions/.install-work/`（加载器跳过） |
 | 临时媒体和渲染文件 | 插件 `cache/` |
 
 配置由单写队列提交：连接 SQLite、合并默认值、迁移与校验、写入启动项和运行覆盖，成功后发布冻结快照。`get()` 只读，修改通过 `update()`；SQLite 提交失败回滚启动 JSON，已使用 SQLite 主配置时不静默降级到默认值。
@@ -76,6 +79,8 @@
 Custom Tool/Filter 读取宿主或跨插件资源必须声明 `frameworkResources`，见 [框架资源文档](custom-framework-resources.md)。Skill 只注入提示词，不注册为可执行工具。用户扩展与源码分开，更新插件不覆盖用户代码。
 
 Custom 工具随扩展包启停：启用并成功加载后即可进入工具目录，无需加入 `tools.enabledTools`；停用后重新加载会移除该包工具。正式调用仍受工具总开关、角色权限、自定义工具策略和模型工具策略约束。
+
+扩展安装使用 `extensions/installation/` 的来源适配、计划、SQLite Store 与独立调度，入口为模型工具、主人命令和 Web 安装记录。可信消息由宿主原始事件捕获，主人身份从宿主配置重新读取。任务先持久化再受理，不依赖模型回合；目标锁覆盖旧编辑入口，隔离恢复先于 Registry 初始化。Skill 先保护为停用再原子发布，仅静态刷新 Skill；MCP 导入保存停用与空开放名单，连接、发现、启用分别授权。配置通用编辑及恢复不能绕过受管理目标的启停、固定端点和网络授权入口。详见 [安装流程与验收边界](extension-installation.md)。
 
 ## 管理台与安全
 
@@ -99,6 +104,8 @@ Custom 工具随扩展包启停：启用并成功加载后即可进入工具目�
 
 管理台支持“保存并发现”以及已保存服务的“测试连接 / 发现工具”。探测使用临时 MCP 客户端完成初始化和分页 `tools/list`，返回工具清单后关闭连接，不改变运行中的客户端、不写入工具注册表，也不要求 MCP 总开关或服务启用开关处于开启状态。
 
+通过安装计划导入的 MCP 是受管理服务：不支持全开放，仅接受明确审阅的工具及 schema 摘要；schema 变化后旧授权不再注册。其端点与传输固定，凭据和网络绑定变更需先停用，会清空工具开放名单。连接、SSE endpoint POST 和重连使用同一 scoped fetch，逐次读取现有绑定、校验真实 DNS/IP、端口与路径，并通过固定地址的直连 socket 连接。服务级 CA 保留正常证书与主机名校验，不读取环境代理。未授权的私网、元数据及保留地址拒绝连接。
+
 ### MCP 鉴权与密钥注入
 
 stdio 服务继续使用 `env` 传递子进程环境；SSE 和 Streamable HTTP 服务可在 `headers` 中配置请求头。URL、请求头值和 stdio 环境值支持 `${env:变量名}` 占位符，运行时只从启动 Yunzai 的进程环境读取真实值，例如：
@@ -112,6 +119,8 @@ stdio 服务继续使用 `env` 传递子进程环境；SSE 和 Streamable HTTP �
   }
 }
 ```
+
+下面的 `env` / Header 配置适用于原有手动管理服务。安装计划导入的服务只允许独立凭据引用，拒绝外部 `env`、Header 与环境占位符。
 
 `env` 是当前 MCP 服务的连接级变量，不会修改 Yunzai 主进程的 `process.env`；HTTP 请求头可以引用它，stdio 则会把它传给对应的子进程。未在服务 `env` 中配置的变量才回退读取启动 Yunzai 时的环境变量。配置文件和管理台接口会对请求头与密钥字段脱敏；缺少变量、无效 Header 名称或换行值会使连接测试失败，不会把密钥写入日志、运行状态或响应。SSE 会同时给初始连接和后续 POST 请求附加这些请求头。
 

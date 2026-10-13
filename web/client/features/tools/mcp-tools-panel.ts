@@ -1,7 +1,7 @@
 import { CapabilityList, CapabilityRisk } from "./capability-list.js"
 import { CapabilityRoleButtons } from "./capability-role-buttons.js"
 import { computed, ref } from "vue"
-import { store, request, refreshTab, toast } from "../../app/store/store.js"
+import { store, request, refreshTab, toast, confirmAction } from "../../app/store/store.js"
 import { asRecord, asRecords, errorMessage } from "../../shared/data.js"
 
 /** 独立即时保存，修改名单不覆盖连接信息或尚未提交的服务编辑。 */
@@ -14,13 +14,15 @@ export const McpToolsPanel = {
     const slice = computed(() => asRecord(store.mcp))
     const status = computed(() => asRecord(slice.value.status || store.tools?.mcp))
     const server = computed(() => asRecord(asRecord(asRecord(slice.value.config).servers)[props.serverId]))
+    const managed = computed(() => Boolean(server.value.installationId))
     const all = computed(() => server.value.allowedTools == null)
     const selected = computed<string[]>(() => Array.isArray(server.value.allowedTools) ? server.value.allowedTools as string[] : [])
     const activeCatalog = computed(() => asRecords(status.value.catalog).filter(tool => tool.server === props.serverId))
     const catalog = computed(() => asRecords(probe.value?.catalog || activeCatalog.value).filter(tool => tool.server === props.serverId))
     const rows = computed(() => {
       const names = new Set(catalog.value.map(tool => String(tool.originalName)))
-      return [...catalog.value, ...selected.value.filter(name => !names.has(name)).map(originalName => ({ originalName, description: "已配置，但当前服务未发现此工具", missing: true }))]
+      const reviewed = asRecord(server.value.reviewedToolSchemas)
+      return [...catalog.value.map(tool => ({ ...tool, reviewRequired: managed.value && selected.value.includes(String(tool.originalName)) && reviewed[String(tool.originalName)] !== tool.schemaDigest })), ...selected.value.filter(name => !names.has(name)).map(originalName => ({ originalName, description: "已配置，但当前服务未发现此工具", missing: true }))]
     })
     const connection = computed(() => {
       const error = asRecords(status.value.errors).find(item => item.server === props.serverId)
@@ -31,6 +33,8 @@ export const McpToolsPanel = {
     })
     async function save(allowedTools: string[] | null) {
       if (busy.value) return
+      if (managed.value && allowedTools?.some(name => !selected.value.includes(name) || asRecord(server.value.reviewedToolSchemas)[name] !== catalog.value.find(tool => tool.originalName === name)?.schemaDigest)
+        && !await confirmAction({ title: "开放已审阅的 MCP 工具？", message: "请先审阅参数定义和服务端声明；调用仍受角色与网络授权约束。", detail: allowedTools.join("、"), confirmText: "开放已审阅工具", tone: "warn", icon: "link" })) return
       busy.value = true
       try {
         await request(`/api/mcp/${encodeURIComponent(props.serverId)}/tools`, { method: "POST", body: JSON.stringify({ allowedTools }) })
@@ -61,23 +65,24 @@ export const McpToolsPanel = {
       const override = asRecord(asRecord(server.value.toolPolicies)[String(item.originalName)] || asRecord(server.value.toolPolicies)[String(item.name)])
       return { risk: override.risk || server.value.risk || "external", policy: { externalNetwork: true, ...asRecord(server.value.policy), ...asRecord(override.policy) } }
     }
-    return { toolRisk, busy, all, selected, rows, connection, save, toggle, discover, catalog }
+    return { toolRisk, busy, managed, all, selected, rows, connection, save, toggle, discover, catalog }
   },
   template: `
     <Collapse title="工具开放配置" hint="查看工具与控制注入；修改立即保存" nested>
-      <p class="muted small">{{ connection }}</p>
+      <p class="muted small">{{ connection }}</p><p v-if="managed" class="muted small">受管理服务仅开放明确审阅的工具；定义变化后需要重新发现和选择。</p>
       <div class="row">
         <button class="btn small" :disabled="busy" @click="discover">测试连接 / 发现工具</button>
-        <button class="btn small" :disabled="busy || all" @click="save(null)">全部开放（含未来新增）</button>
-        <button class="btn small" :disabled="busy || !all" @click="save(catalog.map(tool => tool.originalName))">仅开放当前清单</button>
+        <button class="btn small" :disabled="busy || all || managed" @click="save(null)">全部开放（含未来新增）</button>
+        <button class="btn small" :disabled="busy || (!all && !managed)" @click="save(catalog.map(tool => tool.originalName))">仅开放当前清单</button>
         <button class="btn small" :disabled="busy" @click="save([])">全部关闭</button>
         <span class="muted tiny">{{ all ? '全部开放模式' : '名单模式：新增工具默认关闭' }}</span>
       </div>
       <CapabilityList :rows="rows" label="工具" empty="尚未发现工具。">
         <template #identity="{ item }"><strong>{{ item.originalName }}</strong><div class="cell-sub">{{ item.name }}</div><div class="cell-sub">{{ item.description }}</div><p v-if="item.status === 'unavailable'" class="danger tiny">当前异常：{{ item.error || '服务连接暂时不可用' }}；后续调用会自动重连。</p></template>
         <template #risk="{ item }"><CapabilityRisk :tool="toolRisk(item)" /></template>
-        <template #status="{ item }"><span v-if="item.missing" class="badge">未发现</span></template>
-        <template #actions="{ item }"><label><input type="checkbox" :disabled="busy" :checked="all || selected.includes(item.originalName)" @change="toggle(item.originalName, $event.target.checked)" /> 开放</label></template>
+        <template #status="{ item }"><span v-if="item.reviewRequired" class="badge">定义变化，待审阅</span><span v-if="item.missing" class="badge">未发现</span></template>
+        <template #actions="{ item }"><label><input type="checkbox" :disabled="busy" :checked="all || (!item.reviewRequired && selected.includes(item.originalName))" @click.prevent="toggle(item.originalName, !(all || (!item.reviewRequired && selected.includes(item.originalName))))" /> 开放</label></template>
+        <template #details="{ item }"><JsonBlock v-if="item.inputSchema" title="参数定义" :value="item.inputSchema" /><JsonBlock v-if="item.annotations" title="服务端声明" :value="item.annotations" /></template>
         <template #roles="{ item }"><CapabilityRoleButtons v-if="item.name" :id="item.name" /></template>
       </CapabilityList>
     </Collapse>

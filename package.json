@@ -5,7 +5,7 @@
   "description": "Yui Chat AI plugin for TRSS-Yunzai",
   "scripts": {
     "postinstall": "node scripts/postinstall.mjs",
-    "check": "npm run check:types && npm run check:types-client && npm run check:types-runtime && npm run check:runtime-build && npm run check:structure && npm run check:sqlite-baseline && npm run check:sqlite-integration && npm run check:memory-p1 && npm run check:knowledge-p1 && npm run check:runtime-p1 && npm run check:actions && npm run check:silent-tools && npm run check:mcp-selection && npm run check:capability-permissions && npm run check:sticker-expression && npm run check:daily-still && npm run check:code-editor && npm run check:reasoning && npm run check:render && npm run smoke",
+    "check": "npm run check:types && npm run check:types-client && npm run check:types-runtime && npm run check:runtime-build && npm run check:structure && npm run check:sqlite-baseline && npm run check:sqlite-integration && npm run check:memory-p1 && npm run check:knowledge-p1 && npm run check:runtime-p1 && npm run check:actions && npm run check:silent-tools && npm run check:mcp-selection && npm run check:capability-permissions && npm run check:sticker-expression && npm run check:daily-still && npm run check:code-editor && npm run check:reasoning && npm run check:render && npm run check:extension-installation && npm run smoke",
     "check:types": "tsc -p tsconfig.json --noEmit",
     "check:types-client": "tsc -p tsconfig.client.json --noEmit",
     "build:types": "tsc -p tsconfig.build.json",
@@ -28,7 +28,8 @@
     "check:daily-still": "node scripts/check-daily-still.mjs",
     "check:code-editor": "node scripts/check-code-editor.mjs",
     "check:reasoning": "node scripts/check-reasoning.mjs",
-    "check:render": "node scripts/check-render.mjs"
+    "check:render": "node scripts/check-render.mjs",
+    "check:extension-installation": "node scripts/check-extension-installation.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.24.0",

@@ -1,4 +1,5 @@
 import path from "node:path"
+import { assertManagedConfigWrite } from "../../extensions/installation/configuration-guard.js"
 import { configStore } from "../../config/store.js"
 import { capabilityStore } from "../../tools/access/capability-store.js"
 import { sqliteClient } from "./sqlite/client.js"
@@ -115,6 +116,7 @@ export async function restoreConfigBackup(fileName: unknown) {
   const rollbackState: { snapshot: SqliteConfigSnapshot | null } = { snapshot: null }
   try {
     const saved = await configStore.restoreBackup(String(fileName || ""), {
+      validateCandidate: assertManagedConfigWrite,
       beforeSave: async (sqliteConfig: unknown) => {
         const candidate = record(sqliteConfig) as unknown as SqliteConfigSnapshot
         if (!candidate.available) return

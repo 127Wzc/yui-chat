@@ -1,7 +1,12 @@
+import { registerInstallationRoutes, installationWebActor } from "./installation.js"
+import { installationInstaller } from "../../../../extensions/installation/installer.js"
+import { recordExtensionManagement } from "../../../../extensions/installation/management.js"
+import { withExtensionLock, assertExtensionWritable } from "../../../../extensions/installation/guard.js"
+import { installationStore } from "../../../../extensions/installation/store.js"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { configStore, pluginRoot, redactConfigSecrets } from "../../../../config/store.js"
-import { createSkillPackage, createSkillTemplate, deleteSkillPackage, getSkillPackage, installRemoteSkill, listSkills, setSkillEnabled, updateRemoteSkill, updateSkillPackage } from "../../../../skills/index.js"
+import { createSkillPackage, createSkillTemplate, deleteSkillPackage, getSkillPackage,  listSkills, setSkillEnabled, updateRemoteSkill, updateSkillPackage } from "../../../../skills/index.js"
 import { customToolManager } from "../../../../tools/custom/manager.js"
 import { applyToolPreset, toolPresets } from "../../../../tools/custom/presets.js"
 import { toolRegistry } from "../../../../tools/support/registry.js"
@@ -83,6 +88,7 @@ async function builtinToolSourcePreview(name: string): Promise<UnknownRecord> {
 
 /** 注册工具、Custom Tool、Skill、MCP 与后台任务管理接口。 */
 export function registerExtensionRoutes(app: RouteApp): void {
+  registerInstallationRoutes(app)
   app.get("/api/tools", auth, handleRoute(async (_req, res) => {
     res.json({
       ok: true,
@@ -317,26 +323,30 @@ export function registerExtensionRoutes(app: RouteApp): void {
     const dryRun = req.body?.dryRun === true
     const result = await createSkillTemplate(String(req.body?.skillId || req.body?.id || "my-skill"), { dryRun })
     if (dryRun) return res.json({ ok: true, result })
-    await toolRegistry.init()
+    await toolRegistry.refreshSkills()
     res.json({ ok: true, result, skills: await listSkills(), tools: await toolRegistry.list() })
   }, { errorStatus: 400 }))
   app.post("/api/skills", auth, handleRoute(async (req, res) => {
     const result = await createSkillPackage(req.body || {})
-    await toolRegistry.init()
+    await toolRegistry.refreshSkills()
     res.json({ ok: true, result, skills: await listSkills(), status: toolRegistry.skillStatus(), tools: await toolRegistry.list() })
   }, { errorStatus: 400 }))
   app.post("/api/skills/install", auth, handleRoute(async (req, res) => {
-    const result = await installRemoteSkill(req.body || {})
-    await toolRegistry.init()
-    res.json({ ok: true, result, skills: await listSkills(), status: toolRegistry.skillStatus(), tools: await toolRegistry.list() })
+    if (req.body.overwrite === true || req.body.skillId) throw new Error("安装不覆盖目标，ID 从 SKILL.md 推导")
+    const task = await installationInstaller.submit({ source: String(req.body.repo || req.body.url || ""), kind: "skill", ref: String(req.body.ref || "") || undefined, subdir: String(req.body.subdir || "") || undefined }, installationWebActor(req))
+    res.status(202).json({ ok: true, accepted: true, task })
   }, { errorStatus: 400 }))
   app.post("/api/skills/:id/enabled", auth, handleRoute(async (req, res) => {
-    const result = await setSkillEnabled(req.params.id, req.body?.enabled)
-    await toolRegistry.init()
+    const receipt = await installationStore.receipt("skill", req.params.id)
+    if (req.body?.enabled !== false && receipt?.sourceVisibility === "private" && req.body.privateContentAcknowledged !== true) throw new Error("启用私有 Skill 会把正文发送给当前模型，请确认内容披露")
+    const result = await recordExtensionManagement("skill", req.params.id, req.body?.enabled === false ? "disable" : "activate", installationWebActor(req), () => setSkillEnabled(req.params.id, req.body?.enabled))
+    await toolRegistry.refreshSkills()
     res.json({ ok: true, result, skills: await listSkills(), status: toolRegistry.skillStatus(), tools: await toolRegistry.list() })
   }, { errorStatus: 400 }))
   app.put("/api/skills/:id/runtime-config", auth, handleRoute(async (req, res) => {
     const id = sanitizeId(req.params.id)
+    await withExtensionLock("skill", id, async () => {
+      assertExtensionWritable("skill", id)
     const skill = (await listSkills()).find(item => item.id === id)
     if (!skill) throw new Error(`Skill ${id} not found`)
     const current = record(record(configStore.get().skills).runtimeVariables)[id] || {}
@@ -347,25 +357,27 @@ export function registerExtensionRoutes(app: RouteApp): void {
       if (Object.keys(value).length) runtimeVariables[id] = value
       else delete runtimeVariables[id]
       return configValue({ ...config, skills: { ...skills, runtimeVariables } })
-    })
+    }, {}, { reinitTools: false, reinitFilters: false })
+    await toolRegistry.refreshSkills()
     res.json({ ok: true, config: redactConfigSecrets(saved), runtime, skills: await listSkills() })
+    })
   }, { errorStatus: 400 }))
   app.post("/api/skills/:id/update-remote", auth, handleRoute(async (req, res) => {
     const result = await updateRemoteSkill(req.params.id)
-    await toolRegistry.init()
+    await toolRegistry.refreshSkills()
     res.json({ ok: true, result, skills: await listSkills(), status: toolRegistry.skillStatus(), tools: await toolRegistry.list() })
   }, { errorStatus: 400 }))
   app.get("/api/skills/:id", auth, handleRoute(async (req, res) => {
     res.json({ ok: true, result: await getSkillPackage(req.params.id) })
   }, { errorStatus: 400 }))
   app.put("/api/skills/:id", auth, handleRoute(async (req, res) => {
-    const result = await updateSkillPackage(req.params.id, req.body || {})
-    await toolRegistry.init()
+    const result = await recordExtensionManagement("skill", req.params.id, "update", installationWebActor(req), () => updateSkillPackage(req.params.id, req.body || {}))
+    await toolRegistry.refreshSkills()
     res.json({ ok: true, result, skills: await listSkills(), status: toolRegistry.skillStatus(), tools: await toolRegistry.list() })
   }, { errorStatus: 400 }))
   app.delete("/api/skills/:id", auth, handleRoute(async (req, res) => {
-    const result = await deleteSkillPackage(req.params.id)
-    await toolRegistry.init()
+    const result = await recordExtensionManagement("skill", req.params.id, "uninstall", installationWebActor(req), () => deleteSkillPackage(req.params.id))
+    await toolRegistry.refreshSkills()
     res.json({ ok: true, result, skills: await listSkills(), status: toolRegistry.skillStatus(), tools: await toolRegistry.list() })
   }, { errorStatus: 400 }))
 }

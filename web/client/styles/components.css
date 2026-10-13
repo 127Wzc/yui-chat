@@ -436,6 +436,8 @@ label, .field { display: grid; gap: 4px; min-width: 0; }
 .capability-mode-tabs > button.active { background: var(--card); color: var(--primary); font-weight: 700; box-shadow: 0 1px 2px rgba(0, 0, 0, .12); }
 .capability-mode-tabs > button > b { min-width: 18px; padding: 1px 5px; border-radius: 5px; background: var(--muted); color: var(--foreground); font-size: 9.5px; text-align: center; }
 .capability-mode-tabs > button.active > b { background: var(--primary-weak); color: var(--primary); }
+.capability-mode-tabs > button.capability-installation-tab { position: relative; margin-inline-start: 8px; }
+.capability-mode-tabs > button.capability-installation-tab::before { content: ""; position: absolute; inset-inline-start: -6px; top: 6px; bottom: 6px; width: 1px; background: var(--border); pointer-events: none; }
 .capability-mode-spacer { flex: 1 1 auto; min-width: 8px; }
 .capability-global-settings { flex: 0 0 auto !important; border: 1px solid var(--ring) !important; background: var(--card) !important; color: var(--primary) !important; font-weight: 700 !important; }
 .capability-global-settings:hover { background: var(--primary-weak) !important; }
