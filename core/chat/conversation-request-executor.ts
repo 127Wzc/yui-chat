@@ -53,7 +53,7 @@ function list(value: unknown): unknown[] {
 }
 
 function withoutCause(value: UnknownRecord): UnknownRecord {
-  const { cause: _cause, responseState: _responseState, historyUserContent: _history, imageReferences: _images, ...rest } = value
+  const { cause: _cause, responseState: _responseState, historyUserContent: _history, imageReferences: _images, deliveredReplyText: _deliveredText, ...rest } = value
   return rest
 }
 
@@ -87,6 +87,7 @@ function traceMetadata(result: UnknownRecord): UnknownRecord {
   const execution = record(result.execution)
   return {
     requiresFinalReply: result.requiresFinalReply,
+    replyDelivered: result.replyDelivered === true,
     toolLimitReached: Boolean(result.toolLimitReached),
     toolFinalizationAttempted: Boolean(result.toolFinalizationAttempted),
     toolFinalization: result.toolFinalizationError ? "failed" : result.toolFinalizationAttempted ? "ok" : "not-needed",
@@ -328,7 +329,8 @@ export async function sendConversation(
     const finalRequiresFinalReply = final.requiresFinalReply !== false
     const finalToolChain = list(final.toolChain).map(record)
     const errorSteps = stepResults.filter(item => item.status === "error")
-    const rawFinalText = text(final.text) || (finalRequiresFinalReply
+    const deliveredReplyText = final.replyDelivered === true ? normalizeResponseText(final.deliveredReplyText) : ""
+    const rawFinalText = deliveredReplyText || text(final.text) || (finalRequiresFinalReply
       ? errorSteps.length
         ? `默认任务没有可用回复：${errorSteps.map(item => `${text(item.stepId)} ${text(record(item.error).message)}`).join("；")}`
         : finalToolChain.length
@@ -377,7 +379,8 @@ export async function sendConversation(
       sessionId,
       prompt,
       media: summarizeMediaForResult(media),
-      text: finalText,
+      text: deliveredReplyText ? "" : finalText,
+      ...(deliveredReplyText ? { replyDelivered: true, deliveredReplyText } : {}),
       requiresFinalReply: finalRequiresFinalReply,
       toolLimitReached: Boolean(final.toolLimitReached),
       toolFinalizationAttempted: Boolean(final.toolFinalizationAttempted),

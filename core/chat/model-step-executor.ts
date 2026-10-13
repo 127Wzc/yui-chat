@@ -223,6 +223,19 @@ function shouldContinueAfterAutomaticDelivery(traces: UnknownRecord[] = []): boo
     && toolAutoDelivery(trace.name).continueConversation === true)
 }
 
+/** 仅模型主动发送的文字答复可直接完成本轮；媒体、转发正文和进度续答仍走工具循环。 */
+function completedTextReply(trace: UnknownRecord, call: UnknownRecord): string {
+  const metadata = record(trace.metadata)
+  const parts = list(record(call.arguments).parts).map(record)
+  const partCount = number(metadata.receiptPartCount)
+  if (trace.name !== "message_send" || trace.status !== "ok" || trace.requiresFinalReply !== false
+    || metadata.outputKind !== "delivery" || metadata.receiptStatus !== "sent"
+    || partCount <= 0 || number(metadata.receiptSentCount) !== partCount || number(metadata.receiptFailedCount) !== 0
+    || number(metadata.mediaPartCount) > 0 || !list(metadata.contentTypes).includes("text")
+    || !parts.length || parts.some(part => !["text", "reply", "mention"].includes(text(part.type)))) return ""
+  return parts.filter(part => part.type === "text").map(part => normalizeResponseText(part.text)).filter(Boolean).join("\n")
+}
+
 interface ContextHint {
   source: string
   label: string
@@ -823,6 +836,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
   let searchDeliveryStatus = "not-needed"
   let searchDeliveryExtraRoundsUsed = 0
   let pendingMessageAppendParts: UnknownRecord[] = []
+  let deliveredReplyText = ""
   const recordModelCall = (current: typeof response, options: { observeTurn?: boolean; updateState?: boolean; logTrace?: UnknownRecord; modelCallId?: string; parentToolId?: string } = {}): void => {
     if (options.observeTurn !== false) agentTurn.observeModel(current.stopReason)
     addUsage(usage, current.usage)
@@ -850,7 +864,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
     // 执行结果仍必须回到模型生成最终说明，不能被 message_send 的静默语义截断。
     // tool_search 只发现工具，不产生需要单独回复的业务结果。
     if (hostedCalls.some(call => call.type !== "tool_search_call") && current.toolCalls?.length && !normalizeResponseText(current.text)) {
-      agentTurn.requestFinalReply(true)
+      agentTurn.requestFinalReply(true, "hosted-tools")
     }
     for (const [callIndex, call] of hostedCalls.entries()) {
       const { trace: hostedTrace, logResult } = hostedToolTrace(call, modelCallIndex)
@@ -1036,6 +1050,18 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
         || "后台任务已开始。"
       agentTurn.requestFinalReply(true)
       response = { ...response, stopReason: "end_turn", text: startReply, toolCalls: [] }
+      break
+    }
+    const finalTextDelivery = response.toolCalls.length === 1 && requestedTraces.length === 1 && !automaticDeliveryTraces.length
+      ? completedTextReply(requestedTraces[0], record(selectedToolCalls[0])) : ""
+    const latestActions = new Map(executionRuntime.ledger.flatMap(entry => entry.operationIds.map(id => [id, entry] as const)))
+    const pendingActions = [...latestActions.values()].some(entry => entry.effect !== "read"
+      && ["success", "partial"].includes(entry.status) && entry.remainingCount > 0 && record(entry.metadata).background !== true)
+    if (finalTextDelivery && !pendingActions && agentTurn.markFinalReplyDelivered()) {
+      deliveredReplyText = finalTextDelivery
+      singleAsyncToolCompleted = true
+      beginFinalization("FINAL_REPLY_DELIVERED")
+      response = { ...response, stopReason: "end_turn", text: "", toolCalls: [] }
       break
     }
     if (roundResult.stopReason || executionRuntime.shouldFinalize()) {
@@ -1312,6 +1338,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
     beginFinalization("MAX_TURNS")
   }
   const automaticDeliveryNeedsFinalReply = agentTurn.state.finalReplyRequired === true
+    && !agentTurn.state.finalReplyDelivered
     && toolRounds > 0
     && !normalizeResponseText(responseText)
   if (automaticDeliveryNeedsFinalReply && agentTurn.beginEmptyFinalRecovery("AUTOMATIC_MEDIA_DELIVERY_COMPLETED")) {
@@ -1355,7 +1382,10 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
     })
     try {
       response = await adapterRegistry.sendMessage({
-        channel: modelChannel(channel),
+        channel: modelChannel({
+          ...channel,
+          responsesRuntime: { ...record(channel.responsesRuntime), webSearchAllowed: false, fileSearchAllowed: false, toolSearchAllowed: false },
+        }),
         messages: modelMessages(finalizationMessages),
         ...(configuredResponsesStateMode === "auto" ? { replayMessages: modelMessages(finalizationRecoveryMessages) } : {}),
         tools: [],
@@ -1395,6 +1425,8 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
     adapter: adapter.id,
     provider: text(record(channel.provider).name || record(channel.modelConfig).apiProvider),
     text: requiresFinalReply ? response.text || "" : "",
+    deliveredReplyText,
+    replyDelivered: agentTurn.state.finalReplyDelivered,
     requiresFinalReply,
     toolLimitReached,
     toolFinalizationAttempted,

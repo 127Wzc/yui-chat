@@ -264,6 +264,20 @@ export function formatHostedSearchCitations(value: unknown, sourcesValue: unknow
 
 function hostedSearchSourceNodes(result: UnknownRecord): ForwardNode[] {
   const seen = new Set<string>()
+  // 文字答复可能已携带运行时追加的来源转发；只补发尚未投递的托管来源。
+  if (result.replyDelivered === true) {
+    for (const trace of (Array.isArray(result.toolChain) ? result.toolChain : []).map(record)) {
+      if (trace.name !== "message_send" || trace.status !== "ok" || record(trace.metadata).receiptStatus !== "sent") continue
+      const parts = record(trace.arguments).parts
+      for (const part of (Array.isArray(parts) ? parts : []).map(record).filter(part => part.type === "forward")) {
+        for (const node of (Array.isArray(part.nodes) ? part.nodes : []).map(record)) {
+          for (const item of (Array.isArray(node.parts) ? node.parts : []).map(record).filter(item => item.type === "text")) {
+            for (const line of text(item.text).split(/\r?\n/u)) if (line.startsWith("链接：")) seen.add(line.slice(3).trim())
+          }
+        }
+      }
+    }
+  }
   const values = Array.isArray(result.hostedSearchSources) ? result.hostedSearchSources : []
   return values.map(record).filter(source => {
     const url = text(source.url).trim()
@@ -326,6 +340,10 @@ export async function sendChatOutput(event: unknown, result: unknown, config: un
   const response = responseConfig(rootConfig)
   const settings = await userSettingsStore.get(event, rootConfig)
   const replyOptions = record(options.replyOptions)
+  if (resultValue.replyDelivered === true && normalizeResponseText(resultValue.deliveredReplyText)) {
+    markReplied(event)
+    return finishOutputDelivery(event, resultValue, rootConfig, text(options.source || resultValue.source), resultValue.deliveredReplyText, options, true)
+  }
   const outputText = compactImageGenerationStart(resultValue.text, resultValue)
   if (isEmptyResponse(outputText)) {
     markReplied(event)

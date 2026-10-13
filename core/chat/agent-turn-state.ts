@@ -6,6 +6,7 @@ export interface AgentTurnSummary {
   phase: AgentTurnPhase
   lastStopReason: ModelStopReason
   finalReplyRequired: boolean
+  finalReplyDelivered: boolean
   emptyFinalRecoveryCount: number
   finalizationReason: string
 }
@@ -21,9 +22,11 @@ export function createAgentTurnState() {
     phase: "model_decision",
     lastStopReason: "unknown",
     finalReplyRequired: false,
+    finalReplyDelivered: false,
     emptyFinalRecoveryCount: 0,
     finalizationReason: "",
   }
+  let continuationRequired = false
 
   function observeModel(stopReason: ModelStopReason): void {
     if (state.phase === "completed" || state.phase === "completed_silent") return
@@ -41,9 +44,20 @@ export function createAgentTurnState() {
     state.phase = "tool_execution"
   }
 
-  function requestFinalReply(required = true): boolean {
+  function requestFinalReply(required = true, reason: "continuation" | "hosted-tools" = "continuation"): boolean {
     state.finalReplyRequired ||= required === true
+    if (required) {
+      state.finalReplyDelivered = false
+      continuationRequired ||= reason === "continuation"
+    }
     return state.finalReplyRequired
+  }
+
+  /** 正文投递可履行托管工具回复义务，但不能跳过显式要求的后续处理。 */
+  function markFinalReplyDelivered(): boolean {
+    if (continuationRequired) return false
+    state.finalReplyDelivered = true
+    return true
   }
 
   function beginFinalization(reason: unknown): void {
@@ -53,14 +67,14 @@ export function createAgentTurnState() {
   }
 
   function beginEmptyFinalRecovery(reason = "EMPTY_FINAL_RESPONSE"): boolean {
-    if (!state.finalReplyRequired || state.emptyFinalRecoveryCount >= 1) return false
+    if (!state.finalReplyRequired || state.finalReplyDelivered || state.emptyFinalRecoveryCount >= 1) return false
     state.emptyFinalRecoveryCount++
     beginFinalization(reason)
     return true
   }
 
   function complete(silent = false): void {
-    state.phase = silent ? "completed_silent" : "completed"
+    state.phase = silent && !state.finalReplyDelivered ? "completed_silent" : "completed"
   }
 
   function summary(): AgentTurnSummary {
@@ -73,6 +87,7 @@ export function createAgentTurnState() {
     observeModel,
     beginToolExecution,
     requestFinalReply,
+    markFinalReplyDelivered,
     beginFinalization,
     beginEmptyFinalRecovery,
     complete,

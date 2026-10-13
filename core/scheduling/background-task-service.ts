@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { hostRuntime } from "../runtime/host-runtime.js"
+import { errorDetails, redactErrorText } from "../shared/error-details.js"
 
 type UnknownRecord = Record<string, unknown>
 export type BackgroundTaskStatus = "queued" | "running" | "ok" | "error" | "canceled"
@@ -39,6 +40,7 @@ export interface PublicBackgroundTask {
   endedAt: number
   result: unknown
   error: string
+  errorDetails: UnknownRecord
 }
 
 interface BackgroundTask extends PublicBackgroundTask {
@@ -190,6 +192,7 @@ export class BackgroundTaskService {
       endedAt: 0,
       result: null,
       error: "",
+      errorDetails: {},
       controller: new AbortController(),
       execute: input.execute,
       onComplete: input.onComplete || null,
@@ -228,7 +231,8 @@ export class BackgroundTaskService {
       task.result = await task.execute(task.controller.signal)
       task.status = task.controller.signal.aborted ? "canceled" : "ok"
     } catch (error) {
-      task.error = errorMessage(error).slice(0, 500)
+      task.error = redactErrorText(errorMessage(error))
+      task.errorDetails = errorDetails(error)
       task.status = task.controller.signal.aborted ? "canceled" : "error"
       hostRuntime.logger?.warn?.(`[yui-chat] 后台工具任务 ${task.name} ${task.status}`, task.error)
     } finally {
@@ -308,6 +312,7 @@ export class BackgroundTaskService {
       endedAt: task.endedAt,
       result: task.result,
       error: task.error,
+      errorDetails: task.errorDetails,
     }
   }
 }

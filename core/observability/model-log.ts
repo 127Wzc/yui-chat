@@ -311,6 +311,8 @@ function detailEventBytes(event: DetailEvent): number {
 
 function redactText(value: unknown = "", limit = 20000): string {
   const text = boundedText(value, limit)
+    // 先完整遮蔽带引号的值，避免空格、分隔符或转义引号留下凭证后半段。
+    .replace(/((?:["']?)(?:api[_-]?key|access[_-]?token|token|secret|password|credential|authorization|cookie)(?:["']?)\s*[:=]\s*)("[^"\\]*(?:\\[\s\S][^"\\]*)*(?:"|$)|'[^'\\]*(?:\\[\s\S][^'\\]*)*(?:'|$))/gi, '$1"<redacted>"')
     .replace(/-----BEGIN(?: [A-Z0-9]+)? PRIVATE KEY-----[\s\S]*?-----END(?: [A-Z0-9]+)? PRIVATE KEY-----/gi, "<redacted-private-key>")
     .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, "<redacted-jwt>")
     .replace(/\b(?:sk|rk|pk|ghp|gho|ghu|ghs|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{8,}\b/gi, "<redacted-token>")
@@ -365,7 +367,7 @@ function redactValue(value: unknown, key = "", depth = 0, seen = new WeakSet<obj
   if (SECRET_KEY.test(String(key))) return "<redacted>"
   if (depth > 4) return "[truncated]"
   if (value === null || value === undefined || typeof value !== "object") {
-    if (typeof value === "string") return redactText(value, 800)
+    if (typeof value === "string") return redactText(value, key === "stack" ? 6000 : 800)
     if (typeof value === "bigint") return value.toString()
     return value
   }
@@ -1323,8 +1325,8 @@ class ModelLogStore {
       requires_final_reply: Boolean(requiresFinalReply),
       arguments_json: boundedText(json(toolArguments), 16000),
       result_text: redactText(result, 16000),
-      error_message: error ? redactText(error, 500) : "",
-      metadata_json: json(metadata),
+      error_message: error ? redactText(errorMessage(error), 500) : "",
+      metadata_json: json({ ...record(metadata), ...failureMetadata(error, record(metadata).errorDetails) }),
     }
     trace.toolCalls += 1
     if (["error", "denied", "failed", "ambiguous", "canceled", "interrupted", "blocked"].includes(finalStatus)) trace.failedTools += 1
@@ -2017,6 +2019,7 @@ class ModelLogStore {
       delete result[key]
     }
     const metadata = record(result.metadata)
+    result.error_details = record(metadata.errorDetails)
     result.deduplicated = metadata.deduplicated === true
     for (const key of ["operationId", "operationFamily", "effect", "repeatPolicy", "retryPolicy", "dispatched", "decision", "guardCode", "attempt", "requestedCount", "executedCount", "completedCount", "remainingCount", "retryAllowed", "resultFingerprint", "backgroundStatus", "taskId"]) {
       const value = metadata[key]

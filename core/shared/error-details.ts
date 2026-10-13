@@ -3,6 +3,7 @@ import type { UnknownRecord } from "../message/types.js"
 const MAX_MESSAGE_LENGTH = 500
 const MAX_CAUSE_DEPTH = 3
 const MAX_CAUSES = 8
+const MAX_STACK_LENGTH = 6000
 
 function record(value: unknown): UnknownRecord {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value) ? value as UnknownRecord : {}
@@ -16,15 +17,20 @@ function text(value: unknown): string {
  * 错误信息可能来自供应商、undici 或自定义工具，先移除凭证和过长正文，
  * 再写入控制台/SQLite。这里不接入 model-log，避免网络层与持久化层形成环。
  */
-export function redactErrorText(value: unknown, limit = MAX_MESSAGE_LENGTH): string {
-  return text(value)
+export function redactErrorText(value: unknown, limit = MAX_MESSAGE_LENGTH, preserveLines = false): string {
+  const redacted = text(value)
+    // 先完整遮蔽带引号的值，避免空格、分隔符或转义引号留下凭证后半段。
+    .replace(/((?:["']?)(?:api[_-]?key|access[_-]?token|token|secret|password|credential|authorization|cookie)(?:["']?)\s*[:=]\s*)("[^"\\]*(?:\\[\s\S][^"\\]*)*(?:"|$)|'[^'\\]*(?:\\[\s\S][^'\\]*)*(?:'|$))/gi, '$1"<redacted>"')
     .replace(/-----BEGIN(?: [A-Z0-9]+)? PRIVATE KEY-----[\s\S]*?-----END(?: [A-Z0-9]+)? PRIVATE KEY-----/gi, "<redacted-private-key>")
+    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, "<redacted-jwt>")
+    .replace(/\b(?:sk|rk|pk|ghp|gho|ghu|ghs|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{8,}\b/gi, "<redacted-token>")
+    .replace(/data:[^\s"']+/gi, "<omitted-data-url>")
+    .replace(/((?:["']?)(?:authorization|cookie)(?:["']?)\s*[:=]\s*)[^\r\n]+/gi, "$1<redacted>")
     .replace(/(Bearer\s+)[^\s,;]+/gi, "$1<redacted>")
     .replace(/((?:["']?)(?:api[_-]?key|access[_-]?token|token|secret|password|credential|authorization|cookie)(?:["']?)\s*[:=]\s*(?:["']?))[^"'\s,;}&]+/gi, "$1<redacted>")
     .replace(/([?&](?:api[_-]?key|key|access[_-]?token|token|secret|password)=)[^&#\s]+/gi, "$1<redacted>")
     .replace(/(https?:\/\/)([^/\s:@]+):([^@\s/]+)@/gi, "$1<redacted>@")
-    .replace(/\s+/g, " ")
-    .slice(0, Math.max(1, limit))
+  return (preserveLines ? redacted : redacted.replace(/\s+/g, " ")).slice(0, Math.max(1, limit))
 }
 
 function optionalText(value: unknown): string | undefined {
@@ -71,6 +77,11 @@ function nestedError(value: unknown, depth: number): UnknownRecord | undefined {
   if (method) result.method = method
   if (timeoutMs !== undefined) result.timeoutMs = timeoutMs
   if (responseReceived !== undefined) result.responseReceived = responseReceived
+  if (typeof source.stack === "string") result.stack = redactErrorText(source.stack, MAX_STACK_LENGTH, true)
+  const tool = record(source.yuiTool)
+  const stage = optionalText(tool.stage)
+  if (stage) result.stage = stage
+  if (typeof tool.elapsedMs === "number" && Number.isFinite(tool.elapsedMs)) result.elapsedMs = Math.max(0, tool.elapsedMs)
   const cause = nestedError(source.cause, depth + 1)
   if (cause) result.cause = cause
   const errors = Array.isArray(source.errors) ? source.errors : []

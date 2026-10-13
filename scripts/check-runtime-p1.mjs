@@ -319,6 +319,17 @@ try {
     assert(!String(emptyStored.history_json).includes("EMPTY"), "<EMPTY> must not be written into the stored history")
     await chatService.clearByKeys([emptyKey])
 
+    const deliveredEvent = { isGroup: false, user_id: "delivered-reply-user", sender: { nickname: "delivered reply" } }
+    const deliveredKey = "mock:p:delivered-reply-user"
+    chatService.runObservedStep = async () => ({ ...successfulStep(""), requiresFinalReply: false, replyDelivered: true, deliveredReplyText: "正文已经由发送工具投递。" })
+    const deliveredResult = await chatService.send(deliveredEvent, "评价一下", { channelId: "mock", applyInputFilters: false, persistMemory: false })
+    assert.equal(deliveredResult.text, "", "a tool-delivered answer must not be sent again by the normal output path")
+    assert.equal(deliveredResult.deliveredReplyText, "正文已经由发送工具投递。")
+    const deliveredHistory = (await conversationStore.get(deliveredKey)).history
+    assert.equal(deliveredHistory.length, 2, "tool-delivered answers must retain the actual conversation turn")
+    assert.equal(deliveredHistory[1].content, "正文已经由发送工具投递。", "history should use the delivered answer rather than an empty placeholder")
+    await chatService.clearByKeys([deliveredKey])
+
     const scopeStarted = deferred()
     const releaseScopeReply = deferred()
     chatService.runObservedStep = async () => {

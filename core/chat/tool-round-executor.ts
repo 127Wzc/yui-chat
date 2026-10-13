@@ -5,6 +5,7 @@ import { conversationLog } from "./conversation-log.js"
 import { getToolCommon } from "../../tools/support/contract.js"
 import { toolRegistry, type RegistryExecutionContext } from "../../tools/support/registry.js"
 import type { UnknownRecord } from "../message/types.js"
+import { errorSummary, redactErrorText } from "../shared/error-details.js"
 
 interface ToolCall extends UnknownRecord {
   id?: unknown
@@ -190,7 +191,7 @@ export async function executeToolRound(options: {
                   result: taskText,
                   resultChars: taskText.length,
                   error: background.error || "",
-                  metadata: { background: true, taskId: text(background.id), backgroundStatus: text(background.status), parentToolId: text(call.id) },
+                  metadata: { background: true, taskId: text(background.id), backgroundStatus: text(background.status), parentToolId: text(call.id), errorDetails: record(background.errorDetails) },
                 })
               },
             }
@@ -224,7 +225,7 @@ export async function executeToolRound(options: {
       const ended = Date.now()
       executionRecord = record(runtime.recordExecution({ guard, call, result, startedAt: started, endedAt: ended }))
       if (["failed", "ambiguous", "denied", "canceled"].includes(text(executionRecord.status))) {
-        hostRuntime.logger?.warn?.(`[yui-chat] 工具 ${name} ${text(executionRecord.status)}`, result.error || result.value)
+        hostRuntime.logger?.warn?.(`[yui-chat] 工具 ${name} ${text(executionRecord.status)}`, errorSummary(result.error || result.value))
       }
     }
 
@@ -243,7 +244,7 @@ export async function executeToolRound(options: {
     const policy = runtime.policyFor(tool, callArguments(call))
     const executionPolicy = record(policy.execution)
     const deduplicated = internalStatus === "skipped"
-    const error = result.error ? errorMessage(result.error).slice(0, 500) : ""
+    const error = result.error ? redactErrorText(errorMessage(result.error)) : ""
     conversationLog.toolCompleted(toolContext.config, {
       round,
       name,
@@ -293,7 +294,7 @@ export async function executeToolRound(options: {
       arguments: executionRecord.normalizedArgs || callArguments(call),
       result: rawResultText,
       resultChars: rawResultText.length,
-      error,
+      error: result.error || error,
       metadata: {
         repeatPolicy: text(executionPolicy.repeatPolicy),
         retryPolicy: text(executionPolicy.retryPolicy),

@@ -12,6 +12,7 @@ import type { ToolExecutionContext } from "../support/tool-contract.js"
 import { hostRuntime } from "../../core/runtime/host-runtime.js"
 import { resolveBoundaryRole } from "../access/roles.js"
 import { resolveToolRuntimeConfig } from "../../extensions/runtime-config.js"
+import { redactErrorText } from "../../core/shared/error-details.js"
 
 type ToolArgs = UnknownRecord
 
@@ -81,7 +82,7 @@ function canDeliverToCurrentChat(context: ImageToolContext): boolean {
 }
 
 function imageErrorText(error: unknown): string {
-  return (error instanceof Error ? error.message : String(error || "图片生成失败")).slice(0, 500)
+  return redactErrorText(error instanceof Error ? error.message : String(error || "图片生成失败"))
 }
 
 function eventUserId(event: unknown): string {
@@ -276,6 +277,8 @@ export class GenerateImageTool {
   async execute(args: ToolArgs = {}, context: ImageToolContext = {}): Promise<UnknownRecord> {
     const config = record(context.config || configStore.get())
     const imageRuntime = record(context.toolConfig)
+    const startedAt = Date.now()
+    let stage = "校验生图配置"
     try {
       if (imageRuntime.enabled === false) throw new Error("图片生成未启用")
       const prompt = text(args.prompt).trim()
@@ -306,8 +309,10 @@ export class GenerateImageTool {
       const requestedCount = multiImageAllowed
         ? targetCount === undefined ? undefined : maxCount > 0 ? Math.min(targetCount, maxCount) : targetCount
         : 1
+      stage = "准备参考图"
       const references = await prepareReferenceImages(args, context, config, imageRuntime.maxReferences === undefined ? 3 : Number(imageRuntime.maxReferences))
       const generationStartedAt = Date.now()
+      stage = "请求图片模型"
       const result = await adapterRegistry.generateImages({
         channel,
         prompt,
@@ -338,6 +343,7 @@ export class GenerateImageTool {
           adapter: channel.type,
         },
       })
+      stage = "处理生成图片"
       const generationDurationMs = Math.max(0, Date.now() - generationStartedAt)
       const outputLimit = multiImageAllowed ? maxCount : 1
       const images = outputLimit > 0 ? result.images.slice(0, outputLimit) : result.images
@@ -354,6 +360,7 @@ export class GenerateImageTool {
       builder.text(`✅ 图片生成完成（${(generationDurationMs / 1000).toFixed(2)}s）\n🤖 模型：${modelName}`)
       builder.concat(imageParts)
       const chain = builder.build()
+      stage = "投递生成图片"
       const delivery = canDeliverToCurrentChat(context)
         ? await sendWithMessageTool(chain, context, "complete")
         : { status: "generated", partCount: chain.length, sentCount: 0, failedCount: 0 }
@@ -380,8 +387,11 @@ export class GenerateImageTool {
       }
     } catch (error) {
       const message = imageErrorText(error)
+      const diagnostics = { yuiTool: { stage, elapsedMs: Math.max(0, Date.now() - startedAt) } }
+      // 普通 Error 保留原类型、code 与堆栈；只对不可附加字段的错误包装 cause。
+      const failure = Object.assign(error instanceof Error && Object.isExtensible(error) ? error : new Error(message, { cause: error }), diagnostics)
       await sendFailureNotice(`图片生成失败：${message}`, context)
-      throw error
+      throw failure
     }
   }
 }

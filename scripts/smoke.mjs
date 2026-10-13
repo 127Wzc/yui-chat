@@ -936,6 +936,14 @@ async function checkToolPolicy() {
     assert(observedImageCounts[0] === 1 && ordinaryImage.metadata?.imageCount === 1, "ordinary users should always request and receive one generated image")
     assert(observedImageCounts[1] === 2 && allowlistedImage.metadata?.imageCount === 2, "allowlisted users should have their requested count capped by maxCount")
     assert(observedImageCounts[2] === undefined && ownerDefaultImage.metadata?.imageCount === 2, "maxCount should cap returned images without becoming the upstream count when count is omitted")
+    const { errorDetails } = await import("../output/runtime/core/shared/error-details.js")
+    const imageFailure = new RangeError("Maximum call stack size exceeded")
+    adapterRegistry.generateImages = async () => { throw imageFailure }
+    const failedImage = await imageTool.execute({ prompt: "cat", referenceImages: [] }, { config, toolConfig: {}, e: { user_id: "ordinary" } }).catch(error => error)
+    const imageDiagnostics = errorDetails(failedImage)
+    assert(failedImage === imageFailure && imageDiagnostics.stage === "请求图片模型" && imageDiagnostics.elapsedMs >= 0 && imageDiagnostics.name === "RangeError" && imageDiagnostics.stack.includes("smoke.mjs:"), "image failures should retain the original error, stack and the failing stage")
+    const failedReference = await imageTool.execute({ prompt: "cat", referenceImages: ["invalid"] }, { config, toolConfig: {}, e: { user_id: "ordinary" } }).catch(error => error)
+    assert(errorDetails(failedReference).stage === "准备参考图", "reference failures should be distinguishable from model request failures")
   } finally {
     adapterRegistry.generateImages = originalImageGeneration
     providerResolver.resolveCandidateChannels = originalImageCandidates
@@ -1875,6 +1883,27 @@ async function checkNetworkTools() {
   const transportSummary = errorSummary(transportError)
   assert(transportDetails.cause?.causes?.length === 2 && transportSummary.includes("ECONNRESET") && transportSummary.includes("ETIMEDOUT"), "network error diagnostics should preserve AggregateError connection causes")
   assert(!transportSummary.includes("smoke-secret") && !String(transportDetails.target).includes("smoke-secret"), "network error diagnostics must redact credentials")
+  const stackError = new Error("token=stack-secret")
+  stackError.stack = "Error: token=stack-secret\n    at request (https://user:password@example.com/file.js?key=query-secret:10:2)\n    at generate (/plugin/image-generation.js:321:7)\nCookie: session=cookie-secret; another=second-secret\nAuthorization: Basic basic-secret\nsk-abcdefgh12345678\ndata:image/png;base64,private-image"
+  const stackDetails = errorDetails(stackError)
+  assert(stackDetails.stack.includes("\n    at generate (/plugin/image-generation.js:321:7)"), "diagnostic stacks should retain line breaks, filenames and line numbers")
+  for (const secret of ["stack-secret", "query-secret", "password", "cookie-secret", "second-secret", "basic-secret", "sk-abcdefgh12345678", "private-image"]) assert(!JSON.stringify(stackDetails).includes(secret), `diagnostic stacks must redact ${secret}`)
+  for (const sensitive of [
+    '{"password":"demo secret;tail&rest","status":"failed"}',
+    "credential='demo secret;tail&rest' status=failed",
+    JSON.stringify({ apiKey: 'demo "escaped" secret;tail&rest', status: "failed" }),
+    '{"password":"demo secret;tail&rest',
+  ]) {
+    const quotedError = new Error(sensitive)
+    const safeDetails = JSON.stringify(errorDetails(quotedError))
+    const safeSummary = errorSummary(quotedError)
+    for (const secret of ["demo", "secret;tail", "rest", "escaped"]) {
+      assert(!safeDetails.includes(secret) && !safeSummary.includes(secret), "quoted credentials must be fully redacted in stacks and console summaries")
+    }
+  }
+  stackError.stack = "frame\n".repeat(3000)
+  stackError.cause = stackError
+  assert(errorDetails(stackError).stack.length <= 6000 && JSON.stringify(errorDetails(stackError)).length < 30000, "diagnostic stacks and cyclic causes should remain bounded")
   let blocked = false
   try {
     await assertSafeHttpUrl("http://127.0.0.1:2536/yui-chat", config.tools.builtin.websiteFetch)
@@ -4470,7 +4499,16 @@ async function checkConversations() {
     const originalHostedMessageSend = toolRegistry.tools.get("message_send")
     const hostedMessageDeliveries = []
     const hostedMessageRequests = []
+    const hostedMessageEffectiveTools = []
     let hostedMessageRuntime
+    let hostedMessageParts = [
+      { type: "image", source: { kind: "url", value: "https://example.com/one.jpg" } },
+      { type: "image", source: { kind: "url", value: "https://example.com/two.jpg" } },
+    ]
+    let hostedMessageReceipt = "sent"
+    let hostedMessageSecondText = "已经把两张图片发给你，并完成了结果说明。"
+    let hostedMessageExtraCall = null
+    const { toolsForResponses } = await import("../output/runtime/models/adapters/openai/responses/request-adapter.js")
     const hostedMessageSend = normalizeTool({
       ...originalHostedMessageSend,
       name: "message_send",
@@ -4480,9 +4518,9 @@ async function checkConversations() {
         return {
           kind: "delivery",
           chain: args.parts,
-          isError: false,
+          isError: hostedMessageReceipt === "failed",
           issues: [],
-          receipt: { id: "smoke-hosted-message-delivery", status: "sent", partCount: args.parts?.length || 0, sentCount: args.parts?.length || 0, failedCount: 0 },
+          receipt: { id: "smoke-hosted-message-delivery", status: hostedMessageReceipt, partCount: args.parts?.length || 0, sentCount: hostedMessageReceipt === "sent" ? args.parts.length : hostedMessageReceipt === "partial" ? 1 : 0, failedCount: hostedMessageReceipt === "sent" ? 0 : args.parts.length - (hostedMessageReceipt === "partial" ? 1 : 0) },
         }
       },
     })
@@ -4494,21 +4532,20 @@ async function checkConversations() {
       supportsStreaming: false,
       supportsEmbeddings: false,
       supportsNativeToolSearch: true,
-      async sendMessage({ channel, messages = [] }) {
+      async sendMessage({ channel, messages = [], tools = [] }) {
         hostedMessageRuntime = channel.responsesRuntime
         hostedMessageRequests.push(messages)
+        hostedMessageEffectiveTools.push(toolsForResponses(tools, channel))
         if (hostedMessageRequests.length > 1) {
-          return { id: "resp_hosted_message_final", text: "已经把两张图片发给你，并完成了结果说明。", stopReason: "end_turn", usage: { input: 1, output: 1, total: 2, source: "reported" }, toolCalls: [] }
+          return { id: "resp_hosted_message_final", text: hostedMessageRequests.length === 2 ? hostedMessageSecondText : "收束说明。", stopReason: "end_turn", usage: { input: 1, output: 1, total: 2, source: "reported" }, toolCalls: [] }
         }
         return {
           id: "resp_hosted_message_tool",
           text: "",
           stopReason: "tool_calls",
           usage: { input: 1, output: 1, total: 2, source: "reported" },
-          toolCalls: [{ id: "hosted-message-send", name: "message_send", arguments: { parts: [
-            { type: "image", source: { kind: "url", value: "https://example.com/one.jpg" } },
-            { type: "image", source: { kind: "url", value: "https://example.com/two.jpg" } },
-          ] } }],
+          toolCalls: [{ id: "hosted-message-send", name: "message_send", arguments: { parts: hostedMessageParts } }, ...(hostedMessageExtraCall ? [hostedMessageExtraCall] : [])],
+          hostedSearchSources: [{ title: "测试来源", url: "https://example.com/hosted-answer-source" }],
           hostedToolCalls: [{
             id: "hosted-message-web-search",
             type: "web_search_call",
@@ -4544,6 +4581,57 @@ async function checkConversations() {
       assert(hostedMessageRuntime?.webSearchAllowed === false, "disabling the web_search capability should override the hosted implementation switch")
       assert(hostedMessageRequests.length === 2 && hostedMessageRequests[1].some(item => item.role === "tool"), "hosted plus local Responses calls should feed the local tool result back to the model")
       assert(hostedMessageResult.text.includes("完成了结果说明") && hostedMessageResult.requiresFinalReply === true, "hosted plus message_send Responses output must not be mistaken for a silent single-delivery turn")
+      const runHostedMessage = async (config = hostedMessageConfig) => {
+        hostedMessageDeliveries.length = 0
+        hostedMessageRequests.length = 0
+        hostedMessageEffectiveTools.length = 0
+        return chatService.runModelStepWithChannel({
+          e: { isGroup: true, isMaster: true, group_id: "20001", user_id: "10001", sender: { role: "owner" }, reply: async () => {} },
+          prompt: "锐评一下", config, history: [], step: { id: "reply", task: "replyer", mode: "final" },
+          channel: { id: hostedMessageAdapter.id, type: hostedMessageAdapter.id, model: "smoke", modelConfig: { toolUse: true, toolPolicy: { routes: { web_search: { source: "hosted" }, tool_search: { source: "disabled" } } } }, timeoutMs: 1000 },
+        })
+      }
+      hostedMessageParts = [{ type: "reply", messageId: "555011254" }, { type: "text", text: "这是已经发送的最终锐评。" }]
+      for (const emptyReply of ["", "<EMPTY>"]) {
+        hostedMessageSecondText = emptyReply
+        const textResult = await runHostedMessage()
+        assert(hostedMessageRequests.length === 1 && hostedMessageDeliveries.length === 1 && textResult.text === "" && textResult.requiresFinalReply === false, "hosted search with an already delivered text answer must stop before a second model request or empty recovery")
+        assert(textResult.deliveredReplyText === "这是已经发送的最终锐评。" && textResult.agentTurn.finalReplyDelivered === true && textResult.agentTurn.phase === "completed" && textResult.agentTurn.emptyFinalRecoveryCount === 0 && textResult.toolFinalizationReason === "FINAL_REPLY_DELIVERED", "delivered answers should remain distinguishable from true silent turns")
+        const { sendChatOutput } = await import("../output/runtime/core/chat/output-service.js")
+        const outputReplies = []
+        await sendChatOutput({ isGroup: true, user_id: "10001", group_id: "20001", group: { makeForwardMsg: async nodes => ({ type: "node", data: nodes }) }, reply: async message => { outputReplies.push(message); return true } }, textResult, hostedMessageConfig)
+        assert(outputReplies.length === 1 && outputReplies[0].type === "node" && JSON.stringify(outputReplies[0]).includes("hosted-answer-source") && !JSON.stringify(outputReplies[0]).includes("最终锐评"), "the normal output path should forward hosted sources without resending the delivered answer")
+        const alreadyForwarded = structuredClone(textResult)
+        alreadyForwarded.toolChain.find(trace => trace.name === "message_send").arguments.parts.push({ type: "forward", nodes: [{ parts: [{ type: "text", text: "链接：https://example.com/hosted-answer-source" }] }] })
+        outputReplies.length = 0
+        await sendChatOutput({ user_id: "10001", reply: async message => { outputReplies.push(message); return true } }, alreadyForwarded, hostedMessageConfig)
+        assert(outputReplies.length === 0, "hosted sources already forwarded with the text answer must not be delivered twice")
+      }
+      const oneCallConfig = structuredClone(hostedMessageConfig)
+      oneCallConfig.chat.execution.maxToolCalls = 1
+      const quotaResult = await runHostedMessage(oneCallConfig)
+      assert(quotaResult.modelCalls.length === 1 && quotaResult.replyDelivered === true && !quotaResult.toolFinalizationAttempted, "a successful final text delivery at the tool-call limit must not trigger another model request")
+      hostedMessageSecondText = "投递未全部完成，请稍后重试。"
+      for (const status of ["partial", "failed"]) {
+        hostedMessageReceipt = status
+        const failureResult = await runHostedMessage()
+        assert(hostedMessageRequests.length === 2 && !failureResult.replyDelivered && failureResult.requiresFinalReply && failureResult.text.includes("未全部完成"), "partial or failed text deliveries must retain a final explanation")
+      }
+      hostedMessageReceipt = "sent"
+      const extraName = "smoke_hosted_extra_read"
+      toolRegistry.tools.set(extraName, normalizeTool({ name: extraName, source: "builtin", requiresFinalReply: true, execution: { effect: "read" }, async execute() { return "其他工具结果。" } }))
+      try {
+        hostedMessageExtraCall = { id: "hosted-extra-read", name: extraName, arguments: {} }
+        const mixedResult = await runHostedMessage({ ...hostedMessageConfig, tools: { ...hostedMessageConfig.tools, enabledTools: ["message_send", extraName] } })
+        assert(mixedResult.modelCalls.length === 2 && !mixedResult.replyDelivered && mixedResult.text, "a text sender mixed with another local tool must feed all results back to the model")
+      } finally { hostedMessageExtraCall = null; toolRegistry.tools.delete(extraName) }
+      hostedMessageParts = [{ type: "image", source: { kind: "url", value: "https://example.com/one.jpg" } }]
+      hostedMessageSecondText = "<EMPTY>"
+      const nativeConfig = structuredClone(hostedMessageConfig)
+      nativeConfig.tools.enabledTools.push("web_search")
+      const nativeFinalResult = await runHostedMessage(nativeConfig)
+      assert(nativeFinalResult.modelCalls.length === 3 && nativeFinalResult.agentTurn.emptyFinalRecoveryCount === 1 && nativeFinalResult.text === "收束说明。", "media-only hosted delivery should retain one bounded recovery when the required explanation is empty")
+      assert(hostedMessageEffectiveTools[0].some(tool => tool.type === "web_search") && hostedMessageEffectiveTools[1].some(tool => tool.type === "web_search") && hostedMessageEffectiveTools[2].length === 0, "a finalization request must disable Responses native tools while normal rounds keep their capabilities")
     } finally {
       toolRegistry.tools.set("message_send", originalHostedMessageSend)
       adapterRegistry.adapters.delete(hostedMessageAdapter.id)
@@ -5503,6 +5591,16 @@ async function checkConversations() {
     assert(completedBackgroundTask?.status === "ok" && completedBackgroundTask.result?.content === "background done", "background task should complete outside the model turn and remain queryable")
     const retainedBackgroundTask = backgroundTaskService.tasks.get(backgroundTask.id)
     assert(retainedBackgroundTask?.onComplete === null && await retainedBackgroundTask?.execute() === undefined, "completed background tasks should release captured execution and completion closures")
+    let failedBackgroundResult
+    const failedBackgroundTask = backgroundTaskService.submit({
+      name: "smoke_failed_background_tool",
+      config: backgroundConfig,
+      execute: async () => { throw Object.assign(new RangeError("Maximum call stack size exceeded token=background-secret"), { yuiTool: { stage: "处理生成图片", elapsedMs: 123 } }) },
+      onComplete: task => { failedBackgroundResult = task },
+    })
+    await sleep(20)
+    assert(failedBackgroundResult?.status === "error" && failedBackgroundResult.errorDetails?.stage === "处理生成图片" && failedBackgroundResult.errorDetails?.stack.includes("smoke.mjs:"), "background completion should carry safe diagnostics after a tool fails")
+    assert(!JSON.stringify(backgroundTaskService.get(failedBackgroundTask.id)).includes("background-secret"), "background task state must redact credentials before callbacks and queries")
 
     let releaseImageQueueTask
     const imageQueueGate = new Promise(resolve => { releaseImageQueueTask = resolve })
@@ -6056,6 +6154,49 @@ async function checkUnifiedModelLogs() {
     modelLogStore.completeModelCall(failureCall, { error: timeoutError })
     const failureDetail = await modelLogStore.getModelCallDetail(failureCall.id)
     assert(failureDetail?.modelCall?.error_message?.includes("请求超时") && failureDetail.modelCall.error_details?.code === "ETIMEDOUT" && failureDetail.modelCall.error_details?.responseReceived === false, "model logs should expose failure messages and timeout diagnostics")
+    const { errorDetails } = await import("../output/runtime/core/shared/error-details.js")
+    const toolFailure = Object.assign(new RangeError("Maximum call stack size exceeded token=log-secret password=\"demo secret;tail&rest\""), { yuiTool: { stage: "投递生成图片", elapsedMs: 40600 } })
+    toolFailure.stack += "\n" + Array.from({ length: 35 }, (_, i) => `    at frame${i} (/plugin/image-generation.js:${i + 1}:7)`).join("\n")
+    modelLogStore.recordToolCall(failureCall.trace, { toolName: "generate_image", toolCallId: "smoke-failed-image", status: "failed", error: toolFailure, result: '{"password":"demo secret;tail&rest"}' })
+    modelLogStore.recordToolCall(failureCall.trace, { toolName: "generate_image", toolCallId: "smoke-failed-background-image", status: "error", error: toolFailure.message, metadata: { background: true, errorDetails: errorDetails(toolFailure) } })
+    await modelLogStore.flush(true)
+    const failedToolDetail = await modelLogStore.getRun(failureCall.trace.id)
+    const toolErrors = failedToolDetail.toolCalls.filter(tool => tool.tool_name === "generate_image")
+    assert(toolErrors.length === 2 && toolErrors.every(tool => tool.error_message.includes("Maximum call stack size exceeded") && tool.error_details?.stage === "投递生成图片" && tool.error_details?.elapsedMs === 40600 && tool.error_details?.stack.includes("frame34")), "panel logs should persist diagnostic stacks beyond the ordinary metadata text limit for foreground and background failures")
+    for (const secret of ["log-secret", "demo", "secret;tail", "rest"]) assert(!JSON.stringify(toolErrors).includes(secret), "persisted tool diagnostics must fully redact credentials")
+    const { toolRegistry } = await import("../output/runtime/tools/support/registry.js")
+    const { createExecutionRuntime } = await import("../output/runtime/tools/support/execution-runtime.js")
+    const { executeToolRound } = await import("../output/runtime/core/chat/tool-round-executor.js")
+    const logConfig = structuredClone(defaults)
+    logConfig.tools.enabled = true
+    logConfig.tools.policy.allowCustomTools = true
+    logConfig.chat.execution.background.enabled = true
+    const fixtureNames = ["smoke_log_failure_sync", "smoke_log_failure_background"]
+    logConfig.tools.enabledTools.push(...fixtureNames)
+    const previousWarn = global.logger.warn
+    const warningMessages = []
+    global.logger.warn = (...values) => { warningMessages.push(values.map(String).join(" ")) }
+    try {
+      for (const [index, name] of fixtureNames.entries()) {
+        toolRegistry.register({
+          name, source: "custom", category: "media", description: "Failure log fixture", parameters: { type: "object", properties: {} },
+          execution: { effect: "read", repeatPolicy: "bounded", background: index === 1 },
+          execute: async () => { await sleep(5); throw toolFailure },
+        })
+        await executeToolRound({
+          toolCalls: [{ id: `smoke-log-call-${index}`, name, arguments: {} }], workingMessages: [],
+          toolContext: { config: logConfig, e: { user_id: "log-owner", isMaster: true }, executionRuntime: createExecutionRuntime({ config: logConfig }), observability: { trace: failureCall.trace } },
+        })
+      }
+      await sleep(30)
+      await modelLogStore.flush(true)
+      const roundDetail = await modelLogStore.getRun(failureCall.trace.id)
+      for (const name of fixtureNames) assert(roundDetail.toolCalls.some(tool => tool.tool_name === name && ["failed", "error"].includes(tool.status) && tool.error_details?.stack.includes("frame34") && tool.error_details?.stage === "投递生成图片"), "real tool rounds should forward foreground and background error diagnostics to panel logs")
+      assert(warningMessages.some(message => message.includes("Maximum call stack size exceeded")) && warningMessages.every(message => !message.includes("log-secret")), "tool failure summaries must remain useful without exposing credentials in console logs")
+    } finally {
+      global.logger.warn = previousWarn
+      for (const name of fixtureNames) toolRegistry.tools.delete(name)
+    }
   } finally {
     await modelLogStore.stop({ flush: true })
     if (ownsSqliteClient) await sqliteClient.close()

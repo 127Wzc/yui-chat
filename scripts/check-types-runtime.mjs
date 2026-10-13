@@ -144,9 +144,22 @@ assert.deepEqual(agentTurn.summary(), {
   phase: "completed",
   lastStopReason: "end_turn",
   finalReplyRequired: true,
+  finalReplyDelivered: false,
   emptyFinalRecoveryCount: 1,
   finalizationReason: "EMPTY_FINAL_RESPONSE",
 })
+
+const deliveredTurn = createAgentTurnState()
+deliveredTurn.requestFinalReply(true, "hosted-tools")
+assert.equal(deliveredTurn.markFinalReplyDelivered(), true)
+assert.equal(deliveredTurn.beginEmptyFinalRecovery(), false, "a delivered final answer must not trigger empty recovery")
+deliveredTurn.complete(true)
+assert.equal(deliveredTurn.summary().phase, "completed", "successful delivery is not a silent response")
+const continuingTurn = createAgentTurnState()
+continuingTurn.requestFinalReply(true)
+continuingTurn.requestFinalReply(true, "hosted-tools")
+assert.equal(continuingTurn.markFinalReplyDelivered(), false, "a hosted reply obligation must not overwrite an explicit continuation")
+assert.equal(continuingTurn.beginEmptyFinalRecovery(), true)
 
 let runtimeConfigRow = {
   schema_version: 1,

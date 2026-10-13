@@ -138,10 +138,11 @@ export class ChatService {
         const execution = record(result.execution)
         const agentTurn = record(result.agentTurn)
         modelLogStore.finishTrace(trace, {
-          status: isEmptyResponse(result.text) ? "silent" : "ok",
-          response: result.text,
+          status: isEmptyResponse(result.deliveredReplyText || result.text) ? "silent" : "ok",
+          response: result.deliveredReplyText || result.text,
           metadata: {
             requiresFinalReply: result.requiresFinalReply,
+            replyDelivered: result.replyDelivered === true,
             toolLimitReached: Boolean(result.toolLimitReached),
             toolFinalizationAttempted: Boolean(result.toolFinalizationAttempted),
             toolFinalization: result.toolFinalizationError ? "failed" : result.toolFinalizationAttempted ? "ok" : "not-needed",
@@ -168,6 +169,7 @@ export class ChatService {
               phase: agentTurn.phase,
               lastStopReason: agentTurn.lastStopReason,
               finalReplyRequired: agentTurn.finalReplyRequired === true,
+              finalReplyDelivered: agentTurn.finalReplyDelivered === true,
               emptyFinalRecoveryCount: Number(agentTurn.emptyFinalRecoveryCount || 0),
               finalizationReason: agentTurn.finalizationReason || "",
             } : {},
