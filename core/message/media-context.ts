@@ -69,6 +69,7 @@ const onlyQuotedImagePattern = /(?:只看|只分析).{0,8}(?:引用|回复|旧�
 export function conversationImageFollowup(prompt: unknown): boolean {
   const value = compact(prompt)
   return !messageManagementIntentPattern.test(value)
+    && !/(?:我|你|您|他|她).{0,8}(?:发|贴|传|分享)(?:的|了)/.test(value)
     && /第[一二三四五六七八九十\d]+张|(?:左|右)边.{0,8}(?:图|那个|这)|(?:再|继续).{0,5}(?:仔细看|看看|看下|分析|解读)|(?:图里|图中|图上|图片里)|(?:你刚才|你说).{0,12}(?:图|画面|那个|这个)/i.test(value)
     && !recentImageReferencePattern.test(value)
     && !adjacentImageReferencePattern.test(value)
@@ -100,6 +101,7 @@ export function visionInputModeForPrompt(prompt: unknown): VisionInputMode {
 export function recentImageRecallModeForPrompt(prompt: unknown): RecentImageRecallMode {
   const value = compact(prompt)
   if (messageManagementIntentPattern.test(value)) return "none"
+  if (/(?:我|你|您|他|她).{0,8}(?:发|贴|传|分享)(?:的|了).{0,12}(?:图|照片|截图|什么|啥)/.test(value)) return "explicit"
   if (recentImageReferencePattern.test(value) || recentSharedContentPattern.test(value) || /(?:看|识别|分析|描述|解读|比较|对比).{0,30}(?:发的|的)(?:图片|图|照片|截图|表情包)/.test(value)) return "explicit"
   if (adjacentImageReferencePattern.test(value) || contextualVisualIntent(value)) return "adjacent"
   return "none"
@@ -272,22 +274,28 @@ async function getQuotedMessage(event: unknown = {}): Promise<unknown> {
   return { ...merge({}, "unavailable"), diagnostics }
 }
 
-/** 点名群图片时复用引用消息读取边界，保留当前请求者身份并校验图片作者。 */
-export async function refreshRecentImage(event: unknown, image: { messageId: string; userId: string; url: string; imageIndex?: number }): Promise<string | null> {
+/** 读取真实图片消息，保留当前请求者身份并校验消息所属群与作者。 */
+export async function readRecentMessageImages(event: unknown, image: { messageId: string; userId: string }): Promise<string[]> {
   const e = record(event)
-  if (!image.messageId) return image.url || null
+  if (!image.messageId) return []
   const quote = record(await getQuotedMessage({
     user_id: e.user_id, self_id: e.self_id, group_id: e.group_id, isGroup: e.isGroup,
     bot: e.bot, group: e.group, friend: e.friend, getMessage: e.getMessage, getMsg: e.getMsg,
-    reply_id: image.messageId, source: { message_id: image.messageId, user_id: image.userId },
+    reply_id: image.messageId, source: { message_id: image.messageId },
   }))
-  if (quote.quoteStatus === "unavailable") return null
+  if (quote.quoteStatus === "unavailable") return []
   const sender = record(quote.sender)
-  if (text(quote.user_id || sender.user_id) !== image.userId || sender.user_id && text(sender.user_id) !== image.userId) return null
+  if (text(quote.user_id || sender.user_id) !== image.userId || sender.user_id && text(sender.user_id) !== image.userId) return []
   const parsed = buildQuoteContext(quote)
-  const images = parsed.attachments.filter(item => item.kind === "image" && item.url)
+  return parsed.attachments.filter(item => item.kind === "image" && item.url).map(item => text(item.url))
+}
+
+/** 点名群图片时复用引用消息读取边界，保留当前请求者身份并校验图片作者。 */
+export async function refreshRecentImage(event: unknown, image: { messageId: string; userId: string; url: string; imageIndex?: number }): Promise<string | null> {
+  if (!image.messageId) return image.url || null
+  const images = await readRecentMessageImages(event, image)
   // 已核对消息和作者，同消息多图按原始位置更新短时地址。
-  return text(images.find(item => item.url === image.url)?.url || (image.imageIndex !== undefined ? images[image.imageIndex]?.url : images.length === 1 ? images[0].url : "")) || null
+  return images.find(url => url === image.url) || (image.imageIndex !== undefined ? images[image.imageIndex] : images.length === 1 ? images[0] : "") || null
 }
 
 function buildQuoteContext(quoteValue: unknown): QuoteContext {
@@ -387,7 +395,6 @@ export async function resolveMediaContext(event: unknown = {}, prompt: unknown =
   const quoteDiagnostics = record(quotedValue).diagnostics
   const diagnostics = [
     ...(Array.isArray(quoteDiagnostics) ? quoteDiagnostics.map(text) : []),
-    ...(attachments.length ? [] : ["本轮没有可解析的媒体附件。"]),
   ]
   if (quoteAsCurrent && quote && !currentTargeted) attachments.sort((a, b) => Number(b.source === "quote") - Number(a.source === "quote"))
   const selectedUrls = new Set<string>()
@@ -420,7 +427,7 @@ export function summarizeMediaContext(media: Partial<ResolvedMediaContext> = {})
     if (!items) continue
     const readable = items.filter(item => item.visionEligible !== false)
     const skipped = items.length - readable.length
-    if (readable.length) lines.push(`${kind} 附件 ${readable.length} 个：${readable.map(item => `${displayAttachment(item)}(${item.source || "current"})`).join("，")}`)
+    if (readable.length) lines.push(`${kind} 附件 ${readable.length} 个：${readable.map(item => kind === "image" ? `${item.source || "current"}` : `${displayAttachment(item)}(${item.source || "current"})`).join("，")}`)
     if (skipped) lines.push(`${kind} 附件 ${skipped} 个（本轮无需读取）`)
   }
   for (const item of media.diagnostics || []) lines.push(item)

@@ -1,6 +1,7 @@
 import { applyReasoningPayload } from "../../../configuration/reasoning.js"
 import { responsesUsesUpstreamState, type ResponsesStateMode } from "../../../configuration/responses-state.js"
 import { contentToText } from "../../base.js"
+import { enforcePromptBudgetDetailed, inputTokenLimit } from "../../../../core/chat/token-budget.js"
 import { responsesToolDefinition } from "../../../../tools/support/contract.js"
 import type { ModelChannel, ModelMessage, ModelToolChoice } from "../../../protocol/types.js"
 import type { ToolDefinition } from "../../../../tools/support/tool-contract.js"
@@ -20,6 +21,7 @@ export interface ResponsesRecoveryRequest {
   body: UnknownRecord
   replayedMessages: number
   droppedToolItems: number
+  localCompaction?: { before: number; after: number; limit: number; messagesDropped: number; toolPayloadsCompressed: number }
 }
 
 function record(value: unknown): UnknownRecord {
@@ -251,6 +253,13 @@ export function buildResponsesRequest(input: ResponsesRequestInput): UnknownReco
     input: previousResponseId ? incrementalResponsesInput(input.messages) : messagesForResponses(input.messages),
     store,
   }
+  // 压缩随正常 Responses 推理进行，不再发起独立 compact 请求。
+  const runtimeThreshold = Number(runtime.compactThreshold)
+  const compactThreshold = Number.isFinite(runtimeThreshold) && runtimeThreshold > 0
+    ? Math.floor(runtimeThreshold)
+    : Math.max(1, Math.floor(inputTokenLimit({}, { channel, maxTokens: input.maxTokens }) * 0.8))
+  if (runtime.compactionDisabled === true) delete body.context_management
+  else body.context_management = [{ type: "compaction", compact_threshold: compactThreshold }]
   // Responses 的流式开关属于传输层配置，不应混入普通模型参数；只有显式
   // 开启时发送 stream=true，未开启时主动移除可能遗留的 params.stream。
   delete body.stream
@@ -287,15 +296,34 @@ export function buildResponsesRequest(input: ResponsesRequestInput): UnknownReco
 }
 
 /** 构造断链后的无状态请求；不会修改普通请求或重新执行任何本地工具。 */
-export function buildResponsesRecoveryRequest(input: ResponsesRequestInput): ResponsesRecoveryRequest {
-  const replayMessages = input.replayMessages?.length ? input.replayMessages : input.messages
+export function buildResponsesRecoveryRequest(input: ResponsesRequestInput, localFallback = false, reduceBudget = false): ResponsesRecoveryRequest {
+  let replayMessages = input.replayMessages?.length ? input.replayMessages : input.messages
   const runtime = record(input.channel.responsesRuntime)
+  let localCompaction: ResponsesRecoveryRequest["localCompaction"]
+  if (localFallback) {
+    // 失效的加密状态不再回放；从可见正文和真实 call_id 重建工具配对。
+    const visibleMessages = replayMessages.map(message => {
+      const { protocol, ...visible } = message
+      const calls = Array.isArray(protocol?.outputItems) ? protocol.outputItems.map(record).filter(item => item.type === "function_call") : []
+      const localCalls = calls.length ? calls.map(call => ({ id: text(call.call_id), function: { name: text(call.name), arguments: call.arguments } })) : record(visible).tool_calls || visible.toolCalls
+      return { ...visible, ...(localCalls ? { tool_calls: localCalls } : {}), ...(visible.toolCallId ? { tool_call_id: visible.toolCallId } : {}) }
+    })
+    const config = { chat: { inputTokenBudget: runtime.inputTokenBudget } }
+    const limit = inputTokenLimit(config, { channel: input.channel, maxTokens: input.maxTokens })
+    // 上游已明确超窗时进一步缩小一次预算；系统提示和当前问题仍保留。
+    const outcome = enforcePromptBudgetDetailed(visibleMessages, config, {
+      channel: input.channel,
+      maxTokens: (Number(input.maxTokens) || 0) + (reduceBudget ? Math.ceil(limit / 2) : 0),
+    })
+    replayMessages = outcome.messages as unknown as ModelMessage[]
+    localCompaction = { before: outcome.before, after: outcome.after, limit: outcome.limit, messagesDropped: outcome.messagesDropped, toolPayloadsCompressed: outcome.toolPayloadsCompressed }
+  }
   const body = buildResponsesRequest({
     ...input,
     messages: replayMessages,
     channel: {
       ...input.channel,
-      responsesRuntime: { ...runtime, stateMode: "auto", previousResponseId: "" },
+      responsesRuntime: { ...runtime, stateMode: localFallback ? "local" : "auto", previousResponseId: "", ...(localFallback ? { compactionDisabled: true } : {}) },
     },
   })
   const repaired = pruneBrokenFunctionCallPairs(Array.isArray(body.input) ? body.input : [])
@@ -305,5 +333,6 @@ export function buildResponsesRecoveryRequest(input: ResponsesRequestInput): Res
     body,
     replayedMessages: replayMessages.length,
     droppedToolItems: repaired.droppedToolItems,
+    ...(localCompaction ? { localCompaction } : {}),
   }
 }

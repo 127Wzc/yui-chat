@@ -1,8 +1,9 @@
 import crypto from "node:crypto"
+import { recentContextStore } from "../chat/recent-context.js"
 import path from "node:path"
 import { configStore, tempDir } from "../../config/store.js"
 import { assertSafeHttpUrl, linkSafetyConfig } from "../network/link-safety-policy.js"
-import { hostRuntime } from "../runtime/host-runtime.js"
+import { hostRuntime, hostMessageIds } from "../runtime/host-runtime.js"
 import { createNativeAtSegment } from "../message/cq-code.js"
 import type {
   ContentPart,
@@ -168,11 +169,6 @@ async function forwardSegment(part: ForwardPart, context: MessageChainDeliveryCo
   return { type: "node", data: nodes }
 }
 
-function messageIdFrom(value: unknown): string {
-  const source = record(value)
-  return text(source.message_id || source.messageId || source.id)
-}
-
 /**
  * 解析当前会话的发送方法。
  *
@@ -253,8 +249,10 @@ export async function deliverMessageChain(chain: MessageChain, context: MessageC
       const result = await sender.send(payloads.length === 1 ? payloads[0] : payloads, batch.forward || batch.items.some(item => ["music", "record", "audio"].includes(text(record(item.payload).type))) ? false : quotePending)
       if (result === false || record(result).error || record(result).status === "failed") throw new Error("宿主消息投递失败。")
       quotePending = false
-      const messageId = messageIdFrom(result)
-      if (messageId) messageIds.push(messageId)
+      const sentIds = hostMessageIds(result)
+      const messageId = sentIds.length === 1 ? sentIds[0] : ""
+      messageIds.push(...sentIds)
+      await recentContextStore.recordDeliveredImages(context.e, result, batch.items.filter(item => chain[item.index].type === "image").length)
       for (const item of batch.items) {
         const receipt = parts.find(part => part.index === item.index)
         if (receipt && messageId) receipt.messageId = messageId

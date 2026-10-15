@@ -22,9 +22,31 @@ export function estimateTokens(value: unknown = ""): number {
   return Math.ceil(cjk / 1.7 + Math.max(0, serialized.length - cjk) / 4)
 }
 
+// 无尺寸/模型 tokenizer 时按每图预留 2048 tokens；这是预算估算，不是供应商用量。
+// URL 和 Base64 都是图片传输载体，不能按其字符数计算视觉 token。
+const IMAGE_TOKEN_RESERVE = 2048
+
+function contentTokens(value: unknown): number {
+  if (!Array.isArray(value)) return estimateTokens(value)
+  return value.reduce((sum, part) => {
+    const item = record(part)
+    if (["image_url", "input_image", "image"].includes(text(item.type))) return sum + IMAGE_TOKEN_RESERVE
+    return sum + estimateTokens(part)
+  }, 0)
+}
+
+function protocolTokens(value: unknown): number {
+  const source = record(value)
+  if (!Array.isArray(source.outputItems)) return estimateTokens(value)
+  return estimateTokens({ ...source, outputItems: undefined }) + source.outputItems.reduce((sum: number, item: unknown) => {
+    const output = record(item)
+    return sum + estimateTokens({ ...output, content: undefined }) + contentTokens(output.content)
+  }, 0)
+}
+
 export function messageTokens(message: unknown = {}): number {
   const source = record(message)
-  return estimateTokens(source.content) + estimateTokens(source.tool_calls) + estimateTokens(source.protocol) + 4
+  return contentTokens(source.content) + estimateTokens(source.tool_calls) + protocolTokens(source.protocol) + 4
 }
 
 export function truncateTextToTokens(value: unknown = "", limit = 0): string {
@@ -204,7 +226,7 @@ export interface PromptBudgetOptions {
  * 输出预留（任务 maxTokens）与安全边际从目标里扣除，避免输入顶满窗口把输出挤掉；
  * 估算器本身偏保守，安全边际固定为 200，不再单独配置。
  */
-function inputTokenLimit(config: unknown, options: PromptBudgetOptions = {}): number {
+export function inputTokenLimit(config: unknown, options: PromptBudgetOptions = {}): number {
   const chat = record(record(config).chat)
   const outputReserve = Math.max(0, Math.floor(Number(options.maxTokens) || 0))
   const safetyMargin = 200
@@ -285,26 +307,4 @@ export function promptBudgetReport(messages: readonly UnknownRecord[] = [], tool
     messages: messages.reduce((sum, item) => sum + messageTokens(item), 0),
     tools: tools.reduce((sum, item) => sum + estimateTokens({ name: item.name, description: item.description, parameters: item.parameters }), 0),
   }
-}
-
-/** 仅压缩最后一轮以前的完整单元；本轮群资料和工具链留在原位。 */
-export async function compactPromptHistory(
-  messages: UnknownRecord[],
-  config: unknown,
-  options: PromptBudgetOptions & { preserveFrom?: UnknownRecord },
-  compact: (history: UnknownRecord[]) => Promise<UnknownRecord | null>,
-): Promise<UnknownRecord[] | null> {
-  const limit = inputTokenLimit(config, options)
-  if (messages.reduce((sum, item) => sum + messageTokens(item), 0) <= limit) return null
-  const units = groupAtomicUnits(messages)
-  const anchor = options.preserveFrom ? units.findIndex(unit => unit.includes(options.preserveFrom!)) : -1
-  const lastUser = anchor >= 0 ? anchor : units.map(unit => unit.some(item => item.role === "user")).lastIndexOf(true)
-  if (lastUser <= 0) return null
-  const history = units.slice(0, lastUser).filter(unit => !unit.some(item => item.role === "system")).flat()
-  if (!history.length) return null
-  const result = await compact(history)
-  if (!result) return null
-  const candidate = [...units.slice(0, lastUser).filter(unit => unit.some(item => item.role === "system")).flat(), result, ...units.slice(lastUser).flat()]
-  // 加密内容不做字符串截断；结果仍超预算时回到原始明文的本地裁剪。
-  return candidate.reduce((sum, item) => sum + messageTokens(item), 0) <= limit ? candidate : null
 }

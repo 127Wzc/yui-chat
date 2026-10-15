@@ -214,7 +214,7 @@ export async function parseClaudeStreamResponse(response: Response): Promise<Mod
     ...(Object.keys(usage).length ? { usage } : {}),
   }
   const parsed = parseClaudeResponse(data)
-  return { ...parsed, raw: { stream: true, events, stopReason } }
+  return { ...parsed, raw: { ...data, stream: true, events, stopReason } }
 }
 
 function parseClaudeResponse(data: UnknownRecord): ModelResponse {
@@ -265,7 +265,7 @@ export class ClaudeAdapter extends ModelAdapter {
   override async sendMessage({ channel, messages, tools = [], toolChoice, maxTokens = 0, signal, onRequest }: ModelRequest): Promise<ModelResponse> {
     if (!channel.apiKey) throw new Error("Claude channel apiKey is required")
     const baseURL = (channel.baseURL || "https://api.anthropic.com/v1").replace(/\/$/, "")
-    const systemValue = messages.find(item => item.role === "system")?.content
+    const systemValue = messages.filter(item => item.role === "system").map(item => contentToText(item.content)).filter(Boolean).join("\n\n")
     const params = record(channel.params)
     const body = applyReasoningPayload({
       model: channel.model || "claude-3-5-haiku-latest",

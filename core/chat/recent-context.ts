@@ -1,9 +1,10 @@
 import { estimateTokens } from "./token-budget.js"
 import { configStore, registerConfigPublishHook } from "../../config/store.js"
 import { isCommandMessage } from "../message/command-prefixes.js"
-import { extractMessageContext } from "../message/message-context.js"
+import { stripMessageCodes, extractMessageContext } from "../message/message-context.js"
 import { groupIdFromEvent, isGroupEvent } from "../message/event-scope.js"
-import { hostRuntime } from "../runtime/host-runtime.js"
+import { hostRuntime, hostMessageIds } from "../runtime/host-runtime.js"
+import { readRecentMessageImages } from "../message/media-context.js"
 import type { UnknownRecord } from "../message/types.js"
 
 interface ContextRow {
@@ -14,6 +15,7 @@ interface ContextRow {
   text: string
   attachments: { images: number; records: number; videos: number }
   imageUrls: string[]
+  mentions?: string[]
   /** 被动观察阶段只保存一层回复关系；引用媒体仍在真正触发时按 ID 懒读取。 */
   replyTo?: {
     messageId: string
@@ -235,6 +237,11 @@ export class RecentContextStore {
   }
 
   record(event: unknown = {}): boolean {
+    return this.recordInScope(event, event)
+  }
+
+  /** 会话归属与消息作者独立，助手私聊回复仍属于原请求者。 */
+  private recordInScope(event: unknown, scopeEvent: unknown): boolean {
     const config = configStore.get()
     this.prune(config)
     if (!shouldRecord(event, config)) return false
@@ -243,7 +250,7 @@ export class RecentContextStore {
     const reply = replyContext(e, context)
     const rawText = text(e.msg || e.raw_message || "")
     const replyCodeOnly = context.replies.length > 0 && /\[CQ:(?:reply|source)[,\]]/i.test(rawText)
-    const value = compact(context.text || (replyCodeOnly ? "" : rawText))
+    const value = compact(context.text || (replyCodeOnly ? "" : stripMessageCodes(rawText)))
     // 宿主有时会把引用快照展开到当前事件；能拿到快照地址时先从当前发言的
     // 媒体里扣除，避免把“回复别人的图”记录成发送者自己的图。没有快照时
     // 不做猜测，关系仍保留在 replyTo 中。
@@ -253,23 +260,31 @@ export class RecentContextStore {
       ...(Array.isArray(e.img) ? e.img.map(text) : []),
     ].filter(url => Boolean(url) && !quotedImageUrls.has(url)))]
     if (!value && !imageUrls.length && !context.records.length && !context.videos.length && !reply?.target) return false
-    const key = scopeKey(e)
+    const key = scopeKey(scopeEvent)
     const rows = buffers.get(key) || []
     const row: ContextRow = {
       messageId: messageId(e),
       userId: text(e.user_id), name: userName(e), aliases: userAliases(e), text: value,
       attachments: { images: imageUrls.length, records: context.records.length, videos: context.videos.length },
       imageUrls,
+      mentions: context.mentions.map(item => item.qq),
       ...(reply?.target ? { replyTo: reply.target } : {}),
-      time: Date.now(),
+      time: historyTime(e) ? (historyTime(e) < 1e12 ? historyTime(e) * 1000 : historyTime(e)) : Date.now(),
     }
     if (text(e.user_id) === text(e.self_id) && e.self_id && reply?.target) {
       const targetId = reply.target.userId || rows.find(item => item.messageId === reply.target?.messageId)?.userId
       if (targetId) row.respondingToUserId = targetId
     }
     const duplicateIndex = row.messageId ? rows.findIndex(item => item.messageId === row.messageId) : -1
-    if (duplicateIndex >= 0) rows.splice(duplicateIndex, 1)
-    rows.push(row)
+    if (duplicateIndex >= 0) {
+      row.time = rows[duplicateIndex].time
+      row.replyTo ||= rows[duplicateIndex].replyTo
+      row.respondingToUserId ||= rows[duplicateIndex].respondingToUserId
+      if (!row.imageUrls.length) row.imageUrls = rows[duplicateIndex].imageUrls
+      row.attachments.images = row.imageUrls.length
+      rows[duplicateIndex] = row
+    } else rows.push(row)
+    rows.sort((a, b) => a.time - b.time)
     buffers.set(key, rows.slice(-configuredMessageCount(config)))
     return true
   }
@@ -280,14 +295,63 @@ export class RecentContextStore {
     const value = text(answer).trim()
     if (!value || value === "<EMPTY>" || !e.self_id) return
     const replyId = messageId(e)
-    const sentId = text(record(receipt).message_id || record(receipt).messageId)
+    const sentIds = hostMessageIds(receipt)
+    const sentId = sentIds.length === 1 ? sentIds[0] : ""
     const syntheticId = sentId || `assistant:${replyId || Date.now()}:${text(e.user_id)}`
-    if (!this.record({ ...e, user_id: e.self_id, sender: { nickname: "助手" }, message_id: syntheticId,
-      msg: value, raw_message: value, message: [{ type: "text", text: value }], img: [],
+    if (!this.recordInScope({ ...e, user_id: e.self_id, sender: { nickname: "助手" }, message_id: syntheticId,
+      time: Date.now(), msg: value, raw_message: value, message: [{ type: "text", text: value }], img: [],
       source: undefined, quoted_message: undefined, quotedMessage: undefined, quote: undefined,
-      reply: { message_id: replyId, user_id: e.user_id, sender: e.sender }, reply_id: undefined })) return
+      reply: { message_id: replyId, user_id: e.user_id, sender: e.sender }, reply_id: undefined }, e)) return
     const row = (buffers.get(scopeKey(e)) || []).find(item => item.messageId === syntheticId)
     if (row) row.respondingToUserId = text(e.user_id)
+  }
+
+  /** 投递成功后登记真实图片消息；资源由平台按消息 ID 懒读取，不保留内联图片或任意本地路径。 */
+  async recordDeliveredImages(event: unknown, receipt: unknown, count: number): Promise<void> {
+    const e = record(event)
+    const ids = hostMessageIds(receipt)
+    if (!e.self_id || count <= 0 || receipt === false) return
+    if (!ids.length) {
+      hostRuntime.logger?.debug?.("[yui-chat] 图片回看登记跳过：宿主回执未提供有效消息 ID。")
+      return
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      const config = configStore.get()
+      const context = contextConfig(config)
+      if (!configuredMessageCount(config) || (isGroupEvent(e) ? context.captureGroups === false : context.capturePrivate === false)) return
+      const persona = record(record(config).persona)
+      // 回看只是辅助记录：多回执核验共用一秒预算，不能拖住已成功的投递。
+      const deadline = Date.now() + 1000
+      for (const id of ids.slice(0, 8)) {
+        let imageCount = count
+        if (ids.length > 1) {
+          const remaining = deadline - Date.now()
+          if (remaining <= 0) break
+          const images = await Promise.race([
+            readRecentMessageImages(e, { messageId: id, userId: text(e.self_id) }),
+            new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), remaining) }),
+          ])
+          clearTimeout(timer)
+          if (images === null) {
+            hostRuntime.logger?.debug?.("[yui-chat] 图片回看登记超时，跳过剩余回执。")
+            break
+          }
+          imageCount = images.length
+        }
+        if (!imageCount) continue
+        this.recordInScope({ ...e, user_id: e.self_id, sender: { nickname: text(persona.firstPerson) || "助手" },
+          message_id: id, time: Date.now(), msg: "", raw_message: "", img: [],
+          source: undefined, quoted_message: undefined, quotedMessage: undefined, quote: undefined, reply_id: undefined, replyId: undefined,
+          message: Array.from({ length: imageCount }, (_, index) => ({ type: "image", url: `platform-image:${id}:${index}` })),
+          reply: { message_id: messageId(e), user_id: e.user_id, sender: e.sender } }, e)
+      }
+    } catch {
+      // 登记失败不改变真实投递结果，也不记录可能包含媒体凭证的宿主错误。
+      hostRuntime.logger?.debug?.("[yui-chat] 图片回看登记失败，已发送消息不受影响。")
+    } finally {
+      clearTimeout(timer)
+    }
   }
 
   /** 点名只绑定当前窗口中可证实的身份；同名多用户保留歧义。 */
@@ -307,7 +371,7 @@ export class RecentContextStore {
   }
 
   /** 每轮提供群窗口；点名/引用仅影响预算优先级，按回复链整组裁剪。 */
-  buildReference(event: unknown, prompt: unknown, options: { history?: unknown[]; maxTokens?: number } = {}): string {
+  buildReference(event: unknown, prompt: unknown, options: { history?: unknown[]; maxTokens?: number; diagnostics?: UnknownRecord } = {}): string {
     const e = record(event)
     const config = configStore.get()
     this.prune(config)
@@ -318,18 +382,25 @@ export class RecentContextStore {
     const targetIds = this.referencedUsers(event, prompt)
     const targets = new Set(targetIds)
     const quoteIds = new Set(extractMessageContext(e).replies.map(item => item.id))
-    const rows = (buffers.get(scopeKey(e)) || []).filter(row => (!currentId || row.messageId !== currentId) && !represented.has(row.messageId)
-      && !(row.respondingToUserId === text(e.user_id) && history.some(item => item.role === "assistant" && text(item.content) === row.text)))
+    const rows = (buffers.get(scopeKey(e)) || []).filter(row => (!currentId || row.messageId !== currentId)
+      && (row.attachments.images > 0 || !represented.has(row.messageId)
+        && !(row.respondingToUserId === text(e.user_id) && history.some(item => item.role === "assistant" && text(item.content) === row.text))))
     const selectedIds = new Set(rows.filter(row => targets.has(row.userId) || targets.has(row.respondingToUserId || "") || quoteIds.has(row.messageId)).map(row => row.messageId))
     const candidates = rows.map((row, index) => ({
       index,
       priority: selectedIds.has(row.messageId) || selectedIds.has(row.replyTo?.messageId || "") ? 1 : 0,
       value: {
-        messageId: row.messageId, speaker: { userId: row.userId, name: row.name },
-        text: row.text, attachments: row.attachments,
-        ...(row.replyTo ? { replyTo: row.replyTo } : {}),
-        ...(row.respondingToUserId ? { respondingToUserId: row.respondingToUserId } : {}),
-        relation: row.userId === text(e.user_id) ? "当前请求者的群发言" : row.respondingToUserId === text(e.user_id) ? "助手对当前请求者的回答" : row.respondingToUserId ? "助手对其他成员的回答" : "其他群成员发言；回复关系以 replyTo 为准",
+        messageId: row.messageId, from: row.userId,
+        ...(row.text ? { text: row.text } : {}),
+        ...(row.attachments.images ? { images: row.attachments.images } : {}),
+        ...(row.attachments.records ? { audio: row.attachments.records } : {}),
+        ...(row.attachments.videos ? { videos: row.attachments.videos } : {}),
+        ...(row.mentions?.length ? { mentions: row.mentions } : {}),
+        ...(row.replyTo ? { replyTo: row.replyTo.messageId,
+          ...(!rows.some(other => other.messageId === row.replyTo?.messageId) && !represented.has(row.replyTo.messageId) && row.replyTo.text
+            ? { quote: { from: row.replyTo.userId, text: stripMessageCodes(row.replyTo.text) } } : {}) } : {}),
+        ...(row.respondingToUserId && !rows.some(other => other.messageId === row.replyTo?.messageId)
+          ? { to: row.respondingToUserId } : {}),
       },
     }))
     // 以回复链为单位保留问答；预算不足时整组省略，不能只留下“是的”等孤立回答。
@@ -348,22 +419,40 @@ export class RecentContextStore {
     }
     const kept: typeof candidates = []
     const maxTokens = Math.max(0, options.maxTokens ?? 1200)
-    let used = 100
+    const serialize = (items: typeof candidates): string => {
+      const ordered = [...items].sort((a, b) => a.index - b.index)
+      // 观察和投递回调可能乱序；有真实回复关系时先呈现父消息，不猜测其他顺序。
+      const result: typeof candidates = []
+      const visited = new Set<number>()
+      const visit = (item: typeof candidates[number]): void => {
+        if (visited.has(item.index)) return
+        visited.add(item.index)
+        const parent = ordered.find(other => other.value.messageId === item.value.replyTo)
+        if (parent) visit(parent)
+        result.push(item)
+      }
+      ordered.forEach(visit)
+      const members = Object.fromEntries([...new Set(result.map(item => item.value.from))]
+        .sort().map(id => [id, rows.find(row => row.userId === id)?.name || id]))
+      return JSON.stringify({ members, ...(targetIds.length ? { requestedUserIds: targetIds } : {}),
+        ...(items.length < rows.length ? { incomplete: true } : {}),
+        ...(!items.length ? { unavailable: "群窗口没有可提供的消息，不能猜测缺失内容。" } : {}),
+        messages: result.map(item => item.value) })
+    }
     const ranked = [...groups.values()]
       .sort((a, b) => Math.max(...b.map(item => item.priority)) - Math.max(...a.map(item => item.priority)) || b.at(-1)!.index - a.at(-1)!.index)
     for (const group of ranked) {
-      const cost = estimateTokens(group.map(item => item.value))
-      if (used + cost > maxTokens) continue
-      kept.push(...group); used += cost
+      if (estimateTokens(serialize([...kept, ...group])) > maxTokens) continue
+      kept.push(...group)
     }
-    return JSON.stringify({ referenceOnly: true, requestedUserIds: targetIds,
-      windowMessages: (buffers.get(scopeKey(e)) || []).length,
-      eligibleMessages: rows.length, includedMessages: kept.length, omittedMessages: rows.length - kept.length,
+    if (options.diagnostics) Object.assign(options.diagnostics, {
+      windowMessages: (buffers.get(scopeKey(e)) || []).length, eligibleMessages: rows.length,
+      windowImageMessages: (buffers.get(scopeKey(e)) || []).filter(row => row.attachments.images > 0).length,
+      includedImageMessages: kept.filter(item => Boolean(item.value.images)).length,
+      includedMessages: kept.length, omittedMessages: rows.length - kept.length,
       ...(rows.length > kept.length ? { omissionReason: "参考资料超出本轮预算，按完整回复链裁剪。" } : {}),
-      ...(!kept.length ? { unavailable: rows.length
-        ? "群窗口资料超出本轮预算；不能猜测未提供的内容。"
-        : "当前群窗口没有额外可提供的消息；当前发言和个人历史另行提供，不能猜测未提供的内容。" } : {}),
-      messages: kept.sort((a, b) => a.index - b.index).map(item => item.value) })
+    })
+    return serialize(kept)
   }
 
   buildPrompt(event: unknown = {}): string {
@@ -463,6 +552,15 @@ export class RecentContextStore {
     const e = record(event)
     const value = compact(prompt)
     const targets = this.referencedUsers(e, prompt)
+    const personaNames = record(record(configStore.get()).persona)
+    const namedAssistant = [personaNames.firstPerson, personaNames.assistantLabel, ...(Array.isArray(personaNames.aliases) ? personaNames.aliases : [])]
+      .map(text).filter(Boolean).some(name => {
+        const index = value.indexOf(name)
+        return index >= 0 && /^(?:刚才|刚刚|刚|之前|最近|最新)?(?:发|贴|传|分享)(?:的|了)/.test(value.slice(index + name.length))
+      })
+    const assistantTarget = namedAssistant || /(?:你|您)(?:刚才|刚刚|刚|之前|最近|最新)?(?:发|贴|传|分享)(?:的|了)|(?:你|您)的(?:图|照片|截图|表情)/.test(value)
+    if (assistantTarget && e.self_id) targets.push(text(e.self_id))
+    if (!targets.length && selfImageReferencePattern.test(value)) targets.push(text(e.user_id))
     const rows = (buffers.get(scopeKey(e)) || []).filter(row => !messageId(e) || row.messageId !== messageId(e))
     const comparison = /比较|对比|区别|一起看/.test(value)
     const mentions = extractMessageContext(e, value).mentions.filter(item => item.qq !== text(e.self_id) && item.qq !== "all")
@@ -481,8 +579,9 @@ export class RecentContextStore {
       if (authorPhrase.startsWith(name)) authorPhrase = authorPhrase.slice(name.length).trim()
     }
     authorPhrase = authorPhrase.replace(/^(?:(?:请|帮我|再|看看|看一下|看下|看|识别|分析|描述|解读)\s*)+/, "")
-    const namedAuthor = (authorPhrase.match(/^(.*?)(?:发|贴|传|晒|分享)(?:的|了)/)?.[1] || "").replace(/(?:刚才|刚刚|之前|最近|刚)$/, "").trim()
+    const namedAuthor = (authorPhrase.match(/^(.*?)(?:发|贴|传|晒|分享)(?:的|了)/)?.[1] || "").replace(/(?:刚才|刚刚|之前|最近|最新|刚)$/, "").trim()
     const explicitOther = Boolean(namedAuthor) || /(?:看|识别|分析|描述|解读|比较|对比).{0,30}(?:发的|的)(?:图片|图|照片|截图|表情包)/.test(value)
+    if (!targets.length && otherImageReferencePattern.test(value)) return { images: [], diagnostic: "尚未确认他/她指哪位成员，请 @ 成员或引用原图。" }
     if (!targets.length && explicitOther && !selfImageReferencePattern.test(value)) return { images: [], diagnostic: "未在当前群窗口确认被点名的图片作者，请用户 @ 成员或引用原图。" }
     if (comparison && /我(?:的|发)|和我|与我/.test(value) && !targets.includes(text(e.user_id))) targets.push(text(e.user_id))
     if (!targets.length) {
@@ -507,6 +606,20 @@ export class RecentContextStore {
     const images = selected.slice(0, maxImages)
     if (!comparison) images.sort((a, b) => rows.findIndex(row => row.messageId === a.messageId) - rows.findIndex(row => row.messageId === b.messageId) || (a.imageIndex || 0) - (b.imageIndex || 0))
     return { images, diagnostic: omitted || selected.length > maxImages ? `本轮只提供最近的 ${images.length} 张目标图片，其余未加载。` : "" }
+  }
+
+  selectAdjacentImages(event: unknown): { images: RecentImageReference[]; diagnostic: string } {
+    const e = record(event)
+    this.prune()
+    const rows = (buffers.get(scopeKey(e)) || []).filter(row => row.messageId !== messageId(e)).slice(-5)
+    const recent = rows.filter(row => Date.now() - row.time <= 2 * 60 * 1000)
+    const imageRows = recent.filter(row => row.imageUrls.length)
+    const last = recent.at(-1)
+    const target = last?.imageUrls.length ? last : imageRows.length === 1 && imageRows[0].userId === text(e.user_id) ? imageRows[0] : null
+    if (!target) return { images: [], diagnostic: imageRows.length ? "图片指代不唯一，请引用目标图片。" : "附近没有可确认的图片，请引用或重发原图。" }
+    return { images: target.imageUrls.slice(0, 4).map((url, imageIndex) => ({ url, imageIndex,
+      messageId: target.messageId, userId: target.userId, name: target.name, time: target.time,
+      source: target.userId === text(e.user_id) ? "recent-self" : "recent-group" })), diagnostic: "" }
   }
 
   /** 按回复语境、点名对象和人称指代选择最近图片；无明确对象时使用时间上最近的一张。 */
@@ -551,7 +664,7 @@ export class RecentContextStore {
 
     const rawPrompt = compact(options.prompt ?? e.msg ?? e.raw_message ?? "")
     if (selfImageReferencePattern.test(rawPrompt)) return find(row => row.userId === currentUserId)
-    if (isGroupEvent(e) && otherImageReferencePattern.test(rawPrompt)) return find(row => row.userId !== currentUserId)
+    if (isGroupEvent(e) && otherImageReferencePattern.test(rawPrompt)) return null
     return find(() => true)
   }
 

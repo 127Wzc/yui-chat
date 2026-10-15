@@ -41,30 +41,39 @@ function objectArguments(value: unknown): Record<string, JsonValue> {
 
 /** 返回统一的空用量，避免不同供应商缺少 usage 时出现 undefined 分支。 */
 export function emptyModelUsage(source: ModelUsage["source"] = "unknown"): ModelUsage {
-  return { input: 0, output: 0, total: 0, cached: 0, reasoning: 0, source, inputKnown: false, outputKnown: false }
+  return { input: 0, output: 0, total: 0, cached: 0, reasoning: 0, source, inputKnown: false, outputKnown: false, totalKnown: false }
 }
 
-/** 将 OpenAI/Claude/Gemini 常见字段归一化为供应商无关的用量结构。 */
+function knownCounter(value: unknown): boolean {
+  return (typeof value === "number" || (typeof value === "string" && value.trim() !== ""))
+    && Number.isFinite(Number(value)) && Number(value) >= 0
+}
+
+/** 同时接受供应商字段与统一结构；重复归一化必须保留数值、来源和已知标记。 */
 export function normalizeModelUsage(value: unknown): ModelUsage {
   if (!isRecord(value)) return emptyModelUsage()
   const usage = isRecord(value.usage) ? value.usage : isRecord(value.usageMetadata) ? value.usageMetadata : value
-  const inputValue = usage.prompt_tokens ?? usage.input_tokens ?? usage.promptTokenCount
-  const outputValue = usage.completion_tokens ?? usage.output_tokens ?? usage.candidatesTokenCount
-  const input = number(inputValue)
-  const output = number(outputValue)
-  const total = number(usage.total_tokens ?? usage.totalTokenCount) || input + output
+  const inputValue = usage.prompt_tokens ?? usage.input_tokens ?? usage.promptTokenCount ?? usage.inputTokenCount ?? usage.input
+  const outputValue = usage.completion_tokens ?? usage.output_tokens ?? usage.candidatesTokenCount ?? usage.outputTokenCount ?? usage.output
+  const totalValue = usage.total_tokens ?? usage.totalTokenCount ?? usage.totalTokens ?? usage.total
+  const explicitSource = ["reported", "estimated", "unknown"].includes(text(usage.source)) ? usage.source as ModelUsage["source"] : undefined
+  const inputKnown = knownCounter(inputValue) && (typeof usage.inputKnown === "boolean" ? usage.inputKnown : explicitSource !== "unknown" && explicitSource !== "estimated")
+  const outputKnown = knownCounter(outputValue) && (typeof usage.outputKnown === "boolean" ? usage.outputKnown : explicitSource !== "unknown" && explicitSource !== "estimated")
+  const totalKnown = typeof usage.totalKnown === "boolean" ? usage.totalKnown && knownCounter(totalValue)
+    : (inputKnown && outputKnown) || (knownCounter(totalValue) && explicitSource !== "unknown" && explicitSource !== "estimated")
+  const input = knownCounter(inputValue) ? number(inputValue) : 0
+  const output = knownCounter(outputValue) ? number(outputValue) : 0
+  const total = knownCounter(totalValue) ? number(totalValue) : input + output
   const cachedDetails = isRecord(usage.prompt_tokens_details) ? usage.prompt_tokens_details.cached_tokens : undefined
   const inputDetails = isRecord(usage.input_tokens_details) ? usage.input_tokens_details : {}
-  const cached = number(cachedDetails ?? inputDetails.cached_tokens ?? usage.cache_read_input_tokens ?? usage.cachedContentTokenCount)
+  const cached = number(cachedDetails ?? inputDetails.cached_tokens ?? usage.cache_read_input_tokens ?? usage.cachedContentTokenCount ?? usage.cached)
   const reasoningDetails = isRecord(usage.completion_tokens_details) ? usage.completion_tokens_details.reasoning_tokens : undefined
   const outputDetails = isRecord(usage.output_tokens_details) ? usage.output_tokens_details : {}
-  const reasoning = number(reasoningDetails ?? outputDetails.reasoning_tokens ?? usage.thoughtsTokenCount)
-  const known = inputValue !== undefined || outputValue !== undefined
+  const reasoning = number(reasoningDetails ?? outputDetails.reasoning_tokens ?? usage.thoughtsTokenCount ?? usage.reasoning)
   return {
     input, output, total, cached, reasoning,
-    source: known ? "reported" : "unknown",
-    inputKnown: inputValue !== undefined && inputValue !== null,
-    outputKnown: outputValue !== undefined && outputValue !== null,
+    source: explicitSource ?? (inputKnown || outputKnown || totalKnown ? "reported" : "unknown"),
+    inputKnown, outputKnown, totalKnown,
   }
 }
 

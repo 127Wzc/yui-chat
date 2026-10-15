@@ -388,6 +388,7 @@ export async function sendChatOutput(event: unknown, result: unknown, config: un
   if (payload.asImage) {
     const imageFactory = segmentFactory()?.image
     const delivered = await sendReply(event, typeof imageFactory === "function" ? imageFactory(payload.image) : payload.image, response.quoteReply, replyOptions)
+    await recentContextStore.recordDeliveredImages(event, delivered, 1)
     return finishOutputDelivery(event, resultValue, rootConfig, source, displayText, options, delivered)
   }
   if (payload.chunks) {

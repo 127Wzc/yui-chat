@@ -879,6 +879,18 @@ async function checkToolPolicy() {
   const { explainToolPolicy } = await import("../output/runtime/tools/access/policy.js")
   const { getToolCommon, isToolEnabledByConfig, normalizeTool, resolveToolExecutionPolicy } = await import("../output/runtime/tools/support/contract.js")
   const { selectPromptTools } = await import("../output/runtime/core/chat/token-budget.js")
+  const { messageTokens, enforcePromptBudgetDetailed } = await import("../output/runtime/core/chat/token-budget.js")
+  const imageMessage = url => ({ role: "user", content: [{ type: "text", text: "看看图片" }, { type: "image_url", image_url: { url } }] })
+  const remoteImage = imageMessage("https://example.com/image.png")
+  const inlineImage = imageMessage(`data:image/png;base64,${Buffer.alloc(1024 * 1024).toString("base64")}`)
+  assert(messageTokens(remoteImage) === messageTokens(inlineImage), "image transport size must not affect visual token reserve")
+  assert(messageTokens(inlineImage) >= 2048 && messageTokens(inlineImage) < 2200, "images must retain a nonzero bounded budget reserve")
+  assert(messageTokens({ role: "user", content: [...inlineImage.content, inlineImage.content[1]] }) === messageTokens(inlineImage) + 2048, "each image must consume its own reserve")
+  const budgetMessages = [{ role: "system", content: "助手" }, { role: "user", content: "之前" }, { role: "assistant", content: "回答" }, inlineImage]
+  assert(!enforcePromptBudgetDetailed(budgetMessages, { chat: { inputTokenBudget: 6000 } }, { maxTokens: 1024 }).compressed, "inline images must not spuriously drop history")
+  const largeText = [{ role: "user", content: "a".repeat(24000) }, { role: "user", content: "继续" }]
+  assert(enforcePromptBudgetDetailed(largeText, { chat: { inputTokenBudget: 6000 } }, { maxTokens: 1024 }).messagesDropped === 1, "real text overflow must still drop old history")
+
   const { groupIdFromEvent, isGroupEvent, normalizeEventScope } = await import("../output/runtime/core/message/event-scope.js")
   const original = await configStore.load()
   const config = JSON.parse(JSON.stringify(original))
@@ -2120,6 +2132,29 @@ async function checkAdapterToolProtocol() {
   assert(adapters.find(item => item.id === "gemini-images")?.supportsStreaming === true, "Gemini Images adapter should declare streaming support")
   assert(adapters.find(item => item.id === "openai-responses")?.supportsNativeToolSearch === true, "OpenAI Responses adapter should declare native tool search support")
   assert(adapters.find(item => item.id === "openai-responses")?.protocol === "responses" && adapters.find(item => item.id === "claude")?.protocol === "claude-messages" && adapters.find(item => item.id === "gemini")?.protocol === "gemini-generate-content", "adapter diagnostics should expose the actual upstream conversation protocol")
+  const originalSystemFetch = globalThis.fetch
+  try {
+    for (const type of ["claude", "gemini"]) {
+      let body
+      globalThis.fetch = async (_url, init) => {
+        body = JSON.parse(init.body)
+        return new Response(JSON.stringify({ content: [], candidates: [] }), { status: 200 })
+      }
+      const adapter = adapterRegistry.get(type)
+      for (const systems of [[], ["稳定人格"], ["稳定人格", "Skill、记忆与知识", "额外规则"]]) {
+        await adapter.sendMessage({
+          channel: { type, model: "test", apiKey: "test", baseURL: "https://example.invalid" },
+          messages: [...systems.map((content, index) => ({ role: "system", content: index === 1 ? [{ type: "text", text: content }] : content })), { role: "user", content: "你好" }],
+        })
+        const actual = type === "claude" ? body.system : body.systemInstruction?.parts.map(part => part.text).join("")
+        assert(actual === (systems.length ? systems.join("\n\n") : undefined), `${type} must retain all system messages in order`)
+        const conversation = type === "claude" ? body.messages : body.contents
+        assert(conversation.length === 1 && conversation[0].role === "user", `${type} must not duplicate system messages as conversation turns`)
+      }
+    }
+  } finally {
+    globalThis.fetch = originalSystemFetch
+  }
   const mockModels = await adapterRegistry.listModels({ id: "mock", type: "mock" })
   assert(mockModels.adapter === "mock" && mockModels.models.some(item => item.id === "mock"), "adapter registry should support listing models from adapters")
   const messages = [
@@ -2283,7 +2318,7 @@ async function checkAdapterToolProtocol() {
       ].join("\n")
       return new Response(source, { status: 200, headers: { "content-type": "text/event-stream" } })
     }
-    const streamedResponses = await adapterRegistry.get("openai-responses").sendMessage({
+    const streamedResponses = await adapterRegistry.sendMessage({
       channel: {
         id: "responses-stream-smoke",
         type: "openai-responses",
@@ -2299,6 +2334,7 @@ async function checkAdapterToolProtocol() {
       tools: [{ name: "command_search", description: "Search commands.", parameters: { type: "object", properties: {} }, async execute() {} }],
       maxTokens: 64,
     })
+    assert(streamedResponses.raw?.usage?.input_tokens === 4, "streamed Responses snapshots must retain upstream usage")
     assert(responsesStreamRequest.stream === true, "Responses streaming requests should send stream=true")
     assert(streamedResponses.text === "你好" && streamedResponses.toolCalls[0]?.name === "command_search" && streamedResponses.toolCalls[0]?.arguments?.query === "体力", "Responses semantic SSE should combine text and function argument deltas")
     assert(streamedResponses.upstreamResponseId === "resp_stream" && streamedResponses.usage.total === 6 && streamedResponses.stopReason === "tool_calls", "Responses semantic SSE should preserve response id, usage and tool stop reason")
@@ -4392,7 +4428,7 @@ async function checkConversations() {
     assert(recentContextStore.record({ ...adjacentQuestionEvent, message_id: "conversation-intervening", msg: "无关插话", raw_message: "无关插话" }), "conversation smoke should retain an intervening message")
     assert(recentContextStore.record(adjacentQuestionEvent), "conversation smoke should retain the contextual question after intervening text")
     const separatedImageResult = await chatService.send(adjacentQuestionEvent, "看看这个图")
-    assert(!separatedImageResult.media?.images, "contextual 'look at this image' should not bind across an intervening non-image message")
+    assert(separatedImageResult.media?.images === 1, "a unique recent own image should survive a short text interruption")
     const mediaResult = await chatService.send({
       isGroup: true,
       group_id: "20001",
@@ -6100,6 +6136,53 @@ async function checkUnifiedModelLogs() {
   try {
     modelLogStore.start(defaults)
     assert(modelLogStore.stats().persistenceAvailable, "unified model logs should see the baseline SQLite worker")
+    const { normalizeModelResponse } = await import("../output/runtime/models/protocol/index.js")
+    const { tokenUsage } = await import("../output/runtime/models/adapters/base.js")
+    const usageTrace = modelLogStore.createTrace({ source: "usage-reconcile-smoke", purpose: "chat" })
+    const usageCall = modelLogStore.beginModelCall({ trace: usageTrace, purpose: "chat", channel: { type: "openai-responses", model: "gpt-visible", modelConfig: { name: "usage-reconcile-smoke" }, provider: { name: "可编辑渠道" } }, messages: [{ role: "user", content: "预算测试" }] })
+    modelLogStore.captureModelRequest(usageCall, { protocol: "responses", body: { context_management: [{ type: "compaction", compact_threshold: 3200 }] } })
+    const localBudget = usageCall.row.estimated_input_tokens
+    // 先写入进行中记录，再在不等待下一次 flush 的情况下检查上游响应。
+    await modelLogStore.flush(true)
+    const upstreamUsage = { input_tokens: 11924, output_tokens: 42, total_tokens: 11966, input_tokens_details: { cached_tokens: 100 }, output_tokens_details: { reasoning_tokens: 12 } }
+    modelLogStore.completeModelCall(usageCall, { response: normalizeModelResponse({ text: "完成", raw: { usage: upstreamUsage }, usage: tokenUsage({ usage: upstreamUsage }), protocol: { kind: "responses", outputItems: [{ type: "compaction", encrypted_content: "MUST_NOT_PERSIST" }] } }) })
+    const reconciled = await modelLogStore.getModelCallDetail(usageCall.id)
+    assert(reconciled.modelCall.input_tokens === 11924 && reconciled.modelCall.output_tokens === 42 && reconciled.modelCall.total_tokens === 11966 && reconciled.modelCall.usage_source === "reported", "completed usage must immediately replace the persisted running estimate")
+    assert(reconciled.modelCall.estimated_input_tokens === 0 && reconciled.modelCall.estimated_output_tokens === 0 && reconciled.modelCall.cached_tokens === 100 && reconciled.modelCall.reasoning_tokens === 12, "upstream usage must retain cached/reasoning counters without counting local estimates")
+    assert(reconciled.modelCall.metadata.localInputBudget === localBudget && reconciled.modelCall.metadata.usageKnown.input && reconciled.modelCall.metadata.usageKnown.output, "the original local budget and per-counter provenance must remain available for comparison")
+    assert(usageTrace.usage.total === 11966 && usageTrace.usage.estimated === 0 && !usageTrace.finished, "active trace usage must update as soon as the model returns")
+    const activeRun = await modelLogStore.getRun(usageTrace.id)
+    assert(activeRun.run.total_tokens === 11966 && activeRun.modelCalls[0].input_tokens === 11924, "active run details must use the current in-memory usage before SQLite flush")
+    assert(reconciled.modelCall.channel_name === "可编辑渠道" && reconciled.modelCall.model_display_name === "gpt-visible" && reconciled.modelCall.metadata.compaction.count === 1 && reconciled.modelCall.metadata.compaction.threshold === 3200, "log details must expose channel/model display names and actual compaction separately from ordinary chat")
+    assert(activeRun.run.model_names[0] === "gpt-visible" && activeRun.run.channel_names[0] === "可编辑渠道" && activeRun.run.compaction_count === 1, "run display summaries must omit internal model keys and flag actual compaction")
+    modelLogStore.finishTrace(usageTrace, { status: "ok", response: "完成" })
+    await modelLogStore.flush(true)
+    const listedUsage = (await modelLogStore.listRuns({ source: "usage-reconcile-smoke" })).items.find(item => item.id === usageTrace.id)
+    assert(listedUsage.model_names[0] === "gpt-visible" && listedUsage.channel_names[0] === "可编辑渠道" && listedUsage.compaction_count === 1, "persisted list queries must return model identifiers, channel names and compaction markers")
+    const dailyUsage = await sqliteClient.get("SELECT * FROM ai_usage_daily WHERE model_name=?", ["usage-reconcile-smoke"])
+    assert(dailyUsage.total_tokens === 11966 && dailyUsage.input_tokens === 11924 && dailyUsage.output_tokens === 42 && dailyUsage.estimated_tokens === 0 && dailyUsage.calls === 1, "daily accounting must use upstream values exactly once")
+    const fallbackTrace = modelLogStore.createTrace({ source: "local-compaction-fallback-smoke", purpose: "chat" })
+    const fallbackCall = modelLogStore.beginModelCall({ trace: fallbackTrace, channel: { type: "openai-responses", model: "fallback-smoke" }, messages: [{ role: "user", content: "本轮问题" }] })
+    modelLogStore.captureModelRequest(fallbackCall, { protocol: "responses", body: { context_management: [{ type: "compaction", compact_threshold: 800 }] } })
+    modelLogStore.captureModelRequest(fallbackCall, { protocol: "responses", phase: "local-compaction-fallback", body: { input: [{ role: "user", content: "本轮问题" }] } })
+    modelLogStore.completeModelCall(fallbackCall, { response: { text: "本地恢复完成", usage: { input: 10, output: 5, total: 15, source: "reported", inputKnown: true, outputKnown: true, totalKnown: true }, responsesStateRecovery: { reason: "compaction_failed", from: "ready", to: "stateless_replay", replayedMessages: 1, droppedToolItems: 0, localCompaction: { before: 2000, after: 1000, limit: 1200, messagesDropped: 2, toolPayloadsCompressed: 0 } } } })
+    const fallbackDetail = await modelLogStore.getModelCallDetail(fallbackCall.id)
+    const fallbackRun = await modelLogStore.getRun(fallbackTrace.id)
+    assert(fallbackDetail.modelCall.metadata.compaction.mode === "local-fallback" && fallbackDetail.modelCall.metadata.localCompaction.messagesDropped === 2 && fallbackDetail.modelCall.metadata.responsesStateRecovery.reason === "compaction_failed", "successful fallback must retain local mode and trimming diagnostics")
+    assert(fallbackRun.run.local_compaction_count === 1 && fallbackRun.run.local_compaction_fallback_count === 1 && fallbackRun.run.compaction_count === 0, "local fallback must be visible in run summaries without claiming server compaction")
+    modelLogStore.finishTrace(fallbackTrace, { status: "ok" })
+    await modelLogStore.flush(true)
+    const listedFallback = (await modelLogStore.listRuns({ source: "local-compaction-fallback-smoke" })).items[0]
+    assert(listedFallback.local_compaction_fallback_count === 1 && listedFallback.local_compaction_count === 1, "persisted run summaries must retain local fallback markers")
+    for (const [label, rawUsage] of [["partial", { input_tokens: 99 }], ["total-only", { total_tokens: 123 }], ["zero", { input_tokens: 0, output_tokens: 0, total_tokens: 0 }], ["missing", {}]]) {
+      const fixture = modelLogStore.beginModelCall({ source: "usage-reconcile-smoke", channel: { type: "openai-responses", model: label }, messages: [{ role: "user", content: "预算测试" }] })
+      modelLogStore.completeModelCall(fixture, { response: normalizeModelResponse({ text: "本地输出估算", usage: tokenUsage({ usage: rawUsage }) }) })
+      const row = (await modelLogStore.getModelCallDetail(fixture.id)).modelCall
+      if (label === "partial") assert(row.input_tokens === 99 && row.output_tokens > 0 && row.estimated_input_tokens === 0 && row.estimated_output_tokens === row.output_tokens && row.total_tokens === 99 + row.output_tokens && row.usage_source === "mixed", "partial usage must estimate only missing counters")
+      if (label === "total-only") assert(row.total_tokens === 123 && row.usage_source === "mixed" && row.metadata.usageKnown.total && !row.metadata.usageKnown.input, "an upstream total must survive missing directional counts")
+      if (label === "zero") assert(row.total_tokens === 0 && row.input_tokens === 0 && row.output_tokens === 0 && row.usage_source === "reported", "reported zero usage must never be replaced by estimates")
+      if (label === "missing") assert(row.total_tokens > 0 && row.usage_source === "estimated" && !row.metadata.usageKnown.total, "missing usage must remain explicitly estimated")
+    }
     const call = modelLogStore.beginModelCall({
       source: "smoke",
       purpose: "chat",
@@ -6120,6 +6203,7 @@ async function checkUnifiedModelLogs() {
     modelLogStore.completeModelCall(call, {
       response: {
         id: "resp_log_smoke",
+        raw: { usage: { input_tokens: 2, output_tokens: 1, total_tokens: 3, input_tokens_details: { cached_tokens: 1 } }, output: [], authorization: "MUST_NOT_PERSIST", api_key: "MUST_NOT_PERSIST" },
         text: "完成",
         stopReason: "end_turn",
         toolCalls: [],
@@ -6129,6 +6213,11 @@ async function checkUnifiedModelLogs() {
       },
     })
     modelLogStore.captureModelResponseMedia(call, [tinyPngDataUrl], 2)
+    const responseDetail = await modelLogStore.getModelCallDetail(call.id)
+    assert(responseDetail?.snapshot?.request?.rawResponse?.body?.usage?.input_tokens === 2 && responseDetail.snapshot.request.rawResponse.body.usage.input_tokens_details.cached_tokens === 1, "raw response usage numbers must survive secret redaction")
+    assert(responseDetail?.snapshot?.request?.rawResponse?.usage?.source === "reported" && responseDetail.modelCall.estimated_input_tokens === 0, "reported usage must remain distinct from estimates")
+    assert(!JSON.stringify(responseDetail?.snapshot).includes("MUST_NOT_PERSIST"), "raw responses must redact credentials and encrypted content")
+
     const detail = await modelLogStore.getModelCallDetail(call.id)
     assert(detail?.modelCall?.adapter === "openai-responses" && detail.modelCall.hosted_tool_call_count === 1, "model logs should expose protocol adapter and hosted-tool call summaries")
     assert(detail?.modelCall?.protocol === "responses" && detail.modelCall.stream === true, "model logs should expose the canonical protocol and streaming mode")
@@ -6154,6 +6243,14 @@ async function checkUnifiedModelLogs() {
     modelLogStore.completeModelCall(failureCall, { error: timeoutError })
     const failureDetail = await modelLogStore.getModelCallDetail(failureCall.id)
     assert(failureDetail?.modelCall?.error_message?.includes("请求超时") && failureDetail.modelCall.error_details?.code === "ETIMEDOUT" && failureDetail.modelCall.error_details?.responseReceived === false, "model logs should expose failure messages and timeout diagnostics")
+    const oversizedCall = modelLogStore.beginModelCall({ source: "smoke", purpose: "chat", channel: { id: "raw-large", type: "openai-responses", model: "test" }, messages: [] })
+    modelLogStore.completeModelCall(oversizedCall, { response: { raw: { usage: { input_tokens: 7 }, output: Array.from({ length: 10 }, () => ({ text: "x".repeat(10000) })) } } })
+    const oversizedDetail = await modelLogStore.getModelCallDetail(oversizedCall.id)
+    assert(oversizedDetail.snapshot.request.rawResponse.upstreamUsage.input_tokens === 7 && oversizedDetail.snapshot.request.rawResponse.body.truncated, "oversized response bodies must not hide upstream usage")
+    const httpFailureCall = modelLogStore.beginModelCall({ source: "smoke", purpose: "chat", channel: { id: "raw-error", type: "openai-responses", model: "test" }, messages: [] })
+    modelLogStore.completeModelCall(httpFailureCall, { error: Object.assign(new Error("Not Found"), { status: 404, rawResponse: { error: { message: "Not Found" }, cookie: "MUST_NOT_PERSIST" } }) })
+    const httpFailureDetail = await modelLogStore.getModelCallDetail(httpFailureCall.id)
+    assert(httpFailureDetail.snapshot.request.rawResponse.body.error.message === "Not Found" && !JSON.stringify(httpFailureDetail.snapshot).includes("MUST_NOT_PERSIST"), "upstream error snapshots must be visible and redacted")
     const { errorDetails } = await import("../output/runtime/core/shared/error-details.js")
     const toolFailure = Object.assign(new RangeError("Maximum call stack size exceeded token=log-secret password=\"demo secret;tail&rest\""), { yuiTool: { stage: "投递生成图片", elapsedMs: 40600 } })
     toolFailure.stack += "\n" + Array.from({ length: 35 }, (_, i) => `    at frame${i} (/plugin/image-generation.js:${i + 1}:7)`).join("\n")
@@ -6589,7 +6686,7 @@ async function checkWebAndBoot() {
   assert(webLogsSource.includes("logs-session-workbench") && webLogsSource.includes("loadConversationTurn") && webLogsSource.includes("toolGroupsForModel") && webLogsSource.includes("LogContextView") && webLogsSource.includes("modelDetail.snapshot") && webLogsSource.includes("loadExtractionResult") && webLogsSource.includes("logs-extraction-result") && webLogsSource.includes("提炼结果") && webLogsSource.includes("rawRequests") && webLogsSource.includes("setDeveloperMode") && webLogsSource.includes("toggleDeveloperMode") && webLogsSource.includes("logs-developer-panel") && webLogsSource.includes("protocolShortLabel") && webLogsSource.includes("streamLabel") && webLogsSource.includes("sessionId") && webLogsSource.includes("logs-inline-message"), "logs page should provide a session workbench with lazy turn details, grouped tool rounds, protocol/stream/session metadata, visible developer diagnostics, and compact failure messages")
   assert(webAdvancedSource.includes("captureScheduleMode") && webAdvancedSource.includes("captureScheduleTime") && webAdvancedSource.includes("captureScheduleCron") && webAdvancedSource.includes("Cron（分 时 日 月 周）"), "advanced memory settings should expose friendly fixed-time and Cron scheduling controls")
   assert(webLogsSource.includes("运行失败诊断详情"), "logs page should expose run-level failure diagnostics in developer mode")
-  assert(webLogsSource.includes("row.error_message"), "logs page should show failure messages in the run list")
+  assert(webLogsSource.includes("row.error_message"), "logs page should retain failure messages for hover hints in the run list")
   assert(webOverviewSource.includes("wizard-inline-config") && webOverviewSource.includes("saveProviderAndTest") && webOverviewSource.includes("saveRouting") && webOverviewSource.includes("savePersona") && webOverviewSource.includes("saveTools") && webOverviewSource.includes("saveKnowledge") && webOverviewSource.includes("saveOutput") && webOverviewSource.includes("sendWizardTest"), "overview setup guide should configure the common path and run the final chat test without leaving the drawer")
   assert(!webPersonaSource.includes("/api/persona/expression") && !webPersonaSource.includes("deleteExpression") && !webPersonaSource.includes("learnAssistant") && !webPersonaSource.includes("expressionExamples"), "persona page should remove expression learning controls")
   assert(webPersonaSource.includes("previewGreeting") && webPersonaSource.includes("initiativeGreetingScheduled"), "persona page should expose initiative greeting controls")
@@ -7173,6 +7270,13 @@ async function checkWebAndBoot() {
     assert(providerKeptKey.apiProviders[0].apiKey === "smoke-secret", "provider update helper should keep api key when empty")
     const providerCleared = updateProviderConfig(providerUpdated, original.apiProviders[0].name, { clearApiKey: true })
     assert(providerCleared.apiProviders[0].apiKey === "", "provider update helper should clear api key explicitly")
+    const { throws: assertThrows } = await import("node:assert/strict")
+    const renameConfig = { ...providerUpdated, models: [{ name: "stable-model-key", apiProvider: original.apiProviders[0].name, modelIdentifier: "gpt-visible" }], modelTasks: { replyer: { modelList: ["stable-model-key"] } } }
+    const renamedProvider = updateProviderConfig(renameConfig, original.apiProviders[0].name, { name: " 我的渠道 " })
+    assert(renamedProvider.apiProviders[0].name === "我的渠道" && renamedProvider.models[0].apiProvider === "我的渠道" && renamedProvider.models[0].name === "stable-model-key" && renamedProvider.apiProviders[0].apiKey === "smoke-secret", "provider rename must update references while retaining model keys and credentials")
+    assert(renamedProvider.modelTasks === renameConfig.modelTasks && renameConfig.models[0].apiProvider === original.apiProviders[0].name, "provider rename must preserve routing references without mutating the source config")
+    assertThrows(() => updateProviderConfig(renameConfig, original.apiProviders[0].name, { name: "  " }), /渠道名称不能为空/)
+    assertThrows(() => updateProviderConfig({ ...renameConfig, apiProviders: [...renameConfig.apiProviders, { name: "重名渠道" }] }, original.apiProviders[0].name, { name: "重名渠道" }), /渠道名称已存在/)
     const providerDeleteConfig = {
       ...original,
       apiProviders: [
@@ -7439,6 +7543,25 @@ async function checkPluginIsolation() {
 }
 
 async function checkWebRichContent() {
+  const browserGlobals = ["localStorage", "location"].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)])
+  try {
+    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: { getItem: () => null } })
+    Object.defineProperty(globalThis, "location", { configurable: true, value: { pathname: "/yui-chat" } })
+    const { modelTokenCounters, usageSourceLabel, modelNamesLabel, channelNamesLabel, compactionLabel } = await import("../output/runtime/web/client/features/logs/logs-tab.js")
+    assert(modelNamesLabel({ model_name: "backend-key", model_identifier: "gpt-visible" }) === "gpt-visible" && channelNamesLabel({ provider_name: "我的渠道" }) === "我的渠道", "log display names must use the channel and upstream model instead of the internal model key")
+    assert(compactionLabel({ metadata: { compaction: { mode: "server", count: 0 } } }) === "自动压缩已开启" && compactionLabel({ compaction_count: 1 }) === "对话含上下文压缩" && compactionLabel({}) === "", "enabling compaction must not be confused with actually performing compaction")
+    assert(compactionLabel({ metadata: { localCompaction: { before: 2000, after: 1000 } } }) === "本地压缩" && compactionLabel({ metadata: { compaction: { mode: "local-fallback", count: 0 } } }) === "本地压缩兜底" && compactionLabel({ local_compaction_fallback_count: 1 }) === "本地压缩兜底", "local budget trimming and Responses fallback must have distinct labels")
+    const mixed = modelTokenCounters({ status: "ok", usage_source: "mixed", input_tokens: 99, output_tokens: 5, total_tokens: 104, metadata: { usageKnown: { input: true, output: false, total: false } } })
+    assert(mixed.map(item => item.source).join(",") === "reported,estimated,estimated" && mixed[0].value === 99, "token styling must distinguish reported and estimated counters individually")
+    const running = modelTokenCounters({ status: "running", usage_source: "unknown", estimated_input_tokens: 2048 })
+    assert(running[0].value === 2048 && running[0].source === "estimated" && running[1].value === null && running[1].note === "等待上游", "running calls must display the local input budget and pending output")
+    assert(usageSourceLabel("mixed") === "部分估算" && modelTokenCounters({ status: "ok", usage_source: "reported", input_tokens: 0, output_tokens: 0, total_tokens: 0 }).every(item => item.source === "reported" && item.value === 0), "reported zero usage must retain its source styling")
+  } finally {
+    for (const [key, descriptor] of browserGlobals) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor)
+      else delete globalThis[key]
+    }
+  }
   const { renderRichContent, plainTextContent } = await import("../output/runtime/web/client/shared/rich-content.js")
   const html = renderRichContent("# 标题\n\n**加粗**\n\n![图片](data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==)")
   assert(/<h1>标题<\/h1>/.test(html), "web content renderer should parse headings and emphasis")

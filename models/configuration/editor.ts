@@ -327,8 +327,12 @@ export function updateProviderConfig(config: UnknownRecord, providerName = "", p
   const index = providers.findIndex(item => text(item.name) === name)
   if (index < 0) throw new Error(`provider not found: ${name}`)
   const current = providers[index]
+  const nextName = patch.name === undefined ? name : text(patch.name).trim()
+  if (!nextName) throw new Error("渠道名称不能为空")
+  if (providers.some((item, position) => position !== index && text(item.name) === nextName)) throw new Error(`渠道名称已存在：${nextName}`)
   const nextProvider: UnknownRecord = {
     ...current,
+    name: nextName,
     type: text(patch.type || current.type) || "openai-compatible",
     baseURL: patch.baseURL === undefined ? current.baseURL : text(patch.baseURL).trim(),
     authType: text(patch.authType || current.authType) || "bearer",
@@ -340,7 +344,9 @@ export function updateProviderConfig(config: UnknownRecord, providerName = "", p
   else if (patch.apiKey !== undefined && text(patch.apiKey).trim()) nextProvider.apiKey = text(patch.apiKey).trim()
   const nextProviders = [...providers]
   nextProviders[index] = nextProvider
-  return { ...config, apiProviders: nextProviders }
+  return { ...config, apiProviders: nextProviders,
+    models: configModels(config).map(model => text(model.apiProvider) === name ? { ...model, apiProvider: nextName } : model),
+  }
 }
 
 export function deleteProviderConfig(config: UnknownRecord, providerName = ""): { next: UnknownRecord; deleted: string; removedModels: string[]; fallbackModel: string } {

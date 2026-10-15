@@ -1,10 +1,9 @@
 import { fetchWithTimeout } from "../../../../core/network/fetch-timeout.js"
-import { notifyModelRequest, tokenUsage } from "../../base.js"
+import { notifyModelRequest } from "../../base.js"
 import type { ModelChannel, ModelRequest, ModelResponse } from "../../../protocol/types.js"
 import { OpenAICompatibleAdapter } from "../chat/adapter.js"
 import { parseResponsesResponse, parseResponsesStreamResponse } from "./response-adapter.js"
-import { messagesForResponses } from "./request-adapter.js"
-import { ResponsesConversationStateMachine } from "./state-machine.js"
+import { ResponsesConversationStateMachine, responsesRecoveryReason } from "./state-machine.js"
 
 type UnknownRecord = Record<string, unknown>
 
@@ -26,7 +25,9 @@ async function readJson(response: Response): Promise<UnknownRecord> {
 function responseError(data: UnknownRecord, status: number): Error {
   const error = record(data.error)
   const result = new Error(String(error.message || error.code || `HTTP ${status}`))
-  Object.assign(result, { status, code: String(error.code || "") })
+  Object.assign(result, { status, code: String(error.code || ""), param: String(error.param || "") })
+  // 仅供脱敏快照读取，避免普通错误日志枚举整个上游正文。
+  Object.defineProperty(result, "rawResponse", { value: data })
   return result
 }
 
@@ -47,34 +48,13 @@ export class OpenAIResponsesAdapter extends OpenAICompatibleAdapter {
     return url
   }
 
-  /** 压缩旧历史；返回的所有 output items 必须原样回放，不能提取成普通摘要。 */
-  async compact(request: ModelRequest): Promise<ModelResponse> {
-    const { channel, signal } = request
-    const url = this.buildUrl(channel)
-    url.pathname += "/compact"
-    const body = { model: channel.model, input: messagesForResponses(request.messages) }
-    notifyModelRequest(request.onRequest, this.protocol, body, "compact")
-    return fetchWithTimeout(url, {
-      method: "POST", headers: this.buildHeaders(channel), body: JSON.stringify(body),
-      timeoutMs: Math.min(channel.timeoutMs || 30000, 30000), signal,
-      consume: async response => {
-        const data = await readJson(response)
-        if (!response.ok) throw responseError(data, response.status)
-        if (!Array.isArray(data.output) || !data.output.some(item => record(item).type === "compaction" && typeof record(item).encrypted_content === "string" && record(item).encrypted_content)) {
-          throw new Error("COMPACT_INVALID_OUTPUT")
-        }
-        return { id: String(data.id || ""), text: "", toolCalls: [], stopReason: "end_turn", usage: tokenUsage(data), protocol: { kind: "responses", outputItems: data.output } }
-      },
-    })
-  }
-
   override async sendMessage(request: ModelRequest): Promise<ModelResponse> {
     const { channel, signal } = request
     const state = new ResponsesConversationStateMachine(request)
     const body = state.initialRequest()
-    const send = (requestBody: UnknownRecord, phase = "initial"): Promise<ModelResponse> => {
+    const send = async (requestBody: UnknownRecord, phase = "initial"): Promise<ModelResponse> => {
       notifyModelRequest(request.onRequest, this.protocol, requestBody, phase)
-      return fetchWithTimeout(this.buildUrl(channel), {
+      const result = await fetchWithTimeout(this.buildUrl(channel), {
         method: "POST",
         headers: this.buildHeaders(channel),
         body: JSON.stringify(requestBody),
@@ -88,13 +68,19 @@ export class OpenAIResponsesAdapter extends OpenAICompatibleAdapter {
           return parseResponsesResponse(data)
         },
       })
+      if (result.stopReason === "error") {
+        const error = responseError(record(result.raw), 200)
+        const reason = responsesRecoveryReason(error)
+        if (reason === "compaction_failed" || reason === "context_length_exceeded") throw error
+      }
+      return result
     }
     try {
       return state.complete(await send(body))
     } catch (error) {
       const recovery = state.recoveryRequest(error)
       if (!recovery) throw error
-      return state.complete(await send(recovery.body, "recovery"), recovery.recovery)
+      return state.complete(await send(recovery.body, recovery.recovery.localCompaction ? "local-compaction-fallback" : "recovery"), recovery.recovery)
     }
   }
 }

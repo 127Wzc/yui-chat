@@ -140,6 +140,7 @@ interface UsageShape extends Omit<UsageTotals, "estimated"> {
   source: string
   inputKnown: boolean
   outputKnown: boolean
+  totalKnown: boolean
 }
 
 interface NormalizedUsage extends UsageShape {
@@ -363,8 +364,16 @@ function responseForLog({ source = "", purpose = "" }: { source?: unknown; purpo
   return shouldStoreMemoryConsolidationInput({ source, purpose }) ? "" : redactText(response, 20000)
 }
 
+// 仅放行已知的数值用量和结构化明细，不能让同名字符串绕过凭证脱敏。
+function isUsageCounter(value: unknown, key: string): boolean {
+  return typeof value === "number" && Number.isFinite(value)
+    && /^(?:input_tokens|output_tokens|total_tokens|prompt_tokens|completion_tokens|cached_tokens|reasoning_tokens|cache_read_input_tokens|cache_creation_input_tokens|promptTokenCount|candidatesTokenCount|totalTokenCount|cachedContentTokenCount|thoughtsTokenCount)$/.test(key)
+    || Boolean(value) && typeof value === "object" && !Array.isArray(value)
+    && /^(?:input_tokens_details|output_tokens_details|prompt_tokens_details|completion_tokens_details)$/.test(key)
+}
+
 function redactValue(value: unknown, key = "", depth = 0, seen = new WeakSet<object>()): unknown {
-  if (SECRET_KEY.test(String(key))) return "<redacted>"
+  if (SECRET_KEY.test(String(key)) && !isUsageCounter(value, key)) return "<redacted>"
   if (depth > 4) return "[truncated]"
   if (value === null || value === undefined || typeof value !== "object") {
     if (typeof value === "string") return redactText(value, key === "stack" ? 6000 : 800)
@@ -381,7 +390,7 @@ function redactValue(value: unknown, key = "", depth = 0, seen = new WeakSet<obj
 // 请求快照需要比普通元数据保留更多正文，才能在详情窗口还原模型实际看到的上下文；
 // 仍沿用同一组凭证字段脱敏规则，并对单值、层级、数组和对象键数设上限。
 function snapshotValue(value: unknown, key = "", depth = 0, seen = new WeakSet<object>()): unknown {
-  if (SECRET_KEY.test(String(key))) return "<redacted>"
+  if (SECRET_KEY.test(String(key)) && !isUsageCounter(value, key)) return "<redacted>"
   if (depth > 6) return "[truncated]"
   if (value === null || value === undefined || typeof value !== "object") {
     if (typeof value === "string") return redactText(value, SNAPSHOT_STRING_LIMIT)
@@ -569,6 +578,7 @@ function usageShape(usage: unknown = {}): UsageShape {
     source,
     inputKnown: sourceUsage.inputKnown === undefined ? source === "reported" : Boolean(sourceUsage.inputKnown),
     outputKnown: sourceUsage.outputKnown === undefined ? source === "reported" : Boolean(sourceUsage.outputKnown),
+    totalKnown: sourceUsage.totalKnown === undefined ? source === "reported" && sourceUsage.total !== undefined : Boolean(sourceUsage.totalKnown),
   }
 }
 
@@ -592,24 +602,25 @@ function estimateResponseOutput(response: UnknownRecord = {}): number {
 
 function normalizeUsage(response: UnknownRecord = {}, meta: UnknownRecord = {}): NormalizedUsage {
   const raw = usageShape(response.usage || {})
-  const inputEstimate = estimateRequestInput(meta)
-  const outputEstimate = estimateResponseOutput(response)
   if (raw.source === "reported" && raw.inputKnown && raw.outputKnown) {
     return { ...raw, estimatedInput: 0, estimatedOutput: 0 }
   }
+  const inputEstimate = raw.inputKnown ? 0 : estimateRequestInput(meta)
+  const outputEstimate = raw.outputKnown ? 0 : estimateResponseOutput(response)
   const input = raw.inputKnown ? raw.input : inputEstimate
   const output = raw.outputKnown ? raw.output : outputEstimate
   return {
     input,
     output,
-    total: raw.total || input + output,
+    total: raw.totalKnown ? raw.total : input + output,
     cached: raw.cached,
     reasoning: raw.reasoning,
-    source: raw.inputKnown && raw.outputKnown ? raw.source : (raw.inputKnown || raw.outputKnown ? "mixed" : (input || output ? "estimated" : "unknown")),
+    source: raw.inputKnown && raw.outputKnown ? raw.source : (raw.inputKnown || raw.outputKnown || raw.totalKnown ? "mixed" : (input || output ? "estimated" : "unknown")),
     estimatedInput: raw.inputKnown ? 0 : inputEstimate,
     estimatedOutput: raw.outputKnown ? 0 : outputEstimate,
     inputKnown: raw.inputKnown,
     outputKnown: raw.outputKnown,
+    totalKnown: raw.totalKnown,
   }
 }
 
@@ -641,11 +652,16 @@ function modelStreamValue(row: LogRow): boolean | null {
 }
 
 function modelSummary(rows: LogRow[] = []): UnknownRecord {
-  const names = [...new Set(rows.map(row => String(row.model_name || "").trim()).filter(Boolean))]
+  const names = [...new Set(rows.map(row => String(row.model_identifier || row.model_name || "").trim()).filter(Boolean))]
+  const channels = [...new Set(rows.map(row => String(row.provider_name || "").trim()).filter(Boolean))]
   const adapters = [...new Set(rows.map(row => String(row.adapter || "").trim()).filter(Boolean))]
   const streams = [...new Set(rows.map(modelStreamValue))]
   const result: UnknownRecord = {
     model_names: names,
+    channel_names: channels,
+    compaction_count: rows.reduce((sum, row) => sum + asInt(record(parseJson(row.metadata_json).compaction).count), 0),
+    local_compaction_count: rows.filter(row => Object.keys(record(parseJson(row.metadata_json).localCompaction)).length > 0).length,
+    local_compaction_fallback_count: rows.filter(row => record(parseJson(row.metadata_json).compaction).mode === "local-fallback").length,
     model_adapters: adapters,
     model_streams: streams,
   }
@@ -1109,6 +1125,16 @@ class ModelLogStore {
       const request = parseJson(snapshot.request_json)
       const protocol = String(capture.protocol || "")
       const phase = String(capture.phase || "")
+      const contextManagement = record(capture.body).context_management
+      const compaction = Array.isArray(contextManagement) ? contextManagement.map(record).find(item => item.type === "compaction") : null
+      if (compaction) {
+        call.row.metadata_json = json({ ...parseJson(call.row.metadata_json), compaction: { mode: "server", threshold: asInt(compaction.compact_threshold), count: 0 } })
+        this.enqueueDetail({ kind: "model", row: call.row, terminal: false })
+      } else if (phase === "local-compaction-fallback") {
+        const metadata = parseJson(call.row.metadata_json)
+        call.row.metadata_json = json({ ...metadata, compaction: { ...record(metadata.compaction), mode: "local-fallback", count: 0 } })
+        this.enqueueDetail({ kind: "model", row: call.row, terminal: false })
+      }
       const rawRequests = Array.isArray(request.rawRequests) ? request.rawRequests : []
       const item = snapshotValue({
         capturedAt: now(),
@@ -1154,6 +1180,8 @@ class ModelLogStore {
     if (error && !response?.usage) usage.source = "unknown"
     const status = modelCallStatus(error)
     const previousMetadata = parseJson(call.row.metadata_json)
+    const responseItems = record(response.protocol).outputItems
+    const compactionCount = Array.isArray(responseItems) ? responseItems.filter(item => record(item).type === "compaction").length : 0
     const row = {
       ...call.row,
       status,
@@ -1172,6 +1200,10 @@ class ModelLogStore {
       metadata_json: json({
         ...previousMetadata,
         responseId: opaqueIdForLog(response.id),
+        localInputBudget: asInt(call.row.estimated_input_tokens),
+        usageKnown: { input: usage.inputKnown, output: usage.outputKnown, total: usage.totalKnown },
+        ...(previousMetadata.compaction || compactionCount ? { compaction: { ...record(previousMetadata.compaction), ...(compactionCount ? { mode: "server" } : {}), count: compactionCount } } : {}),
+        ...(record(response.responsesStateRecovery).localCompaction ? { localCompaction: record(response.responsesStateRecovery).localCompaction } : {}),
         responseText: responseForLog(call.row, response.text || ""),
         stopReason: response.stopReason || "unknown",
         toolCalls: Array.isArray(response.toolCalls) ? response.toolCalls.length : 0,
@@ -1181,6 +1213,31 @@ class ModelLogStore {
           : {}),
         ...(error ? { errorDetails: { ...record(previousMetadata.errorDetails), ...errorDetails(error) } } : {}),
       }),
+    }
+    // 原始响应只进入有界、脱敏的按需快照；不混入运行摘要。
+    if (call.snapshot && !shouldStoreMemoryConsolidationInput({ source: call.trace.source, purpose: call.row.purpose })) {
+      const snapshot = call.snapshot
+      const rawBody = response.raw ?? record(error).rawResponse ?? null
+      const rawResponse: UnknownRecord = {
+        usage: snapshotValue(usage),
+        upstreamUsage: snapshotValue(record(rawBody).usage || record(rawBody).usageMetadata || null),
+        body: snapshotValue(rawBody),
+      }
+      let request = parseJson(snapshot.request_json)
+      // 响应正文过大时保留独立的用量字段，不能把请求和响应全部折叠成无法浏览的预览。
+      if (Buffer.byteLength(JSON.stringify(rawResponse)) > 12 * 1024) {
+        rawResponse.body = { truncated: true, preview: redactText(JSON.stringify(rawResponse.body), 2000) }
+        snapshot.truncated = true
+      }
+      if (Buffer.byteLength(JSON.stringify({ ...request, rawResponse })) > SNAPSHOT_REQUEST_LIMIT) {
+        request = { truncated: true, preview: redactText(JSON.stringify(request), 2000) }
+        snapshot.truncated = true
+      }
+      const serialized = serializedSnapshotObject({ ...request, rawResponse }, SNAPSHOT_REQUEST_LIMIT)
+      snapshot.request_json = serialized.text
+      snapshot.truncated = Boolean(snapshot.truncated || serialized.truncated)
+      snapshot.updated_at = endedAt
+      this.enqueueDetail({ kind: "snapshot", row: snapshot, terminal: true, priority: "high" })
     }
     const budgetEstimate = call.requestMeta.operation === "embedding"
       ? (usage.input || call.row.estimated_input_tokens || 0)
@@ -1196,6 +1253,15 @@ class ModelLogStore {
     trace.usage.reasoning += asInt(usage.reasoning)
     trace.usage.estimated += asInt(budgetEstimate)
     trace.cost += asNumber(row.estimated_cost)
+    call.row = row
+    if (!trace.finished && trace.startRow) {
+      trace.startRow = { ...trace.startRow,
+        input_tokens: asInt(trace.usage.input), output_tokens: asInt(trace.usage.output), total_tokens: asInt(trace.usage.total),
+        cached_tokens: asInt(trace.usage.cached), reasoning_tokens: asInt(trace.usage.reasoning), estimated_tokens: asInt(trace.usage.estimated),
+        model_calls: trace.modelCalls, estimated_cost: trace.cost,
+      }
+      this.enqueueDetail({ kind: "run", row: trace.startRow, terminal: false })
+    }
     call.traceUpdated = true
     // SQLite 可用时由终态模型调用的触发器维护日汇总；内存日账本只服务于
     // SQLite 不可用时的降级展示，避免两份长期聚合状态并行累积。
@@ -1738,7 +1804,7 @@ class ModelLogStore {
     const purposes = new Map<string, SummaryMetrics & { name: string }>()
     const totals: SummaryMetrics = { input: 0, output: 0, total: 0, estimated: 0, cached: 0, reasoning: 0, calls: 0, failures: 0, durationMs: 0, cost: 0 }
     for (const row of merged.values()) {
-      const normalized: SummaryMetrics = { input: row.input_tokens, output: row.output_tokens, total: row.total_tokens || row.input_tokens + row.output_tokens, estimated: row.estimated_tokens, cached: row.cached_tokens, reasoning: row.reasoning_tokens, calls: row.calls, failures: row.failures, durationMs: row.duration_ms, cost: row.estimated_cost }
+      const normalized: SummaryMetrics = { input: row.input_tokens, output: row.output_tokens, total: row.total_tokens, estimated: row.estimated_tokens, cached: row.cached_tokens, reasoning: row.reasoning_tokens, calls: row.calls, failures: row.failures, durationMs: row.duration_ms, cost: row.estimated_cost }
       const day = daily.get(row.day) || { day: row.day, input: 0, output: 0, total: 0, estimated: 0, cached: 0, reasoning: 0, calls: 0, failures: 0, durationMs: 0, cost: 0 }
       const model = models.get(row.model_name) || { name: row.model_name, input: 0, output: 0, total: 0, estimated: 0, cached: 0, reasoning: 0, calls: 0, failures: 0, durationMs: 0, cost: 0 }
       const purpose = purposes.get(row.purpose) || { name: row.purpose, input: 0, output: 0, total: 0, estimated: 0, cached: 0, reasoning: 0, calls: 0, failures: 0, durationMs: 0, cost: 0 }
@@ -1788,7 +1854,7 @@ class ModelLogStore {
     if (ids.length) {
       const placeholders = ids.map(() => "?").join(",")
       const models = await sqliteClient.all<LogRow>(
-        `SELECT id, run_id, model_name, adapter, metadata_json FROM model_call_events WHERE run_id IN (${placeholders}) ORDER BY sequence ASC, started_at ASC, id ASC`,
+        `SELECT id, run_id, model_name, model_identifier, provider_name, adapter, metadata_json FROM model_call_events WHERE run_id IN (${placeholders}) ORDER BY sequence ASC, started_at ASC, id ASC`,
         ids,
       )
       for (const model of models) {
@@ -1818,9 +1884,15 @@ class ModelLogStore {
         persistence: false,
       }
     }
-    const run = await sqliteClient.get<LogRow>("SELECT * FROM ai_runs WHERE id=?", [key])
+    let run = await sqliteClient.get<LogRow>("SELECT * FROM ai_runs WHERE id=?", [key])
+    const liveRun = this.memoryRuns.get(key)
+    if (liveRun && (!run || asInt(liveRun.ended_at) >= asInt(run.ended_at))) run = liveRun
     if (!run) return null
-    const modelCalls = await sqliteClient.all<LogRow>("SELECT * FROM model_call_events WHERE run_id=? ORDER BY sequence ASC, started_at ASC", [key])
+    const models = new Map((await sqliteClient.all<LogRow>("SELECT * FROM model_call_events WHERE run_id=? ORDER BY sequence ASC, started_at ASC", [key])).map(row => [row.id, row]))
+    for (const row of this.memoryModels.values()) {
+      if (row.run_id === key && (!models.has(row.id) || asInt(row.ended_at) >= asInt(models.get(row.id)?.ended_at))) models.set(row.id, row)
+    }
+    const modelCalls = [...models.values()].sort((a, b) => asInt(a.sequence) - asInt(b.sequence) || asInt(a.started_at) - asInt(b.started_at))
     const toolCalls = await sqliteClient.all<LogRow>("SELECT * FROM tool_call_events WHERE run_id=? ORDER BY round ASC, call_index ASC, started_at ASC", [key])
     const childRuns = await sqliteClient.all<LogRow>("SELECT * FROM ai_runs WHERE parent_run_id=? ORDER BY started_at ASC, id ASC", [key])
     return { run: { ...this.publicRun(run), ...modelSummary(modelCalls) }, modelCalls: modelCalls.map(row => this.publicModel(row, run)), toolCalls: toolCalls.map(row => this.publicTool(row)), childRuns: childRuns.map(row => this.publicRun(row)), persistence: true }
@@ -1832,8 +1904,12 @@ class ModelLogStore {
     let model = this.memoryModels.get(key) || null
     let snapshot = this.memorySnapshots.get(key) || null
     if (sqliteClient.status.available) {
-      model = await sqliteClient.get<LogRow>("SELECT * FROM model_call_events WHERE id=?", [key]) || model
-      snapshot = await sqliteClient.get<LogRow>("SELECT * FROM model_call_snapshots WHERE model_call_id=?", [key]) || snapshot
+      const persistedModel = await sqliteClient.get<LogRow>("SELECT * FROM model_call_events WHERE id=?", [key])
+      const persistedSnapshot = await sqliteClient.get<LogRow>("SELECT * FROM model_call_snapshots WHERE model_call_id=?", [key])
+      model = this.memoryModels.get(key) || model
+      snapshot = this.memorySnapshots.get(key) || snapshot
+      if (persistedModel && (!model || asInt(persistedModel.ended_at) > asInt(model.ended_at))) model = persistedModel
+      if (persistedSnapshot && (!snapshot || asInt(persistedSnapshot.updated_at) > asInt(snapshot.updated_at))) snapshot = persistedSnapshot
     }
     if (!model) return null
     let run: LogRow | null = this.memoryRuns.get(String(model.run_id || "")) || null
@@ -1966,6 +2042,8 @@ class ModelLogStore {
     const sessionId = String(run?.session_id || row.session_id || "")
     return {
       ...row,
+      model_display_name: row.model_identifier || row.model_name || "未知模型",
+      channel_name: row.provider_name || "未记录渠道",
       metadata,
       protocol,
       stream,

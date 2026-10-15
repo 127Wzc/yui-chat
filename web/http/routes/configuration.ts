@@ -177,7 +177,7 @@ export function registerConfigRoutes(app: RouteApp): void {
   app.patch("/api/providers/:name", auth, handleRoute(async (req, res) => {
     const providerName = String(req.params.name || "").trim()
     const { saved, runtime } = await updateConfigAndApply(config => configValue(updateProviderConfig(config, providerName, bodyOf(req))))
-    const provider = records(saved.apiProviders).find(item => String(item.name || "") === providerName)
+    const provider = records(saved.apiProviders).find(item => String(item.name || "") === String(bodyOf(req).name ?? providerName).trim())
     res.json({
       ok: true,
       provider: provider ? publicConfig(provider) : null,

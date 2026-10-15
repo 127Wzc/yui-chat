@@ -88,6 +88,27 @@ function record(value: unknown): HostRecord {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value) ? value as HostRecord : {}
 }
 
+/** 只提取宿主成功回执中的真实消息 ID；数组不能拼成一个平台不存在的 ID。 */
+export function hostMessageIds(receipt: unknown): string[] {
+  const ids = new Set<string>()
+  const seen = new WeakSet<object>()
+  const visit = (value: unknown, depth: number): void => {
+    if (!value || typeof value !== "object" || depth > 5 || seen.has(value)) return
+    seen.add(value)
+    if (Array.isArray(value)) { value.slice(0, 100).forEach(item => visit(item, depth + 1)); return }
+    const source = record(value)
+    if (source.status === "failed" || source.status === "error" || source.success === false
+      || source.error && (!Array.isArray(source.error) || source.error.length)) return
+    const raw = source.message_id ?? source.messageId ?? source.id
+    for (const id of Array.isArray(raw) ? raw : [raw]) {
+      if (typeof id === "string" && id.trim() || typeof id === "number" && Number.isFinite(id) && id !== 0) ids.add(String(id).trim())
+    }
+    visit(source.data, depth + 1)
+  }
+  visit(receipt, 0)
+  return [...ids]
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }

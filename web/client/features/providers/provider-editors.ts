@@ -136,6 +136,7 @@ export const ProviderEditor = {
   props: { provider: Object },
   setup(props: { provider: ProviderConfig }, { emit }: { emit: Emit }) {
     const draft = reactive({
+      name: props.provider.name,
       baseURL: props.provider.baseURL || "",
       apiKey: "",
       clearApiKey: "false",
@@ -151,6 +152,7 @@ export const ProviderEditor = {
           if (!accepted) return
         }
         const body: UnknownRecord = {
+          name: draft.name.trim(),
           baseURL: draft.baseURL,
           headers: parseJsonText(draft.headers, `${name} headers`, {}),
           clearApiKey: draft.clearApiKey === "true",
@@ -161,7 +163,7 @@ export const ProviderEditor = {
         store.providers = { ...asRecord(store.providers), diagnostics: result.diagnostics }
         draft.apiKey = ""
         draft.clearApiKey = "false"
-        toast(`已保存供应商 ${name}`)
+        toast(`已保存渠道 ${draft.name.trim()}`)
         await refreshTab("providers")
         emit("saved")
       } catch (err) {
@@ -173,6 +175,7 @@ export const ProviderEditor = {
   template: `
       <div class="settings-stack">
       <div class="form-grid dense">
+        <Field label="渠道名称" v-model="draft.name" tip="改名时同步模型的渠道引用，模型路由保持不变。" />
         <Field label="Base URL" v-model="draft.baseURL" placeholder="https://api.example.com/v1" tip="留空时沿用模板默认端点；自建网关或代理时再改。" />
         <Field label="替换 API Key" type="password" v-model="draft.apiKey" :placeholder="provider.apiKey ? '留空保持当前密钥' : '输入 API Key'" tip="编辑态不会回显旧密钥；留空就保持不变。" />
         <Field label="清空 API Key" type="select" :options="BOOL_OFF_OPTIONS" v-model="draft.clearApiKey" tip="开启后会移除已保存的密钥；通常只在换渠道或停用时使用。" />

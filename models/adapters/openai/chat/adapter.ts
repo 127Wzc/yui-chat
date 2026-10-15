@@ -88,6 +88,7 @@ export async function parseOpenAIStreamResponse(response: Response): Promise<Mod
   let text = ""
   let id = ""
   let usage = tokenUsage({})
+  let rawUsage: unknown = undefined
   let chunks = 0
   let finishReason = ""
 
@@ -106,7 +107,7 @@ export async function parseOpenAIStreamResponse(response: Response): Promise<Mod
     if (data.error) throw responseError(data, response.status)
     chunks++
     if (!id && data.id) id = stringValue(data.id)
-    if (data.usage) usage = tokenUsage(data)
+    if (data.usage) { rawUsage = data.usage; usage = tokenUsage(data) }
     const choice = array(data.choices).length ? record(array(data.choices)[0]) : {}
     const delta = record(choice.delta)
     text += contentToText(delta.content || "")
@@ -136,7 +137,7 @@ export async function parseOpenAIStreamResponse(response: Response): Promise<Mod
   return {
     id: id || crypto.randomUUID(),
     text,
-    raw: { stream: true, chunks, finishReason },
+    raw: { stream: true, chunks, finishReason, usage: rawUsage, text },
     usage,
     stopReason: normalizeModelStopReason(finishReason, toolCalls.size),
     toolCalls: [...toolCalls.entries()]

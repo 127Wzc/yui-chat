@@ -147,12 +147,14 @@ export function buildAgentLoopContinuationMessages(messages: UnknownRecord[] = [
 }
 
 /** 搜索类工具完成后，统一要求模型通过 message_send 组装并投递结果。 */
-export function buildSearchDeliveryMessages(messages: UnknownRecord[] = []): UnknownRecord[] {
+export function buildSearchDeliveryMessages(messages: UnknownRecord[] = [], allowCorrection = false): UnknownRecord[] {
   const instruction = [
     "【搜索结果统一发送】本轮已经获得搜索或检索工具的返回结果。",
-    "你必须调用 message_send 把结果发送到当前会话，不得直接输出普通模型文本，也不得声称已经发送但不调用工具。",
+    allowCorrection
+      ? "先核对检索是否回答本轮发言及其指代对象；若查错话题，可以纠正查询一次。结果相关则调用 message_send 发送，不重复检索。不得直接输出普通文本或声称已发送。"
+      : "你必须调用 message_send 把结果发送到当前会话，不得直接输出普通模型文本，也不得声称已经发送但不调用工具。",
     "请自行理解最近的原始工具结果：纯文字或 JSON 结论放进 text 片段；图片、音频、视频或文件地址放进对应媒体片段的 source，地址必须逐字复制自工具结果；多个结果按用户需求选择、组合并保持说明与资源的对应关系。",
-    "如果最近结果来自 web_search，其中可能同时包含百度/Tavily 的原始搜索摘要与 OpenAI hostedDigest。请基于全部证据只做一次最终综合，消除重复与冲突，不要逐渠道复述，也不要再次调用搜索工具。只把整理后的回答放进 text；运行时会自动在 parts 末尾追加包含全部搜索来源的 forward 合并转发，正文不要重复罗列来源链接。",
+    "如果最近结果来自 web_search，其中可能同时包含百度/Tavily 的原始搜索摘要与 OpenAI hostedDigest。请基于全部证据只做一次最终综合，消除重复与冲突，不要逐渠道复述；除明确查错话题且允许纠正外，不要再次调用搜索工具。只把整理后的回答放进 text；运行时会自动在 parts 末尾追加包含全部搜索来源的 forward 合并转发，正文不要重复罗列来源链接。",
     "如果没有找到结果、没有可发送媒体或工具返回错误，也要调用 message_send，用 text 片段如实说明；不要编造资源，不要输出 CQ 码。",
     "如果 bilibili_media 返回 coverSource 和 source，必须把完整 coverSource 作为前置 image.source、完整 source 作为 video.source 原样复制；它们已经是本地 cache 资源，不要改写字段，也不要发送 B 站页面 URL。运行时会把封面留在图文消息中，并将视频本体自动拆成独立消息。",
   ].join("\n")

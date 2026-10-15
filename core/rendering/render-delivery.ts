@@ -1,4 +1,5 @@
 import path from "node:path"
+import { recentContextStore } from "../chat/recent-context.js"
 import { configStore, tempDir } from "../../config/store.js"
 import { renderImageByKind } from "./render-service.js"
 import { hostRuntime } from "../runtime/host-runtime.js"
@@ -183,7 +184,8 @@ export async function deliverRenderedImage(result: RenderResult = {}, context: D
     return `${text(opts.label) || "图片"}渲染完成：${Buffer.isBuffer(result.buffer) ? result.buffer.length : 0} bytes`
   }
   const target = await targetFromOptions(event, opts, config)
-  await target.send(imageSegmentFromRender(result))
+  const receipt = await target.send(imageSegmentFromRender(result))
+  if (!opts.targetType && !opts.targetId && !opts.groupId && !opts.userId) await recentContextStore.recordDeliveredImages(event, receipt, 1)
   return `已向 ${target.label} 发送${text(opts.label) || "渲染图片"}。`
 }
 
@@ -200,7 +202,8 @@ export async function deliverImages(images: unknown = [], context: DeliveryConte
   const event = context.e
   if (!event?.reply) return `图片准备完成：${payload.length} 张。`
   const target = await targetFromOptions(event, opts, config)
-  await target.send(payload.length === 1 ? payload[0] : payload)
+  const receipt = await target.send(payload.length === 1 ? payload[0] : payload)
+  if (!opts.targetType && !opts.targetId && !opts.groupId && !opts.userId) await recentContextStore.recordDeliveredImages(event, receipt, payload.length)
   return `已向 ${target.label} 发送 ${payload.length} 张图片。`
 }
 

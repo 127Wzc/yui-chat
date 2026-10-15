@@ -21,7 +21,10 @@ function streamResponseError(data: unknown, status = 0): Error {
     ...(status ? { status } : {}),
     ...(error.code || root.code ? { code: text(error.code || root.code) } : {}),
     ...(error.type ? { providerType: text(error.type) } : {}),
+    ...(error.param || root.param ? { param: text(error.param || root.param) } : {}),
   })
+  // 原始错误正文只允许观测层按需脱敏读取。
+  Object.defineProperty(result, "rawResponse", { value: root })
   return result
 }
 
@@ -323,5 +326,5 @@ export async function parseResponsesStreamResponse(response: Response): Promise<
       }).filter(item => item.type)
   const data: UnknownRecord = { ...responseState, output }
   const parsed = parseResponsesResponse(data)
-  return { ...parsed, raw: { stream: true, eventCount, status: text(data.status) || "unknown" } }
+  return { ...parsed, raw: { ...data, stream: true, eventCount } }
 }

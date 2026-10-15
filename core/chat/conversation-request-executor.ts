@@ -265,7 +265,7 @@ export async function sendConversation(
       const recallMode = recentImageRecallMode(media, prompt)
       if (recallMode !== "none") {
         const selection = recallMode === "adjacent"
-          ? { images: [recentContextStore.findRecentImage(event, { maxRowsBack: 1, prompt })].filter((item): item is NonNullable<typeof item> => Boolean(item)), diagnostic: "" }
+          ? recentContextStore.selectAdjacentImages(event)
           : recentContextStore.selectRecentImages(event, prompt)
         if (selection.diagnostic) media.diagnostics.push(selection.diagnostic)
         for (const recentImage of selection.images) {

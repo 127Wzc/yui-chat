@@ -238,7 +238,7 @@ export async function parseGeminiStreamResponse(response: Response): Promise<Mod
   const parsed = {
     id: crypto.randomUUID(),
     text: firstParts.map(part => stringValue(part.text || "")).join(""),
-    raw: { stream: true, chunks, finishReason: first.finishReason || "" },
+    raw: { ...data, stream: true, chunks, finishReason: first.finishReason || "" },
     usage: tokenUsage(data, "gemini"),
     stopReason: normalizeModelStopReason(first.finishReason, parseGeminiToolCalls(data).length),
     toolCalls: parseGeminiToolCalls(data),
@@ -395,7 +395,7 @@ export class GeminiAdapter extends ModelAdapter {
     if (!channel.apiKey) throw new Error("Gemini channel apiKey is required")
     const baseURL = (channel.baseURL || "https://generativelanguage.googleapis.com").replace(/\/$/, "")
     const model = channel.model || "gemini-flash-latest"
-    const system = messages.find(item => item.role === "system")?.content
+    const system = messages.filter(item => item.role === "system").map(item => contentToText(item.content)).filter(Boolean).join("\n\n")
     const generationConfig: UnknownRecord = { ...record(channel.params) }
     const tokenLimit = Math.max(0, Number(maxTokens) || 0)
     if (tokenLimit) generationConfig.maxOutputTokens = tokenLimit

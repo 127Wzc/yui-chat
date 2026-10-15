@@ -41,7 +41,6 @@ interface RuntimeAdapter {
   readonly supportsImageGeneration: boolean
   readonly supportsNativeToolSearch: boolean
   readonly supportsDecision?: boolean
-  compact?(request: RuntimeModelRequest): Promise<ModelResponse>
   sendMessage(request: RuntimeModelRequest): Promise<ModelResponse>
   embedTexts(request: RuntimeEmbeddingRequest): Promise<Awaited<ReturnType<import("../protocol/adapter.js").ModelAdapter["embedTexts"]>>>
   generateImages?(request: ImageGenerationRequest): Promise<ImageGenerationResponse>
@@ -61,7 +60,6 @@ interface ModelSendOptions {
   purpose?: string
   source?: string
   taskName?: string
-  operation?: string
   trace?: unknown
   parentToolId?: string
   metadata?: Record<string, unknown>
@@ -190,15 +188,13 @@ export class AdapterRegistry {
     }))
   }
 
-  async sendMessage({ channel, messages = [], replayMessages, tools = [], toolChoice, maxTokens = 0, signal, event, purpose = "chat", source = "", taskName = "", operation = "chat", trace = null, parentToolId = "", metadata = {}, snapshotMetadata = {} }: ModelSendOptions = {}): Promise<ModelResponse> {
+  async sendMessage({ channel, messages = [], replayMessages, tools = [], toolChoice, maxTokens = 0, signal, event, purpose = "chat", source = "", taskName = "", trace = null, parentToolId = "", metadata = {}, snapshotMetadata = {} }: ModelSendOptions = {}): Promise<ModelResponse> {
     if (!channel) throw new Error("channel is required")
     const adapter = this.get(channel.type)
-    const send = operation === "compact" ? adapter.compact : adapter.sendMessage
-    if (!send) throw new Error("COMPACT_UNSUPPORTED")
     const modelVisibleTools = adapter.supportsNativeToolSearch ? toolsForResponses(tools, channel) : tools
-    const call = modelLogStore.beginModelCall({ trace, event, source, purpose, taskName, operation, channel, messages, tools: modelVisibleTools, parentToolId, metadata, snapshotMetadata, request: { maxTokens, toolChoice, protocol: adapter.protocol } })
+    const call = modelLogStore.beginModelCall({ trace, event, source, purpose, taskName, operation: "chat", channel, messages, tools: modelVisibleTools, parentToolId, metadata, snapshotMetadata, request: { maxTokens, toolChoice, protocol: adapter.protocol } })
     try {
-      const result = normalizeModelResponse(await send.call(adapter, { channel, messages, replayMessages, tools, toolChoice, maxTokens, signal, event, onRequest: capture => modelLogStore.captureModelRequest(call, capture) }))
+      const result = normalizeModelResponse(await adapter.sendMessage({ channel, messages, replayMessages, tools, toolChoice, maxTokens, signal, event, onRequest: capture => modelLogStore.captureModelRequest(call, capture) }))
       modelLogStore.completeModelCall(call, { response: result })
       return result
     } catch (error) {

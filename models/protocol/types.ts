@@ -44,11 +44,12 @@ export interface ModelMessage {
 }
 
 export interface ResponsesStateRecovery {
-  reason: "previous_response_missing" | "tool_call_link_missing"
-  from: "linked"
+  reason: "previous_response_missing" | "tool_call_link_missing" | "compaction_failed" | "context_length_exceeded"
+  from: "linked" | "ready"
   to: "stateless_replay"
   replayedMessages: number
   droppedToolItems: number
+  localCompaction?: { before: number; after: number; limit: number; messagesDropped: number; toolPayloadsCompressed: number }
 }
 
 /** 统一 token 用量结构。 */
@@ -61,6 +62,8 @@ export interface ModelUsage {
   source: "reported" | "estimated" | "unknown"
   inputKnown: boolean
   outputKnown: boolean
+  /** 总量是否来自上游，或可由完整的上游输入/输出用量求和。 */
+  totalKnown?: boolean
 }
 
 /** 供应商无关的模型终止原因；聊天循环只消费这些结构化状态。 */

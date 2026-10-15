@@ -415,6 +415,7 @@
 
 .logs-model-cell { min-width: 150px; max-width: 230px; }
 .logs-model-cell .cell-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.logs-model-cell > .muted { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .logs-session-cell { display: grid; gap: 2px; min-width: 145px; }
 .logs-session-short { display: inline-block; max-width: 220px; overflow: hidden; color: var(--muted-foreground); font: 10px/1.35 var(--mono); text-overflow: ellipsis; white-space: nowrap; }
 .logs-inline-message { display: block; max-width: min(360px, 100%); margin: 5px 0 0; padding: 0; overflow: hidden; background: transparent; font-size: 10.5px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }

@@ -17,7 +17,7 @@ import { hostRuntime } from "../runtime/host-runtime.js"
 import { modelLogStore } from "../observability/model-log.js"
 import { conversationLog } from "./conversation-log.js"
 import { createAgentTurnState } from "./agent-turn-state.js"
-import { compactPromptHistory, enforcePromptBudgetDetailed, estimateTokens, messageTokens, selectPromptTools } from "./token-budget.js"
+import { inputTokenLimit, enforcePromptBudgetDetailed, estimateTokens, messageTokens, selectPromptTools } from "./token-budget.js"
 import { executeToolRound } from "./tool-round-executor.js"
 import { normalizeResponseText } from "./response-pipeline.js"
 import {
@@ -317,10 +317,10 @@ function contextMetadata(messages: readonly UnknownRecord[], phase: string, hint
     current.tokenEstimate = Number(current.tokenEstimate || 0) + Number(item.tokenEstimate || 0)
     grouped.set(key, current)
   }
-  const systemIndex = items.find(item => item.source === "system-context")?.index
   const sections: UnknownRecord[] = []
   for (const section of personaSections) {
-    const sectionIndex = section.source === "recent-reference" ? items.find(item => item.source === "current")?.index : systemIndex
+    const sectionIndex = items.find(item => item.source === (section.source === "recent-reference" ? "current" : "system-context")
+      && contentToText(messages[item.index].content).includes(section.content))?.index
     if (section.source === "recent-reference" && !messages.some(message => contentToText(message.content).includes(section.content))) continue
     sections.push({
       source: section.source,
@@ -515,7 +515,8 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
   })
   await recentContextStore.buildPromptWithHistory(options.e)
   const referenceBudget = Math.max(0, Math.min(1200, Math.floor(number(chat.inputTokenBudget, 6000) * 0.2)))
-  const groupReference = recentContextStore.buildReference(options.e, prompt, { history, maxTokens: referenceBudget })
+  const groupReferenceDiagnostics: UnknownRecord = {}
+  const groupReference = recentContextStore.buildReference(options.e, prompt, { history, maxTokens: referenceBudget, diagnostics: groupReferenceDiagnostics })
   const currentMessage = buildUserMessage(options.e, prompt, root, { vision, media: options.media, groupReference })
   const contextHints = new WeakMap<object, ContextHint>()
   const markContext = (items: readonly unknown[], hint: ContextHint): void => {
@@ -685,33 +686,18 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
   }
   const taskConfig = stepConfig(root, step)
   const maxTokens = Math.max(1, number(taskConfig.maxTokens, 1024))
-  // 只有整个会话超出窗口才会压缩；压缩一旦发生就必须在链路里留下痕迹，
-  // 否则"模型好像忘了前面说过什么"这类问题无从排查。
+  // Responses 在正常请求内进行服务端压缩；本地预算仍负责窗口的安全边界。
   // 预算目标优先用当前渠道模型声明的上下文窗口，未声明时回落全局聊天预算。
   const usage = emptyUsage()
   const modelCalls: UnknownRecord[] = []
-  let compactAttempted = false
+  if (adapter.protocol === "responses") {
+    channel.responsesRuntime = { ...record(channel.responsesRuntime), inputTokenBudget: record(root.chat).inputTokenBudget, compactThreshold: Math.max(1, Math.floor(inputTokenLimit(root, { channel, maxTokens }) * 0.8)) }
+  }
+  const localBudgetOutcomes = new WeakMap<object, UnknownRecord>()
   const budgeted = async (input: UnknownRecord[], phase: string): Promise<UnknownRecord[]> => {
-    if (!compactAttempted && adapter.compact && !text(record(channel.responsesRuntime).previousResponseId)) {
-      const compacted = await compactPromptHistory(input, root, { channel, maxTokens, preserveFrom: currentMessage }, async history => {
-        compactAttempted = true
-        const signal = agentContext.signal instanceof AbortSignal ? agentContext.signal : undefined
-        try {
-          const result = await adapterRegistry.sendMessage({ channel: modelChannel(channel), messages: modelMessages(history), operation: "compact", signal, event: options.e, source, purpose, taskName: text(step.task), trace })
-          addUsage(usage, result.usage)
-          modelCalls.push({ operation: "compact", usage: result.usage, channel: channel.id })
-          return { role: "assistant", content: "", protocol: result.protocol }
-        } catch (error) {
-          if (signal?.aborted) throw error
-          // 不记录供应商原始错误，避免错误正文泄露输入或鉴权信息。
-          hostRuntime.logger?.warn?.("[yui-chat] compact 不可用，回退本地上下文裁剪")
-          return null
-        }
-      })
-      if (compacted) return compacted
-    }
     const outcome = enforcePromptBudgetDetailed(input, root, { channel, maxTokens })
     if (outcome.compressed) {
+      localBudgetOutcomes.set(outcome.messages, { before: outcome.before, after: outcome.after, limit: outcome.limit, messagesDropped: outcome.messagesDropped, toolPayloadsCompressed: outcome.toolPayloadsCompressed })
       conversationLog.promptCompressed(root, {
         limit: outcome.limit,
         before: outcome.before,
@@ -724,10 +710,8 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
     }
     return outcome.messages
   }
-  if (previousResponseId && enforcePromptBudgetDetailed(recoveryMessages, root, { channel, maxTokens }).compressed) {
-    messages = recoveryMessages
-    channel.responsesRuntime = { ...record(channel.responsesRuntime), previousResponseId: "" }
-  }
+  // 上游链可能已经压缩，不能用本地明文历史的大小推断上游窗口并断链。
+  // 恢复检查点仍由本地安全预算限制，只有实际断链错误才触发恢复。
   const hasSeparateRecoveryContext = recoveryMessages !== messages
   messages = await budgeted(messages, "initial")
   recoveryMessages = hasSeparateRecoveryContext
@@ -784,11 +768,15 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
       metadata: {
         route,
         context: contextMetadata(input, phase, contextHints, [], false, false),
+        groupReference: groupReferenceDiagnostics,
+        ...(localBudgetOutcomes.has(input) ? { localCompaction: localBudgetOutcomes.get(input) } : {}),
         responsesState: { mode: configuredResponsesStateMode, linked: Boolean(text(record(channel.responsesRuntime).previousResponseId)) },
       },
       snapshotMetadata: {
         route,
         context: contextMetadata(input, phase, contextHints, [...personaBuild.sections, ...(groupReference ? [{ source: "recent-reference", label: "群聊参考资料", content: groupReference }] : [])], true),
+        groupReference: groupReferenceDiagnostics,
+        ...(localBudgetOutcomes.has(input) ? { localCompaction: localBudgetOutcomes.get(input) } : {}),
         responsesState: { mode: configuredResponsesStateMode, linked: Boolean(text(record(channel.responsesRuntime).previousResponseId)) },
       },
     }
@@ -805,7 +793,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
   let response = await adapterRegistry.sendMessage({
     channel: modelChannel(channel),
     messages: modelMessages(messages),
-    ...(configuredResponsesStateMode === "auto" ? { replayMessages: modelMessages(recoveryMessages) } : {}),
+    ...(adapter.protocol === "responses" ? { replayMessages: modelMessages(recoveryMessages) } : {}),
     tools: toolDefinitions(initialTools),
     toolChoice: initialToolChoice,
     event: options.e,
@@ -835,6 +823,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
   let searchDeliveryAttempted = false
   let searchDeliveryStatus = "not-needed"
   let searchDeliveryExtraRoundsUsed = 0
+  let searchCorrectionOffered = false
   let pendingMessageAppendParts: UnknownRecord[] = []
   let deliveredReplyText = ""
   const recordModelCall = (current: typeof response, options: { observeTurn?: boolean; updateState?: boolean; logTrace?: UnknownRecord; modelCallId?: string; parentToolId?: string } = {}): void => {
@@ -855,6 +844,9 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
         ...record(channel.responsesRuntime),
         previousResponseId: text(current.upstreamResponseId).trim(),
       }
+    }
+    if (options.updateState !== false && current.responsesStateRecovery?.localCompaction) {
+      channel.responsesRuntime = { ...record(channel.responsesRuntime), compactionDisabled: true }
     }
     for (const source of current.hostedSearchSources || []) {
       if (source.url && !hostedSearchSources.has(source.url)) hostedSearchSources.set(source.url, source)
@@ -1126,27 +1118,31 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
       break
     }
     const pendingSearchDelivery = searchDeliveryRequired && searchDeliveryStatus === "required"
+    const allowSearchCorrection = pendingSearchDelivery && !searchCorrectionOffered && toolRounds < maxToolRounds
+      && requestedTraces.some(item => ["web_search", "knowledge_manage"].includes(text(item.name))
+        && item.effect === "read" && isSearchToolTrace(item, text(prompt)))
+    if (allowSearchCorrection) searchCorrectionOffered = true
     const phase = pendingSearchDelivery ? "search-delivery" : "after-tools"
     const nextMessages = pendingSearchDelivery
-      ? buildSearchDeliveryMessages(workingMessages)
+      ? buildSearchDeliveryMessages(workingMessages, allowSearchCorrection)
       : agentTurn.state.finalReplyRequired
         ? buildAgentLoopContinuationMessages(workingMessages)
         : workingMessages
     const boundedMessages = await budgeted(nextMessages, phase)
     const recoveryNextMessages = pendingSearchDelivery
-      ? buildSearchDeliveryMessages(workingRecoveryMessages)
+      ? buildSearchDeliveryMessages(workingRecoveryMessages, allowSearchCorrection)
       : agentTurn.state.finalReplyRequired
         ? buildAgentLoopContinuationMessages(workingRecoveryMessages)
         : workingRecoveryMessages
-    const boundedRecoveryMessages = configuredResponsesStateMode === "auto"
+    const boundedRecoveryMessages = adapter.protocol === "responses"
       ? await budgeted(recoveryNextMessages, `responses-recovery-${phase}`)
       : boundedMessages
     await executionRuntime.waitForNextRound(agentContext.signal instanceof AbortSignal ? agentContext.signal : undefined)
     const availableAfterTools = currentTools()
-    const forcedToolName = pendingSearchDelivery ? "message_send" : ""
+    const forcedToolName = pendingSearchDelivery && !allowSearchCorrection ? "message_send" : ""
     const afterTools = forcedToolName
       ? availableAfterTools.filter(tool => tool.name === forcedToolName)
-      : availableAfterTools
+      : allowSearchCorrection ? availableAfterTools.filter(tool => ["message_send", "web_search", "knowledge_manage"].includes(tool.name)) : availableAfterTools
     if (forcedToolName && !afterTools.length) {
       searchDeliveryStatus = "unavailable"
       response = { ...response, text: "搜索结果无法发送：message_send 当前未启用或没有权限。", toolCalls: [] }
@@ -1167,9 +1163,9 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
     response = await adapterRegistry.sendMessage({
       channel: modelChannel(channel),
       messages: modelMessages(boundedMessages),
-      ...(configuredResponsesStateMode === "auto" ? { replayMessages: modelMessages(boundedRecoveryMessages) } : {}),
+      ...(adapter.protocol === "responses" ? { replayMessages: modelMessages(boundedRecoveryMessages) } : {}),
       tools: toolDefinitions(afterTools),
-      toolChoice: forcedToolName ? { type: "function", name: forcedToolName } : undefined,
+      toolChoice: forcedToolName ? { type: "function", name: forcedToolName } : allowSearchCorrection ? "required" : undefined,
       event: options.e,
       maxTokens,
       signal: agentContext.signal instanceof AbortSignal ? agentContext.signal : undefined,
@@ -1247,7 +1243,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
     const correctionMessages = await budgeted(directMediaCodes.length
       ? buildMediaDeliveryCorrectionMessages(correctionBaseMessages, responseText, directMediaCodes)
       : buildMediaSelectionCorrectionMessages(correctionBaseMessages, responseText), "media-correction")
-    const correctionRecoveryMessages = configuredResponsesStateMode === "auto"
+    const correctionRecoveryMessages = adapter.protocol === "responses"
       ? await budgeted(directMediaCodes.length
         ? buildMediaDeliveryCorrectionMessages(workingRecoveryMessages, responseText, directMediaCodes)
         : buildMediaSelectionCorrectionMessages(workingRecoveryMessages, responseText), "responses-recovery-media-correction")
@@ -1266,7 +1262,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
       const correctionResponse = await adapterRegistry.sendMessage({
         channel: modelChannel(channel),
         messages: modelMessages(correctionMessages),
-        ...(configuredResponsesStateMode === "auto" ? { replayMessages: modelMessages(correctionRecoveryMessages) } : {}),
+        ...(adapter.protocol === "responses" ? { replayMessages: modelMessages(correctionRecoveryMessages) } : {}),
         tools: toolDefinitions(correctionTools),
         event: options.e,
         maxTokens,
@@ -1359,7 +1355,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
         ),
       "finalization",
     )
-    const finalizationRecoveryMessages = configuredResponsesStateMode === "auto"
+    const finalizationRecoveryMessages = adapter.protocol === "responses"
       ? await budgeted(
         automaticDeliveryContinuation
           ? buildAutomaticDeliveryContinuationMessages(workingRecoveryMessages)
@@ -1387,7 +1383,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
           responsesRuntime: { ...record(channel.responsesRuntime), webSearchAllowed: false, fileSearchAllowed: false, toolSearchAllowed: false },
         }),
         messages: modelMessages(finalizationMessages),
-        ...(configuredResponsesStateMode === "auto" ? { replayMessages: modelMessages(finalizationRecoveryMessages) } : {}),
+        ...(adapter.protocol === "responses" ? { replayMessages: modelMessages(finalizationRecoveryMessages) } : {}),
         tools: [],
         event: options.e,
         maxTokens,

@@ -1,5 +1,6 @@
 import type { ContentPart, JsonValue } from "../../core/message-chain/types.js"
 import { ModelAdapter as ProtocolModelAdapter } from "../protocol/adapter.js"
+import { normalizeModelUsage } from "../protocol/normalize.js"
 import type { EmbeddingRequest, EmbeddingResponse, ImageGenerationRequest, ImageGenerationResponse, ModelListRequest, ModelRequest, ModelRequestCapture, ModelResponse, ModelUsage } from "../protocol/types.js"
 
 type UnknownRecord = Record<string, unknown>
@@ -104,39 +105,10 @@ export function parseResponseData(response: Response, data: unknown): UnknownRec
   return isRecord(data) ? data : {}
 }
 
-function usageRecord(data: unknown, kind: string): { value: UnknownRecord; present: boolean } {
-  if (!isRecord(data)) return { value: {}, present: false }
-  const candidate = kind === "gemini" ? data.usageMetadata : data.usage
-  return isRecord(candidate) ? { value: candidate, present: true } : { value: {}, present: false }
-}
-
-function numeric(value: unknown): number {
-  const result = Number(value)
-  return Number.isFinite(result) ? result : 0
-}
-
 /** 兼容 OpenAI、Claude 和 Gemini 的 usage 字段，并明确标记是否由上游报告。 */
 export function tokenUsage(data: unknown = {}, kind = "openai"): ModelUsage {
-  const { value: usage, present } = usageRecord(data, kind)
-  const inputValue = usage.prompt_tokens ?? usage.input_tokens ?? usage.promptTokenCount ?? usage.inputTokenCount
-  const outputValue = usage.completion_tokens ?? usage.output_tokens ?? usage.candidatesTokenCount ?? usage.outputTokenCount
-  const input = numeric(inputValue)
-  const output = numeric(outputValue)
-  const total = numeric(usage.total_tokens ?? usage.totalTokenCount ?? usage.totalTokens ?? input + output) || input + output
-  const promptDetails = isRecord(usage.prompt_tokens_details) ? usage.prompt_tokens_details : isRecord(usage.input_tokens_details) ? usage.input_tokens_details : {}
-  const completionDetails = isRecord(usage.completion_tokens_details) ? usage.completion_tokens_details : isRecord(usage.output_tokens_details) ? usage.output_tokens_details : {}
-  const cached = numeric(promptDetails.cached_tokens ?? usage.cache_read_input_tokens ?? usage.cachedContentTokenCount)
-  const reasoning = numeric(completionDetails.reasoning_tokens ?? usage.thoughtsTokenCount)
-  return {
-    input,
-    output,
-    total,
-    cached,
-    reasoning,
-    source: present ? "reported" : "unknown",
-    inputKnown: inputValue !== undefined && inputValue !== null,
-    outputKnown: outputValue !== undefined && outputValue !== null,
-  }
+  const source = isRecord(data) ? data : {}
+  return normalizeModelUsage(kind === "gemini" ? source.usageMetadata : source.usage)
 }
 
 /** 只把可序列化对象作为工具参数；非法 JSON 或标量统一降为空对象。 */
