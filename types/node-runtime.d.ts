@@ -22,6 +22,8 @@ declare module "node:fs/promises" {
   }
 
   interface FileStat {
+    dev: number
+    ino: number
     mtimeMs: number
     birthtimeMs: number
     size: number

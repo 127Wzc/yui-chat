@@ -8,6 +8,7 @@ import https from 'node:https'
 import { EventEmitter } from 'node:events'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import './check-installation-writer.mjs'
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'yui-chat-installation-'))
@@ -21,7 +22,7 @@ const load = name => import(new URL(`../output/runtime/${name}.js`, import.meta.
 const { configStore } = await load('config/store')
 const { sqliteClient } = await load('core/storage/sqlite/client')
 const { SqliteRuntimeConfigRepository } = await load('core/storage/sqlite/runtime-config-repository')
-const { installationInstaller, installationSummary } = await load('extensions/installation/installer')
+const { InstallationInstaller, installationInstaller, installationSummary } = await load('extensions/installation/installer')
 const { installationStore } = await load('extensions/installation/store')
 const { issueWebInstallationActor, issueOwnerInstallationActor } = await load('extensions/installation/authorization')
 const { credentialStore } = await load('extensions/credentials')
@@ -110,6 +111,25 @@ function tar(entries) {
 try {
   assert.equal((await sqliteClient.init(await configStore.load())).available, true)
   await configStore.attachRuntimeConfigRepository(new SqliteRuntimeConfigRepository(sqliteClient))
+  const leaseFile = path.join(root, 'data/yui-chat/installation-writer.json')
+  const originalActive = installationStore.active
+  try {
+    installationStore.active = async () => { throw new Error('injected startup recovery failure') }
+    await assert.rejects(installationInstaller.init(), /injected startup recovery failure/)
+    await assert.rejects(fs.access(leaseFile), { code: 'ENOENT' })
+  } finally { installationStore.active = originalActive }
+  const initializing = installationInstaller.init()
+  assert.equal(installationInstaller.init(), initializing, 'concurrent init shares startup')
+  await initializing
+  const lease = await fs.readFile(leaseFile, 'utf8')
+  const duplicateInstaller = new InstallationInstaller()
+  await assert.rejects(duplicateInstaller.init(), { code: 'INSTALLATION_WRITER_ALREADY_ACTIVE' })
+  await duplicateInstaller.stop()
+  assert.equal(await fs.readFile(leaseFile, 'utf8'), lease, 'failed contender cannot release the active installer')
+  await installationInstaller.stop()
+  // Stop during initialization must wait for recovery and release its owned lease.
+  await Promise.all([installationInstaller.init(), installationInstaller.stop()])
+  await assert.rejects(fs.access(leaseFile), { code: 'ENOENT' })
   await installationInstaller.init(); installationInstaller.start()
   await new Promise(resolve => remote.listen(0, '127.0.0.1', resolve))
   const origin = `http://127.0.0.1:${remote.address().port}`

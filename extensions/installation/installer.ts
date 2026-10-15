@@ -8,6 +8,7 @@ import { backgroundTaskService } from "../../core/scheduling/background-task-ser
 import { hostRuntime } from "../../core/runtime/host-runtime.js"
 import { skillManager } from "../../skills/index.js"
 import { installationStore } from "./store.js"
+import { acquireInstallationWriterLease } from "./writer-lease.js"
 import { assertInstallationActor, checkContinuedAuthorization, installationRequestKey } from "./authorization.js"
 import { withExtensionLock, isolateExtension, resetExtensionIsolation } from "./guard.js"
 import { fetchSource, sourceIdentity } from "./sources/index.js"
@@ -31,21 +32,31 @@ export class InstallationInstaller {
   private readonly dispatched = new Set<string>()
   private readonly scheduled = new Map<string, string>()
   private readonly controllers = new Map<string, AbortController>()
-  private lease = ""
+  private initializing: Promise<void> | null = null
+  private releaseLease: (() => Promise<void>) | null = null
   private poll: ReturnType<typeof setInterval> | null = null
-  async init(): Promise<void> {
-    if (this.initialized) return
-    await fs.mkdir(dataDir, { recursive: true })
-    this.lease = crypto.randomUUID()
-    try { await fs.writeFile(leaseFile, JSON.stringify({ pid: process.pid, nonce: this.lease }), { flag: "wx", mode: 0o600 }) } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
-      const prior = JSON.parse(await fs.readFile(leaseFile, "utf8")) as { pid: number }
-      try { process.kill(prior.pid, 0); throw new InstallationError("INSTALLATION_WRITER_ALREADY_ACTIVE") } catch (check) {
-        if ((check as NodeJS.ErrnoException).code !== "ESRCH") throw check
-        await fs.unlink(leaseFile)
-        await fs.writeFile(leaseFile, JSON.stringify({ pid: process.pid, nonce: this.lease }), { flag: "wx", mode: 0o600 })
+  init(): Promise<void> {
+    if (this.initialized) return Promise.resolve()
+    this.initializing ||= this.initialize().finally(() => { this.initializing = null })
+    return this.initializing
+  }
+  private async initialize(): Promise<void> {
+    if (this.releaseLease) throw new InstallationError("INSTALLATION_WRITER_ALREADY_ACTIVE")
+    this.releaseLease = await acquireInstallationWriterLease(leaseFile)
+    try {
+      await this.recoverStartup()
+      this.initialized = true
+    } catch (error) {
+      try {
+        await this.releaseLease()
+        this.releaseLease = null
+      } catch (releaseError) {
+        throw new AggregateError([error, releaseError], "INSTALLATION_INITIALIZATION_CLEANUP_FAILED")
       }
+      throw error
     }
+  }
+  private async recoverStartup(): Promise<void> {
     resetExtensionIsolation()
     await fs.mkdir(workRoot, { recursive: true })
     for (let task of await installationStore.active()) {
@@ -60,7 +71,6 @@ export class InstallationInstaller {
     }
     for (const task of await installationStore.pendingNotifications()) if (task.notification === "sending") await installationStore.change(task, { notification: "uncertain" }, { type: "notification_result_uncertain" })
     await installationStore.cleanupExpiredRecords()
-    this.initialized = true
   }
   start(): void {
     if (!this.initialized || !this.stopped) return
@@ -70,6 +80,8 @@ export class InstallationInstaller {
     void this.dispatchPending()
   }
   async stop(): Promise<void> {
+    // A shutdown during startup must wait until recovery or its rollback completes.
+    await this.initializing?.catch(() => { /* initialize() already attempts owned-lease cleanup. */ })
     this.stopped = true
     if (this.poll) clearInterval(this.poll)
     this.poll = null
@@ -77,10 +89,8 @@ export class InstallationInstaller {
     for (const [id, backgroundId] of this.scheduled) if (!this.controllers.has(id)) { backgroundTaskService.cancel(backgroundId); this.scheduled.delete(id); this.dispatched.delete(id) }
     // Wait for safe commit boundaries before giving up the single writer lease.
     await withExtensionLock("installation", "worker", async () => {})
-    if (this.initialized && await exists(leaseFile)) {
-      const prior = JSON.parse(await fs.readFile(leaseFile, "utf8")) as { nonce: string }
-      if (prior.nonce === this.lease) await fs.unlink(leaseFile)
-    }
+    await this.releaseLease?.()
+    this.releaseLease = null
     this.initialized = false
   }
   async submit(input: SourceInput, actor: InstallationActor, intent: "install" | "inspect" = "install", retryOf?: string): Promise<InstallationTask> {
