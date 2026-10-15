@@ -1,6 +1,6 @@
 # AI Tool 创建与集成指南
 
-本文供维护者和代码 AI 创建、修改 Yui Chat 工具时使用。开始编码前应完整阅读本文，并以以下源码为最终事实来源：
+工具的公共契约与执行入口：
 
 - 公共类型：`tools/support/tool-contract.ts`
 - 归一化与参数校验：`tools/support/contract.ts`
@@ -78,7 +78,7 @@ export class ExampleLookupTool {
 | `category` | 否 | `network`、`media`、`admin` 等；内置分组会补齐。 |
 | `tags` | 否 | 用于工具筛选和搜索意图识别，保持少量稳定词。 |
 | `deferLoading` | 否 | Responses 原生 `tool_search` 是否延期加载。Custom、MCP 和低频 Builtin 默认 `true`；每轮高频核心工具显式设为 `false`。Chat Completions 忽略此字段。 |
-| `risk` | 否 | `low`、`medium`、`high`、`external`，仅作标签。工具默认仅主人可用，可通过角色或用户授权开放；不会因高风险自动增加 `requiresMaster`。 |
+| `risk` | 否 | `low`、`medium`、`high`、`external`，仅作标签。内置工具按默认角色表授权，扩展及未列入表的能力默认仅主人可用；不会因高风险自动增加 `requiresMaster`。 |
 | `policy` | 否 | 权限和边界声明，例如 `requiresMaster`、`requiresGroup`、`requiresGroupAdmin`、`externalNetwork`。 |
 | `parameters` | 是 | 发给模型的调用参数 JSON Schema。只放模型需要决定的输入。 |
 | `configSchema` | 否 | 管理员运行配置 Schema；值经 `context.toolConfig` 注入，不发送给模型。密钥必须标记 `secret: true`。 |
@@ -158,7 +158,7 @@ parameters = {
 | `timeoutMs` | 1000–600000 | 工具级总超时；网络调用仍应接收取消信号并使用更短的客户端超时。 |
 | `backgroundSilent` | boolean | 默认关闭。开启后入队即返回，不等待、不发开始或失败提示、不提前结束主对话。适合可丢弃的表情包、贴表情等动作。 |
 
-Custom 编辑器提供一个“后台静默执行”开关，保存到该工具的 `execution.backgroundSilent`，显式设置优先于入口源码默认值。后台工具不显示“需要最终回复”，保存时也不写入这项；前台工具才保留该配置。执行保护策略中的其他字段不变；没有 `action` 参数时不显示按 action 覆盖。源码编辑区按需加载本地 CodeMirror 与 js-beautify，支持格式化、撤销格式化、行号、语法高亮、括号配对和代码折叠。格式化只调整草稿排版，不执行、保存或校验源码。
+Custom 编辑器提供一个“后台静默执行”开关，保存到该工具的 `execution.backgroundSilent`，显式设置优先于入口源码默认值。后台工具不显示“需要最终回复”，保存时也不写入这项；前台工具才保留该配置。执行保护策略中的其他字段不变；没有 `action` 参数时不显示按 action 覆盖。
 
 静默后台复用有界队列，`timeoutMs` 从入队开始计时，排队过期后不执行。网络请求必须传递 `context.agent.signal`；忽略取消信号的自定义代码无法被强制终止，但超时后运行时不会再投递其媒体计划。队列满、失败和超时只记录诊断，不重试、不要求模型补救。它不会随正常对话结束而取消，也不在重启后恢复。实际执行及媒体发送前重新校验启用状态和权限。
 
@@ -310,14 +310,12 @@ flowchart TD
 | `refusal`、`error` | 拒绝或错误 | 作为终态直接返回已有文本或稳定的本地说明，不再次请求模型。 |
 | `unknown` | 无法识别 | 不执行同时返回的工具块；有正常文本时仍可展示，但保留状态供日志诊断。 |
 
-状态职责保持两层，不再叠加新的编排框架：
+状态职责分为两层：
 
 - `AgentTurnState` 只管理 `model_decision → tool_execution → finalizing/completed`、是否必须最终回复，以及最多一次空回复恢复。
 - `execution-runtime` 只管理工具调用上限、操作额度、去重、重试、副作用和不确定结果；它不决定人格回复。
 - 工具返回模型后，运行时注入一条很短的循环指令：未完成就继续调用工具，完成就输出唯一自然回复。模型正常收尾时直接复用该文本，因此常规路径不会增加额外模型请求。
 - `continueConversation` 是 Turn 级锁存值。同轮或后续轮只要出现一个 `true`，最终必须有一条自然回复；`false` 不能覆盖它。只有模型最终返回空文本或 `<EMPTY>` 才允许一次无工具恢复，恢复后不再循环。
-
-以后接入 Shell、文件编辑或 Skill 驱动的多步骤能力时，仍复用这一循环：Skill 只注入工作方法，可执行动作注册为 Tool；每个工具返回可供下一次模型决策验证的结构化结果。不要在工具内部递归调用模型，也不要为每个步骤单独生成总结。
 
 ### 7.2 聚合搜索工具与渠道适配
 
@@ -399,36 +397,8 @@ export const tools = [
 
 也可以导出 `createTools({ packageId, manifest, framework })`，用于获取声明过的框架资源。资源声明和访问方法见 [Custom 框架资源](custom-framework-resources.md)。
 
-## 10. AI 实施检查清单
+## 10. 集成与验证
 
-代码 AI 创建工具时应依次完成：
+注册工具时同步默认启用集合、角色规则、配置展示和提示词。覆盖正常执行、参数错误、权限拒绝、重复保护、超时与部分失败，重点核对实际副作用和投递次数。
 
-1. 搜索是否已有同类工具、公共能力或 Adapter，避免重复实现。
-2. 确认工具属于 Builtin、Custom、MCP 还是 Skill。
-3. 定义唯一名称、简洁 description 和最小参数 Schema。
-4. 根据真实行为声明 `effect`、重复、重试、派发、次数和目标字段。
-5. 增加权限与网络边界；高风险动作保持最小权限。
-6. 让 `execute()` 接收取消信号，返回有界、可序列化、无凭证的数据。
-7. 媒体发送只走 `message_send`；需要自动发送时显式声明 `autoDelivery`。
-8. 同步注册入口、默认启用集合、预设、配置展示和相关提示词。
-9. 为正常、参数错误、权限拒绝、重复保护、超时/部分失败补回归。
-10. 运行：
-
-```bash
-npm run check
-```
-
-至少确认类型、运行时构建、结构检查和相关 smoke 段通过。不要直接编辑 `output/`；它由构建脚本生成。
-
-## 11. 常见错误
-
-- 在业务模块直接调用工具实例，绕过 Registry、权限和运行账本。
-- `effect` 填成 `read`，实际却发送消息或修改外部状态。
-- 非幂等动作启用自动重试，超时后造成重复发送或重复管理操作。
-- 把运行密钥放进模型参数，造成 Token 浪费和凭证泄漏。
-- 自己拼 CQ 码、直接调用宿主发送，绕过 `message_send` 和统一回执。
-- 仅凭工具名判断群聊；应使用公共事件作用域判断。
-- 自动媒体工具返回计划，却未声明 `autoDelivery`，运行时会按普通观察结果处理。
-- 把人格回复写死在工具结果中；应使用 `continueConversation: true` 统一续答。
-- 为了文件变短而拆出同义的 Service、Manager 或 Repository。
-- 只修改源码字符串断言，没有验证真实行为和失败分支。
+在插件目录运行 `npm run check`。构建产物由脚本生成，具体开发约束见 [AGENTS.md](../AGENTS.md)。行为变化直接更新本文对应章节，并在 [更新记录](../CHANGELOG.md) 中归纳。

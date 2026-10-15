@@ -1,8 +1,8 @@
-# SQLite 从 0 开始基线
+# SQLite 表结构
 
-本项目的 SQLite 结构从 `001-baseline.sql` 基线开始，状态库继续执行 `002-tool-call-events.sql` 和 `003-model-call-snapshots.sql`：前者包含工具事件、群记忆召回和工具链父子关系，后者把每次实际模型请求的脱敏上下文、模型可见工具定义和请求元数据独立保存，供管理台详情窗口按需读取；向量库仍使用自己的基线。无法识别的历史迁移记录或旧表会被拒绝，迁移在 Worker 内事务执行并保留失败现场。运行、模型调用和工具调用的父级引用支持子代理、工具派生模型调用和后台完成事件的拓扑追踪，`005-log-session.sql` 为运行日志增加独立 `session_id` 与索引，会话详情按 `session_id` 汇总同一段会话的顶层轮次；`conversation_key` 仅表示固定归属，模型快照请求元数据中的上下文分组用于显示每条消息的来源。
+状态库位于 `data/yui-chat/storage/state.sqlite3`，向量库位于同目录的 `vectors.sqlite3`。迁移分别来自 `core/storage/sqlite/migrations/` 和 `core/storage/sqlite/vector-migrations/`，在 Worker 内事务执行；未知迁移或旧表会被拒绝并保留失败现场。
 
-`006-extension-installations.sql` 增加持久化安装任务、事件、收据和加密凭据。任务版本 CAS 与 SQLite 触发器使状态更新和事件追加原子完成。收据没有依赖任务的级联外键，任务清理不删除来源证明；显式卸载只退休旧收据，活动目标使用部分唯一索引，允许之后重新安装。配置包白名单不包含这些表或本地主密钥。
+`ai_runs.session_id` 关联一段会话的顶层轮次，`conversation_key` 表示固定归属；运行、模型调用和工具事件的父级引用构成调用拓扑。模型快照独立存储上下文、工具定义与请求元数据，供详情页按需读取。
 
 ## ER 图
 
@@ -192,13 +192,9 @@ flowchart LR
 | state | `group_memory_extraction_jobs` | 群消息自然日提炼任务 | `group_id`、窗口、进度、结果、重试状态 |
 | vectors | `embedding_spaces` | 向量空间定义 | 模型、维度、距离度量、`scope_key` |
 | vectors | `embedding_records` | 向量所有者元数据 | 空间、所有者类型/ID、内容哈希 |
+| state | `extension_installations` | 安装任务与幂等状态 | 任务 JSON、版本、状态、幂等键 |
+| state | `extension_installation_events` | 单调追加的安装事件 | 任务编号、序号、时间、脱敏事件 |
+| state | `extension_installation_receipts` | 安装来源证明 | 固定来源、文件摘要、停用状态、退休时间 |
+| state | `extension_credentials` | 独立凭据存储 | 加密内容或显式环境引用 |
 
-## 有意移除的过渡结构
-
-- 会话拆表：`conversation_messages`、`conversation_turns`、`conversation_usage`、`conversation_tool_calls`；现由单个 `conversations.history_json` 承担短期历史。
-- 知识源和 generation 中间层：`knowledge_sources`、`knowledge_index_generations` 及其子表；文档直接带 `source_type/source_key`，新向量空间完成后再原子切换 `active_vector_space_id`。
-- 人格持久化表：人物行为只由运行配置驱动，不保留独立 profile/binding 表。
-- 工具调用与用量事件流水：旧版 `ai_usage_events` 不再使用；当前工具执行明细统一由 `tool_call_events` 保存，模型用量由 `model_call_events` 和日汇总保存。
-- 群采集的泛化 scope、来源适配器和小时分窗列；第一版只支持 `group_id` 和自然日提炼窗口。
-
-安装表：`extension_installations`（任务 JSON、版本、状态、幂等键）、`extension_installation_events`（任务编号、单调序号、时间与脱敏事件）、`extension_installation_receipts`（固定来源、文件摘要、安装时停用状态、退休时间）、`extension_credentials`（独立加密内容或显式环境引用）。任务与事件默认保留 90 天，活动收据长期保留。
+安装任务的 CAS 更新与事件追加由 SQLite 触发器原子完成。任务和事件默认保留 90 天，活动收据长期保留，任务清理不级联删除收据；卸载退休旧收据后可重装同一 ID。配置包不包含安装表、凭据或本地主密钥。

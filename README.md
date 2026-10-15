@@ -1,6 +1,39 @@
 # Yui Chat
 
-面向 TRSS-Yunzai 的 AI 插件，支持多供应商模型、群聊上下文、长期记忆、媒体与工具扩展。默认命令前缀为 `#yui`，自然呼叫为“埋埋”。
+面向 TRSS-Yunzai 的 AI 插件，支持多供应商模型、群聊上下文、长期记忆、媒体处理和工具扩展。
+
+## 功能
+
+- **对话与模型**：多渠道接入、任务选模、失败回退、流式响应和上下文压缩。
+- **人格与互动**：自定义人设、文字/图片/语音回复、日常定格。
+- **记忆与知识**：个人及群记忆、按日提炼、知识检索和机器人指令推荐。
+- **工具与扩展**：内置工具、Custom、Markdown Skill、MCP，以及动作快捷指令。
+- **Web 管理台**：配置、角色与用户权限、对话测试、调用日志和用量统计。
+
+<details>
+<summary>运行预览（点击展开）</summary>
+
+### 首页
+
+![首页](docs/screenshots/runtime-overview.jpg)
+
+### 模型与回复
+
+![模型与回复](docs/screenshots/runtime-models.jpg)
+
+### 日常定格
+
+![日常定格](docs/screenshots/runtime-daily-still.png)
+
+### 记忆管理
+
+![记忆管理](docs/screenshots/runtime-memory.png)
+
+### AI 能力
+
+![AI 能力](docs/screenshots/runtime-tools.jpg)
+
+</details>
 
 ## 安装与更新
 
@@ -11,55 +44,69 @@ git clone -b main --depth=1 https://github.com/127Wzc/yui-chat.git ./plugins/yui
 pnpm i
 ```
 
-安装脚本自动构建运行文件，完成后重启 Yunzai。插件目录名必须为 `yui-chat`。若跳过安装脚本，手动构建：
-
-```sh
-cd plugins/yui-chat
-pnpm run build:runtime
-```
+安装后重启 Yunzai。插件目录名必须为 `yui-chat`。安装脚本会自动构建运行文件；若跳过脚本或构建失败，在插件目录执行 `pnpm run build:runtime`。
 
 更新时在插件目录执行 `git pull`，回到 Yunzai 根目录运行 `pnpm i`，然后重启。
 
 ## 开始使用
 
-主人发送 `#yui面板` 获取一次性管理链接（3 分钟有效），在「模型与回复」添加供应商和模型，设置默认回复任务。工具启停、权限和动作快捷指令也在管理台配置。内置能力按默认角色表开放，扩展默认仅主人可用；「AI 能力」设置角色范围，「使用权限」可对用户单独授权。风险仅作标签，高风险能力也可手动开放给普通群员，但管理他人仍需目标群管理员以上身份。「使用权限」提供可预览的内置工具角色推荐方案，应用或逐项保存立即生效。用户单独允许覆盖角色禁止，个人禁止优先；面板沿用现有登录权限。
+1. 主人发送 `#yui面板`，通过一次性链接登录管理台。
+2. 在「模型与回复」添加渠道和模型，选择默认回复模型。
+3. 在「助手人设」调整人格；在「AI 能力」启用所需工具并设置角色权限。
+4. 发送 `埋埋 你好` 或 `#yuichat 你好` 开始对话。
+
+默认命令前缀为 `#yui`，自然呼叫为“埋埋”，均可配置。工具启用与授权分别控制；「使用权限」可设置用户例外，群管理操作仍受实际身份和机器人权限限制。
+
+## 常用指令
 
 | 指令 | 用途 |
 | --- | --- |
-| `#yuichat 你好` / `埋埋 你好` | 开始聊天 |
 | `#yui帮助` | 查看完整指令帮助 |
 | `#yuihelp 怎么查体力` | 推荐机器人指令 |
-| `#yui结束对话` | 清空当前个人会话，下一次重新开始 |
-| `#yui我的记忆` | 查看自己的长期记忆及管理用法 |
-| `#yui他的记忆 @成员或QQ号` | 查看指定成员记忆（主人，也支持“她的记忆”） |
-| `#yui管理记忆 @成员或QQ号` | 管理指定成员记忆（主人） |
-| `#yui文本模式` / `#yui图片模式` / `#yui语音模式` | 切换个人输出模式 |
+| `#yui结束对话` | 清空个人会话，保留群窗口、长期记忆和知识库 |
+| `#yui我的记忆` | 查看自己的记忆及管理用法 |
+| `#yui他的记忆 @成员或QQ号` | 主人查看指定成员记忆，也支持“她的记忆” |
+| `#yui管理记忆 @成员或QQ号` | 主人管理指定成员记忆 |
+| `#yui文本模式` / `#yui图片模式` / `#yui语音模式` | 切换个人回复模式 |
 | `#yui定时任务` | 查看自己的提醒 |
-| `#yui处罚列表 [页码]` | 查看人物处罚人员、原因、范围、状态和剩余时间（主人） |
-| `#yui解除处罚 记录编号` | 提前解除指定人物处罚（主人） |
-| `#yui扩展安装 <来源> [ref=版本] [subdir=目录]` | 后台安装 Skill，成功后停用（主人） |
-| `#yui扩展进度 <安装编号>` / `#yui扩展取消 <安装编号>` | 查询或安全取消安装（主人） |
-| `#yui诊断` | 查看运行状态（主人） |
+| `#yui诊断` | 主人查看运行状态 |
 
-人物自主处罚默认关闭。在「AI 能力 → 内置 → 人物自主处罚 → 配置」开启后，还需启用“人物自主处罚”工具并授权普通用户角色（也可在使用权限页限定用户）。这里只允许处罚当前发言者，不赋予其管理别人的权限；主人、群主和管理员受保护。默认不回复和禁言上限均为 30 天；禁言还需单独开启且机器人具备群管理权限。人物不会通过此入口踢人。参数保存后热生效，已有处罚不重算。
+配置通过管理台维护。长期数据位于 Yunzai 的 `data/yui-chat/`，临时文件位于插件 `cache/`；配置包不包含聊天、记忆和日志正文。
 
-群聊以当前发言人为请求者，每轮默认携带最近配置条数内的可用群消息作为参考，超出预算时按回复链裁剪。省略、纠正和补充可承接其他群成员的话题，不默认回到个人旧话题。引用、点名或明确人称指定的图片按需装配为视觉输入；对象不明时要求澄清。结束对话清空个人主线，保留群窗口、长期记忆和知识库。
+## 技术栈
 
-配置通过管理台维护，长期数据位于 Yunzai 的 `data/yui-chat/`；插件 `cache/` 仅存临时文件。配置包不包含聊天、记忆和日志正文。
+| 层次 | 技术与用途 |
+| --- | --- |
+| 运行与构建 | Node.js ESM、TypeScript；编译到 `output/runtime/`，由 TRSS-Yunzai 加载 |
+| 管理台 | Vue 3、TypeScript；Express 路由与宿主 WebSocket 提供接口 |
+| 数据存储 | SQLite（better-sqlite3），Worker 执行数据库操作；sqlite-vec 支持向量检索 |
+| 模型与扩展 | 多供应商协议适配、MCP SDK、Custom 工具和 Markdown Skill |
+| 图片处理 | Puppeteer 渲染 HTML，Sharp 处理图片与 SVG |
 
-扩展安装入口位于「AI 能力 → 安装记录」。支持仓库、认证归档、上传 Markdown Skill，以及远程 HTTP/SSE MCP 的停用导入。模型安装工具 `extension_install` 默认关闭，主人指令和 Web 独立工作。私有凭据、内网 IP/路径和服务级 CA 在管理台明确绑定，安装不执行包脚本、不自动连接 MCP。使用与部署验收见 [扩展安装](docs/extension-installation.md)。
+## 架构概览
+
+```mermaid
+flowchart LR
+    Chat["Yunzai 消息 / 命令"] --> Pipeline["对话流程<br/>访问控制 · 上下文 · 工具循环"]
+    Web["Vue 管理台"] --> API["鉴权 API / WebSocket"]
+    API -->|对话测试| Pipeline
+    API -->|配置与管理| Services["配置 / 记忆 / 知识 / 扩展"]
+    Services -->|上下文与能力| Pipeline
+    Pipeline --> Models["任务选模 / 协议适配"]
+    Pipeline --> Tools["工具 Registry<br/>内置 / Custom / MCP"]
+    Pipeline --> Delivery["文本 / 图片 / 语音投递"]
+    Services --> Storage["SQLite / 文件存储"]
+```
+
+入口共用对话与权限逻辑，模型协议、工具执行和数据存储各自独立。详见 [模块边界与对话流程](docs/architecture.md)。
 
 ## 文档
 
-- [扩展安装与验收](docs/extension-installation.md)
-- [内置工具](docs/builtin-tools.md)
-- [架构与数据流](docs/architecture.md)
-- [Responses 与上下文压缩](docs/responses-api.md)
+- [内置工具与权限](docs/builtin-tools.md)
+- [扩展安装](docs/extension-installation.md)
+- [架构与数据流](docs/architecture.md) · [Responses 与上下文压缩](docs/responses-api.md)
 - [工具开发](docs/tool-authoring-guide.md) · [Custom 框架资源](docs/custom-framework-resources.md)
-- [SQLite 表结构](docs/sqlite-baseline-er.md) · [维护约束](AGENTS.md)
+- [SQLite 表结构](docs/sqlite-baseline-er.md)
+- [更新记录](CHANGELOG.md) · [待办](TODOLIST.md) · [维护约束](AGENTS.md)
 
 开发检查：在插件目录运行 `npm run check`。
-
-人物禁言时长由 AI 根据当前行为和上下文自主决定，默认配置上限为 30 天，可热配置为 1–2592000 秒；上限不代表每次固定禁言 30 天。不回复时长同样可热配置为 1–2592000 秒，默认上限 30 天。
-
-禁言（`mute_user`）、群名片（`edit_card`）和头衔（`set_title`）支持默认本人自助：工具开启且没有明确角色/个人禁止时，无需另行授权本人操作。工具发现时显示本人可用，执行时重新检查真实目标、当前群和参数。操作他人仍需工具授权及管理身份；普通成员不可自行解禁。禁言须本人明确请求且不能覆盖已有禁言；头衔仍受宿主平台权限限制（通常机器人须为群主）。

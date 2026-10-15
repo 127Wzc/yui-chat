@@ -2,7 +2,7 @@
 
 支持 Markdown Skill 和远程 Streamable HTTP / SSE MCP。安装成功代表固定内容已通过静态检查并提交，安装时停用、默认仅主人；运行验证和启用独立进行。不支持 Custom 自动安装、stdio MCP、执行包脚本、覆盖升级或自动启用。
 
-## 三个入口
+## 安装入口
 
 - 主人命令：`#yui扩展安装 <来源> [ref=版本] [subdir=目录]`、`#yui扩展进度 <安装编号>`、`#yui扩展取消 <安装编号>`。
 - MCP 命令：`#yui扩展安装 https://example.com/mcp type=mcp id=example [transport=sse]`，默认传输为 `streamableHttp`。
@@ -11,7 +11,7 @@
 
 模型工具默认关闭；关闭不影响主人命令和 Web。主人身份来自宿主配置与原始入站消息，网页、引用、动作、子代理和合成事件不能授予安装权限。模型入口只返回任务编号、阶段与结果摘要，群通知不返回私有来源明细。Web 接手保留原发起者，原主人会话仍可查询同一编号。
 
-`install` 在无阻断时独立完成；`inspect` 永不自动提交。计划包含固定 commit、文件 SHA-256 清单与有效期，`apply` 不能更换来源、目标或内容。默认计划有效期 30 分钟，等待输入任务 24 小时过期；提交临界区不因计划到期中断。目标冲突等待处理，不覆盖已有目录。旧远程更新入口明确拒绝覆盖；请先检查新版本，再自行决定是否显式卸载和重新安装。
+`install` 在无阻断时独立完成；`inspect` 永不自动提交。计划包含固定 commit、文件 SHA-256 清单与有效期，`apply` 不能更换来源、目标或内容。默认计划有效期 30 分钟，等待输入任务 24 小时过期；提交临界区不因计划到期中断。目标冲突等待处理，不覆盖已有目录。升级前先检查新版本，再显式卸载并重新安装。
 
 ## 来源与私有凭据
 
@@ -25,9 +25,9 @@ GitHub、GitLab、Gitee 通过各自 HTTP API 解析固定 commit、检查文件
 
 Skill 正文在启用前不注入模型。来自凭据读取的私有 Skill 启用时必须明确确认内容披露；该确认不能代替工具、模型或网络权限。
 
-### 首轮真实验收：GitHub
+### GitHub 私有仓库
 
-首个真实私有仓库验收平台暂定 GitHub，具体仓库与认证方式尚未提供。建议创建有到期时间的 fine-grained personal access token，Resource owner 选仓库所属账号或组织，Repository access 仅选择目标仓库，Repository permissions 中 Contents 设为 Read-only，保留自动附带的 Metadata 只读权限。当前读取 commit、tree 和 blob 的 API 需要 Contents 读取权限。组织如要求审批，需等待批准后才能读取私有仓库。依据：[GitHub Token 配置说明](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens)、[API 权限表](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens)。
+创建有到期时间的 fine-grained personal access token，Resource owner 选仓库所属账号或组织，Repository access 仅选择目标仓库，Repository permissions 中 Contents 设为 Read-only，保留自动附带的 Metadata 只读权限。当前读取 commit、tree 和 blob 的 API 需要 Contents 读取权限。组织如要求审批，需等待批准后才能读取私有仓库。依据：[GitHub Token 配置说明](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens)、[API 权限表](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens)。
 
 在管理台创建来源凭据，用途选「仓库读取」（`repository-read`），origin 填 `https://api.github.com`，来源身份（scope）填完整仓库 URL，例如 `https://github.com/owner/repo`；Token 只填写在管理台凭据表单中，由后端生成 Bearer 请求头。之后用仓库 URL 与明确的 `ref / subdir` 执行「只检查」，核对固定 commit、文件摘要与目标，再确认提交。聊天中只提供仓库 URL、版本、子目录和凭据绑定编号。若目标账号不支持细粒度 Token，先核对该仓库的访问方式，再决定替代认证，不自动扩大 Token 权限。
 
@@ -57,8 +57,6 @@ Skill 正文在启用前不注入模型。来自凭据读取的私有 Skill 启�
 
 ## 验证与发布边界
 
-实施基线：`4b3e976bc1a9de3c1994bd3f66f05fbd38099663`；本机宿主依赖实际解析的 MCP SDK 为 `1.29.0`，包依赖声明为 `^1.24.0`。未修改宿主依赖锁或插件外部代码。初始用户工作区中 `pelican-bicycle.html` 的删除与 `TODOLIST.md` 保持原样。
-
 `npm run check:extension-installation` 使用隔离 SQLite 和临时 HTTP/TLS 服务验证持久化、停用提交、不可变计划、幂等、取消、分阶段故障恢复、可信入站身份、主人命令、Web 接手、三平台认证适配模拟、补凭据原任务恢复、安全归档、私网固定地址、服务 CA、证书主机名、实际 SDK HTTP/SSE、Vue 页面渲染与来源转义、终态通知去重。此测试需要本机监听权限与 OpenSSL；完整检查为 `npm run check`。
 
-本地 fixture 不等于计划规定的真实私有仓库与实际 LAN 部署验收。目前没有使用真实私有仓库凭据，也没有实际部署 LAN/容器/IPv6 MCP；这些发布门槛仍需在目标环境完成。需记录三平台真实私有固定内容获取、长连接与断线重连、真实代理/fake-IP 环境、密钥丢失重启、部署崩溃点与并发调用的结果。未满足这些门槛前，不宣称整份 v2 发布验收完成。
+隔离测试不替代真实私有仓库和 LAN/容器/IPv6 部署验收。未完成项统一见 [待办](../TODOLIST.md#扩展安装部署验收)。

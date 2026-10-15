@@ -20,13 +20,13 @@ ID 续接模式强制 `store: true`；本地模式由 `responses.store` 控制�
 
 ## 服务端压缩与本地裁剪
 
-Responses 对话统一使用 `POST /responses`，携带 `context_management: [{ type: "compaction", compact_threshold: ... }]`。不再调用独立压缩接口。阈值取可用输入预算的 80%，预算优先采用模型上下文窗口，未配置时使用全局输入预算，并预留输出空间。服务端根据真实 token 数决定是否在推理过程中压缩。
+Responses 对话统一使用 `POST /responses`，携带 `context_management: [{ type: "compaction", compact_threshold: ... }]`。阈值取可用输入预算的 80%，预算优先采用模型上下文窗口，未配置时使用全局输入预算，并预留输出空间。服务端根据真实 token 数决定是否在推理过程中压缩。
 
 返回的加密 `compaction` 项与其他输出项一起原样回放，不转成摘要、不截断加密正文；Response ID 续接仍只发送增量。本地安全预算仍对超出窗口的工具结果和旧历史裁剪。日志分别标记“自动压缩已开启”和“对话含上下文压缩”，后者只在实际收到 compaction 项时展示。压缩与对话共享一次上游调用及 usage，不伪造独立压缩用量。
 
 压缩状态用于当前步骤与工具续接，不写入聊天正文。个人可见历史仍按原有条数上限保留。Chat、Claude、Gemini 等协议共用本地预算裁剪：超预算时先缩短工具出入参，再整组删除较旧历史；系统提示和当前问题始终保留。这是确定性的裁剪，不额外调用模型生成摘要，日志在实际裁剪时标记“本地压缩”。
 
-Responses 遇到明确的服务端压缩错误（含压缩参数不受支持）或上下文超限时，最多一次使用本地有界上下文重试同一个 `/responses` 接口，移除 `context_management`、旧 Response ID 和加密协议状态，保留当前问题及配对的已执行工具结果；上下文超限时进一步缩小本地预算。日志标记“本地压缩兜底”，记录原因、裁剪前后预算和实际重试请求。本轮后续请求暂停服务端压缩；鉴权、限流、取消、网络失败和无关错误不触发此重试，兜底再次失败才交给原有渠道 fallback。不重试旧接口。依据 [OpenAI 压缩文档](https://developers.openai.com/api/docs/guides/compaction)。
+Responses 遇到明确的服务端压缩错误（含压缩参数不受支持）或上下文超限时，最多一次使用本地有界上下文重试同一个 `/responses` 接口，移除 `context_management`、旧 Response ID 和加密协议状态，保留当前问题及配对的已执行工具结果；上下文超限时进一步缩小本地预算。日志标记“本地压缩兜底”，记录原因、裁剪前后预算和实际重试请求。本轮后续请求暂停服务端压缩；鉴权、限流、取消、网络失败和无关错误不触发此重试，兜底再次失败才交给原有渠道 fallback。依据 [OpenAI 压缩文档](https://developers.openai.com/api/docs/guides/compaction)。
 
 ## 工具来源
 
