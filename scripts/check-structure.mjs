@@ -232,7 +232,7 @@ assertRule(
 assertRule(networkTools.includes("fetchSafeHttp(text(args.url)"), "website_fetch 必须通过安全 HTTP 客户端读取用户 URL", errors)
 assertRule(!skillManager.includes("|| /^file:") && !skillManager.includes("if (/^file:"), "远程 Skill 安装不得接受本地 file:// 仓库", errors)
 
-for (const name of ["knowledge/command-observer.js", "user/settings.js", "core/scheduling/schedule-task-service.js"]) {
+for (const name of ["user/settings.js", "core/scheduling/schedule-task-service.js"]) {
   const source = await domainSource(name)
   assertRule(source.includes("AtomicJsonRepository"), `${name} 必须复用统一原子 JSON 仓库`, errors)
   assertRule(!source.includes("fs.writeFile("), `${name} 不得直接覆盖持久化 JSON`, errors)

@@ -3,6 +3,8 @@ import { configStore } from "../../config/store.js"
 import { knowledgeStore, BUILTIN_COMMANDS_ID } from "../../knowledge/store.js"
 import type { UnknownRecord } from "../../core/message/types.js"
 import type { ToolExecutionContext } from "../support/tool-contract.js"
+import { buildKnowledgePrompt } from "../../knowledge/retrieval.js"
+import { truncateTextToTokens } from "../../core/chat/token-budget.js"
 
 interface CommandToolContext extends ToolExecutionContext {
   e?: UnknownRecord
@@ -44,27 +46,15 @@ export class CommandSearchTool {
 
   async execute(args: ToolArgs = {}, context: CommandToolContext = {}): Promise<string> {
     if (!(await knowledgeStore.list(context.e || {})).some(base => base.id === BUILTIN_COMMANDS_ID)) return "没有访问内置指令库的权限。"
-    const recommendation = await commandObserver.recommendCommandsHybrid(args.query || "", { limit: args.limit || 5 })
+    const recommendation = await commandObserver.recommendCommandsHybrid(args.query || "", { limit: args.limit, event: context.e })
     const results = records(recommendation.results)
     if (!results.length) return "没有找到匹配的指令。可以换一种说法，或先发送 #yuihelp 查看已索引能力。"
-    return results.map((item, index) => {
-      const guide = record(item.usageGuide)
-      const commandHint = item.regexp ? `/${text(item.regexp)}/` : text(item.fnc)
-      const heads = strings(item.commandHeads || guide.heads).slice(0, 6).join(" / ") || "未知"
-      const intents = strings(item.intentHints || guide.intents).slice(0, 6).join(" / ") || "未知"
-      const parameters = records(item.parameterHints || guide.parameters)
-        .slice(0, 6)
-        .map(hint => `${text(hint.name)}${hint.description ? `：${text(hint.description)}` : ""}`)
-        .join("；") || "无明显参数"
-      const recommendationGuide = record(item.recommendation)
-      const examples = strings(item.examples || [item.example])
-      const matchedTokens = strings(item.matchedTokens)
-      const matched = matchedTokens.length ? matchedTokens : strings(item.keywords)
-      return `${index + 1}. ${text(item.pluginName)}：${text(item.description || item.summary) || "无描述"}\n   建议指令：${text(item.suggestedCommand || item.example) || "未知"}\n   推荐理由：${text(item.reason) || "匹配指令知识库"}\n   指令匹配：${commandHint}\n   示例形态：${examples.slice(0, 4).join(" / ") || "未知"}\n   权限：${text(item.permission)}  事件：${text(item.event)}  使用次数：${item.usageCount || 0}  匹配分：${item.score || 0}\n   关键词：${matched.slice(0, 8).join(", ")}`
-        + `\n   触发头：${heads}\n   意图：${intents}\n   参数：${parameters}`
-        + `\n   推荐置信度：${text(recommendationGuide.confidence) || "unknown"}`
-        + `\n   下一步：${strings(recommendationGuide.nextSteps).join("；") || "直接尝试建议指令"}`
-    }).join("\n")
+    const base = record(recommendation.knowledgeBase)
+    return buildKnowledgePrompt(results.map(item => ({
+      knowledgeBaseId: BUILTIN_COMMANDS_ID, knowledgeBaseName: base.name,
+      fieldDescription: base.fieldDescription, title: item.suggestedCommand || item.example || item.fnc,
+      content: `${text(item.retrievalText || item.description || item.summary)}\n推荐理由：${text(item.reason) || "匹配指令知识库"}`,
+    })), Number(record(record(record(configStore.get()).knowledge).retrieval).resultTokenBudget) || 800)
   }
 }
 
@@ -72,7 +62,7 @@ export class CommandSearchTool {
 export class CommandRecommendTool {
   name = "command_recommend"
   source = "builtin"
-  description = "Return structured command recommendations from the command knowledge base for AI planning."
+  description = "Return command candidates ranked by relevance; implementations of the same recommended command use host priority (smaller first)."
   parameters = {
     type: "object",
     properties: {
@@ -85,22 +75,28 @@ export class CommandRecommendTool {
 
   async execute(args: ToolArgs = {}, context: CommandToolContext = {}): Promise<string> {
     if (!(await knowledgeStore.list(context.e || {})).some(base => base.id === BUILTIN_COMMANDS_ID)) return "没有访问内置指令库的权限。"
-    const limit = Math.max(1, Math.min(10, Number(args.limit) || 5))
-    const recommendation = await commandObserver.recommendCommandsHybrid(args.query || "", { limit })
+    const recommendation = await commandObserver.recommendCommandsHybrid(args.query || "", { limit: args.limit, event: context.e })
     const result: UnknownRecord = {
       query: recommendation.query,
       generatedAt: recommendation.generatedAt,
       count: recommendation.count,
       summary: recommendation.summary,
+      knowledgeBase: recommendation.knowledgeBase,
+      ordering: record(recommendation.retrieval).commandOrdering || "relevance-with-command-priority",
       recommendations: records(recommendation.results).map(item => ({
         id: item.id,
         pluginName: item.pluginName,
+        retrievalText: truncateTextToTokens(item.retrievalText, 600),
         description: text(item.description || item.summary),
         command: text(record(item.recommendation).command || item.suggestedCommand || item.example),
         examples: strings(item.examples),
         reason: text(record(item.recommendation).reason || item.reason),
         confidence: text(record(item.recommendation).confidence) || "unknown",
         score: item.score || 0,
+        priority: item.priority ?? null,
+        priorityLabel: item.priorityLabel || "未知",
+        pluginOrder: item.pluginOrder,
+        ruleOrder: item.ruleOrder,
         matchedSignals: strings(record(item.recommendation).matchedSignals),
         parameterHints: records(record(item.recommendation).parameterHints),
         nextSteps: strings(record(item.recommendation).nextSteps),
@@ -243,15 +239,8 @@ export class KnowledgeManageTool {
         const selectedIds = ids.length ? ids : bases.map(base => base.id)
         const forbidden = selectedIds.filter(baseId => !allowed.has(baseId))
         if (forbidden.length) return `没有访问知识库的权限：${forbidden.join(", ")}`
-        const ordinaryIds = selectedIds.filter(baseId => baseId !== BUILTIN_COMMANDS_ID)
-        const sections = []
-        if (ordinaryIds.length) {
-          const results = await knowledgeStore.search(event, args.query || "", { knowledgeBaseIds: ordinaryIds, limit: args.limit || 4, useVector: true })
-          if (results.length) sections.push(results.map((item, index) => `${index + 1}. ${item.knowledgeBaseName} / ${item.title}\n${item.content}`).join("\n\n"))
-        }
-        // 内置指令库继续复用成熟的扫描、权限过滤和推荐说明查询。
-        if (selectedIds.includes(BUILTIN_COMMANDS_ID)) sections.push(await new CommandSearchTool().execute(args, context))
-        return sections.filter(Boolean).join("\n\n") || "没有找到匹配的已授权知识。"
+        const results = await knowledgeStore.search(event, args.query || "", { knowledgeBaseIds: selectedIds, limit: args.limit, useVector: true })
+        return results.length ? buildKnowledgePrompt(results, Number(record(record(record(configStore.get()).knowledge).retrieval).resultTokenBudget) || 800) : "没有找到匹配的已授权知识。"
       }
       case "recommend": return new CommandRecommendTool().execute({ ...args, includeAudit: false }, context)
       default: return "未知 action，可用：list / search / recommend。"

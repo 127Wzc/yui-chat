@@ -1,12 +1,49 @@
+import { commandAvailability, commandEnabledSql, readCommandAvailability, type CommandAvailability } from "../../../../knowledge/command-availability.js"
+import { searchKnowledgeDetailed } from "../../../../knowledge/retrieval.js"
 import { knowledgeRepository } from "../../../../knowledge/repository.js"
 import { knowledgeStore } from "../../../../knowledge/store.js"
 import { requireWebAuth as auth } from "../../auth.js"
 import { handleRoute } from "../../route-handler.js"
 import type { RouteApp } from "../../route-handler.js"
+import { configStore } from "../../../../config/store.js"
+import { updateConfigAndApply } from "../../runtime-config.js"
+import { sqliteClient } from "../../../../core/storage/sqlite/client.js"
+import { commandQuality } from "../../../../knowledge/command-query-service.js"
+import { commandObserver } from "../../../../knowledge/command-observer.js"
+
+type Row = Record<string, any>
+function builtinPresentation(state: CommandAvailability) {
+  const commands = new Map(commandObserver.commands.map(command => [String(command.id), command]))
+  return (document: Row, includeQuality = true): Row => {
+    const metadata = document.metadata || JSON.parse(document.metadata_json || "{}")
+    const command = commands.get(String(metadata.commandId)) || metadata.command || { id: metadata.commandId, origin: metadata.origin, suggestedCommand: document.title }
+    const availability = commandAvailability(String(metadata.commandId), String(metadata.importSourceId || "yunzai"), metadata.command || {}, state)
+    const exclusionReasons: string[] = [...(!availability.pluginEnabled ? ["插件已停用"] : []), ...(!availability.commandEnabled ? ["指令已停用"] : [])]
+    const quality = includeQuality ? commandQuality(command, commandObserver.usageCounts) : null
+    return {
+      canDelete: true,
+      searchable: !exclusionReasons.length,
+      exclusionReasons,
+      qualityScore: quality?.qualityScore,
+      qualityIssues: quality?.issues.map(issue => ({ "missing-example": "缺少示例", "missing-head": "缺少触发词", "missing-parameters": "缺少参数提示", "dynamic-observed": "动态观察条目", "missing-doc": "缺少说明", "low-confidence": "说明置信度低" })[issue] || issue),
+    }
+  }
+}
+
+export async function builtinCommandStats(): Promise<Row> {
+  const rows = await sqliteClient.all<Row>(`SELECT LENGTH(d.content) AS characters, COUNT(c.id) AS chunks, ${commandEnabledSql()} AS enabled FROM knowledge_documents d LEFT JOIN knowledge_chunks c ON c.document_id=d.id WHERE d.knowledge_base_id=? GROUP BY d.id`, ["builtin-commands"])
+  const searchable = rows.filter(row => row.enabled)
+  const pending = await sqliteClient.get("SELECT COUNT(*) AS n FROM knowledge_vector_tasks WHERE knowledge_base_id=?", ["builtin-commands"])
+  return { pendingVectors: Number(pending?.n || 0), documents: rows.length, chunks: rows.reduce((sum, row) => sum + Number(row.chunks), 0), characters: rows.reduce((sum, row) => sum + Number(row.characters), 0), searchableDocuments: searchable.length, searchableChunks: searchable.reduce((sum, row) => sum + Number(row.chunks), 0), excludedDocuments: rows.length - searchable.length }
+}
 
 export function registerKnowledgeBaseRoutes(app: RouteApp): void {
   app.get("/api/knowledge/bases", auth, handleRoute(async (_req, res) => {
-    res.json({ ok: true, bases: await knowledgeStore.list() })
+    const mode = (configStore.get().knowledge?.commandRetrieval as Record<string, unknown>)?.mode || "hybrid"
+    const bases = await knowledgeStore.list()
+    const builtin = bases.find(base => base.id === "builtin-commands")
+    if (builtin) Object.assign(builtin, { retrievalMode: mode, stats: await builtinCommandStats() })
+    res.json({ ok: true, bases })
   }))
   app.post("/api/knowledge/bases", auth, handleRoute(async (req, res) => {
     const base = await knowledgeStore.create(req.body || {})
@@ -17,7 +54,15 @@ export function registerKnowledgeBaseRoutes(app: RouteApp): void {
   }, { errorStatus: 400 }))
   app.patch("/api/knowledge/bases/:id/retrieval", auth, handleRoute(async (req, res) => {
     if (req.params.id !== "builtin-commands") throw new Error("只有内置指令知识库支持专用检索策略设置")
-    res.json({ ok: true, ...(await knowledgeStore.updateBuiltinRetrieval(req.body || {})) })
+    const mode = req.body?.mode
+    if (mode !== undefined && mode !== "lexical" && mode !== "hybrid") throw new Error("检索方式只能是关键词或混合")
+    const current = await knowledgeRepository.getBase(req.params.id)
+    if (!current) throw new Error("内置指令知识库不存在")
+    const vectorChanged = ["embeddingModel", "dimensions", "distanceMetric"].some(key => req.body?.[key] !== undefined && req.body[key] !== current.config?.[key])
+    const settingsChanged = vectorChanged || req.body?.fieldDescription !== undefined
+    const result = settingsChanged ? await knowledgeStore.updateBuiltinRetrieval(req.body || {}) : { base: current, index: null }
+    if (mode !== undefined) await updateConfigAndApply(config => { (config.knowledge?.commandRetrieval as Record<string, unknown>).mode = mode; return config })
+    res.json({ ok: true, ...result, mode: (configStore.get().knowledge?.commandRetrieval as Record<string, unknown>)?.mode || "hybrid" })
   }, { errorStatus: 400 }))
   app.delete("/api/knowledge/bases/:id", auth, handleRoute(async (req, res) => {
     res.json({ ok: true, deleted: await knowledgeRepository.deleteBase(req.params.id) })
@@ -34,7 +79,17 @@ export function registerKnowledgeBaseRoutes(app: RouteApp): void {
     res.json({ ok: true, result })
   }, { errorStatus: 400 }))
   app.get("/api/knowledge/bases/:id/documents", auth, handleRoute(async (req, res) => {
-    res.json({ ok: true, documents: await knowledgeRepository.listDocuments(req.params.id, { query: req.query.q, limit: req.query.limit }) })
+    const builtin = req.params.id === "builtin-commands"
+    const documents = await knowledgeRepository.listDocuments(req.params.id, { query: req.query.q, limit: builtin ? 10000 : req.query.limit })
+    if (!builtin) return res.json({ ok: true, documents })
+    const present = builtinPresentation(await readCommandAvailability())
+    const rows = documents.map(document => ({ ...document, ...present(document) }))
+    if (req.query.sort === "quality-asc" || req.query.sort === "quality-desc") {
+      const direction = req.query.sort === "quality-asc" ? 1 : -1
+      rows.sort((a, b) => direction * (Number(a.qualityScore) - Number(b.qualityScore)) || Number(b.updated_at) - Number(a.updated_at) || String(a.id).localeCompare(String(b.id)))
+    }
+    const limit = Math.max(1, Math.min(10000, Math.trunc(Number(req.query.limit) || 10000)))
+    res.json({ ok: true, documents: rows.slice(0, limit) })
   }))
   app.get("/api/knowledge/bases/:id/documents/:documentId", auth, handleRoute(async (req, res) => {
     const document = await knowledgeRepository.getDocument(req.params.id, req.params.documentId)
@@ -54,12 +109,12 @@ export function registerKnowledgeBaseRoutes(app: RouteApp): void {
     res.json({ ok: true, result: await knowledgeStore.deleteDocument(req.params.id, req.params.documentId) })
   }, { errorStatus: 400 }))
   app.post("/api/knowledge/bases/:id/search", auth, handleRoute(async (req, res) => {
-    const results = await knowledgeStore.search(
+    const result = await searchKnowledgeDetailed(
       { isMaster: true, isGroup: false, user_id: "web-admin" },
       String(req.body?.query || ""),
-      { knowledgeBaseIds: [req.params.id], limit: Number(req.body?.limit) || 8, useVector: req.body?.useVector !== false },
+      { knowledgeBaseIds: [req.params.id], limit: req.body?.limit, useVector: req.body?.useVector !== false },
     )
-    res.json({ ok: true, results })
+    res.json({ ok: true, ...result })
   }, { errorStatus: 400 }))
   app.get("/api/knowledge/bases/:id/grants", auth, handleRoute(async (req, res) => {
     res.json({ ok: true, grants: await knowledgeRepository.listGrants(req.params.id) })

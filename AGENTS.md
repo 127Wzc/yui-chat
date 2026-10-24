@@ -31,7 +31,7 @@
 | 配置 | `config/{defaults,validator,schema,store}.ts`；同步 Web、diagnostics、smoke |
 | 工具 | `tools/support/{contract,registry}.ts`、`tools/access/{policy,matrix,roles}.ts` 与 builtin/Custom/MCP、`extensions/` 共用能力 |
 | Markdown Skill | `skills/index.ts`；仅注入指令，不注册为可执行工具 |
-| 指令知识 | `knowledge/command-document-builder.ts` 推导，`knowledge/command-query-service.ts` 查询/推荐/报告，`knowledge/command-observer.ts` 观察与持久化 |
+| 指令知识 | `knowledge/command-scanner.ts` 按需采集已加载规则与离线静态采集，`knowledge/command-import.ts` 导入/历史/审计，`knowledge/command-query-service.ts` 查询/推荐/报告，`knowledge/command-observer.ts` 加载目录与消息后置回调 |
 | Web 后端 | `web/http/app.ts` 只组装 `web/http/routes/`；鉴权、WebSocket、错误分别在 `web/http/{auth,websocket,route-handler}.ts` |
 | Web 工具页 | `web/client/features/tools/tools-tab.ts` 组合；扩展、MCP、权限、共享规则位于同目录的领域模块 |
 | Web 模型页 | `web/client/features/providers/providers-tab.ts` 组合；编辑器、路由、共享逻辑位于同目录的领域模块 |

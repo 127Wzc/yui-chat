@@ -290,7 +290,7 @@ export async function buildDiagnostics(): Promise<UnknownRecord> {
         mutedScopes: listMutedScopes(),
       },
       persona: personaDigest,
-      knowledge: commandObserver.stats(),
+      knowledge: { ...commandObserver.stats(), retrieval: record(config.knowledge).retrieval },
       memory: memoryStore.stats(),
       groupCapture: await groupCaptureStore.summary(),
       mediaCache,

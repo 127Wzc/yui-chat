@@ -1,3 +1,4 @@
+import { bindKnowledgeSession } from "../../knowledge/retrieval-rerank.js"
 import crypto from "node:crypto"
 import { configStore } from "../../config/store.js"
 import { providerResolver } from "../../models/routing/provider-resolver.js"
@@ -244,6 +245,7 @@ export async function sendConversation(
     }
 
     const sessionId = text(conversation.sessionId) || crypto.randomUUID()
+    bindKnowledgeSession(event, sessionId)
     if (trace && typeof trace === "object") (trace as unknown as UnknownRecord).sessionId = sessionId
 
     await recentContextStore.buildPromptWithHistory(event)

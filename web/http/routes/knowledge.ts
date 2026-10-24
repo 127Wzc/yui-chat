@@ -1,7 +1,7 @@
+import { registerCommandKnowledgeRoutes } from "./knowledge/commands.js"
 import { configStore } from "../../../config/store.js"
 import { recentContextStore } from "../../../core/chat/recent-context.js"
 import { commandObserver } from "../../../knowledge/command-observer.js"
-import { knowledgeStore } from "../../../knowledge/store.js"
 import { memoryStore } from "../../../memory/store.js"
 import { groupCaptureStore } from "../../../memory/group-capture.js"
 import { userSettingsStore } from "../../../user/settings.js"
@@ -23,12 +23,13 @@ function arrayValue(value: unknown): unknown[] {
 
 /** 注册知识库、群记忆、输出状态与主动问候管理接口。 */
 export function registerKnowledgeRoutes(app: RouteApp): void {
+  registerCommandKnowledgeRoutes(app)
   registerKnowledgeBaseRoutes(app)
   registerKnowledgeIndexRoutes(app)
   registerKnowledgeAccessRoutes(app)
   app.get("/api/knowledge", auth, handleRoute(async (req, res) => {
     const query = String(req.query.q || "")
-    const recommendation = query ? await commandObserver.recommendCommandsHybrid(query, { limit: 20 }) : null
+    const recommendation = query ? await commandObserver.recommendCommandsHybrid(query, { limit: req.query.limit }) : null
     const rows = recommendation ? recommendation.results : commandObserver.searchableCommands().slice(0, 100)
     res.json({
       ok: true,
@@ -45,37 +46,7 @@ export function registerKnowledgeRoutes(app: RouteApp): void {
   app.get("/api/knowledge/quality", auth, (req: RouteRequest, res: RouteResponse) => {
     res.json({ ok: true, quality: commandObserver.qualityReport({ limit: Number(req.query.limit || 30) }) })
   })
-  app.post("/api/knowledge/manual-command", auth, handleRoute(async (req, res) => {
-    const command = await commandObserver.upsertManualCommand(req.body || {})
-    const sync = await knowledgeStore.syncBuiltinCommands(commandObserver.searchableCommands())
-    res.json({
-      ok: true,
-      command: commandKnowledgeView(command),
-      sync,
-      stats: commandObserver.stats(),
-      digest: commandObserver.digest({ limit: 20 }),
-      quality: commandObserver.qualityReport({ limit: 20 }),
-    })
-  }, { errorStatus: 400 }))
-  app.get("/api/knowledge/commands/:id", auth, handleRoute(async (req, res) => {
-    const command = commandObserver.commands.find(item => item.id === req.params.id)
-    if (!command) {
-      throw Object.assign(new Error("未找到这条指令说明，请刷新列表后重试。"), { statusCode: 404 })
-    }
-    res.json({ ok: true, command: commandKnowledgeView(command) })
-  }, { errorStatus: 404 }))
-  app.delete("/api/knowledge/commands/:id", auth, handleRoute(async (req, res) => {
-    const result = await commandObserver.deleteCuratedCommand(req.params.id)
-    const sync = await knowledgeStore.syncBuiltinCommands(commandObserver.searchableCommands())
-    res.json({
-      ok: true,
-      result,
-      sync,
-      stats: commandObserver.stats(),
-      digest: commandObserver.digest({ limit: 20 }),
-      quality: commandObserver.qualityReport({ limit: 20 }),
-    })
-  }, { errorStatus: 400 }))
+
   app.get("/api/memory", auth, handleRoute(async (req, res) => {
     await memoryStore.load()
     res.json({
@@ -339,9 +310,5 @@ export function registerKnowledgeRoutes(app: RouteApp): void {
     }, config)
     res.json({ ok: true, result: { groupId: groupId || "preview", text, dryRun: true }, status: initiativeGreetingScheduler.stats() })
   }, { errorStatus: 400 }))
-  app.post("/api/knowledge/rescan", auth, handleRoute(async (_req, res) => {
-    const commands = await commandObserver.scan()
-    const sync = await knowledgeStore.syncBuiltinCommands(commandObserver.searchableCommands())
-    res.json({ ok: true, commands: commands.length, sync, scan: commandObserver.scanStatus(), stats: commandObserver.stats() })
-  }, { errorStatus: 400 }))
+
 }

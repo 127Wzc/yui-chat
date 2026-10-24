@@ -50,9 +50,8 @@ async function boot(): Promise<void> {
   await toolRegistry.init()
   await filterRegistry.init()
   if (sqliteStatus.available) installationInstaller.start()
-  // 指令来源只由管理台的“重新扫描”显式同步。启动时保留已有知识投影，
-  // 避免重启、运行时加载顺序或第三方临时规则意外触发向量重建。
-  await commandObserver.init({ scanOnReady: false })
+  // 启动只加载导入后的知识目录，不扫描源码或调用内容补全模型。
+  await commandObserver.init()
   await groupCaptureStore.init()
   commandObserver.registerAfterHandler(e => { groupCaptureStore.record(e) })
   registerFirstPersonListener()

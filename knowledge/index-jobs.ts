@@ -1,3 +1,5 @@
+import { redactErrorText } from "../core/shared/error-details.js"
+import { embeddingIdentity } from "./embedding-identity.js"
 import crypto from "node:crypto"
 import { configStore } from "../config/store.js"
 import { modelLogStore } from "../core/observability/model-log.js"
@@ -29,6 +31,15 @@ export interface KnowledgeIndexJobOptions {
   immediate?: boolean
   start?: boolean
   deferIfActive?: boolean
+}
+
+export interface KnowledgeIndexInspection {
+  knowledgeBaseId: string
+  state: "ready" | "missing" | "incompatible" | "not_configured" | "unavailable" | "changed"
+  total: number
+  indexed: number
+  missing: number
+  checkedAt: number
 }
 
 type QueueOptions = KnowledgeIndexJobOptions
@@ -100,20 +111,22 @@ function vectorUnavailableError(detail: unknown = ""): Error & { code: string; s
   error.statusCode = 400
   return error
 }
-// 知识库 staging 空间的 scope_key 固定为 "<baseId>:<jobId>:<attempt>"；
+// 知识库 staging 空间保留 base/job/attempt，新增配置指纹；兼容旧空间的孤儿回收。
 // 记忆召回（memory-items）等其他归属不含这个形状，孤儿回收据此绝不越界。
 function knowledgeScopeSegments(scopeKey: unknown = ""): string[] | null {
   const segments = text(scopeKey).split(":")
-  return segments.length === 3 && segments.every(Boolean) && /^\d+$/.test(segments[2]) ? segments : null
+  return (segments.length === 3 || (segments.length === 4 && /^fp-[a-f0-9]{24}$/.test(segments[3]))) && segments.every(Boolean) && /^\d+$/.test(segments[2]) ? segments : null
 }
 
 export class KnowledgeIndexJobs {
   timer: ReturnType<typeof setInterval> | null = null
   queueLocks = new Map<string, Promise<void>>()
   executingJobIds = new Set<string>()
+  processingDocuments = false
 
   start(): void {
     if (this.timer) return
+    this.scheduleAvailable()
     this.cleanupExpired().catch(error => hostRuntime.logger?.warn?.("[yui-chat] 清理过期索引任务失败", error))
     this.timer = setInterval(() => this.runAvailable().catch(error => hostRuntime.logger?.warn?.("[yui-chat] 执行索引任务失败", error)), 60 * 1000)
     this.timer.unref?.()
@@ -143,6 +156,47 @@ export class KnowledgeIndexJobs {
       release()
       if (this.queueLocks.get(key) === current) this.queueLocks.delete(key)
     }
+  }
+
+  /** 只读检查所有已保存分块，不受屏蔽开关影响，不触发分片或模型请求。 */
+  async inspect(knowledgeBaseId: unknown): Promise<KnowledgeIndexInspection> {
+    const base = await sqliteClient.get<UnknownRecord>("SELECT * FROM knowledge_bases WHERE id=?", [knowledgeBaseId])
+    if (!base) throw new Error("知识库不存在")
+    const count = await sqliteClient.get("SELECT COUNT(*) AS total FROM knowledge_chunks WHERE knowledge_base_id=?", [knowledgeBaseId])
+    const result: KnowledgeIndexInspection = { knowledgeBaseId: text(knowledgeBaseId), state: "missing", total: Number(count?.total || 0), indexed: 0, missing: Number(count?.total || 0), checkedAt: Date.now() }
+    if (!base.embedding_model_name || !Number(base.embedding_dimensions)) return { ...result, state: "not_configured" }
+    if (!sqliteClient.status.vector?.available) return { ...result, state: "unavailable" }
+    const fingerprint = embeddingIdentity(base.embedding_model_name)
+    const space = await vectorIndex.getSpace(base.active_vector_space_id)
+    if (space && (!vectorSpaceMatches(space, { modelName: base.embedding_model_name, dimensions: base.embedding_dimensions, distanceMetric: base.distance_metric }) || !space.scopeKey.endsWith(`:fp-${fingerprint}`))) return { ...result, state: "incompatible" }
+    let documentId = "", ordinal = -1
+    if (space) {
+      while (true) {
+        const chunks = await sqliteClient.all<ChunkRow>(
+          "SELECT id, document_id, ordinal, content_hash FROM knowledge_chunks WHERE knowledge_base_id=? AND (document_id>? OR (document_id=? AND ordinal>?)) ORDER BY document_id, ordinal LIMIT 400",
+          [knowledgeBaseId, documentId, documentId, ordinal],
+        )
+        if (!chunks.length) break
+        const hashes = await vectorIndex.indexedContentHashes(space, "knowledge_chunk", chunks.map(chunk => text(chunk.id)))
+        result.indexed += chunks.filter(chunk => hashes.get(text(chunk.id)) === text(chunk.content_hash)).length
+        documentId = text(chunks.at(-1)?.document_id); ordinal = Number(chunks.at(-1)?.ordinal)
+      }
+    }
+    const current = await sqliteClient.get("SELECT updated_at FROM knowledge_bases WHERE id=?", [knowledgeBaseId])
+    if (!current || current.updated_at !== base.updated_at || fingerprint !== embeddingIdentity(base.embedding_model_name)) return { ...result, indexed: 0, state: "changed" }
+    result.missing = Math.max(0, result.total - result.indexed)
+    result.state = result.missing ? "missing" : "ready"
+    return result
+  }
+
+  async repair(knowledgeBaseId: unknown, options: QueueOptions = {}): Promise<UnknownRecord> {
+    const inspection = await this.inspect(knowledgeBaseId)
+    if (inspection.state === "not_configured") return { status: "fts_ready", inspection }
+    if (inspection.state === "unavailable") throw vectorUnavailableError(sqliteClient.status.vector?.error)
+    if (inspection.state === "changed") throw new Error("检查期间知识库或模型配置发生变化，请重新检查")
+    if (!inspection.missing) return { status: "ready", inspection }
+    // 仍走既有 staging/发布流程，兼容向量直接复制，只为缺失或摘要不一致的分块调用模型。
+    return { ...await this.queue(knowledgeBaseId, options), inspection }
   }
 
   async queue(knowledgeBaseId: unknown, options: QueueOptions = {}): Promise<UnknownRecord | null> {
@@ -217,10 +271,73 @@ export class KnowledgeIndexJobs {
   }
 
   async runAvailable(): Promise<Array<UnknownRecord | null>> {
+    await this.runPendingDocuments()
     await this.cleanupExpired()
     const config = record(configStore.get())
     const concurrency = Math.max(1, Math.min(16, numberValue(record(record(config.knowledge).indexing).concurrency, 2) || 2))
     return Promise.all(Array.from({ length: concurrency }, () => this.runNext()))
+  }
+
+  /** Merge changed chunks from nearby documents into model batches, without rebuilding a space. */
+  async runPendingDocuments(): Promise<void> {
+    if (this.processingDocuments || !sqliteClient.status.vector?.available) return
+    this.processingDocuments = true
+    try {
+      const tasks = await sqliteClient.all<UnknownRecord>("SELECT * FROM knowledge_vector_tasks WHERE attempts<3 AND retry_at<=? ORDER BY CASE WHEN kind='delete' THEN 0 ELSE 1 END,updated_at LIMIT 50", [Date.now()])
+      const groups = new Map<string, { space: VectorSpace; model: string; dimensions: number; fingerprint: string; items: Array<{ task: UnknownRecord; chunk: ChunkRow }> }>()
+      let completed = 0
+      const finish = async (task: UnknownRecord): Promise<void> => {
+        await sqliteClient.run("DELETE FROM knowledge_vector_tasks WHERE kind=? AND owner_id=? AND updated_at=? AND content_hash=?", [task.kind, task.owner_id, task.updated_at, task.content_hash])
+        completed++
+      }
+      const fail = async (task: UnknownRecord, error: unknown): Promise<void> => {
+        await sqliteClient.run("UPDATE knowledge_vector_tasks SET attempts=attempts+1,retry_at=?,error=? WHERE kind=? AND owner_id=? AND updated_at=?", [Date.now() + 60000, redactErrorText(message(error), 300), task.kind, task.owner_id, task.updated_at])
+        hostRuntime.logger?.warn?.("[yui-chat] 增量知识向量更新失败，正文保留，等待重试", redactErrorText(message(error)))
+      }
+      for (const task of tasks) {
+        try {
+          if (await sqliteClient.get("SELECT id FROM knowledge_index_jobs WHERE knowledge_base_id=? AND status IN ('running','canceling')", [task.knowledge_base_id])) continue
+          if (task.kind === "delete") {
+            if (!await sqliteClient.get("SELECT id FROM knowledge_chunks WHERE id=?", [task.owner_id])) await vectorIndex.deleteOwners("knowledge_chunk", [task.owner_id])
+            await finish(task); continue
+          }
+          const base = await sqliteClient.get<UnknownRecord>("SELECT * FROM knowledge_bases WHERE id=?", [task.knowledge_base_id])
+          if (!base?.embedding_model_name || !Number(base.embedding_dimensions)) continue
+          const document = await sqliteClient.get<UnknownRecord>("SELECT content_hash FROM knowledge_documents WHERE id=? AND knowledge_base_id=?", [task.owner_id, task.knowledge_base_id])
+          if (!document || document.content_hash !== task.content_hash) { await finish(task); continue }
+          const fingerprint = embeddingIdentity(base.embedding_model_name), dimensions = Number(base.embedding_dimensions)
+          let space = await vectorIndex.getSpace(base.active_vector_space_id)
+          if (!space) {
+            space = await vectorIndex.ensureSpace({ modelName: base.embedding_model_name, dimensions, distanceMetric: "cosine", scopeKey: `${task.knowledge_base_id}:incremental:fp-${fingerprint}` })
+            if (!space) continue
+            await sqliteClient.run("UPDATE knowledge_bases SET active_vector_space_id=? WHERE id=? AND active_vector_space_id IS NULL AND updated_at=?", [space.id, task.knowledge_base_id, base.updated_at])
+            if ((await sqliteClient.get("SELECT active_vector_space_id FROM knowledge_bases WHERE id=?", [task.knowledge_base_id]))?.active_vector_space_id !== space.id) continue
+          }
+          if (!vectorSpaceMatches(space, { modelName: base.embedding_model_name, dimensions, distanceMetric: "cosine" }) || !space.scopeKey.endsWith(`:fp-${fingerprint}`)) continue
+          const chunks = await sqliteClient.all<ChunkRow>("SELECT id,content,content_hash FROM knowledge_chunks WHERE document_id=? ORDER BY ordinal", [task.owner_id])
+          const indexed = await vectorIndex.indexedContentHashes(space, "knowledge_chunk", chunks.map(chunk => text(chunk.id)))
+          const pending = chunks.filter(chunk => indexed.get(text(chunk.id)) !== chunk.content_hash)
+          if (!pending.length) { await finish(task); continue }
+          const group = groups.get(space.id) || { space, model: text(base.embedding_model_name), dimensions, fingerprint, items: [] }
+          group.items.push(...pending.map(chunk => ({ task, chunk }))); groups.set(space.id, group)
+        } catch (error) { await fail(task, error) }
+      }
+      for (const group of groups.values()) {
+        const byDocument = new Map<string, Array<{ task: UnknownRecord; chunk: ChunkRow; index: number }>>()
+        group.items.forEach((item, index) => { const id = text(item.task.owner_id); const values = byDocument.get(id) || []; values.push({ ...item, index }); byDocument.set(id, values) })
+        try {
+          const embedded = await embeddingRunner.embedTexts({ modelName: group.model, texts: group.items.map(item => text(item.chunk.content)), dimensions: group.dimensions, purpose: "embedding_knowledge", source: "knowledge-document-update", taskName: "knowledge-vector-update" })
+          for (const [id, items] of byDocument) {
+            const task = items[0].task
+            const latest = await sqliteClient.get("SELECT d.content_hash,b.active_vector_space_id FROM knowledge_documents d JOIN knowledge_bases b ON b.id=d.knowledge_base_id WHERE d.id=?", [id])
+            if (latest?.content_hash !== task.content_hash || latest?.active_vector_space_id !== group.space.id || group.fingerprint !== embeddingIdentity(group.model)) continue
+            await vectorIndex.upsertBatch(group.space, items.map(item => ({ ownerType: "knowledge_chunk", ownerId: text(item.chunk.id), contentHash: text(item.chunk.content_hash), vector: embedded.vectors[item.index] })))
+            await finish(task)
+          }
+        } catch (error) { for (const items of byDocument.values()) await fail(items[0].task, error) }
+      }
+      if (tasks.length === 50 && completed) this.scheduleAvailable()
+    } finally { this.processingDocuments = false }
   }
 
   async assertStillRunning(jobId: unknown): Promise<void> {
@@ -266,7 +383,7 @@ export class KnowledgeIndexJobs {
     }
     try {
       await writeProgress({ phase: "preparing", processed: 0, total: 0, percent: 0, message: "准备读取知识分块", error: "" })
-      const base = await sqliteClient.get<UnknownRecord>("SELECT id, embedding_model_name, embedding_dimensions, distance_metric, chunk_strategy_json, active_vector_space_id FROM knowledge_bases WHERE id=?", [job.knowledge_base_id])
+      const base = await sqliteClient.get<UnknownRecord>("SELECT id, embedding_model_name, embedding_dimensions, distance_metric, chunk_strategy_json, active_vector_space_id, updated_at FROM knowledge_bases WHERE id=?", [job.knowledge_base_id])
       if (!base) {
         await sqliteClient.run("UPDATE knowledge_index_jobs SET status='canceled', lease_until=0, error='知识库已删除', updated_at=? WHERE id=?", [Date.now(), job.id])
         return { id: job.id, status: "canceled" }
@@ -288,6 +405,7 @@ export class KnowledgeIndexJobs {
       }
       const totalRow = await sqliteClient.get("SELECT COUNT(*) AS count FROM knowledge_chunks WHERE knowledge_base_id=?", [job.knowledge_base_id])
       const total = Number(totalRow?.count || 0)
+      const fingerprint = embeddingIdentity(job.model_name)
       const dimensions = Number(job.dimensions)
       const activeSpaceId = String(base.active_vector_space_id || "")
       // 预算/无模型暂停和重试恢复时，若模型、维度、度量与分块策略都没变就复用原 staging 空间续传，
@@ -296,9 +414,10 @@ export class KnowledgeIndexJobs {
       const reusable = Boolean(previousStaging)
         && previousStaging !== null
         && previousStaging.id !== activeSpaceId
+        && previousStaging.scopeKey.endsWith(`:fp-${fingerprint}`)
         && vectorSpaceMatches(previousStaging, { modelName: job.model_name, dimensions, distanceMetric: job.distance_metric || "cosine" })
         && String(job.chunk_strategy_json || "{}") === String(base.chunk_strategy_json || "{}")
-      const scopeKey = reusable && previousStaging ? previousStaging.scopeKey : `${job.knowledge_base_id}:${job.id}:${job.attempts}`
+      const scopeKey = reusable && previousStaging ? previousStaging.scopeKey : `${job.knowledge_base_id}:${job.id}:${job.attempts}:fp-${fingerprint}`
       const stagingSpaceId = reusable && previousStaging ? previousStaging.id : vectorIndex.spaceIdFor({ modelName: job.model_name, dimensions, distanceMetric: job.distance_metric || "cosine", scopeKey })
       // 任务行先指向目标空间、之后才创建空间（引用先于存在）。孤儿回收按“先快照空间清单、
       // 再收集引用”的顺序扫描，因此任何已存在的空间要么已被引用、要么真是孤儿，无需与执行器加锁。
@@ -314,7 +433,10 @@ export class KnowledgeIndexJobs {
       const model = (Array.isArray(config.models) ? config.models : []).find(item => text(record(item).name) === text(job.model_name))
       const modelEmbedding = record(record(model).embedding)
       const batchSize = Math.max(1, Math.min(512, numberValue(modelEmbedding.batchSize || record(record(config.knowledge).indexing).batchSize, 32) || 32))
-      const trace = total ? modelLogStore.createTrace({ source: "knowledge-index-rebuild", purpose: "embedding_knowledge", metadata: { knowledgeBaseId: job.knowledge_base_id, indexJobId: job.id, totalChunks: total } }) : null
+      let trace: ReturnType<typeof modelLogStore.createTrace> | null = null
+      const activeSpace = activeSpaceId ? await vectorIndex.getSpace(activeSpaceId) : null
+      const reusableActive = activeSpace?.scopeKey.endsWith(`:fp-${fingerprint}`) ? activeSpace : null
+      let copied = 0
       let processed = 0
       let cursorDocumentId = ""
       let cursorOrdinal = -1
@@ -328,15 +450,12 @@ export class KnowledgeIndexJobs {
             [job.knowledge_base_id, cursorDocumentId, cursorDocumentId, cursorOrdinal, batchSize],
           )
           if (!batch.length) break
+          copied += await vectorIndex.copyMatching(reusableActive, stagingSpace, batch)
           // 续传复用空间时按 content_hash 跳过已写入的分块，只为缺失/变更分块消耗 embedding 预算。
-          const writtenRows = await sqliteClient.all<UnknownRecord>(
-            `SELECT owner_id, content_hash FROM embedding_records WHERE space_id=? AND owner_type='knowledge_chunk' AND owner_id IN (${batch.map(() => "?").join(",")})`,
-            [stagingSpace.id, ...batch.map(chunk => String(chunk.id))],
-            "vectors",
-          )
-          const writtenHashes = new Map(writtenRows.map(row => [String(row.owner_id), String(row.content_hash)]))
+          const writtenHashes = await vectorIndex.indexedContentHashes(stagingSpace, "knowledge_chunk", batch.map(chunk => text(chunk.id)))
           const pending = batch.filter(chunk => writtenHashes.get(String(chunk.id)) !== String(chunk.content_hash))
           if (pending.length) {
+            trace ||= modelLogStore.createTrace({ source: "knowledge-index-rebuild", purpose: "embedding_knowledge", metadata: { knowledgeBaseId: job.knowledge_base_id, indexJobId: job.id, totalChunks: total } })
             const embedded = await embeddingRunner.embedTexts({
               modelName: text(job.model_name), texts: pending.map(chunk => text(chunk.content)), dimensions,
               purpose: "embedding_knowledge", source: "knowledge-index-rebuild", taskName: "knowledge-vector-rebuild", trace,
@@ -358,10 +477,12 @@ export class KnowledgeIndexJobs {
         throw error
       }
       await this.assertStillRunning(job.id)
+      if (fingerprint !== embeddingIdentity(job.model_name)) throw new Error("向量模型配置在重建期间变化，请重试")
+      await writeProgress({ reusedChunks: copied, embeddingFingerprint: fingerprint })
       const previousSpaceId = String(base.active_vector_space_id || "")
       const timestamp = Date.now()
       const publish = await sqliteClient.transaction([
-        { sql: "UPDATE knowledge_bases SET active_vector_space_id=?, updated_at=? WHERE id=? AND embedding_model_name=? AND embedding_dimensions=? AND distance_metric=? AND EXISTS (SELECT 1 FROM knowledge_index_jobs WHERE id=? AND status='running')", params: [stagingSpace.id, timestamp, job.knowledge_base_id, job.model_name, dimensions, job.distance_metric || "cosine", job.id] },
+        { sql: "UPDATE knowledge_bases SET active_vector_space_id=?, updated_at=MAX(updated_at+1, ?) WHERE id=? AND embedding_model_name=? AND embedding_dimensions=? AND distance_metric=? AND updated_at=? AND EXISTS (SELECT 1 FROM knowledge_index_jobs WHERE id=? AND status='running')", params: [stagingSpace.id, timestamp, job.knowledge_base_id, job.model_name, dimensions, job.distance_metric || "cosine", base.updated_at, job.id] },
         { sql: "UPDATE knowledge_index_jobs SET status='completed', lease_until=0, error='', completed_at=?, updated_at=? WHERE id=? AND status='running' AND EXISTS (SELECT 1 FROM knowledge_bases WHERE id=? AND active_vector_space_id=?)", params: [timestamp, timestamp, job.id, job.knowledge_base_id, stagingSpace.id] },
         { sql: "UPDATE knowledge_index_jobs SET status='canceled', lease_until=0, error='', completed_at=?, updated_at=? WHERE id=? AND status='canceling'", params: [timestamp, timestamp, job.id] },
         { sql: "UPDATE knowledge_index_jobs SET status='superseded', lease_until=0, error='重建期间向量配置已变更', completed_at=?, updated_at=? WHERE id=? AND status='running'", params: [timestamp, timestamp, job.id] },
@@ -371,8 +492,11 @@ export class KnowledgeIndexJobs {
         // 未能发布即被取消/顶替，staging 已无用途；删除失败时空间仍被任务行引用，随任务删除或过期清理回收。
         await vectorIndex.deleteSpace(stagingSpace.id).catch(error => hostRuntime.logger?.warn?.("[yui-chat] 清理未发布的 staging 向量空间失败", error))
         stagingSpace = null
-        return { id: job.id, status: numberValue(record(publish?.[2]).changes, 0) > 0 ? "canceled" : "superseded", chunks: processed }
+        const canceled = numberValue(record(publish?.[2]).changes, 0) > 0
+        if (!canceled) this.scheduleReplacement(job.knowledge_base_id)
+        return { id: job.id, status: canceled ? "canceled" : "superseded", chunks: processed }
       }
+      await sqliteClient.run("DELETE FROM knowledge_vector_tasks WHERE kind='document' AND knowledge_base_id=? AND EXISTS (SELECT 1 FROM knowledge_documents d WHERE d.id=knowledge_vector_tasks.owner_id AND d.content_hash=knowledge_vector_tasks.content_hash)", [job.knowledge_base_id])
       return await this.finishPublished({ job, stagingSpace, previousSpaceId, total: processed, writeProgress })
     } catch (error) {
       const currentProgress = progress(job.progress_json)

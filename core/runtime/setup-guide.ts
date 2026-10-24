@@ -209,14 +209,14 @@ export async function buildSetupGuide(config: RuntimeConfigObject = configStore.
         : (knowledge.commands > 0 ? "ready" : "warn"),
       knowledgeConfig.enabled === false
         ? "知识库未开启，AI 暂不能检索指令帮助。"
-        : `已索引 ${knowledge.commands || 0} 条指令，动态触发记录 ${knowledge.events || 0} 条。`,
+        : `已索引 ${knowledge.commands || 0} 条指令，由导入文档统一维护。`,
       { label: "查看知识库", tab: "knowledge" },
       {
-        recommendation: "保持指令知识库开启并先执行一次重新扫描，AI 才能准确推荐机器人命令。",
+        recommendation: "先用采集脚本导出元数据，在外部整理后导入指令知识库，再测试检索效果。",
         defaults: {
           知识库: "开启",
           指令前缀: "# / *",
-          首次操作: "重新扫描指令",
+          首次操作: "采集、整理并导入知识文档",
         },
       },
     ),

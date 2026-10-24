@@ -179,6 +179,11 @@ flowchart LR
 | state | `knowledge_chunks` | 文档分块 | 文档/知识库复合外键、序号、正文、哈希 |
 | state | `knowledge_fts` | 知识分块 FTS5 投影 | `chunk_id`, `knowledge_base_id`, 标题、正文 |
 | state | `knowledge_index_jobs` | 向量重建任务与进度 | `vector_space_id`, 状态、尝试、`progress_json` |
+| state | `knowledge_command_disabled` | 指令知识本地启停状态 | 来源、插件/指令类型、目标标识；独立于正文与向量 |
+| state | `knowledge_vector_tasks` | 文档增量向量与旧块清理待办 | 文档/分块 ID、内容摘要、重试次数与错误 |
+| state | `knowledge_document_history` | 指令文档旧版本 | 永久来源键、完整快照、操作和时间；当前存在时保留两版 |
+| state | `knowledge_import_runs` | 导入及手动维护批次 | 来源、时间、新增/修改/删除/跳过数量 |
+| state | `knowledge_import_changes` | 批次内的逐条变化 | 批次外键、永久 ID、操作、前后摘要 |
 | state | `capability_rules` | 工具/能力授权规则 | 主体、资源、allow/deny |
 | state | `knowledge_grants` | 知识库授权规则 | 知识库、主体、群域、allow/deny |
 | state | `ai_runs` | 一轮模型工作的汇总 | `session_id`, `conversation_key`, `parent_run_id`, 来源、用途、作用域、用量、成本、状态 |

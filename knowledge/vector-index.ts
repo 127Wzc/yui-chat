@@ -2,7 +2,7 @@ import crypto from "node:crypto"
 import { sqliteClient } from "../core/storage/sqlite/client.js"
 
 type UnknownRecord = Record<string, unknown>
-type DistanceMetric = "cosine" | "l2" | "l1"
+type DistanceMetric = "cosine"
 
 export interface VectorSpace {
   id: string
@@ -39,8 +39,8 @@ function normalizeDimensions(value: unknown): number {
 }
 export function normalizeDistanceMetric(value: unknown = "cosine"): DistanceMetric {
   const metric = String(value || "cosine").trim().toLowerCase()
-  if (!["cosine", "l2", "l1"].includes(metric)) throw new Error("向量距离算法无效，仅支持 cosine、l2、l1")
-  return metric as DistanceMetric
+  if (metric !== "cosine") throw new Error("向量检索统一使用 cosine，不支持其他距离算法")
+  return "cosine"
 }
 export function vectorSpaceMatches(space: unknown, { modelName, dimensions, distanceMetric = "cosine" }: { modelName?: unknown; dimensions?: unknown; distanceMetric?: unknown } = {}): boolean {
   if (!space) return false
@@ -87,6 +87,9 @@ export class VectorIndex {
   async getSpace(spaceIdValue: unknown): Promise<VectorSpace | null> {
     if (!sqliteClient.status.vector?.available || !spaceIdValue) return null
     const row = await sqliteClient.get("SELECT * FROM embedding_spaces WHERE id=?", [spaceIdValue], "vectors")
+    // 旧度量空间只能回收，不能伪装成 cosine 空间继续查询或复制。
+    if (row && row.distance_metric !== "cosine") return null
+    if (row && !await sqliteClient.get("SELECT 1 AS present FROM sqlite_master WHERE type='table' AND name=?", [safeTable(row.id)], "vectors")) return null
     return row ? {
       id: String(row.id || ""),
       table: safeTable(row.id),
@@ -103,6 +106,7 @@ export class VectorIndex {
 
   async upsertBatch(space: VectorSpace | null, items: unknown[] = []): Promise<number> {
     if (!space || !sqliteClient.status.vector?.available) return 0
+    normalizeDistanceMetric(space.distanceMetric)
     const records = items.filter((item): item is VectorItem => {
       const value = record(item)
       return Boolean(value.ownerType && value.ownerId && Array.isArray(value.vector))
@@ -150,10 +154,66 @@ export class VectorIndex {
     return written
   }
 
-  async search(space: VectorSpace | null, vector: readonly number[], limit = 30): Promise<VectorMatch[]> {
+  /** 只认可元数据和 vec0 中实际向量同时存在的条目，用于状态检查与断点续传。 */
+  async indexedContentHashes(space: VectorSpace | null, ownerType: string, ownerIds: string[]): Promise<Map<string, string>> {
+    const hashes = new Map<string, string>()
+    if (!space || !sqliteClient.status.vector?.available) return hashes
+    for (let offset = 0; offset < ownerIds.length; offset += 400) {
+      const batch = ownerIds.slice(offset, offset + 400)
+      const rows = await sqliteClient.all(
+        `SELECT r.owner_id, r.content_hash FROM embedding_records r JOIN ${space.table} v ON v.record_id=r.id
+         WHERE r.space_id=? AND r.owner_type=? AND r.owner_id IN (${batch.map(() => "?").join(",")})`,
+        [space.id, ownerType, ...batch], "vectors",
+      )
+      for (const row of rows) hashes.set(String(row.owner_id), String(row.content_hash))
+    }
+    return hashes
+  }
+
+  /** 从相同模型空间按内容摘要复制真实向量；新 chunk ID 也可复用。 */
+  async copyMatching(source: VectorSpace | null, target: VectorSpace, chunks: Array<{ id?: unknown; content_hash?: unknown }>): Promise<number> {
+    if (!source || source.id === target.id || !vectorSpaceMatches(source, target) || !chunks.length) return 0
+    const hashes = [...new Set(chunks.map(item => String(item.content_hash || "")))]
+    const rows = await sqliteClient.all<UnknownRecord>(
+      `SELECT r.content_hash, vec_to_json(v.embedding) AS vector FROM embedding_records r JOIN ${source.table} v ON v.record_id=r.id WHERE r.space_id=? AND r.owner_type='knowledge_chunk' AND r.content_hash IN (${hashes.map(() => "?").join(",")})`,
+      [source.id, ...hashes], "vectors",
+    )
+    const byHash = new Map(rows.map(row => [String(row.content_hash), String(row.vector)]))
+    const items = chunks.filter(item => byHash.has(String(item.content_hash))).map(item => ({ ownerType: "knowledge_chunk", ownerId: String(item.id), contentHash: String(item.content_hash), vector: JSON.parse(byHash.get(String(item.content_hash))!) as number[] }))
+    return this.upsertBatch(target, items)
+  }
+
+  async search(space: VectorSpace | null, vector: readonly number[], limit = 30, filter?: { ownerType: string; ownerIds: string[] }): Promise<VectorMatch[]> {
     if (!space || !sqliteClient.status.vector?.available) return []
     const resultLimit = Math.max(1, Math.min(1000, Number(limit) || 30))
     normalizeDistanceMetric(space.distanceMetric)
+    if (filter) {
+      // 每批先解析允许的 rowid，再由 vec0 在该集合内取近邻；空集合绝不退回全局搜索。
+      // 各批 top-k 的并集包含全体 top-k，分批只限制 SQL 参数量，不截断召回范围。
+      const ownerIds = [...new Set(filter.ownerIds)]
+      const matches: VectorMatch[] = []
+      for (let offset = 0; offset < ownerIds.length; offset += 400) {
+        const batch = ownerIds.slice(offset, offset + 400)
+        const rows = await sqliteClient.all(
+          `SELECT record_id, distance FROM ${space.table} WHERE embedding MATCH ? AND k=? AND rowid IN (
+            SELECT v.rowid FROM ${space.table} v JOIN embedding_records r ON r.id=v.record_id
+            WHERE r.space_id=? AND r.owner_type=? AND r.owner_id IN (${batch.map(() => "?").join(",")})
+          )`, [JSON.stringify(vector), resultLimit, space.id, filter.ownerType, ...batch], "vectors",
+        )
+        const ids = rows.map(row => String(row.record_id))
+        if (!ids.length) continue
+        const records = await sqliteClient.all(`SELECT id, owner_id FROM embedding_records WHERE space_id=? AND owner_type=? AND id IN (${ids.map(() => "?").join(",")})`, [space.id, filter.ownerType, ...ids], "vectors")
+        const byId = new Map(records.map(row => [String(row.id), String(row.owner_id)]))
+        for (const row of rows) {
+          const id = String(row.record_id)
+          const ownerId = byId.get(id)
+          if (ownerId) matches.push({ id, ownerType: filter.ownerType, ownerId, distance: Number(row.distance) })
+        }
+        matches.sort((a, b) => a.distance - b.distance || a.ownerId.localeCompare(b.ownerId))
+        matches.length = Math.min(matches.length, resultLimit)
+      }
+      return matches
+    }
     const rows = await sqliteClient.all(`SELECT record_id, distance FROM ${space.table} WHERE embedding MATCH ? AND k = ?`, [JSON.stringify(vector), resultLimit], "vectors")
     if (!rows.length) return []
     const ids = rows.map(row => String(row.record_id || ""))

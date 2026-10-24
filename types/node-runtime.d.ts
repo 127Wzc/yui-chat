@@ -7,7 +7,7 @@ declare module "node:path" {
     isAbsolute: (file: string) => boolean
     basename: (file: string, suffix?: string) => string
     extname: (file: string) => string
-    posix: { join: (...parts: string[]) => string }
+    posix: { join: (...parts: string[]) => string; dirname: (file: string) => string; normalize: (file: string) => string }
   }
   export default path
 }
@@ -15,7 +15,7 @@ declare module "node:path" {
 declare module "node:fs/promises" {
   interface FileHandle {
     stat(): Promise<FileStat>
-    read(buffer: Uint8Array, offset?: number, length?: number, position?: number): Promise<unknown>
+    read(buffer: Uint8Array, offset?: number, length?: number, position?: number): Promise<{ bytesRead: number; buffer: Uint8Array }>
     sync(): Promise<void>
     writeFile(contents: string, encoding?: string): Promise<void>
     close(): Promise<void>
@@ -39,7 +39,7 @@ declare module "node:fs/promises" {
   }
 
   const fs: {
-    open(path: string, flags: string, mode?: number): Promise<FileHandle>
+    open(path: string, flags: string | number, mode?: number): Promise<FileHandle>
     mkdir(path: string, options?: { recursive?: boolean; mode?: number }): Promise<void>
     stat(path: string): Promise<FileStat>
     lstat(path: string): Promise<FileStat>

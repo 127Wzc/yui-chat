@@ -1,7 +1,9 @@
 import crypto from "node:crypto"
+import { chunkStrategyHash } from "./chunking.js"
 import { sqliteClient } from "../core/storage/sqlite/client.js"
 import type { SqliteOperation } from "../core/storage/types.js"
-import { vectorIndex } from "./vector-index.js"
+import { normalizeDistanceMetric, vectorIndex } from "./vector-index.js"
+import { DEFAULT_COMMAND_FIELD_DESCRIPTION, normalizeFieldDescription } from "./field-description.js"
 
 type UnknownRecord = Record<string, unknown>
 
@@ -79,6 +81,7 @@ export class KnowledgeRepository {
   async listBases(ids: unknown[] | null = null): Promise<KnowledgeBase[]> {
     if (!sqliteClient.status.available) return []
     const normalizedIds = Array.isArray(ids) ? ids.map(String).filter(Boolean) : []
+    if (Array.isArray(ids) && !normalizedIds.length) return []
     const filter = normalizedIds.length
       ? { sql: ` WHERE b.id IN (${normalizedIds.map(() => "?").join(",")})`, params: normalizedIds }
       : { sql: "", params: [] }
@@ -103,7 +106,7 @@ export class KnowledgeRepository {
         built_in: row.id === "builtin-commands" ? 1 : 0,
         default_active: retrieval.defaultActive ? 1 : 0,
         auto_retrieve: retrieval.autoRetrieve ? 1 : 0,
-        config: { embeddingModel: row.embedding_model_name, dimensions: row.embedding_dimensions, distanceMetric: row.distance_metric, chunking, triggerWords: Array.isArray(retrieval.triggerWords) ? retrieval.triggerWords : [], ...retrieval },
+        config: { embeddingModel: row.embedding_model_name, dimensions: row.embedding_dimensions, distanceMetric: row.distance_metric, chunking, triggerWords: Array.isArray(retrieval.triggerWords) ? retrieval.triggerWords : [], fieldDescription: row.id === "builtin-commands" ? DEFAULT_COMMAND_FIELD_DESCRIPTION : "", ...retrieval },
         tags: Array.isArray(retrieval.tags) ? retrieval.tags : [],
         stats: { documents: Number(row.document_count || 0), chunks: Number(row.chunk_count || 0), characters: Number(row.character_count || 0) },
         index: { status: row.index_status || (row.embedding_model_name ? "not_built" : "fts_ready"), error: row.index_error || "", updatedAt: Number(row.index_updated_at || 0) },
@@ -131,20 +134,28 @@ export class KnowledgeRepository {
     }
     const retrieval = {
       ...item.config,
+      fieldDescription: normalizeFieldDescription(item.config.fieldDescription === undefined ? (baseId === "builtin-commands" ? DEFAULT_COMMAND_FIELD_DESCRIPTION : "") : item.config.fieldDescription),
       type: item.type,
       defaultActive: item.defaultActive,
       autoRetrieve: item.autoRetrieve,
       triggerWords: item.triggerWords,
       tags: item.tags,
+      distanceMetric: normalizeDistanceMetric(item.config.distanceMetric),
     }
+    // 字段说明不是索引输入；仅修改它时保留发布守卫使用的版本时间。
+    const fieldDescriptionOnly = current && item.name === current.name && item.description === current.description
+      && item.protected === Boolean(current.protected)
+      && Object.keys({ ...current.config, ...retrieval }).every(key => key === "fieldDescription"
+        || JSON.stringify(current.config?.[key]) === JSON.stringify(retrieval[key as keyof typeof retrieval]))
     await sqliteClient.run(
       `INSERT INTO knowledge_bases(id, name, description, embedding_model_name, embedding_dimensions, distance_metric, chunk_strategy_json, retrieval_json, protected, created_at, updated_at)
        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET name=excluded.name, description=excluded.description,
          embedding_model_name=excluded.embedding_model_name, embedding_dimensions=excluded.embedding_dimensions,
          distance_metric=excluded.distance_metric, chunk_strategy_json=excluded.chunk_strategy_json,
-         retrieval_json=excluded.retrieval_json, protected=excluded.protected, updated_at=excluded.updated_at`,
-      [item.id, item.name, item.description, String(item.config.embeddingModel || ""), Number(item.config.dimensions || 0), String(item.config.distanceMetric || "cosine"), JSON.stringify(item.config.chunking || {}), JSON.stringify(retrieval), item.protected ? 1 : 0, timestamp, timestamp],
+         retrieval_json=excluded.retrieval_json, protected=excluded.protected,
+         updated_at=CASE WHEN ? THEN knowledge_bases.updated_at ELSE MAX(knowledge_bases.updated_at+1, excluded.updated_at) END`,
+      [item.id, item.name, item.description, String(item.config.embeddingModel || ""), Number(item.config.dimensions || 0), retrieval.distanceMetric, JSON.stringify(item.config.chunking || {}), JSON.stringify(retrieval), item.protected ? 1 : 0, timestamp, timestamp, fieldDescriptionOnly ? 1 : 0],
     )
     return this.getBase(baseId)
   }
@@ -157,7 +168,7 @@ export class KnowledgeRepository {
       querySql = " AND (d.title LIKE ? OR d.content LIKE ?)"
       params.push(`%${cleanQuery}%`, `%${cleanQuery}%`)
     }
-    params.push(Math.max(1, Math.min(500, Number(limit) || 200)))
+    params.push(Math.max(1, Math.min(baseId === "builtin-commands" ? 10000 : 500, Number(limit) || 200)))
     return sqliteClient.all<UnknownRecord>(
       `SELECT d.id, d.knowledge_base_id, d.source_key AS source_id, d.source_key, d.source_type, d.title, d.content_hash,
               d.metadata_json, d.created_at, d.updated_at, d.title AS source_name,
@@ -167,7 +178,7 @@ export class KnowledgeRepository {
        LEFT JOIN knowledge_chunks c ON c.document_id=d.id
        WHERE d.knowledge_base_id=?${querySql}
        GROUP BY d.id
-       ORDER BY d.updated_at DESC LIMIT ?`,
+       ORDER BY d.updated_at DESC, d.id LIMIT ?`,
       params,
     ).then(rows => rows.map(row => ({ ...row, metadata: parse(row.metadata_json), chunks: Number(row.chunk_count || 0), characters: Number(row.character_count || 0) })))
   }
@@ -180,7 +191,14 @@ export class KnowledgeRepository {
     return row ? { ...row, metadata: parse(row.metadata_json) } : null
   }
 
-  async replaceDocument({ knowledgeBaseId, sourceType = "text", sourceKey, title, content, contentHash, metadata = {}, chunks = [] }: DocumentInput): Promise<UnknownRecord> {
+  async replaceDocument(input: DocumentInput): Promise<UnknownRecord> {
+    const prepared = await this.prepareDocument(input)
+    if (prepared.operations.length) await sqliteClient.transaction(prepared.operations)
+    return prepared.result
+  }
+
+  /** Compose document, FTS, history and audit changes into one caller-owned transaction. */
+  async prepareDocument({ knowledgeBaseId, sourceType = "text", sourceKey, title, content, contentHash, metadata = {}, chunks = [] }: DocumentInput): Promise<{ operations: SqliteOperation[]; result: UnknownRecord }> {
     const timestamp = now()
     const normalizedSourceKey = String(sourceKey || "source").slice(0, 1000)
     const normalizedTitle = String(title || "未命名文档").slice(0, 500)
@@ -192,13 +210,14 @@ export class KnowledgeRepository {
     )
     const normalizedContent = String(content || "")
     const normalizedHash = String(contentHash || "")
-    const metadataJson = JSON.stringify(record(metadata))
-    if (existing?.content_hash === normalizedHash && existing?.title === normalizedTitle) {
-      if (existing.metadata_json !== metadataJson) await sqliteClient.run("UPDATE knowledge_documents SET metadata_json=?, updated_at=? WHERE id=?", [metadataJson, timestamp, existing.id])
-      return { id: existing.id, sourceId: normalizedSourceKey, changed: false, created: false, chunks: 0 }
+    const metadataJson = JSON.stringify({ ...record(metadata), chunkStrategyHash: chunkStrategyHash(sourceType === "command" ? { ...record(record(metadata).chunkOptions), context: record(metadata).chunkContext } : record(base.config?.chunking)) })
+    if (existing?.content_hash === normalizedHash && existing?.title === normalizedTitle && parse(existing.metadata_json).chunkStrategyHash === parse(metadataJson).chunkStrategyHash) {
+      return { operations: existing.metadata_json !== metadataJson ? [{ sql: "UPDATE knowledge_documents SET metadata_json=?, updated_at=? WHERE id=?", params: [metadataJson, timestamp, existing.id] }] : [], result: { id: existing.id, sourceId: normalizedSourceKey, changed: false, created: false, chunks: 0 } }
     }
     const documentId = String(existing?.id || id())
     const normalizedChunks: KnowledgeChunk[] = records(chunks).map(chunk => ({ content: String(chunk.content || ""), contentHash: String(chunk.contentHash || "") }))
+    const previous = await sqliteClient.all<UnknownRecord>("SELECT id, content_hash FROM knowledge_chunks WHERE document_id=? ORDER BY ordinal", [documentId])
+    const retained = new Set<string>()
     const operations: SqliteOperation[] = [
       {
         sql: existing
@@ -208,8 +227,13 @@ export class KnowledgeRepository {
           ? [String(sourceType), normalizedTitle, normalizedContent, normalizedHash, metadataJson, timestamp, documentId]
           : [documentId, knowledgeBaseId, String(sourceType), normalizedSourceKey, normalizedTitle, normalizedContent, normalizedHash, metadataJson, timestamp, timestamp],
       },
-      { sql: "DELETE FROM knowledge_chunks WHERE document_id=?", params: [documentId] },
+      { sql: "UPDATE knowledge_chunks SET ordinal=-ordinal-1 WHERE document_id=?", params: [documentId] },
       ...normalizedChunks.flatMap((chunk, ordinal) => {
+        const same = previous.find(row => row.content_hash === chunk.contentHash && !retained.has(String(row.id)))
+        if (same) {
+          retained.add(String(same.id))
+          return [{ sql: "UPDATE knowledge_chunks SET ordinal=? WHERE id=?", params: [ordinal, same.id] }]
+        }
         const chunkId = id()
         return [
           { sql: "INSERT INTO knowledge_chunks(id, knowledge_base_id, document_id, ordinal, content, content_hash) VALUES(?, ?, ?, ?, ?, ?)", params: [chunkId, knowledgeBaseId, documentId, ordinal, chunk.content, chunk.contentHash] },
@@ -217,8 +241,10 @@ export class KnowledgeRepository {
         ]
       }),
     ]
-    await sqliteClient.transaction(operations)
-    return { id: documentId, sourceId: normalizedSourceKey, changed: true, created: !existing, chunks: normalizedChunks.length }
+    operations.push({ sql: "UPDATE knowledge_fts SET title=? WHERE chunk_id IN (SELECT id FROM knowledge_chunks WHERE document_id=?)", params: [normalizedTitle, documentId] })
+    operations.push(...previous.filter(row => !retained.has(String(row.id))).map(row => ({ sql: "DELETE FROM knowledge_chunks WHERE id=?", params: [row.id] })))
+    operations.push({ sql: "UPDATE knowledge_bases SET updated_at=MAX(updated_at+1, ?) WHERE id=?", params: [timestamp, knowledgeBaseId] })
+    return { operations, result: { id: documentId, sourceId: normalizedSourceKey, changed: true, created: !existing, chunks: normalizedChunks.length } }
   }
 
   async deleteBase(baseId: unknown): Promise<boolean> {
@@ -240,7 +266,7 @@ export class KnowledgeRepository {
     const document = await this.getDocument(baseId, documentId)
     if (!document) return false
     const chunks = await sqliteClient.all<UnknownRecord>("SELECT id FROM knowledge_chunks WHERE knowledge_base_id=? AND document_id=?", [baseId, documentId])
-    await sqliteClient.run("DELETE FROM knowledge_documents WHERE knowledge_base_id=? AND id=?", [baseId, documentId])
+    await sqliteClient.transaction([{ sql: "DELETE FROM knowledge_documents WHERE knowledge_base_id=? AND id=?", params: [baseId, documentId] }, { sql: "UPDATE knowledge_bases SET updated_at=MAX(updated_at+1, ?) WHERE id=?", params: [Date.now(), baseId] }])
     await vectorIndex.deleteOwners("knowledge_chunk", chunks.map(chunk => chunk.id))
     return true
   }

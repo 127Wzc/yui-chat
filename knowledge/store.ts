@@ -9,6 +9,8 @@ import { normalizeKnowledgeDocuments } from "./ingestion.js"
 import { resolveEmbeddingDimensions } from "../models/embeddings/dimensions.js"
 import { normalizeDistanceMetric, vectorIndex } from "./vector-index.js"
 import type { KnowledgeIndexJobOptions } from "./index-jobs.js"
+import { buildCommandRetrievalText } from "./command-document-builder.js"
+import { commandChunks } from "./command-import.js"
 
 type UnknownRecord = Record<string, unknown>
 
@@ -79,7 +81,7 @@ export class KnowledgeStore {
     await knowledgeRepository.upsertBase({
       id: BUILTIN_COMMANDS_ID,
       name: "内置指令知识库",
-      description: "由 Yunzai 指令扫描和人工精修组成的受保护知识库。",
+      description: "由外部整理的指令文档导入维护，支持增量索引与版本回退。",
       type: "command",
       builtIn: true,
       protected: true,
@@ -175,85 +177,15 @@ export class KnowledgeStore {
       protected: Boolean(current.protected),
       config: this.validateBaseConfig(record(input.config), current.config || {}),
     })
-    return await this.applyVectorConfigChange(baseId, current, base) || {}
-  }
-
-  async syncBuiltinCommands(commands: readonly UnknownRecord[] = []): Promise<UnknownRecord> {
-    if (!sqliteClient.status.available) return { synced: 0 }
-    const normalized = [...new Map(commands
-      .map(command => [text(command.id).trim(), command] as const)
-      .filter(([id]) => id)).values()]
-    const currentCount = await sqliteClient.get(
-      "SELECT COUNT(*) AS count FROM knowledge_documents WHERE knowledge_base_id=? AND source_type='command'",
-      [BUILTIN_COMMANDS_ID],
-    )
-    // 空扫描不能把已经可用的 SQLite 投影清空；首次空库则保持空状态即可。
-    const currentDocumentCount = numberValue(currentCount?.count, 0)
-    if (!normalized.length && currentDocumentCount > 0) {
-      return { synced: 0, deleted: 0, total: currentDocumentCount, skipped: true, reason: "empty_command_set" }
-    }
-    let synced = 0
-    let added = 0
-    let updated = 0
-    const preservedManual = normalized.filter(command => command.manual || command.pluginKey === "manual").length
-    const activeSourceKeys = new Set<string>()
-    for (const command of normalized) {
-      const commandId = text(command.id).trim()
-      if (!commandId) continue
-      const parameterHints = records(command.parameterHints)
-      const documentText = [
-        command.pluginName || command.pluginKey,
-        command.description || command.summary,
-        command.body,
-        command.fnc,
-        command.regexp,
-        ...(Array.isArray(command.commandHeads) ? command.commandHeads : []),
-        ...(Array.isArray(command.intentHints) ? command.intentHints : []),
-        ...(Array.isArray(command.examples) ? command.examples : []),
-        ...parameterHints.map(item => `${text(item.name)} ${text(item.description)}`),
-      ].filter(Boolean).map(value => text(value)).join("\n")
-      if (!documentText) continue
-      activeSourceKeys.add(`command:${commandId}`)
-      const hash = contentHash(documentText)
-      const origin = record(command.origin)
-      const result = await knowledgeRepository.replaceDocument({
-        knowledgeBaseId: BUILTIN_COMMANDS_ID,
-        sourceType: "command",
-        sourceKey: `command:${commandId}`,
-        title: text(command.suggestedCommand || command.example || command.fnc || commandId).slice(0, 500),
-        content: documentText,
-        contentHash: hash,
-        metadata: { commandId, origin },
-        chunks: chunkText(documentText, { targetChars: 800, overlapChars: 120, minChars: 20 }).map(chunk => ({ ...chunk, tokenCount: Math.ceil(chunk.content.length / 2) })),
-      })
-      if (result.changed === true) {
-        synced++
-        if (result.created === true) added++
-        else updated++
+    if (JSON.stringify(current.config?.chunking || {}) !== JSON.stringify(base?.config?.chunking || {})) {
+      const documents = await sqliteClient.all<UnknownRecord>("SELECT id FROM knowledge_documents WHERE knowledge_base_id=?", [baseId])
+      for (const row of documents) {
+        const document = await knowledgeRepository.getDocument(baseId, row.id)
+        if (document) await knowledgeRepository.replaceDocument({ knowledgeBaseId: baseId, sourceType: document.source_type, sourceKey: document.source_key, title: document.title, content: document.content, contentHash: document.content_hash, metadata: document.metadata, chunks: chunkText(document.content, record(base?.config?.chunking)) })
       }
+      if (base?.config?.embeddingModel) await knowledgeIndexJobs.queue(baseId, { start: true, deferIfActive: true })
     }
-    const stale = await sqliteClient.all(
-      "SELECT id, source_key FROM knowledge_documents WHERE knowledge_base_id=? AND source_type='command'",
-      [BUILTIN_COMMANDS_ID],
-    )
-    let deleted = 0
-    for (const document of stale) {
-      if (activeSourceKeys.has(text(document.source_key))) continue
-      if (await knowledgeRepository.deleteDocument(BUILTIN_COMMANDS_ID, document.id)) deleted++
-    }
-    const changed = synced > 0 || deleted > 0
-    const base = await knowledgeRepository.getBase(BUILTIN_COMMANDS_ID)
-    const index = changed && base?.config?.embeddingModel ? await knowledgeIndexJobs.queue(BUILTIN_COMMANDS_ID, { start: true, deferIfActive: true }) : null
-    return {
-      synced,
-      deleted,
-      total: normalized.length,
-      changed,
-      // 扫描前后内容哈希相同就不会创建 generation；人工修订本身是独立文档，
-      // 对应插件规则会在扫描阶段被人工修订遮蔽，不会覆盖该正文或单独触发重建。
-      comparison: { added, updated, deleted, unchanged: normalized.length - synced, preservedManual },
-      index,
-    }
+    return await this.applyVectorConfigChange(baseId, current, base) || {}
   }
 
   async updateBuiltinRetrieval(input: UnknownRecord = {}): Promise<UnknownRecord> {
@@ -263,6 +195,7 @@ export class KnowledgeStore {
       embeddingModel: input.embeddingModel,
       dimensions: input.dimensions,
       distanceMetric: input.distanceMetric,
+      fieldDescription: input.fieldDescription !== undefined ? input.fieldDescription : current.config?.fieldDescription,
     }, current.config || {})
     const base = await knowledgeRepository.upsertBase({
       id: BUILTIN_COMMANDS_ID,
@@ -288,6 +221,7 @@ export class KnowledgeStore {
     const indexing = record(record(config.knowledge).indexing)
     const maxBytes = Math.max(1024, numberValue(indexing.maxFileBytes, 10485760) || 10485760)
     const documents = normalizeKnowledgeDocuments({ name, content, kind, metadata })
+    if (knowledgeBaseId === BUILTIN_COMMANDS_ID) throw new Error("请使用指令文档导入入口，以保留永久 ID、历史和日志")
     if (!documents.length) throw new Error("知识内容不能为空")
     const maxChunks = Math.max(1, numberValue(indexing.maxChunksPerKnowledgeBase, 100000) || 100000)
     const prepared: PreparedDocument[] = []
@@ -359,13 +293,37 @@ export class KnowledgeStore {
     return { deleted, index }
   }
 
+  /** 显式重建时识别分片策略/算法版本；启动只加载既有投影。 */
+  async prepareRebuild(baseId: unknown): Promise<number> {
+    const base = await knowledgeRepository.getBase(baseId)
+    if (!base) throw new Error("知识库不存在")
+    const busy = await sqliteClient.get("SELECT id FROM knowledge_index_jobs WHERE knowledge_base_id=? AND status IN ('queued','running','canceling','retrying')", [baseId])
+    if (busy) throw Object.assign(new Error("已有索引任务，请完成或取消后再重建"), { code: "KNOWLEDGE_INDEX_ALREADY_RUNNING", statusCode: 409 })
+    const documents = await sqliteClient.all<UnknownRecord>("SELECT id FROM knowledge_documents WHERE knowledge_base_id=?", [baseId])
+    let changed = 0
+    for (const row of documents) {
+      const document = await knowledgeRepository.getDocument(baseId, row.id)
+      if (!document) continue
+      const metadata = record(document.metadata)
+      const command = record(metadata.command)
+      const documentText = metadata.importSourceId ? text(document.content) : document.source_type === "command" ? buildCommandRetrievalText(command) || text(document.content) : text(document.content)
+      if (document.source_type === "command") { metadata.retrievalTextVersion = 2; metadata.command = { ...command, retrievalText: documentText }; metadata.chunkContext = `指令：${text(document.title)}` }
+      const options = document.source_type === "command" ? { targetChars: 800, overlapChars: 0, minChars: 20, ...record(metadata.chunkOptions), context: metadata.chunkContext || `指令：${text(document.title)}` } : record(base.config?.chunking)
+      if (document.source_type === "command") { metadata.chunkOptions = { targetChars: options.targetChars, overlapChars: options.overlapChars, minChars: options.minChars }; metadata.chunkContext = options.context }
+      const result = await knowledgeRepository.replaceDocument({ knowledgeBaseId: baseId, sourceType: document.source_type, sourceKey: document.source_key, title: document.title, content: documentText, contentHash: contentHash(documentText), metadata, chunks: metadata.importSourceId ? commandChunks(documentText) : chunkText(documentText, options) })
+      if (result.changed) changed++
+    }
+    return changed
+  }
+
   async search(e: KnowledgeEvent, query: unknown, options: UnknownRecord = {}): Promise<KnowledgeResult[]> {
     const config = record(configStore.get())
     const retrieval = record(record(config.knowledge).retrieval)
     return searchKnowledge(e, query, {
       ...options,
+      useVector: options.useVector !== false,
+      vectorCandidateLimit: options.vectorCandidateLimit ?? retrieval.vectorCandidateLimit,
       candidateLimit: options.candidateLimit || retrieval.ftsCandidateLimit,
-      limit: options.limit || retrieval.resultLimit,
     })
   }
 

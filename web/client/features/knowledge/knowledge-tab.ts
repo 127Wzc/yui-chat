@@ -1,11 +1,11 @@
-import { computed, onUnmounted, reactive, ref } from "vue"
-import { confirmAction, store, request, toast, saveConfigPatch, refreshTab } from "../../app/store/store.js"
+import { computed, onUnmounted, reactive, ref, watch } from "vue"
+import { confirmAction, store, request, toast, saveConfigPatch, refreshTab, setDirtyScope } from "../../app/store/store.js"
 import { asRecord, asRecords, errorMessage, type UnknownRecord } from "../../shared/data.js"
-import { splitTokens, percent, shortId, groupBy } from "../../shared/format.js"
+import { splitTokens, shortId } from "../../shared/format.js"
 import { KnowledgeBaseWorkspace } from "./knowledge-base-workspace.js"
 import { KnowledgeCommandMaintenance } from "./knowledge-command-maintenance.js"
+import { KnowledgeCommandEditor } from "./knowledge-command-editor.js"
 
-const BOOL_OPTIONS = [{ value: "true", label: "开启" }, { value: "false", label: "关闭" }]
 const BOOL_OFF_OPTIONS = [{ value: "false", label: "关闭" }, { value: "true", label: "开启" }]
 
 /** 管理台知识库的 API 结构会随索引能力扩展；这里将边界收敛成页面内部模型。 */
@@ -13,13 +13,7 @@ type KnowledgeRecord = Record<string, any>
 
 interface KnowledgeConfig extends KnowledgeRecord {
   enabled?: boolean
-  dynamicCapture?: boolean
   commandPrefixes?: string[]
-  captureGroups?: boolean
-  capturePrivate?: boolean
-  maxEvents?: number
-  excludedPlugins?: string[]
-  excludedCommands?: string[]
 }
 
 interface KnowledgeItem extends KnowledgeRecord {
@@ -93,11 +87,6 @@ interface KnowledgeModel extends KnowledgeRecord {
   embedding?: KnowledgeRecord
 }
 
-interface RecommendationItem extends KnowledgeRecord {
-  sectionRank?: number
-  sectionLabel?: string
-}
-
 interface KnowledgeApiResponse extends KnowledgeRecord {
   result?: KnowledgeRecord
   base?: KnowledgeBase
@@ -119,29 +108,18 @@ interface KnowledgeApiResponse extends KnowledgeRecord {
 interface KnowledgeDraft extends KnowledgeRecord {
   query: string
   enabled: string
-  dynamicCapture: string
   commandPrefixes: string
-  captureGroups: string
-  capturePrivate: string
-  maxEvents: number
-  excludedPlugins: string
-  excludedCommands: string
-  manualId: string
-  manualSourceCommandId: string
-  manualSourceRuleKey: string
-  manualSourceOrigin: unknown
-  manualPluginName: string
-  manualCommand: string
-  manualDescription: string
-  manualBody: string
-  manualExamples: string
-  manualParameters: string
-  manualNotes: string
   baseName: string
   baseDescription: string
+  baseFieldDescription: string
   baseEmbeddingModel: string
   baseDimensions: number
+  commandMinRelevance: number
+  commandRerankEnabled: string
+  commandRerankModel: string
   commandEmbeddingModel: string
+  commandRetrievalMode: string
+  commandFieldDescription: string
   commandEmbeddingDimensions: number
   baseId: string
   baseAutoRetrieve: string
@@ -151,6 +129,7 @@ interface KnowledgeDraft extends KnowledgeRecord {
   sourceContent: string
   documentId: string
   retrievalQuery: string
+  retrievalResultLimit: number
   grantPrincipalType: string
   grantPrincipalId: string
   grantGroupId: string
@@ -165,32 +144,29 @@ function record<T extends KnowledgeRecord = KnowledgeRecord>(value: unknown): T 
   return asRecord(value) as T
 }
 
-function canDelete(item: KnowledgeItem = { id: "" }) {
-  return Boolean(item.manual || item.dynamic || item.pluginKey === "manual" || item.pluginKey === "observed")
-}
-
 function documentOrigin(item: KnowledgeItem = { id: "" }) {
   const origin = item?.metadata?.origin || {}
+  const command = item?.metadata?.command || {}
   const type = origin.type || (item.source_type === "command" ? "runtime-plugin-rule" : "")
   if (!type) return null
   const labels: Record<string, string> = {
     "runtime-plugin-rule": "Yunzai 插件规则",
+    "loaded-plugin-rule": "已加载插件规则",
     manual: "管理台手动补充",
     observed: "动态观察",
   }
-  const unavailable = type === "runtime-plugin-rule" ? "重新扫描后补全" : "不适用"
   return {
     label: origin.label || labels[type] || "知识来源",
-    plugin: origin.pluginName || origin.pluginKey || unavailable,
-    file: origin.file || unavailable,
-    fileRole: origin.fileRole || (type === "runtime-plugin-rule" ? unavailable : "不适用"),
-    method: origin.method || unavailable,
+    plugin: command.pluginName || origin.pluginName || origin.pluginKey || command.pluginKey || "未提供插件",
+    fileLabel: origin.file ? "文件" : "注册来源",
+    file: origin.file || origin.registrationKey || command.registrationKey || command.origin?.registrationKey || "未提供来源",
+    method: origin.method || command.fnc || "未提供方法",
   }
 }
 
 export const KnowledgeTab = {
   name: "KnowledgeTab",
-  components: { KnowledgeBaseWorkspace, KnowledgeCommandMaintenance },
+  components: { KnowledgeBaseWorkspace, KnowledgeCommandMaintenance, KnowledgeCommandEditor },
   setup() {
     const cfg = computed<KnowledgeConfig>(() => record<KnowledgeRecord>(store.config).knowledge as KnowledgeConfig || {})
     const knowledge = computed<KnowledgeSlice>(() => record<KnowledgeSlice>(store.knowledge))
@@ -198,60 +174,55 @@ export const KnowledgeTab = {
     const quality = computed<KnowledgeQuality>(() => knowledge.value.quality || {})
     const recommendation = computed<KnowledgeRecord | null>(() => knowledge.value.recommendation || null)
     const showManualDrawer = ref(false)
-    const showCaptureDrawer = ref(false)
-    const showExclusionDrawer = ref(false)
+    const currentCommand = ref<KnowledgeRecord>({})
+    const commandRevision = ref(0)
     const showBaseDrawer = ref(false)
     const showDocumentDrawer = ref(false)
     const showGrantDrawer = ref(false)
     const showCommandMaintenanceDrawer = ref(false)
     const bases = ref<KnowledgeBase[]>([])
+    let contentRevision = 0
+    let detailRevision = 0
     const selectedBaseId = ref("")
     const baseQuery = ref("")
     const activeBasePane = ref("documents")
     const documents = ref<KnowledgeDocument[]>([])
     const grants = ref<KnowledgeGrant[]>([])
     const indexJobs = ref<IndexJob[]>([])
+    const indexInspection = ref<KnowledgeRecord | null>(null)
     const indexJobPage = ref(1)
     const indexJobPagination = ref<IndexPagination>({ page: 1, pageSize: 10, total: 0 })
     let indexPollTimer: ReturnType<typeof setInterval> | null = null
     let indexPollBusy = false
     const retrievalResults = ref<KnowledgeItem[]>([])
+    const retrievalDiagnostics = ref<KnowledgeRecord | null>(null)
     const documentQuery = ref("")
+    const documentSort = ref("updated")
     const baseBusy = ref(false)
     const activeMaintenancePane = ref("commands")
+    const globalSettingsOpen = ref(false)
+    const globalSettingsBusy = ref(false)
     const maintenancePaneItems = [
-      { value: "commands", label: "指令与示例", icon: "book" },
-      { value: "overview", label: "采集概览", icon: "sparkles" },
-      { value: "quality", label: "收录质量", icon: "activity" },
+      { value: "commands", label: "指令管理", icon: "book" },
+      { value: "settings", label: "设置", icon: "sliders" },
     ]
 
     const draft = reactive<KnowledgeDraft>({
       query: "怎么查体力",
       enabled: String(Boolean(cfg.value.enabled)),
-      dynamicCapture: String(Boolean(cfg.value.dynamicCapture)),
       commandPrefixes: (cfg.value.commandPrefixes || ["#", "/", "*"]).join(","),
-      captureGroups: String(Boolean(cfg.value.captureGroups)),
-      capturePrivate: String(Boolean(cfg.value.capturePrivate)),
-      maxEvents: cfg.value.maxEvents || 1000,
-      excludedPlugins: (cfg.value.excludedPlugins || []).join(", "),
-      excludedCommands: (cfg.value.excludedCommands || []).join("\n"),
-      manualId: "",
-      manualSourceCommandId: "",
-      manualSourceRuleKey: "",
-      manualSourceOrigin: null,
-      manualPluginName: "手动知识",
-      manualCommand: "#体力",
-      manualDescription: "查询体力或每日状态",
-      manualBody: "",
-      manualExamples: "#体力,#体力 @用户",
-      manualParameters: "内容,@用户",
-      manualNotes: "",
       baseName: "",
       baseDescription: "",
+      baseFieldDescription: "",
       baseEmbeddingModel: "",
       baseDimensions: 0,
+      commandMinRelevance: cfg.value.retrieval?.minRelevance ?? 0.55,
+      commandRerankEnabled: String(cfg.value.retrieval?.rerankEnabled === true),
+      commandRerankModel: cfg.value.retrieval?.rerankModel || "",
       commandEmbeddingModel: "",
-      commandEmbeddingDimensions: 1024,
+      commandRetrievalMode: "hybrid",
+      commandFieldDescription: "",
+      commandEmbeddingDimensions: 0,
       baseId: "",
       baseAutoRetrieve: "false",
       baseTriggerWords: "",
@@ -260,6 +231,7 @@ export const KnowledgeTab = {
       sourceContent: "",
       documentId: "",
       retrievalQuery: "",
+      retrievalResultLimit: cfg.value.retrieval?.resultLimit ?? 5,
       grantPrincipalType: "role",
       grantPrincipalId: "user",
       grantGroupId: "",
@@ -267,6 +239,22 @@ export const KnowledgeTab = {
     })
 
     const selectedBase = computed(() => bases.value.find(base => base.id === selectedBaseId.value) || null)
+    const globalResultLimit = computed(() => cfg.value.retrieval?.resultLimit ?? 5)
+    const globalSettingsDirty = computed(() => Number(draft.retrievalResultLimit) !== globalResultLimit.value)
+    watch(globalSettingsDirty, dirty => setDirtyScope("knowledge-global-settings", dirty))
+    watch(globalResultLimit, (value, previous) => {
+      if (Number(draft.retrievalResultLimit) === previous) draft.retrievalResultLimit = value
+    })
+    async function saveGlobalSettings(): Promise<void> {
+      if (globalSettingsBusy.value) return
+      const limit = Number(draft.retrievalResultLimit)
+      if (!Number.isInteger(limit) || limit < 1 || limit > 20) { toast("召回数量请填写 1–20 的整数"); return }
+      try {
+        globalSettingsBusy.value = true
+        await saveConfigPatch({ "knowledge.retrieval.resultLimit": limit })
+        toast("全局召回数量已保存，所有知识库立即生效")
+      } catch (err) { toast(errorMessage(err)) } finally { globalSettingsBusy.value = false }
+    }
     const filteredBases = computed(() => {
       const query = baseQuery.value.trim().toLowerCase()
       const matched = query ? bases.value.filter(base => [base.name, base.description, base.id].some(value => String(value || "").toLowerCase().includes(query))) : [...bases.value]
@@ -280,6 +268,20 @@ export const KnowledgeTab = {
         label: `${model.name}${model.embedding?.defaultDimensions ? ` · ${model.embedding.defaultDimensions} 维` : ""}`,
       })),
     ])
+    const commandModelOptions = computed(() => {
+      const providers = records<KnowledgeRecord>(record(store.config).apiProviders)
+      return records<KnowledgeModel>(record(store.config).models).filter(model => {
+        const provider = providers.find(item => item.name === model.apiProvider)
+        const adapter = model.adapter || provider?.type || "mock"
+        const purpose = model.purpose || (adapter === "typesafe" ? "decision" : ["openai-images", "openai-chat-completions", "gemini-images"].includes(adapter) ? "image" : model.capabilities?.chat === false && model.capabilities?.embedding ? "embedding" : "chat")
+        return purpose === "chat" && model.capabilities?.chat !== false && adapter !== "mock"
+      }).map(model => ({ value: model.name, label: `${model.apiProvider || "未分配渠道"} / ${model.name}` }))
+    })
+    function resetCommandModelSettings(): void {
+      draft.commandMinRelevance = cfg.value.retrieval?.minRelevance ?? 0.55
+      draft.commandRerankEnabled = String(cfg.value.retrieval?.rerankEnabled === true)
+      draft.commandRerankModel = cfg.value.retrieval?.rerankModel || ""
+    }
     const activeIndexJob = computed(() => indexJobs.value.find(item => ["queued", "running", "retrying", "canceling"].includes(item.status || "")) || null)
     const latestIndexJob = computed(() => indexJobs.value[0] || null)
     const visibleIndexJob = computed(() => {
@@ -299,7 +301,7 @@ export const KnowledgeTab = {
       const status = base.index?.status || "fts_ready"
       if (["failed", "paused_budget", "paused_no_model"].includes(status)) return { state: "bad", label: status === "failed" ? "索引异常" : "索引暂停" }
       if (!Number(base.stats?.documents || 0)) return { state: "warn", label: "暂无内容" }
-      if (base.config?.embeddingModel && !["completed", "ready"].includes(status)) return { state: "warn", label: "待构建" }
+      if (base.config?.embeddingModel && (!base.active_vector_space_id || !["completed", "ready"].includes(status))) return { state: "warn", label: "待构建" }
       return { state: "on", label: base.config?.embeddingModel ? "可检索" : "全文可用" }
     }
 
@@ -360,54 +362,26 @@ export const KnowledgeTab = {
       if (!indexPollTimer) indexPollTimer = setInterval(() => refreshIndexJobsOnly(), 1000)
     }
 
+    const builtinBase = computed(() => bases.value.find(base => base.id === "builtin-commands"))
+    const commandModelDimensions = computed(() => Number(records<KnowledgeModel>(record(store.config).models).find(model => model.name === draft.commandEmbeddingModel)?.embedding?.defaultDimensions || 0))
+    const currentCommandDimensions = computed(() => Number(builtinBase.value?.config?.dimensions || 0))
+    function selectCommandEmbeddingModel(name: string): void {
+      draft.commandEmbeddingModel = name
+      draft.commandEmbeddingDimensions = name ? commandModelDimensions.value : 0
+    }
+    function syncCommandDimensions(): void {
+      if (!commandModelDimensions.value || activeIndexJob.value) return
+      draft.commandEmbeddingDimensions = commandModelDimensions.value
+    }
     const digestMetrics = computed(() => {
-      const stats = digest.value.stats || {}
+      const stats = builtinBase.value?.stats || {}
       return [
-        { label: "指令", value: stats.commands || 0, icon: "book", tone: "blue" },
-        { label: "插件", value: stats.plugins || 0, icon: "cpu", tone: "purple" },
-        { label: "动态指令", value: stats.dynamicCommands || stats.observedCommands || 0, icon: "activity", tone: "green" },
-        { label: "示例覆盖", value: percent(stats.exampleCoverageRatio || 0), icon: "check", tone: "cyan" },
+        { label: "已收录指令", value: stats.documents || 0 },
+        { label: "可检索指令", value: stats.searchableDocuments || 0 },
+        { label: "总分块", value: stats.chunks || 0 },
+        { label: "向量更新", value: stats.pendingVectors || 0 },
       ]
     })
-    const digestPills = computed(() => {
-      const observer = digest.value.observer || {}
-      const capture = digest.value.capture || {}
-      return [
-        { label: "观察器", active: observer.patched },
-        { label: "前缀 " + ((observer.commandPrefixes || []).join(" ") || "-"), tone: "accent" },
-        { label: "事件 " + (capture.total || 0) },
-        { label: "观察 " + (capture.observed || 0) },
-      ]
-    })
-    const pluginPills = computed(() => records<KnowledgeRecord>(digest.value.distributions?.plugins).map((item: KnowledgeRecord) => ({ label: `${item.key} ${item.count}` })))
-
-    const qualityMetrics = computed(() => {
-      const s = quality.value.summary || {}
-      return [
-        { label: "无明显问题", value: s.okCommands || 0, max: s.commands || undefined, icon: "check", tone: "green" },
-        { label: "问题指令", value: s.issueCommands || 0, icon: "alert", tone: s.issueCommands ? "orange" : "green" },
-        { label: "平均质量", value: s.averageQualityScore ?? 0, max: 100, icon: "activity", tone: "blue" },
-        { label: "动态指令", value: (s.issues || {})["dynamic-observed"] || 0, icon: "search", tone: "cyan" },
-      ]
-    })
-    const weakCommands = computed(() => quality.value.weakCommands || [])
-    const recommendations = computed(() => quality.value.recommendations || [])
-    const recommendationSections = computed(() => {
-      const rows = records<RecommendationItem>(recommendation.value?.results).map((item: RecommendationItem, index: number) => ({ ...item, _order: index + 1 }))
-      const grouped = groupBy(rows, (item: RecommendationItem) => `${item.sectionRank ?? 99}:${item.sectionLabel || "其他功能"}`)
-      return Object.entries(grouped).map(([key, items]) => {
-        const [, title] = key.split(":")
-        return { key, title, items }
-      })
-    })
-
-    const knowledgeSummary = computed(() => {
-      const stats = digest.value.stats || {}
-      if (draft.enabled !== "true") return { tone: "off", title: "指令知识库尚未开启", detail: "开启后，助手才能根据普通中文问题推荐机器人指令。" }
-      if (!Number(stats.commands || 0)) return { tone: "warn", title: "知识库已开启，等待首次扫描", detail: "执行一次扫描后，助手会整理当前机器人中可用的指令和示例。" }
-      return { tone: "ready", title: `助手已经认识 ${stats.commands || 0} 条指令`, detail: `来自 ${stats.plugins || 0} 个插件；用户可以直接描述需求，不必先记住准确命令。` }
-    })
-
     async function search() {
       try {
         const result = await request(`/api/knowledge?q=${encodeURIComponent(draft.query || "")}`) as KnowledgeApiResponse
@@ -415,19 +389,36 @@ export const KnowledgeTab = {
         toast("检索完成")
       } catch (err) { toast(errorMessage(err)) }
     }
-    async function loadBases() {
+    async function refreshKnowledgeContent(): Promise<void> {
+      const revision = ++contentRevision
       try {
-        bases.value = ((await request("/api/knowledge/bases")) as KnowledgeApiResponse).bases || []
+        const result = await request("/api/knowledge/bases") as KnowledgeApiResponse
+        if (revision !== contentRevision) return
+        bases.value = result.bases || []
+        await loadBaseDetails()
+      } catch (err) { toast(errorMessage(err)) }
+    }
+    async function loadBases() {
+      const revision = ++contentRevision
+      try {
+        const result = await request("/api/knowledge/bases") as KnowledgeApiResponse
+        if (revision !== contentRevision) return
+        bases.value = result.bases || []
         if (!bases.value.some(base => base.id === selectedBaseId.value)) selectedBaseId.value = bases.value[0]?.id || ""
         draft.sourceBaseId = selectedBaseId.value
         const builtin = bases.value.find(base => base.id === "builtin-commands")
+        draft.commandRetrievalMode = builtin?.retrievalMode || "hybrid"
+        draft.commandFieldDescription = builtin?.config?.fieldDescription || ""
         draft.commandEmbeddingModel = builtin?.config?.embeddingModel || ""
-        draft.commandEmbeddingDimensions = Number(builtin?.config?.dimensions || 1024)
+        draft.commandEmbeddingDimensions = Number(builtin?.config?.dimensions || 0)
+        resetCommandModelSettings()
+        retrievalBaseline.value = retrievalSignature()
         await loadBaseDetails()
       } catch (err) { toast(errorMessage(err)) }
     }
 
     async function loadBaseDetails() {
+      const revision = ++detailRevision
       const baseId = selectedBaseId.value
       if (!baseId) {
         documents.value = []
@@ -440,14 +431,14 @@ export const KnowledgeTab = {
       try {
         const encoded = encodeURIComponent(baseId)
         const [documentResultRaw, grantResultRaw, jobResultRaw] = await Promise.all([
-          request(`/api/knowledge/bases/${encoded}/documents?q=${encodeURIComponent(documentQuery.value)}`),
+          request(`/api/knowledge/bases/${encoded}/documents?q=${encodeURIComponent(documentQuery.value)}&sort=${encodeURIComponent(documentSort.value)}`),
           request(`/api/knowledge/bases/${encoded}/grants`),
           request(`/api/knowledge/index-jobs?baseId=${encoded}&page=${indexJobPage.value}&pageSize=10`),
         ])
         const documentResult = documentResultRaw as KnowledgeApiResponse
         const grantResult = grantResultRaw as KnowledgeApiResponse
         const jobResult = jobResultRaw as KnowledgeApiResponse
-        if (selectedBaseId.value !== baseId) return
+        if (selectedBaseId.value !== baseId || revision !== detailRevision) return
         documents.value = documentResult.documents || []
         grants.value = grantResult.grants || []
         indexJobs.value = jobResult.jobs || []
@@ -458,6 +449,8 @@ export const KnowledgeTab = {
 
     async function selectBase(baseId: string): Promise<void> {
       selectedBaseId.value = baseId
+      documentSort.value = "updated"
+      indexInspection.value = null
       indexJobPage.value = 1
       draft.sourceBaseId = baseId
       retrievalResults.value = []
@@ -468,11 +461,25 @@ export const KnowledgeTab = {
       draft.baseId = base?.id || ""
       draft.baseName = base?.name || ""
       draft.baseDescription = base?.description || ""
+      draft.baseFieldDescription = base?.config?.fieldDescription || ""
       draft.baseEmbeddingModel = base?.config?.embeddingModel || ""
       draft.baseDimensions = Number(base?.config?.dimensions || 0)
       draft.baseAutoRetrieve = String(Boolean(base?.auto_retrieve))
       draft.baseTriggerWords = (base?.config?.triggerWords || []).join(", ")
+      baseBaseline.value = baseSignature()
       showBaseDrawer.value = true
+    }
+
+    function baseSignature(): string {
+      return JSON.stringify([draft.baseName, draft.baseDescription, draft.baseFieldDescription, draft.baseEmbeddingModel, draft.baseDimensions, draft.baseAutoRetrieve, draft.baseTriggerWords])
+    }
+    const baseBaseline = ref(baseSignature())
+    watch(() => [showBaseDrawer.value, baseSignature()], () => {
+      setDirtyScope("knowledge-base-editor", showBaseDrawer.value && baseSignature() !== baseBaseline.value)
+    })
+    async function closeBaseEditor(): Promise<void> {
+      if (baseSignature() !== baseBaseline.value && !await confirmAction({ title: "放弃未保存的知识库设置？", message: "关闭后将丢弃本次修改。", confirmText: "放弃修改" })) return
+      showBaseDrawer.value = false
     }
 
     async function saveBase() {
@@ -483,7 +490,7 @@ export const KnowledgeTab = {
           description: draft.baseDescription,
           autoRetrieve: draft.baseAutoRetrieve === "true",
           triggerWords: splitTokens(draft.baseTriggerWords),
-          config: { embeddingModel: draft.baseEmbeddingModel, dimensions: Number(draft.baseDimensions || 0) },
+          config: { embeddingModel: draft.baseEmbeddingModel, dimensions: Number(draft.baseDimensions || 0), fieldDescription: draft.baseFieldDescription },
         }
         const editing = Boolean(draft.baseId)
         const result = await request(editing ? `/api/knowledge/bases/${encodeURIComponent(draft.baseId)}` : "/api/knowledge/bases", {
@@ -546,9 +553,27 @@ export const KnowledgeTab = {
       try {
         if (!selectedBaseId.value || !draft.retrievalQuery.trim()) throw new Error("请输入要测试的问题")
         baseBusy.value = true
-        const result = await request(`/api/knowledge/bases/${encodeURIComponent(selectedBaseId.value)}/search`, { method: "POST", body: JSON.stringify({ query: draft.retrievalQuery.trim(), limit: 8, useVector: true }) }) as KnowledgeApiResponse
+        const result = await request(`/api/knowledge/bases/${encodeURIComponent(selectedBaseId.value)}/search`, { method: "POST", body: JSON.stringify({ query: draft.retrievalQuery.trim() }) }) as KnowledgeApiResponse
         retrievalResults.value = result.results || []
+        retrievalDiagnostics.value = result.retrieval || null
         toast(retrievalResults.value.length ? `召回 ${retrievalResults.value.length} 条内容` : "没有召回内容，请检查原文或索引状态")
+      } catch (err) { toast(errorMessage(err)) } finally { baseBusy.value = false }
+    }
+
+    async function checkIndexStatus(repair = false) {
+      const baseId = selectedBaseId.value
+      if (!baseId) return
+      try {
+        baseBusy.value = true
+        const encoded = encodeURIComponent(baseId)
+        const response = await request(`/api/knowledge/bases/${encoded}/${repair ? "repair-index" : "index-status"}`, repair ? { method: "POST", body: JSON.stringify({ start: true }) } : {}) as KnowledgeApiResponse
+        if (selectedBaseId.value !== baseId) return
+        indexInspection.value = repair ? response.result?.inspection || null : response.inspection || null
+        if (repair) {
+          indexJobPage.value = 1
+          await loadBases()
+          toast(response.result?.status === "ready" ? "索引完整，无需补齐" : response.result?.status === "fts_ready" ? "当前使用全文检索，无需向量索引" : "缺失分块补齐已排队，已有向量会复用")
+        } else toast("索引检查完成，未调用模型")
       } catch (err) { toast(errorMessage(err)) } finally { baseBusy.value = false }
     }
 
@@ -638,31 +663,23 @@ export const KnowledgeTab = {
         toast("知识库已删除")
       } catch (err) { toast(errorMessage(err)) }
     }
-    async function rescan() {
-      try {
-        const result = await request("/api/knowledge/rescan", { method: "POST", body: "{}" }) as KnowledgeApiResponse
-        await refreshTab("knowledge")
-        await loadBases()
-        const comparison = result.sync?.comparison || {}
-        const changed = Number(comparison.added || 0) + Number(comparison.updated || 0) + Number(comparison.deleted || 0)
-        const manualNote = Number(comparison.preservedManual || 0) ? `；保留 ${comparison.preservedManual} 条人工修订` : ""
-        if (!result.sync?.changed) toast(`扫描完成，共 ${result.commands || 0} 条；未发现插件侧变更，未重建向量${manualNote}`)
-        else if (result.sync?.index) toast(`扫描完成：检测到 ${changed} 处插件变更，已开始重建向量${manualNote}`)
-        else toast(`扫描完成：检测到 ${changed} 处插件变更，已更新全文检索；未配置向量模型${manualNote}`)
-      } catch (err) { toast(errorMessage(err)) }
-    }
 
     async function saveCommandRetrieval() {
       try {
+        if (draft.commandEmbeddingModel && !Number(draft.commandEmbeddingDimensions)) throw new Error("所选模型未声明默认维度，请先到模型页完善")
+        await saveConfigPatch({ "knowledge.retrieval.minRelevance": Number(draft.commandMinRelevance), "knowledge.retrieval.rerankEnabled": draft.commandRerankEnabled === "true", "knowledge.retrieval.rerankModel": draft.commandRerankModel })
         const result = await request("/api/knowledge/bases/builtin-commands/retrieval", {
           method: "PATCH",
           body: JSON.stringify({
+            mode: draft.commandRetrievalMode,
+            fieldDescription: draft.commandFieldDescription,
             embeddingModel: draft.commandEmbeddingModel,
-            dimensions: Number(draft.commandEmbeddingDimensions || 1024),
+            dimensions: Number(draft.commandEmbeddingDimensions || 0),
           }),
         }) as KnowledgeApiResponse
+        await refreshTab()
         await loadBases()
-        toast(result.index?.status === "queued" ? "已保存，语义索引已排队" : (draft.commandEmbeddingModel ? "已保存向量模型，等待构建索引" : "已切回全文检索"))
+        toast(result.index?.status === "queued" ? "已保存检索设置，语义索引已排队" : "检索设置已保存，所有入口立即生效")
       } catch (err) { toast(errorMessage(err)) }
     }
 
@@ -670,31 +687,13 @@ export const KnowledgeTab = {
       if (base?.id !== "builtin-commands") return
       if (selectedBaseId.value !== base.id) selectBase(base.id)
       draft.commandEmbeddingModel = base.config?.embeddingModel || ""
-      draft.commandEmbeddingDimensions = Number(base.config?.dimensions || 1024)
+      draft.commandRetrievalMode = base.retrievalMode || "hybrid"
+      draft.commandFieldDescription = base.config?.fieldDescription || ""
+      draft.commandEmbeddingDimensions = Number(base.config?.dimensions || 0)
+      resetCommandModelSettings()
+      retrievalBaseline.value = retrievalSignature()
       activeMaintenancePane.value = "commands"
       showCommandMaintenanceDrawer.value = true
-    }
-    async function saveCapture() {
-      try {
-        await saveConfigPatch({
-          "knowledge.enabled": draft.enabled === "true",
-          "knowledge.dynamicCapture": draft.dynamicCapture === "true",
-          "knowledge.commandPrefixes": splitTokens(draft.commandPrefixes || "#,/,*"),
-          "knowledge.captureGroups": draft.captureGroups === "true",
-          "knowledge.capturePrivate": draft.capturePrivate === "true",
-          "knowledge.maxEvents": Number(draft.maxEvents || 1000),
-        })
-      } catch (err) { toast(errorMessage(err)) }
-    }
-    async function saveExclusions() {
-      try {
-        await saveConfigPatch({
-          "knowledge.excludedPlugins": splitTokens(draft.excludedPlugins),
-          "knowledge.excludedCommands": String(draft.excludedCommands || "").split(/[\n,，]+/).map(item => item.trim()).filter(Boolean),
-        }, "knowledge-exclusions")
-        showExclusionDrawer.value = false
-        await rescan()
-      } catch (err) { toast(errorMessage(err)) }
     }
     function canEditBuiltinCommand(item: KnowledgeItem = { id: "" }): boolean {
       return selectedBase.value?.id === "builtin-commands" && Boolean(item?.metadata?.commandId)
@@ -704,94 +703,71 @@ export const KnowledgeTab = {
       try {
         baseBusy.value = true
         const commandId = String(item.metadata?.commandId || "")
-        const baseId = encodeURIComponent(selectedBaseId.value)
-        const [commandResultRaw, documentResultRaw] = await Promise.all([
-          request(`/api/knowledge/commands/${encodeURIComponent(commandId)}`),
-          request(`/api/knowledge/bases/${baseId}/documents/${encodeURIComponent(item.id)}`),
-        ])
-        const commandResult = commandResultRaw as KnowledgeApiResponse
-        const documentResult = documentResultRaw as KnowledgeApiResponse
-        const command = (commandResult.command || { id: commandId }) as KnowledgeItem
-        openManualEditor(command, {
-          sourceCommandId: command.overridesCommandId || commandId,
-          sourceRuleKey: command.overridesSourceRuleKey || command.sourceRuleKey || "",
-          sourceOrigin: command.origin || null,
-          body: command.body || documentResult.document?.content || "",
-        })
+        await openManualEditor({ id: commandId })
       } catch (err) { toast(errorMessage(err)) } finally { baseBusy.value = false }
     }
-    function openManualEditor(item: KnowledgeItem | null = null, options: KnowledgeRecord = {}): void {
-      draft.manualId = item?.manual ? (item.id || "") : ""
-      draft.manualSourceCommandId = options.sourceCommandId ?? (item && !item.manual ? item.id || "" : item?.overridesCommandId || "")
-      draft.manualSourceRuleKey = options.sourceRuleKey ?? (item && !item.manual ? item.sourceRuleKey || "" : item?.overridesSourceRuleKey || "")
-      draft.manualSourceOrigin = options.sourceOrigin ?? (draft.manualSourceCommandId ? item?.origin || null : null)
-      draft.manualPluginName = item?.pluginName || item?.pluginKey || "手动知识"
-      draft.manualCommand = item?.suggestedCommand || item?.example || "#体力"
-      draft.manualDescription = item?.description || item?.summary || ""
-      draft.manualBody = options.body ?? item?.body ?? ""
-      draft.manualExamples = (item?.examples || []).join(", ")
-      draft.manualParameters = (item?.parameterHints || []).map((value: unknown) => typeof value === "string" ? value : record(value).name).filter(Boolean).join(", ")
-      draft.manualNotes = ""
+    async function openManualEditor(item: KnowledgeItem | null = null): Promise<void> {
+      if (!item?.id) return
+      currentCommand.value = item
       showManualDrawer.value = true
     }
-    async function saveManual() {
-      try {
-        if (!draft.manualCommand.trim()) throw new Error("请输入推荐指令")
-        const result = await request("/api/knowledge/manual-command", {
-          method: "POST",
-          body: JSON.stringify({
-            id: draft.manualId || undefined,
-            sourceCommandId: draft.manualSourceCommandId || undefined,
-            sourceRuleKey: draft.manualSourceRuleKey || undefined,
-            sourceOrigin: draft.manualSourceOrigin || undefined,
-            pluginName: draft.manualPluginName.trim() || "手动知识",
-            suggestedCommand: draft.manualCommand.trim(),
-            description: draft.manualDescription,
-            body: draft.manualBody,
-            examples: splitTokens(draft.manualExamples),
-            parameterHints: splitTokens(draft.manualParameters),
-            notes: draft.manualNotes,
-          }),
-        }) as KnowledgeApiResponse
-        store.knowledge = { ...asRecord(store.knowledge), stats: result.stats, digest: result.digest, quality: result.quality }
-        showManualDrawer.value = false
-        await loadBases()
-        toast(result.sync?.index ? "已保存，正文已重新分块并开始重建向量" : "已保存，正文已重新分块；当前使用全文检索")
-      } catch (err) { toast(errorMessage(err)) }
+    function commandAvailabilityChanged(result:KnowledgeRecord):void {
+      const builtin=bases.value.find(base=>base.id==="builtin-commands")
+      if(builtin)builtin.stats=result.stats
+      const states=new Map<string,KnowledgeRecord>((result.availability || []).map((row:KnowledgeRecord)=>[row.id,row]))
+      documents.value=documents.value.map(row=>{const state=states.get(String(row.metadata?.commandId || ""));return state?{...row,searchable:state.enabled,exclusionReasons:state.enabled?[]:["知识推荐已停用"]}:row})
+      retrievalResults.value=retrievalResults.value.filter(row=>states.get(String(row.commandId || row.metadata?.commandId || ""))?.enabled !== false)
+    }
+    async function commandDescriptionChanged(): Promise<void> {
+      commandRevision.value++
+      await refreshKnowledgeContent()
+    }
+    function retrievalSignature(): string {
+      return JSON.stringify([draft.commandRetrievalMode, draft.commandFieldDescription, draft.commandEmbeddingModel, draft.commandEmbeddingDimensions, draft.commandMinRelevance, draft.commandRerankEnabled, draft.commandRerankModel])
+    }
+    const retrievalBaseline = ref(retrievalSignature())
+    watch(() => [showCommandMaintenanceDrawer.value, retrievalSignature()], () => {
+      setDirtyScope("knowledge-command-retrieval", showCommandMaintenanceDrawer.value && retrievalSignature() !== retrievalBaseline.value)
+    })
+    async function closeCommandMaintenance(): Promise<void> {
+      if ((retrievalSignature() !== retrievalBaseline.value || store.dirtyScopes["knowledge-command-workbench"]) && !await confirmAction({ title: "放弃未保存的维护设置？", message: "检索设置或导入内容有未提交的修改。", confirmText: "放弃修改" })) return
+      showCommandMaintenanceDrawer.value = false
     }
     async function requestDeleteCommand(item: KnowledgeItem): Promise<void> {
       const candidate = { id: item.id, label: item.suggestedCommand || item.example || item.id }
       const accepted = await confirmAction({
         title: `删除知识条目“${candidate.label}”？`,
-        message: "只会移除本插件中的手动或动态知识条目，不会删除其他插件的实际命令。",
+        message: "删除当前知识条目及索引，保留最多 3 个版本供恢复；不会删除其他插件的实际命令。",
         detail: candidate.id,
         confirmText: "确认删除条目",
       })
       if (!accepted) return
       try {
-        const result = await request(`/api/knowledge/commands/${encodeURIComponent(candidate.id)}`, { method: "DELETE" }) as KnowledgeApiResponse
+        const current = await request(`/api/knowledge/commands/${encodeURIComponent(candidate.id)}/history`) as KnowledgeRecord
+        const result = await request(`/api/knowledge/commands/${encodeURIComponent(candidate.id)}`, { method: "DELETE", body: JSON.stringify({ expectedRevision: current.revision }) }) as KnowledgeApiResponse
         store.knowledge = { ...asRecord(store.knowledge), stats: result.stats, digest: result.digest, quality: result.quality }
+        commandRevision.value++
+        await refreshKnowledgeContent()
         toast(`已删除知识条目：${candidate.label}`)
       } catch (err) { toast(errorMessage(err)) }
     }
-    onUnmounted(stopIndexPolling)
+    onUnmounted(() => { stopIndexPolling(); setDirtyScope("knowledge-global-settings", false); setDirtyScope("knowledge-base-editor", false); setDirtyScope("knowledge-command-editor", false); setDirtyScope("knowledge-command-retrieval", false); setDirtyScope("knowledge-command-capture", false) })
     loadBases()
 
     function recConfidenceTone(confidence: string): string {
       return confidence === "high" ? "" : confidence === "low" ? "risk-medium" : ""
     }
     return {
-      cfg, knowledge, digest, quality, recommendation, draft,
-      showManualDrawer, showCaptureDrawer, showExclusionDrawer, showBaseDrawer, showDocumentDrawer, showGrantDrawer, showCommandMaintenanceDrawer,
+      cfg, knowledge, digest, quality, recommendation, draft, commandModelOptions,
+      globalSettingsOpen, globalSettingsBusy, globalSettingsDirty, globalResultLimit, saveGlobalSettings,
+      showManualDrawer, currentCommand, commandRevision, commandDescriptionChanged, commandAvailabilityChanged, showBaseDrawer, showDocumentDrawer, showGrantDrawer, showCommandMaintenanceDrawer,
       activeMaintenancePane, maintenancePaneItems, bases, selectedBaseId, selectedBase, baseQuery, filteredBases, activeBasePane, basePaneItems,
-      documents, grants, indexJobs, indexJobPagination, retrievalResults, documentQuery, baseBusy, embeddingModelOptions, activeIndexJob, latestIndexJob, visibleIndexJob,
-      knowledgeSummary,
-      digestMetrics, digestPills, pluginPills, qualityMetrics, weakCommands, recommendations,
-      recommendationSections,
-      canDelete, documentOrigin, canEditBuiltinCommand, shortId, recConfidenceTone, baseHealth, jobLabel, jobProgress, jobProgressLabel, jobProgressTone,
-      BOOL_OPTIONS, BOOL_OFF_OPTIONS,
-      search, rescan, openCommandMaintenance, loadBases, loadBaseDetails, selectBase, createBase, openBaseEditor, saveBase, openDocumentEditor, ingestSource, deleteDocument,
-      testRetrieval, rebuildBase, openGrantEditor, saveGrant, deleteGrant, retryJob, cancelIndexJob, deleteIndexJob, changeIndexJobPage, deleteBase, saveCapture, saveExclusions, openManualEditor, openBuiltinCommandEditor, saveManual, requestDeleteCommand, saveCommandRetrieval,
+      documents, grants, indexJobs, indexJobPagination, retrievalResults, retrievalDiagnostics, documentQuery, documentSort, baseBusy, embeddingModelOptions, activeIndexJob, latestIndexJob, visibleIndexJob,
+      digestMetrics, commandModelDimensions, currentCommandDimensions, selectCommandEmbeddingModel, syncCommandDimensions, refreshKnowledgeContent,
+      documentOrigin, canEditBuiltinCommand, shortId, recConfidenceTone, baseHealth, jobLabel, jobProgress, jobProgressLabel, jobProgressTone,
+      BOOL_OFF_OPTIONS,
+      search, openCommandMaintenance, loadBases, loadBaseDetails, selectBase, createBase, openBaseEditor, closeBaseEditor, saveBase, openDocumentEditor, ingestSource, deleteDocument,
+      testRetrieval, rebuildBase, checkIndexStatus, indexInspection, openGrantEditor, saveGrant, deleteGrant, retryJob, cancelIndexJob, deleteIndexJob, changeIndexJobPage, deleteBase, openManualEditor, openBuiltinCommandEditor, requestDeleteCommand, saveCommandRetrieval, closeCommandMaintenance,
     }
   },
   template: `
@@ -802,7 +778,7 @@ export const KnowledgeTab = {
         subtitle="先建立清晰的库边界，再添加内容和授权。"
         icon="database"
         width="560px"
-        @close="showBaseDrawer = false"
+        @close="closeBaseEditor"
       >
         <div class="form-grid">
           <Field label="名称" v-model="draft.baseName" placeholder="例如：产品帮助中心" />
@@ -811,10 +787,11 @@ export const KnowledgeTab = {
           <Field label="自动召回" type="select" :options="BOOL_OFF_OPTIONS" v-model="draft.baseAutoRetrieve" />
         </div>
         <Field label="描述" type="textarea" rows="4" v-model="draft.baseDescription" placeholder="说明收录范围、维护人和适用场景" />
+        <Field label="字段说明" type="textarea" rows="4" v-model="draft.baseFieldDescription" placeholder="可选，说明正文中专用字段的含义" tip="最多 2000 字符。按知识库提供一次，供重排和回答参考；不写入分块，修改无需重建向量。" />
         <Field label="自动召回触发词" hint="逗号或换行" v-model="draft.baseTriggerWords" placeholder="例如：售后, 保修, 退换货" />
         <div class="hint-banner ok"><Icon name="info" :size="14" /><span>新库默认只允许主人访问；可在“授权”页签中逐步开放给角色、用户或群。</span></div>
         <template #actions>
-          <button class="btn outline" type="button" @click="showBaseDrawer = false"><Icon name="x" :size="14" />取消</button>
+          <button class="btn outline" type="button" @click="closeBaseEditor"><Icon name="x" :size="14" />取消</button>
           <button class="btn primary" type="button" @click="saveBase"><Icon name="save" :size="14" />{{ draft.baseId ? '保存设置' : '创建知识库' }}</button>
         </template>
       </SideDrawer>
@@ -860,104 +837,47 @@ export const KnowledgeTab = {
         </template>
       </SideDrawer>
 
-      <SideDrawer
+      <KnowledgeCommandEditor
         :open="showManualDrawer"
-        :title="draft.manualSourceCommandId ? '编辑内置指令说明' : '补充指令说明'"
-        :subtitle="draft.manualSourceCommandId ? '保存为人工覆盖层：后续重扫会更新其他指令，但不会覆盖这里的指令与正文。' : '补齐扫描不到或描述较弱的指令；手动说明会保留，不会被后续运行态扫描覆盖。'"
-        :icon="draft.manualSourceCommandId ? 'pencil' : 'plus'"
-        width="520px"
+        :command="currentCommand"
         @close="showManualDrawer = false"
-      >
-        <div class="form-grid">
-          <Field label="所属插件" v-model="draft.manualPluginName" tip="同一插件下，同一条推荐指令只保留一份；再次保存会覆盖旧说明，并优先于运行态扫描。" />
-          <Field label="推荐指令" v-model="draft.manualCommand" />
-          <Field label="用途摘要" v-model="draft.manualDescription" />
-          <Field label="示例" hint="逗号或换行" v-model="draft.manualExamples" />
-          <Field label="参数提示" v-model="draft.manualParameters" />
-        </div>
-        <Field label="正文" type="textarea" rows="8" v-model="draft.manualBody" placeholder="填写给 AI 检索和理解的完整说明" />
-        <Field label="备注" type="textarea" v-model="draft.manualNotes" placeholder="补充别名、限制或使用场景" />
-        <div v-if="draft.manualSourceCommandId" class="hint-banner ok"><Icon name="info" :size="14" /><span>这只修改内置指令知识库，不会改动插件源码或实际触发规则；保存后会重新分块，并在已配置向量模型时自动重建索引。</span></div>
-        <template #actions>
-          <button class="btn outline" type="button" @click="showManualDrawer = false"><Icon name="x" :size="14" />取消</button>
-          <button class="btn primary" type="button" @click="saveManual"><Icon name="save" :size="14" />保存并更新索引</button>
-        </template>
-      </SideDrawer>
+        @changed="commandDescriptionChanged"
+      />
 
-      <SideDrawer
-        :open="showExclusionDrawer"
-        title="检索排除规则"
-        subtitle="被排除的插件或指令仍可正常运行，只是不再进入 AI 指令检索。"
-        icon="filter"
-        width="620px"
-        @close="showExclusionDrawer = false"
-      >
-        <div class="hint-banner ok"><Icon name="info" :size="14" /><span>适合隐藏管理命令、实验插件或不希望 AI 主动推荐的危险指令。</span></div>
-        <Field label="排除整个插件" hint="逗号或换行分隔" type="textarea" rows="5" v-model="draft.excludedPlugins" placeholder="例如：群管理插件, 调试工具" />
-        <Field label="只排除某条指令" hint="每行：插件名::指令" type="textarea" rows="7" v-model="draft.excludedCommands" placeholder="例如：群管理插件::#批量禁言" />
-        <template #actions>
-          <button class="btn outline" type="button" @click="showExclusionDrawer = false"><Icon name="x" :size="14" />取消</button>
-          <button class="btn primary small" type="button" @click="saveExclusions"><Icon name="save" :size="14" />保存并重建检索</button>
-        </template>
-      </SideDrawer>
 
-      <SideDrawer
-        :open="showCaptureDrawer"
-        title="采集策略"
-        subtitle="配置指令知识库的动态捕获和采集范围。"
-        icon="filter"
-        width="560px"
-        @close="showCaptureDrawer = false"
-      >
-        <div class="form-grid">
-          <Field label="启用知识库" type="select" :options="BOOL_OPTIONS" v-model="draft.enabled" />
-          <Field label="动态捕获指令" type="select" :options="BOOL_OPTIONS" v-model="draft.dynamicCapture" tip="自动观察聊天中出现的新指令" />
-          <Field label="指令前缀" v-model="draft.commandPrefixes" />
-          <Field label="采集群聊指令" type="select" :options="BOOL_OPTIONS" v-model="draft.captureGroups" />
-          <Field label="采集私聊指令" type="select" :options="BOOL_OFF_OPTIONS" v-model="draft.capturePrivate" />
-          <Field label="最多动态事件" type="number" v-model="draft.maxEvents" />
-        </div>
-        <template #actions>
-          <button class="btn outline" type="button" @click="showCaptureDrawer = false"><Icon name="x" :size="14" />取消</button>
-          <button class="btn primary small" type="button" @click="saveCapture"><Icon name="save" :size="14" />保存采集策略</button>
-        </template>
-      </SideDrawer>
 
       <KnowledgeCommandMaintenance
         :open="showCommandMaintenanceDrawer"
         :active-pane="activeMaintenancePane"
+        :refresh-token="commandRevision"
         :pane-items="maintenancePaneItems"
         :draft="draft"
         :digest-metrics="digestMetrics"
-        :digest-pills="digestPills"
-        :plugin-pills="pluginPills"
-        :recommendation-sections="recommendationSections"
-        :knowledge-summary="knowledgeSummary"
         :embedding-model-options="embeddingModelOptions"
+        :model-options="commandModelOptions"
+        :model-dimensions="commandModelDimensions"
+        :current-dimensions="currentCommandDimensions"
         :active-index-job="activeIndexJob"
         :visible-index-job="visibleIndexJob"
-        :quality-metrics="qualityMetrics"
-        :recommendations="recommendations"
-        :weak-commands="weakCommands"
         :job-progress-tone="jobProgressTone"
         :job-progress-label="jobProgressLabel"
         :job-progress="jobProgress"
         :job-label="jobLabel"
-        :rec-confidence-tone="recConfidenceTone"
-        :can-delete="canDelete"
-        @close="showCommandMaintenanceDrawer = false"
+        @close="closeCommandMaintenance"
         @set-pane="activeMaintenancePane = $event"
-        @open-exclusion="showExclusionDrawer = true"
-        @open-manual="openManualEditor"
         @open-manual-item="openManualEditor"
-        @search="search"
-        @rescan="rescan"
-        @open-capture="showCaptureDrawer = true"
+        @refresh="refreshKnowledgeContent"
+        @availability-changed="commandAvailabilityChanged"
         @save-command-retrieval="saveCommandRetrieval"
-        @request-delete-command="requestDeleteCommand"
+        @select-embedding-model="selectCommandEmbeddingModel"
+        @sync-dimensions="syncCommandDimensions"
       />
 
       <KnowledgeBaseWorkspace
+        :global-settings-open="globalSettingsOpen"
+        :global-settings-busy="globalSettingsBusy"
+        :global-settings-dirty="globalSettingsDirty"
+        :global-result-limit="globalResultLimit"
         :filtered-bases="filteredBases"
         :bases="bases"
         :selected-base-id="selectedBaseId"
@@ -968,9 +888,12 @@ export const KnowledgeTab = {
         :documents="documents"
         :grants="grants"
         :index-jobs="indexJobs"
+        :index-inspection="indexInspection"
         :index-job-pagination="indexJobPagination"
         :retrieval-results="retrievalResults"
+        :retrieval-diagnostics="retrievalDiagnostics"
         :document-query="documentQuery"
+        :document-sort="documentSort"
         :draft="draft"
         :base-busy="baseBusy"
         :active-index-job="activeIndexJob"
@@ -983,19 +906,25 @@ export const KnowledgeTab = {
         :job-progress-label="jobProgressLabel"
         :short-id="shortId"
         @refresh-bases="loadBases"
+        @toggle-global-settings="globalSettingsOpen = !globalSettingsOpen"
+        @save-global-settings="saveGlobalSettings"
         @create-base="createBase"
         @select-base="selectBase"
         @open-command-maintenance="openCommandMaintenance"
         @open-base-editor="openBaseEditor"
         @rebuild-base="rebuildBase"
+        @check-index="checkIndexStatus()"
+        @repair-index="checkIndexStatus(true)"
         @delete-base="deleteBase"
         @set-base-pane="activeBasePane = $event"
         @update-base-query="baseQuery = $event"
         @load-base-details="loadBaseDetails"
         @update-document-query="documentQuery = $event"
+        @update-document-sort="documentSort = $event; loadBaseDetails()"
         @open-document-editor="openDocumentEditor"
         @open-builtin-command="openBuiltinCommandEditor"
         @delete-document="deleteDocument"
+        @delete-builtin-command="requestDeleteCommand"
         @test-retrieval="testRetrieval"
         @open-grant-editor="openGrantEditor"
         @delete-grant="deleteGrant"

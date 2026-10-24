@@ -176,7 +176,7 @@ export class YuiChatCommandHandlers extends hostRuntime.Plugin {
     const config = appConfig(await configStore.load())
     const renderConfigValue = systemRenderConfig(config)
     if (!query) return sendPluginHelp({}, { e: this.e })
-    const recommendation = record(commandObserver.recommendCommands(query, { limit: 8 }))
+    const recommendation = record(await commandObserver.recommendCommandsHybrid(query, { event: this.e }))
     const matches = records(recommendation.results)
     if (!matches.length) return this.reply("没有找到匹配指令。可以换一种说法，或稍后等知识库完成扫描。", true)
     if (renderConfig(renderConfigValue).enabled !== false) {

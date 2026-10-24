@@ -1,0 +1,7234 @@
+{
+  "version": 1,
+  "createdAt": "2026-10-22",
+  "provenance": "当前源码静态核对；非外部插件执行结果，非人工用户日志，非模型质量报告",
+  "scope": {
+    "persistedCatalogRows": 724,
+    "excludedPlugins": [
+      "chatgpt-plugin"
+    ],
+    "runtimeLoading": "unknown-until-bound",
+    "corpus": "评分时必须查询完整实际指令库，不得只检索本文件列出的目标"
+  },
+  "k": 5,
+  "files": [
+    {
+      "file": "plugins/GloryOfKings-Plugin/utils/atTarget.js",
+      "sha256": "bc664d518094ec683678e27639ce11974e1c569f06e97d46ee964f4c14652aac",
+      "lines": 112
+    },
+    {
+      "file": "plugins/yui-chat/core/message/command-prefixes.ts",
+      "sha256": "5d82b3d4255ae14a4e58e8f56f1417497bfbacf8547e02feae5c764c9964a660",
+      "lines": 57
+    },
+    {
+      "file": "plugins/genshin/apps/dailyNote.js",
+      "sha256": "8f9db1b2570c4300021f9aa493c7f34c381d781d03b2cb8f23044304206912a6",
+      "lines": 54
+    },
+    {
+      "file": "plugins/genshin/apps/noteZzz.js",
+      "sha256": "28619d7ab20a9d5c66a51e31ffd7f7af13e4044a9ca83cb02911bc55397e24e6",
+      "lines": 29
+    },
+    {
+      "file": "plugins/genshin/apps/ledger.js",
+      "sha256": "9d3f15e11e6ce3174761c164835fab70dbd98ba5d6bcf1fa44cefccb49125ad4",
+      "lines": 100
+    },
+    {
+      "file": "plugins/genshin/apps/user.js",
+      "sha256": "e62f78dd6c13c9670c72eeb0cd9cad49592d8e1cf315c522dd58cfb466224953",
+      "lines": 237
+    },
+    {
+      "file": "plugins/miao-plugin/apps/profile.js",
+      "sha256": "2a2b885f1b50bdfbd635caba956c11298f8aa730ac6949f40cc713005da31437",
+      "lines": 171
+    },
+    {
+      "file": "plugins/miao-plugin/apps/profile/ProfileDetail.js",
+      "sha256": "2e15110ca42b8a0b50428a092822805b9ab116bb2916b177f1e5403463e3b8e3",
+      "lines": 320
+    },
+    {
+      "file": "plugins/miao-plugin/components/App.js",
+      "sha256": "e41caf71784e81a82a8d218988c0da8534d65c15d265179e31752a548a1f4fca",
+      "lines": 134
+    },
+    {
+      "file": "plugins/miao-plugin/apps/profile/ProfileList.js",
+      "sha256": "df256614a765ae87ee0ca6502775a522c306c2b96bc901f1fa11c3c7a596d447",
+      "lines": 217
+    },
+    {
+      "file": "plugins/miao-plugin/apps/profile/ProfileArtis.js",
+      "sha256": "d713a7e68b429792db78a6db1487ff731f5e1c808b1aa21875be93c35a2b51f6",
+      "lines": 103
+    },
+    {
+      "file": "plugins/miao-plugin/apps/wiki.js",
+      "sha256": "d5a08cd5f864cff276f1ca843cf8c0323eef476ad4a5904fe3a27b655897b375",
+      "lines": 47
+    },
+    {
+      "file": "plugins/miao-plugin/apps/wiki/TodayMaterial.js",
+      "sha256": "a2e766bff6f74b4624b909f4d51186fc8f7dfab1e35823d37d09d45ea3feaa28",
+      "lines": 143
+    },
+    {
+      "file": "plugins/miao-plugin/apps/wiki/Calendar.js",
+      "sha256": "eee9a9de72c41e5a9deeea0024140d374bb8ca8004e61ded7dc6b667af2a8652",
+      "lines": 439
+    },
+    {
+      "file": "plugins/miao-plugin/apps/wiki/CalendarSr.js",
+      "sha256": "7d33fb017e3c59e520cce0bca10bcf415d0895a525f012d1b0e90cd4cfc98512",
+      "lines": 330
+    },
+    {
+      "file": "plugins/miao-plugin/apps/gacha.js",
+      "sha256": "d4e330ca96c2cf2a8574b10fd4b6b7fe3e6e10fcd0f5d5a6ba46e4890e1f0bce",
+      "lines": 26
+    },
+    {
+      "file": "plugins/miao-plugin/apps/gacha/Gacha.js",
+      "sha256": "0de884560b8197f09752dc7cf7806ea70093c793396fd879a11eff5d1ce0433d",
+      "lines": 127
+    },
+    {
+      "file": "plugins/GloryOfKings-Plugin/apps/heroGuide.js",
+      "sha256": "134d5e1fdadaa82ff1eeecaff6e49b07eaa0a013dec9729055d570929e38787e",
+      "lines": 90
+    },
+    {
+      "file": "plugins/GloryOfKings-Plugin/apps/battleExport.js",
+      "sha256": "b8593db22a1ff699fbf0faf428d85c1cfd2187248602f9cf903efa3aa53aa92d",
+      "lines": 156
+    },
+    {
+      "file": "plugins/GloryOfKings-Plugin/apps/whoIsPlaying.js",
+      "sha256": "afdc6e1f7d6d250c3648bd76e0c991319c1b17c23159bd6a42e8f8f320ddff81",
+      "lines": 468
+    },
+    {
+      "file": "plugins/GloryOfKings-Plugin/apps/skinMissing.js",
+      "sha256": "2cb8ec5fe0acaf8c2d60be23b53294b38f53a79b274090544157b3d0fc96e256",
+      "lines": 399
+    },
+    {
+      "file": "plugins/GloryOfKings-Plugin/apps/skinWall.js",
+      "sha256": "277fca20c33573927835dbd91456d876cfb4b098daff9a48f59015e951be1436",
+      "lines": 427
+    },
+    {
+      "file": "plugins/GloryOfKings-Plugin/apps/rankTrend.js",
+      "sha256": "44d23c8faa4a7d08c1d5b0d8b0836bcc87a22b1f3071ee0b23d7407f1d1c2990",
+      "lines": 164
+    },
+    {
+      "file": "plugins/GloryOfKings-Plugin/apps/scoreTrend.js",
+      "sha256": "09632fe4e416baf748d37daa0270712d832d78b6d149f3c8c357af1d5955aaac",
+      "lines": 155
+    },
+    {
+      "file": "plugins/GloryOfKings-Plugin/apps/accountManager.js",
+      "sha256": "7f6df97a65452f6c026adda38cbb3fdff97b8ae6bdf77c2389d73cff3ddf71b8",
+      "lines": 974
+    },
+    {
+      "file": "plugins/TRSS-Plugin/apps/QRCode.js",
+      "sha256": "8c81bb4d25faa62bcc2cd3880f4dee61374d3867ef8ba4cf0d4ddd28dd69b70a",
+      "lines": 26
+    },
+    {
+      "file": "plugins/TRSS-Plugin/apps/RemBG.js",
+      "sha256": "381e3f54f05d9f44cefdae336f325c094cd2d8ca1f9a382dddfcafb61da7d6ac",
+      "lines": 105
+    },
+    {
+      "file": "plugins/TRSS-Plugin/apps/RealESRGAN.js",
+      "sha256": "05c755157377b6ac2289a6d2ba235d9a82799b05039ea650f77d86bf9e4b7dcc",
+      "lines": 105
+    },
+    {
+      "file": "plugins/example/网易点歌.js",
+      "sha256": "43b7425b9e38b2e8953d348805bb0ecfd3a7a26a167c61a6bbfee739107736fa",
+      "lines": 185
+    },
+    {
+      "file": "plugins/GT-Manual/apps/GTest.js",
+      "sha256": "d8df4b0b10cc61ccccc30fdfec52fdd77dfcb66e8f5bfcb0b3e9ad8555916343",
+      "lines": 178
+    },
+    {
+      "file": "plugins/GT-Manual-Plugin/apps/GTest.js",
+      "sha256": "1abfa6fbe5d6e4a857bf1c44b1d7a045d87cfe11849a0f6b8782bcda11917e4b",
+      "lines": 172
+    },
+    {
+      "file": "plugins/other/restart.js",
+      "sha256": "73b998c5c62b12a3fda42f06a884068891897db129c4f16d6c20242914c8191c",
+      "lines": 152
+    },
+    {
+      "file": "plugins/system/recallReply.js",
+      "sha256": "b743ac353ff2777fdee0dfefd0a0808f5456e53f2dfcdf2816cc95484db480e4",
+      "lines": 29
+    },
+    {
+      "file": "plugins/other/speakRank.js",
+      "sha256": "d67a7f59773c6d0a668ce84b1c476ec793e567f0242f36abe19526c6ad75d04b",
+      "lines": 245
+    },
+    {
+      "file": "plugins/yenai-plugin/apps/groupAdmin/groupAdmin.js",
+      "sha256": "c614736a8e7688b61ddce4e5aba809229d4c0686742b25f336b2b1139b818972",
+      "lines": 381
+    },
+    {
+      "file": "plugins/Guoba-Plugin/apps/login.js",
+      "sha256": "c686304a145145bb75ed5bc66d477ebc6202348d959a88c0ab0ab7cdefff1db9",
+      "lines": 86
+    },
+    {
+      "file": "plugins/yui-chat/apps/chat.ts",
+      "sha256": "cbd5df11c95ddf6d1bf460e305e0e0b77336686a71524c9fdd5f46d7805bf488",
+      "lines": 539
+    },
+    {
+      "file": "plugins/yui-chat/apps/master.ts",
+      "sha256": "fbd0d4b4496f1a276c3e71ed291c83fef01b97ae1726cf8fe6c13d1b1ad0f3e9",
+      "lines": 105
+    },
+    {
+      "file": "plugins/yui-chat/apps/commands/memory.ts",
+      "sha256": "0dffb19fccd36f9160c0c409cb6f94c84e75c8ffd7138170e50086d0fadaa701",
+      "lines": 163
+    }
+  ],
+  "targets": [
+    {
+      "id": "gs-stamina",
+      "family": "stamina",
+      "selector": {
+        "pluginKey": "genshin",
+        "fnc": "note",
+        "regexp": "^#*(原神|星铁)?(体力|树脂|查询体力)$",
+        "regexpFlags": ""
+      },
+      "pluginName": "体力查询",
+      "example": "#原神体力",
+      "meaning": "查询原神实时便笺中的树脂等信息。",
+      "declaredPermission": "all",
+      "executionConditions": [
+        "需要可用米游社账号或目标 UID；不是绑定入口"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/genshin/apps/dailyNote.js",
+          "startLine": 16,
+          "endLine": 19,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/genshin/apps/dailyNote.js",
+          "startLine": 27,
+          "endLine": 52,
+          "claim": "查询原神实时便笺中的树脂等信息。"
+        }
+      ]
+    },
+    {
+      "id": "zzz-stamina",
+      "family": "stamina",
+      "selector": {
+        "pluginKey": "genshin",
+        "fnc": "note",
+        "regexp": "^#*绝区零?(体力|树脂|查询体力)$",
+        "regexpFlags": ""
+      },
+      "pluginName": "体力查询",
+      "example": "#绝区零体力",
+      "meaning": "查询绝区零实时便笺。",
+      "declaredPermission": "all",
+      "executionConditions": [
+        "绝区零接口与账号数据可用；不能返回原神体力"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/genshin/apps/noteZzz.js",
+          "startLine": 12,
+          "endLine": 15,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/genshin/apps/noteZzz.js",
+          "startLine": 21,
+          "endLine": 27,
+          "claim": "查询绝区零实时便笺。"
+        }
+      ]
+    },
+    {
+      "id": "gs-ledger",
+      "family": "ledger",
+      "selector": {
+        "pluginKey": "genshin",
+        "fnc": "ledger",
+        "regexp": "^(#原石|#*札记|#*(星铁)?星琼)([0-9]|[一二两三四五六七八九十]+)*月*$",
+        "regexpFlags": ""
+      },
+      "pluginName": "札记查询",
+      "example": "#原石6月",
+      "meaning": "查询指定月份的原石札记或星琼月历。",
+      "declaredPermission": "all",
+      "executionConditions": [
+        "需要相应游戏账号数据；指定月份不是年度累计"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/genshin/apps/ledger.js",
+          "startLine": 14,
+          "endLine": 17,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/genshin/apps/ledger.js",
+          "startLine": 55,
+          "endLine": 66,
+          "claim": "查询指定月份的原石札记或星琼月历。"
+        }
+      ]
+    },
+    {
+      "id": "gs-ledger-count",
+      "family": "ledger",
+      "selector": {
+        "pluginKey": "genshin",
+        "fnc": "ledgerCount",
+        "regexp": "^#*(原石|札记|(星铁)?星琼)统计$",
+        "regexpFlags": ""
+      },
+      "pluginName": "札记查询",
+      "example": "#原石统计",
+      "meaning": "汇总保存的原石或星琼札记统计。",
+      "declaredPermission": "all",
+      "executionConditions": [
+        "依赖已保存的札记数据；不等同指定月份明细"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/genshin/apps/ledger.js",
+          "startLine": 23,
+          "endLine": 26,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/genshin/apps/ledger.js",
+          "startLine": 74,
+          "endLine": 85,
+          "claim": "汇总保存的原石或星琼札记统计。"
+        }
+      ]
+    },
+    {
+      "id": "gs-bind",
+      "family": "bind-game",
+      "selector": {
+        "pluginKey": "genshin",
+        "fnc": "bingUid",
+        "regexp": "^#(原神|星铁|绝区零)?绑定(uid)?(\\s|\\+)*((1[0-9]|[1-9])[0-9]{8}|[1-9][0-9]{7})$",
+        "regexpFlags": "i"
+      },
+      "pluginName": "用户绑定",
+      "example": "#原神绑定900000001",
+      "meaning": "绑定游戏 UID，由 User.bingUid 处理。",
+      "declaredPermission": "all",
+      "executionConditions": [
+        "使用测试 UID；不代表绑定 Cookie 或已登录"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/genshin/apps/user.js",
+          "startLine": 44,
+          "endLine": 47,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/genshin/apps/user.js",
+          "startLine": 185,
+          "endLine": 187,
+          "claim": "绑定游戏 UID，由 User.bingUid 处理。"
+        }
+      ]
+    },
+    {
+      "id": "gs-cookie-help",
+      "family": "cookie",
+      "selector": {
+        "pluginKey": "genshin",
+        "fnc": "ckHelp",
+        "regexp": "^#?(体力|[Cc](oo)?[Kk](ie)?)帮助",
+        "regexpFlags": ""
+      },
+      "pluginName": "用户绑定",
+      "example": "#Cookie帮助",
+      "meaning": "提供 Cookie 绑定教程，并提示私聊提交或扫码登录。",
+      "declaredPermission": "all",
+      "executionConditions": [
+        "不得要求在群里发送 Cookie；不是显示 Cookie 内容"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/genshin/apps/user.js",
+          "startLine": 14,
+          "endLine": 17,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/genshin/apps/user.js",
+          "startLine": 161,
+          "endLine": 164,
+          "claim": "提供 Cookie 绑定教程，并提示私聊提交或扫码登录。"
+        }
+      ]
+    },
+    {
+      "id": "miao-detail",
+      "family": "miao-panel",
+      "selector": {
+        "pluginKey": "miao-plugin",
+        "fnc": "profileDetail",
+        "regexp": "^#*([^#]+)\\s*(详细|详情|面板|面版|圣遗物|遗器|武器[1-7]?|伤害([1-9]+\\d*)?)\\s*(\\d{9,10})*(.*[换变改].*)?$",
+        "regexpFlags": ""
+      },
+      "pluginName": "喵喵:角色面板",
+      "example": "#雷电将军面板",
+      "meaning": "查看具体角色面板、伤害或圣遗物详情。",
+      "declaredPermission": "all",
+      "executionConditions": [
+        "角色可识别且有目标 UID、可用面板数据；不是管理后台"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/miao-plugin/apps/profile.js",
+          "startLine": 24,
+          "endLine": 28,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/miao-plugin/apps/profile/ProfileDetail.js",
+          "startLine": 15,
+          "endLine": 123,
+          "claim": "查看具体角色面板、伤害或圣遗物详情。"
+        },
+        {
+          "file": "plugins/miao-plugin/components/App.js",
+          "startLine": 26,
+          "endLine": 126,
+          "claim": "App 注册键转为宿主 fnc，实际处理转发给 app.fn"
+        }
+      ],
+      "delegatedHandler": "ProfileDetail.detail"
+    },
+    {
+      "id": "miao-list",
+      "family": "miao-panel",
+      "selector": {
+        "pluginKey": "miao-plugin",
+        "fnc": "profileList",
+        "regexp": "^#(星铁|原神)?(面板角色|角色面板|面板)(列表)?\\s*(\\d{9,10})?$",
+        "regexpFlags": ""
+      },
+      "pluginName": "喵喵:角色面板",
+      "example": "#面板列表",
+      "meaning": "列出已获取面板数据的游戏角色。",
+      "declaredPermission": "all",
+      "executionConditions": [
+        "有目标 UID；仅查看已获取的数据"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/miao-plugin/apps/profile.js",
+          "startLine": 17,
+          "endLine": 22,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/miao-plugin/apps/profile/ProfileList.js",
+          "startLine": 71,
+          "endLine": 167,
+          "claim": "列出已获取面板数据的游戏角色。"
+        },
+        {
+          "file": "plugins/miao-plugin/components/App.js",
+          "startLine": 26,
+          "endLine": 126,
+          "claim": "App 注册键转为宿主 fnc，实际处理转发给 app.fn"
+        }
+      ],
+      "delegatedHandler": "ProfileList.render"
+    },
+    {
+      "id": "miao-refresh",
+      "family": "miao-panel",
+      "selector": {
+        "pluginKey": "miao-plugin",
+        "fnc": "profileRefresh",
+        "regexp": "^#(星铁|原神)?(全部面板更新|更新全部面板|获取游戏角色详情|更新面板|面板更新)\\s*(\\d{9,10})?$",
+        "regexpFlags": ""
+      },
+      "pluginName": "喵喵:角色面板",
+      "example": "#更新面板",
+      "meaning": "重新获取游戏橱窗角色详情。",
+      "declaredPermission": "all",
+      "executionConditions": [
+        "橱窗开放详情，服务可用；不修改角色配装"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/miao-plugin/apps/profile.js",
+          "startLine": 121,
+          "endLine": 126,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/miao-plugin/apps/profile/ProfileList.js",
+          "startLine": 52,
+          "endLine": 54,
+          "claim": "重新获取游戏橱窗角色详情。"
+        },
+        {
+          "file": "plugins/miao-plugin/components/App.js",
+          "startLine": 26,
+          "endLine": 126,
+          "claim": "App 注册键转为宿主 fnc，实际处理转发给 app.fn"
+        }
+      ],
+      "delegatedHandler": "ProfileList.refresh"
+    },
+    {
+      "id": "miao-artifacts",
+      "family": "miao-artifacts",
+      "selector": {
+        "pluginKey": "miao-plugin",
+        "fnc": "artisList",
+        "regexp": "^#(星铁|原神)?(圣遗物|遗器)列表\\s*(\\d{9,10})?$",
+        "regexpFlags": ""
+      },
+      "pluginName": "喵喵:角色面板",
+      "example": "#圣遗物列表",
+      "meaning": "查看面板保存的圣遗物或遗器列表。",
+      "declaredPermission": "all",
+      "executionConditions": [
+        "需要可用角色及面板数据"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/miao-plugin/apps/profile.js",
+          "startLine": 66,
+          "endLine": 70,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/miao-plugin/apps/profile/ProfileArtis.js",
+          "startLine": 53,
+          "endLine": 102,
+          "claim": "查看面板保存的圣遗物或遗器列表。"
+        },
+        {
+          "file": "plugins/miao-plugin/components/App.js",
+          "startLine": 26,
+          "endLine": 126,
+          "claim": "App 注册键转为宿主 fnc，实际处理转发给 app.fn"
+        }
+      ],
+      "delegatedHandler": "profileArtisList"
+    },
+    {
+      "id": "miao-material",
+      "family": "miao-material",
+      "selector": {
+        "pluginKey": "miao-plugin",
+        "fnc": "today",
+        "regexp": "^#(今日|今天|每日|我的|明天|明日|周([1-7]|一|二|三|四|五|六|日))*(素材|材料|天赋)[ |0-9]*$",
+        "regexpFlags": ""
+      },
+      "pluginName": "喵喵:角色资料",
+      "example": "#今日素材",
+      "meaning": "按今天、明天或星期筛选可刷的天赋和武器素材。",
+      "declaredPermission": "all",
+      "executionConditions": [
+        "依赖角色数据；周日提示全部素材可刷"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/miao-plugin/apps/wiki.js",
+          "startLine": 40,
+          "endLine": 43,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/miao-plugin/apps/wiki/TodayMaterial.js",
+          "startLine": 8,
+          "endLine": 43,
+          "claim": "按今天、明天或星期筛选可刷的天赋和武器素材。"
+        },
+        {
+          "file": "plugins/miao-plugin/components/App.js",
+          "startLine": 26,
+          "endLine": 126,
+          "claim": "App 注册键转为宿主 fnc，实际处理转发给 app.fn"
+        }
+      ],
+      "delegatedHandler": "TodayMaterial.render"
+    },
+    {
+      "id": "miao-calendar",
+      "family": "game-calendar",
+      "selector": {
+        "pluginKey": "miao-plugin",
+        "fnc": "calendar",
+        "regexp": "^(#|喵喵)+(日历|日历列表)$",
+        "regexpFlags": ""
+      },
+      "pluginName": "喵喵:角色资料",
+      "example": "#日历",
+      "meaning": "展示原神活动和卡池等日历信息。",
+      "declaredPermission": "all",
+      "executionConditions": [
+        "原神日历，不能混为星铁日历"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/miao-plugin/apps/wiki.js",
+          "startLine": 22,
+          "endLine": 25,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/miao-plugin/apps/wiki/Calendar.js",
+          "startLine": 424,
+          "endLine": 435,
+          "claim": "展示原神活动和卡池等日历信息。"
+        },
+        {
+          "file": "plugins/miao-plugin/components/App.js",
+          "startLine": 26,
+          "endLine": 126,
+          "claim": "App 注册键转为宿主 fnc，实际处理转发给 app.fn"
+        }
+      ],
+      "delegatedHandler": "Calendar.render"
+    },
+    {
+      "id": "miao-calendar-sr",
+      "family": "game-calendar",
+      "selector": {
+        "pluginKey": "miao-plugin",
+        "fnc": "calendarSr",
+        "regexp": "^#(星铁)+(日历|日历列表)$",
+        "regexpFlags": ""
+      },
+      "pluginName": "喵喵:角色资料",
+      "example": "#星铁日历",
+      "meaning": "展示星铁日历。",
+      "declaredPermission": "all",
+      "executionConditions": [
+        "按星铁日历数据生成"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/miao-plugin/apps/wiki.js",
+          "startLine": 28,
+          "endLine": 31,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/miao-plugin/apps/wiki/CalendarSr.js",
+          "startLine": 315,
+          "endLine": 326,
+          "claim": "展示星铁日历。"
+        },
+        {
+          "file": "plugins/miao-plugin/components/App.js",
+          "startLine": 26,
+          "endLine": 126,
+          "claim": "App 注册键转为宿主 fnc，实际处理转发给 app.fn"
+        }
+      ],
+      "delegatedHandler": "CalendarSr.render"
+    },
+    {
+      "id": "miao-gacha",
+      "family": "gacha",
+      "selector": {
+        "pluginKey": "miao-plugin",
+        "fnc": "detail",
+        "regexp": "^#*(星铁)?喵喵(抽卡|抽奖|角色|武器|光锥|常驻|集录|up)+池?(记录|祈愿|分析)$",
+        "regexpFlags": ""
+      },
+      "pluginName": "喵喵:抽卡统计",
+      "example": "#喵喵抽卡记录",
+      "meaning": "展示已有抽卡记录与祈愿分析。",
+      "declaredPermission": "all",
+      "executionConditions": [
+        "需要已有或已导入的抽卡数据；不是模拟抽卡"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/miao-plugin/apps/gacha.js",
+          "startLine": 9,
+          "endLine": 15,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/miao-plugin/apps/gacha/Gacha.js",
+          "startLine": 7,
+          "endLine": 71,
+          "claim": "展示已有抽卡记录与祈愿分析。"
+        },
+        {
+          "file": "plugins/miao-plugin/components/App.js",
+          "startLine": 26,
+          "endLine": 126,
+          "claim": "App 注册键转为宿主 fnc，实际处理转发给 app.fn"
+        }
+      ],
+      "delegatedHandler": "Gacha.detail"
+    },
+    {
+      "id": "king-guide",
+      "family": "king-guide",
+      "selector": {
+        "pluginKey": "GloryOfKings-Plugin",
+        "fnc": "guide",
+        "regexp": "^#(王者)?(英雄攻略|攻略|出装|克制|铭文出装|铭文)\\s*(.*)$",
+        "regexpFlags": ""
+      },
+      "pluginName": "王者英雄攻略",
+      "example": "#英雄攻略 孙悟空",
+      "meaning": "查看王者英雄出装、铭文、关系和技能资料。",
+      "declaredPermission": "all",
+      "executionConditions": [
+        "必须带英雄名；官网基础资料不强制绑定营地，营地增强数据依赖登录态"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/GloryOfKings-Plugin/apps/heroGuide.js",
+          "startLine": 22,
+          "endLine": 25,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/GloryOfKings-Plugin/apps/heroGuide.js",
+          "startLine": 30,
+          "endLine": 88,
+          "claim": "查看王者英雄出装、铭文、关系和技能资料。"
+        }
+      ]
+    },
+    {
+      "id": "king-export",
+      "family": "king-export",
+      "selector": {
+        "pluginKey": "GloryOfKings-Plugin",
+        "fnc": "exportCsv",
+        "regexp": "(?:^\\s*@[^#]*(?=#)|^)#(王者)?(导出战绩|战绩导出)\\s*(.*)$",
+        "regexpFlags": ""
+      },
+      "pluginName": "王者战绩导出",
+      "example": "#导出战绩 7",
+      "meaning": "将本地已有王者战绩归档导出为 CSV。",
+      "declaredPermission": "all",
+      "executionConditions": [
+        "需要目标营地账号和已有归档；不能承诺导出未归档的全部历史"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/GloryOfKings-Plugin/apps/battleExport.js",
+          "startLine": 73,
+          "endLine": 73,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/GloryOfKings-Plugin/apps/battleExport.js",
+          "startLine": 78,
+          "endLine": 154,
+          "claim": "将本地已有王者战绩归档导出为 CSV。"
+        }
+      ]
+    },
+    {
+      "id": "king-online",
+      "family": "king-online",
+      "selector": {
+        "pluginKey": "GloryOfKings-Plugin",
+        "fnc": "list",
+        "regexp": "^#(谁在(打游戏|打王者|玩王者|上号|排位)|王者在线(列表|状态)?|在线列表)$",
+        "regexpFlags": ""
+      },
+      "pluginName": "GloryOfKings-Plugin",
+      "example": "#谁在打王者",
+      "meaning": "查询本群已绑定账号的对局和在线状态，查看时可刷新。",
+      "declaredPermission": "all",
+      "executionConditions": [
+        "依赖群成员索引及已绑定账号；私聊只看自己；不能承诺零网络请求"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/GloryOfKings-Plugin/apps/whoIsPlaying.js",
+          "startLine": 73,
+          "endLine": 76,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/GloryOfKings-Plugin/apps/whoIsPlaying.js",
+          "startLine": 81,
+          "endLine": 189,
+          "claim": "查询本群已绑定账号的对局和在线状态，查看时可刷新。"
+        }
+      ]
+    },
+    {
+      "id": "king-missing",
+      "family": "king-skins",
+      "selector": {
+        "pluginKey": "GloryOfKings-Plugin",
+        "fnc": "query",
+        "regexp": "(?:^\\s*@[^#]*(?=#)|^)#(缺皮肤|皮肤缺失|还差(什么|哪些)皮肤|缺哪些皮肤)\\s*(.*)$",
+        "regexpFlags": ""
+      },
+      "pluginName": "王者皮肤缺失",
+      "example": "#缺皮肤 妲己",
+      "meaning": "比较账号已有皮肤和配置表，列出缺少的皮肤。",
+      "declaredPermission": "all",
+      "executionConditions": [
+        "需要可用营地账号；不是列出已拥有皮肤"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/GloryOfKings-Plugin/apps/skinMissing.js",
+          "startLine": 49,
+          "endLine": 49,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/GloryOfKings-Plugin/apps/skinMissing.js",
+          "startLine": 54,
+          "endLine": 119,
+          "claim": "比较账号已有皮肤和配置表，列出缺少的皮肤。"
+        }
+      ]
+    },
+    {
+      "id": "king-owned",
+      "family": "king-skins",
+      "selector": {
+        "pluginKey": "GloryOfKings-Plugin",
+        "fnc": "skinWall",
+        "regexp": "(?:^\\s*@[^#]*(?=#)|^)#(王者)?皮肤墙\\s*(.*)$",
+        "regexpFlags": ""
+      },
+      "pluginName": "查询王者皮肤墙",
+      "example": "#皮肤墙",
+      "meaning": "展示账号已经拥有的王者皮肤。",
+      "declaredPermission": "all",
+      "executionConditions": [
+        "需要可用营地账号；不是缺失皮肤列表"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/GloryOfKings-Plugin/apps/skinWall.js",
+          "startLine": 98,
+          "endLine": 101,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/GloryOfKings-Plugin/apps/skinWall.js",
+          "startLine": 110,
+          "endLine": 121,
+          "claim": "展示账号已经拥有的王者皮肤。"
+        }
+      ]
+    },
+    {
+      "id": "king-rank-trend",
+      "family": "king-trend",
+      "selector": {
+        "pluginKey": "GloryOfKings-Plugin",
+        "fnc": "trend",
+        "regexp": "(?:^\\s*@[^#]*(?=#)|^)#(段位趋势|段位曲线|排位趋势|段位走势)\\s*(.*)$",
+        "regexpFlags": ""
+      },
+      "pluginName": "王者段位趋势",
+      "example": "#段位趋势 7",
+      "meaning": "查看排位段位变化阶梯图。",
+      "declaredPermission": "all",
+      "executionConditions": [
+        "仅排位赛；归档不足可补拉，数据少于两场无法成图"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/GloryOfKings-Plugin/apps/rankTrend.js",
+          "startLine": 47,
+          "endLine": 47,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/GloryOfKings-Plugin/apps/rankTrend.js",
+          "startLine": 52,
+          "endLine": 123,
+          "claim": "查看排位段位变化阶梯图。"
+        }
+      ]
+    },
+    {
+      "id": "king-peak-trend",
+      "family": "king-trend",
+      "selector": {
+        "pluginKey": "GloryOfKings-Plugin",
+        "fnc": "trend",
+        "regexp": "(?:^\\s*@[^#]*(?=#)|^)#(巅峰(分)?趋势|上分趋势|分数趋势|巅峰曲线)\\s*(.*)$",
+        "regexpFlags": ""
+      },
+      "pluginName": "王者巅峰趋势",
+      "example": "#巅峰趋势 7",
+      "meaning": "查看王者巅峰分涨跌折线图。",
+      "declaredPermission": "all",
+      "executionConditions": [
+        "只统计巅峰赛；不把排位赛算入"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/GloryOfKings-Plugin/apps/scoreTrend.js",
+          "startLine": 41,
+          "endLine": 41,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/GloryOfKings-Plugin/apps/scoreTrend.js",
+          "startLine": 46,
+          "endLine": 114,
+          "claim": "查看王者巅峰分涨跌折线图。"
+        }
+      ]
+    },
+    {
+      "id": "king-bind",
+      "family": "king-bind",
+      "selector": {
+        "pluginKey": "GloryOfKings-Plugin",
+        "fnc": "bindWzryId",
+        "regexp": "(?:^\\s*@[^#]*(?=#)|^)#绑定营地\\s*(.*)$",
+        "regexpFlags": ""
+      },
+      "pluginName": "王者账号管理",
+      "example": "#绑定营地 900000001",
+      "meaning": "绑定王者营地账号。",
+      "declaredPermission": "all",
+      "executionConditions": [
+        "当前实现要求群聊中绑定；不是米游社 UID 绑定"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/GloryOfKings-Plugin/apps/accountManager.js",
+          "startLine": 37,
+          "endLine": 40,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/GloryOfKings-Plugin/apps/accountManager.js",
+          "startLine": 327,
+          "endLine": 356,
+          "claim": "绑定王者营地账号。"
+        }
+      ]
+    },
+    {
+      "id": "trss-qr",
+      "family": "qr",
+      "selector": {
+        "pluginKey": "TRSS-Plugin",
+        "fnc": "QRCode",
+        "regexp": "^二维码.+",
+        "regexpFlags": ""
+      },
+      "pluginName": "二维码生成",
+      "example": "二维码 测试文本",
+      "meaning": "把命令后面的文本编码成二维码图片。",
+      "declaredPermission": "all",
+      "executionConditions": [
+        "提供非空文本；不是识别二维码或网页截图"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/TRSS-Plugin/apps/QRCode.js",
+          "startLine": 11,
+          "endLine": 14,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/TRSS-Plugin/apps/QRCode.js",
+          "startLine": 19,
+          "endLine": 24,
+          "claim": "把命令后面的文本编码成二维码图片。"
+        }
+      ]
+    },
+    {
+      "id": "trss-rembg",
+      "family": "image-process",
+      "selector": {
+        "pluginKey": "TRSS-Plugin",
+        "fnc": "DetectImage",
+        "regexp": "^#?(动漫)?(图片)?(去除?背景|背景去除?)$",
+        "regexpFlags": ""
+      },
+      "pluginName": "图片背景去除",
+      "example": "#去除背景",
+      "meaning": "接收或引用图片并去除背景。",
+      "declaredPermission": "all",
+      "executionConditions": [
+        "需要图片及可用本地模型或服务；无图会进入等待图片流程"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/TRSS-Plugin/apps/RemBG.js",
+          "startLine": 17,
+          "endLine": 20,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/TRSS-Plugin/apps/RemBG.js",
+          "startLine": 25,
+          "endLine": 59,
+          "claim": "接收或引用图片并去除背景。"
+        }
+      ]
+    },
+    {
+      "id": "trss-upscale",
+      "family": "image-process",
+      "selector": {
+        "pluginKey": "TRSS-Plugin",
+        "fnc": "DetectImage",
+        "regexp": "^#?(动漫)?图片修复$",
+        "regexpFlags": ""
+      },
+      "pluginName": "图片修复",
+      "example": "#图片修复",
+      "meaning": "接收或引用图片，用 Real-ESRGAN 修复或放大图片。",
+      "declaredPermission": "all",
+      "executionConditions": [
+        "需要图片及可用本地模型或服务；不能混为抠图"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/TRSS-Plugin/apps/RealESRGAN.js",
+          "startLine": 17,
+          "endLine": 20,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/TRSS-Plugin/apps/RealESRGAN.js",
+          "startLine": 25,
+          "endLine": 59,
+          "claim": "接收或引用图片，用 Real-ESRGAN 修复或放大图片。"
+        }
+      ]
+    },
+    {
+      "id": "music-netease",
+      "family": "music",
+      "selector": {
+        "pluginKey": "example/网易点歌.js",
+        "fnc": "Music",
+        "regexp": "(^#点歌\\s*(.*)$)|(^#听\\s*(\\d+)$)",
+        "regexpFlags": ""
+      },
+      "pluginName": "点歌",
+      "example": "#点歌 稻香",
+      "meaning": "搜索网易云歌曲，再通过编号选择发送歌曲。",
+      "declaredPermission": "all",
+      "executionConditions": [
+        "当前实现仅 NapCat.Onebot；#听1 依赖此前搜索列表，列表不是独立用户会话隔离"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/example/网易点歌.js",
+          "startLine": 17,
+          "endLine": 20,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/example/网易点歌.js",
+          "startLine": 25,
+          "endLine": 184,
+          "claim": "搜索网易云歌曲，再通过编号选择发送歌曲。"
+        }
+      ]
+    },
+    {
+      "id": "gt-sign",
+      "family": "mys-sign",
+      "selector": {
+        "pluginKey": "GT-Manual",
+        "fnc": "sign",
+        "regexp": "^#*(原神|星铁|米游社)?签到$",
+        "regexpFlags": ""
+      },
+      "pluginName": "GT-Manual",
+      "example": "#米游社签到",
+      "meaning": "通过 GT 服务创建米游社手动签到链接。",
+      "declaredPermission": "all",
+      "executionConditions": [
+        "需要已绑定 Cookie 和可用 GT 服务；不保证自动完成签到"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/GT-Manual/apps/GTest.js",
+          "startLine": 18,
+          "endLine": 22,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/GT-Manual/apps/GTest.js",
+          "startLine": 115,
+          "endLine": 144,
+          "claim": "通过 GT 服务创建米游社手动签到链接。"
+        }
+      ]
+    },
+    {
+      "id": "gt-plugin-sign",
+      "family": "mys-sign",
+      "selector": {
+        "pluginKey": "GT-Manual-Plugin",
+        "fnc": "sign",
+        "regexp": "^#*(原神|星铁|米游社)?签到$",
+        "regexpFlags": ""
+      },
+      "pluginName": "GT-Manual-Plugin",
+      "example": "#米游社签到",
+      "meaning": "另一份 GT 安装提供的米游社签到入口。",
+      "declaredPermission": "all",
+      "executionConditions": [
+        "仅在该插件实际加载时可作为等价候选；不能假定两份都启用"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/GT-Manual-Plugin/apps/GTest.js",
+          "startLine": 19,
+          "endLine": 23,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/GT-Manual-Plugin/apps/GTest.js",
+          "startLine": 105,
+          "endLine": 136,
+          "claim": "另一份 GT 安装提供的米游社签到入口。"
+        }
+      ]
+    },
+    {
+      "id": "system-restart",
+      "family": "process",
+      "selector": {
+        "pluginKey": "other/restart.js",
+        "fnc": "restart",
+        "regexp": "^#重启$",
+        "regexpFlags": ""
+      },
+      "pluginName": "进程管理",
+      "example": "#重启",
+      "meaning": "重启机器人进程。",
+      "declaredPermission": "master",
+      "executionConditions": [
+        "仅主人；本基准只检索，绝不执行"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/other/restart.js",
+          "startLine": 39,
+          "endLine": 43,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/other/restart.js",
+          "startLine": 131,
+          "endLine": 135,
+          "claim": "重启机器人进程。"
+        }
+      ]
+    },
+    {
+      "id": "system-stop",
+      "family": "process",
+      "selector": {
+        "pluginKey": "other/restart.js",
+        "fnc": "stop",
+        "regexp": "^#关机$",
+        "regexpFlags": ""
+      },
+      "pluginName": "进程管理",
+      "example": "#关机",
+      "meaning": "暂停宿主插件调度并保留开机入口。",
+      "declaredPermission": "master",
+      "executionConditions": [
+        "仅主人；不是停止操作系统，也不等同退出进程"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/other/restart.js",
+          "startLine": 44,
+          "endLine": 48,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/other/restart.js",
+          "startLine": 137,
+          "endLine": 144,
+          "claim": "暂停宿主插件调度并保留开机入口。"
+        }
+      ]
+    },
+    {
+      "id": "system-exit",
+      "family": "process",
+      "selector": {
+        "pluginKey": "other/restart.js",
+        "fnc": "exit",
+        "regexp": "^#停(机|止)$",
+        "regexpFlags": ""
+      },
+      "pluginName": "进程管理",
+      "example": "#停止",
+      "meaning": "停止机器人进程。",
+      "declaredPermission": "master",
+      "executionConditions": [
+        "仅主人；不是 Yui 聊天闭嘴或清空会话"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/other/restart.js",
+          "startLine": 49,
+          "endLine": 53,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/other/restart.js",
+          "startLine": 146,
+          "endLine": 150,
+          "claim": "停止机器人进程。"
+        }
+      ]
+    },
+    {
+      "id": "system-recall",
+      "family": "recall",
+      "selector": {
+        "pluginKey": "system/recallReply.js",
+        "fnc": "recall",
+        "regexp": "^#?撤回$",
+        "regexpFlags": ""
+      },
+      "pluginName": "回复撤回",
+      "example": "#撤回",
+      "meaning": "撤回命令消息及被回复消息（适配器支持时）。",
+      "declaredPermission": "all",
+      "executionConditions": [
+        "规则未声明 master，但处理函数检查 e.isMaster；需要可撤回的消息和平台权限"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/system/recallReply.js",
+          "startLine": 9,
+          "endLine": 12,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/system/recallReply.js",
+          "startLine": 17,
+          "endLine": 27,
+          "claim": "撤回命令消息及被回复消息（适配器支持时）。"
+        }
+      ]
+    },
+    {
+      "id": "group-speak-rank",
+      "family": "group-stats",
+      "selector": {
+        "pluginKey": "other/speakRank.js",
+        "fnc": "speakRank",
+        "regexp": "^#发言(排行)?榜",
+        "regexpFlags": ""
+      },
+      "pluginName": "发言榜",
+      "example": "#发言榜7天20人",
+      "meaning": "按时间范围统计本群发言排名。",
+      "declaredPermission": "all",
+      "executionConditions": [
+        "只在群聊使用；天数1至365，人数1至100；默认7天20人"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/other/speakRank.js",
+          "startLine": 13,
+          "endLine": 16,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/other/speakRank.js",
+          "startLine": 22,
+          "endLine": 169,
+          "claim": "按时间范围统计本群发言排名。"
+        }
+      ]
+    },
+    {
+      "id": "group-mute-all",
+      "family": "group-mute",
+      "selector": {
+        "pluginKey": "yenai-plugin",
+        "fnc": "muteAll",
+        "regexp": "^#全(体|员)(禁言|解禁)$",
+        "regexpFlags": ""
+      },
+      "pluginName": "椰奶群管-基础",
+      "example": "#全体禁言",
+      "meaning": "开启或解除本群全体禁言。",
+      "declaredPermission": "all",
+      "executionConditions": [
+        "仅群聊；处理函数另检查操作者和机器人管理权限；与仅让AI闭嘴不同"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/yenai-plugin/apps/groupAdmin/groupAdmin.js",
+          "startLine": 33,
+          "endLine": 36,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/yenai-plugin/apps/groupAdmin/groupAdmin.js",
+          "startLine": 136,
+          "endLine": 141,
+          "claim": "开启或解除本群全体禁言。"
+        }
+      ]
+    },
+    {
+      "id": "guoba-login",
+      "family": "guoba-admin",
+      "selector": {
+        "pluginKey": "Guoba-Plugin",
+        "fnc": "login",
+        "regexp": "^#?锅巴(登录|登陆)$",
+        "regexpFlags": ""
+      },
+      "pluginName": "锅巴登录",
+      "example": "#锅巴登录",
+      "meaning": "获取锅巴后台快捷登录入口。",
+      "declaredPermission": "all",
+      "executionConditions": [
+        "规则未声明 master，但处理函数要求主人；不等同 Yui 管理后台"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/Guoba-Plugin/apps/login.js",
+          "startLine": 15,
+          "endLine": 18,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/Guoba-Plugin/apps/login.js",
+          "startLine": 23,
+          "endLine": 84,
+          "claim": "获取锅巴后台快捷登录入口。"
+        }
+      ]
+    },
+    {
+      "id": "yui-clear",
+      "family": "yui-conversation",
+      "selector": {
+        "pluginKey": "yui-chat",
+        "fnc": "clear",
+        "regexp": "^#yui(结束|新开|摧毁|毁灭|完结)对话([\\s\\S]*)$",
+        "regexpFlags": ""
+      },
+      "pluginName": "Yui Chat",
+      "example": "#yui结束对话",
+      "meaning": "结束个人当前对话，重新开始会话。",
+      "declaredPermission": "all",
+      "executionConditions": [
+        "不会因此删除长期记忆或知识库；不是结束所有人的会话"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/yui-chat/apps/chat.ts",
+          "startLine": 532,
+          "endLine": 532,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/yui-chat/apps/chat.ts",
+          "startLine": 198,
+          "endLine": 203,
+          "claim": "结束个人当前对话，重新开始会话。"
+        }
+      ]
+    },
+    {
+      "id": "yui-end-all",
+      "family": "yui-conversation",
+      "selector": {
+        "pluginKey": "yui-chat",
+        "fnc": "endAllConversations",
+        "regexp": "^#yui(结束|新开|摧毁|毁灭|完结)全部(模式|模型)?对话$",
+        "regexpFlags": ""
+      },
+      "pluginName": "Yui Chat",
+      "example": "#yui结束全部对话",
+      "meaning": "主人结束全部 Yui 对话并清理相关会话运行状态。",
+      "declaredPermission": "master",
+      "executionConditions": [
+        "仅主人；不等同只清理个人对话"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/yui-chat/apps/master.ts",
+          "startLine": 80,
+          "endLine": 80,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/yui-chat/apps/chat.ts",
+          "startLine": 245,
+          "endLine": 253,
+          "claim": "主人结束全部 Yui 对话并清理相关会话运行状态。"
+        }
+      ]
+    },
+    {
+      "id": "yui-login",
+      "family": "yui-admin",
+      "selector": {
+        "pluginKey": "yui-chat",
+        "fnc": "webLogin",
+        "regexp": "^#yui(面板|登录|登陆)$",
+        "regexpFlags": ""
+      },
+      "pluginName": "Yui Chat",
+      "example": "#yui面板",
+      "meaning": "向主人提供一次性 Yui 管理面板登录入口。",
+      "declaredPermission": "master",
+      "executionConditions": [
+        "仅主人；默认群内请求私发链接；不是角色面板或锅巴后台"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/yui-chat/apps/master.ts",
+          "startLine": 81,
+          "endLine": 81,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/yui-chat/apps/chat.ts",
+          "startLine": 484,
+          "endLine": 509,
+          "claim": "向主人提供一次性 Yui 管理面板登录入口。"
+        }
+      ]
+    },
+    {
+      "id": "yui-diagnostics",
+      "family": "yui-diagnostics",
+      "selector": {
+        "pluginKey": "yui-chat",
+        "fnc": "diagnostics",
+        "regexp": "^#yui诊断$",
+        "regexpFlags": ""
+      },
+      "pluginName": "Yui Chat",
+      "example": "#yui诊断",
+      "meaning": "查看 Yui 配置、模型与运行诊断摘要。",
+      "declaredPermission": "master",
+      "executionConditions": [
+        "仅主人；不要求生成模型回答，也不是查询游戏状态"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/yui-chat/apps/master.ts",
+          "startLine": 82,
+          "endLine": 82,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/yui-chat/apps/chat.ts",
+          "startLine": 272,
+          "endLine": 296,
+          "claim": "查看 Yui 配置、模型与运行诊断摘要。"
+        }
+      ]
+    },
+    {
+      "id": "yui-mode",
+      "family": "yui-mode",
+      "selector": {
+        "pluginKey": "yui-chat",
+        "fnc": "switchMode",
+        "regexp": "^#yui(文本|图片|语音)模式$",
+        "regexpFlags": ""
+      },
+      "pluginName": "Yui Chat",
+      "example": "#yui图片模式",
+      "meaning": "为当前用户切换文本、图片或语音回复模式。",
+      "declaredPermission": "all",
+      "executionConditions": [
+        "保存个人输出偏好；不是AI绘图指令"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/yui-chat/apps/chat.ts",
+          "startLine": 533,
+          "endLine": 533,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/yui-chat/apps/chat.ts",
+          "startLine": 255,
+          "endLine": 261,
+          "claim": "为当前用户切换文本、图片或语音回复模式。"
+        }
+      ]
+    },
+    {
+      "id": "yui-memory",
+      "family": "yui-memory",
+      "selector": {
+        "pluginKey": "yui-chat",
+        "fnc": "memoryCommand",
+        "regexp": "^#yui我的记忆(?:\\s+[\\s\\S]*)?$",
+        "regexpFlags": ""
+      },
+      "pluginName": "yui-chat",
+      "example": "#yui我的记忆",
+      "meaning": "查看和维护当前用户全局或本群个人记忆。",
+      "declaredPermission": "all",
+      "executionConditions": [
+        "普通用户只操作自己；结束对话不会清空记忆"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/yui-chat/apps/chat.ts",
+          "startLine": 526,
+          "endLine": 526,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/yui-chat/apps/commands/memory.ts",
+          "startLine": 52,
+          "endLine": 147,
+          "claim": "查看和维护当前用户全局或本群个人记忆。"
+        }
+      ]
+    },
+    {
+      "id": "yui-other-memory",
+      "family": "yui-memory",
+      "selector": {
+        "pluginKey": "yui-chat",
+        "fnc": "mentionMemoryCommand",
+        "regexp": "^#yui(?:他的|她的|TA的|ta的)记忆(?:\\s+[\\s\\S]*)?$",
+        "regexpFlags": ""
+      },
+      "pluginName": "yui-chat",
+      "example": "#yui他的记忆 900000001",
+      "meaning": "主人只读查看指定成员的记忆。",
+      "declaredPermission": "master",
+      "executionConditions": [
+        "仅主人；必须唯一真实提及或明确QQ号；不修改他人记忆"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/yui-chat/apps/master.ts",
+          "startLine": 76,
+          "endLine": 76,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/yui-chat/apps/commands/memory.ts",
+          "startLine": 150,
+          "endLine": 162,
+          "claim": "主人只读查看指定成员的记忆。"
+        }
+      ]
+    },
+    {
+      "id": "yui-manage-memory",
+      "family": "yui-memory",
+      "selector": {
+        "pluginKey": "yui-chat",
+        "fnc": "manageMemoryCommand",
+        "regexp": "^#yui管理记忆(?:\\s+[\\s\\S]*)?$",
+        "regexpFlags": ""
+      },
+      "pluginName": "yui-chat",
+      "example": "#yui管理记忆 900000001",
+      "meaning": "主人增删改指定成员的记忆。",
+      "declaredPermission": "master",
+      "executionConditions": [
+        "仅主人；带目标成员；查看入口和管理入口应区分"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/yui-chat/apps/master.ts",
+          "startLine": 77,
+          "endLine": 77,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/yui-chat/apps/commands/memory.ts",
+          "startLine": 52,
+          "endLine": 147,
+          "claim": "主人增删改指定成员的记忆。"
+        }
+      ]
+    },
+    {
+      "id": "yui-tasks",
+      "family": "yui-tasks",
+      "selector": {
+        "pluginKey": "yui-chat",
+        "fnc": "scheduleTaskList",
+        "regexp": "^#yui(?:我的)?定时任务(?:列表)?$",
+        "regexpFlags": ""
+      },
+      "pluginName": "yui-chat",
+      "example": "#yui定时任务",
+      "meaning": "列出当前用户的定时任务。",
+      "declaredPermission": "all",
+      "executionConditions": [
+        "仅自己的任务；列出不等于创建或执行提醒"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/yui-chat/apps/chat.ts",
+          "startLine": 531,
+          "endLine": 531,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/yui-chat/apps/chat.ts",
+          "startLine": 230,
+          "endLine": 233,
+          "claim": "列出当前用户的定时任务。"
+        }
+      ]
+    },
+    {
+      "id": "yui-all-tasks",
+      "family": "yui-tasks",
+      "selector": {
+        "pluginKey": "yui-chat",
+        "fnc": "allScheduleTaskList",
+        "regexp": "^#yui(?:全部|所有)定时任务(?:列表)?$",
+        "regexpFlags": ""
+      },
+      "pluginName": "yui-chat",
+      "example": "#yui全部定时任务",
+      "meaning": "主人查看所有人的定时任务及所有者。",
+      "declaredPermission": "master",
+      "executionConditions": [
+        "仅主人；查看不代表代替创建者取消"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/yui-chat/apps/master.ts",
+          "startLine": 78,
+          "endLine": 78,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/yui-chat/apps/chat.ts",
+          "startLine": 235,
+          "endLine": 243,
+          "claim": "主人查看所有人的定时任务及所有者。"
+        }
+      ]
+    },
+    {
+      "id": "yui-mute",
+      "family": "yui-mute",
+      "selector": {
+        "pluginKey": "yui-chat",
+        "fnc": "muteChat",
+        "regexp": "^#yui(本群|全局)?(群\\d+)?(闭嘴|关机|休眠|下班)([\\s\\S]*)$",
+        "regexpFlags": ""
+      },
+      "pluginName": "Yui Chat",
+      "example": "#yui本群闭嘴",
+      "meaning": "控制 Yui 在本群或指定作用域停止回应。",
+      "declaredPermission": "master",
+      "executionConditions": [
+        "仅主人；不执行群全员禁言、不关闭机器人进程"
+      ],
+      "evidence": [
+        {
+          "file": "plugins/yui-chat/apps/master.ts",
+          "startLine": 92,
+          "endLine": 92,
+          "claim": "注册规则、处理入口及声明权限"
+        },
+        {
+          "file": "plugins/yui-chat/apps/chat.ts",
+          "startLine": 321,
+          "endLine": 333,
+          "claim": "控制 Yui 在本群或指定作用域停止回应。"
+        }
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "id": "gs-stamina-1",
+      "family": "stamina",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#原神体力",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "gs-stamina"
+          ]
+        ],
+        "forbiddenTargets": [
+          "zzz-stamina"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要可用米游社账号或目标 UID；不是绑定入口"
+        ]
+      }
+    },
+    {
+      "id": "gs-stamina-2",
+      "family": "stamina",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "原神还剩多少树脂",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "gs-stamina"
+          ]
+        ],
+        "forbiddenTargets": [
+          "zzz-stamina"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要可用米游社账号或目标 UID；不是绑定入口"
+        ]
+      }
+    },
+    {
+      "id": "gs-stamina-3",
+      "family": "stamina",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "typo",
+      "query": "原神提力怎么查",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "gs-stamina"
+          ]
+        ],
+        "forbiddenTargets": [
+          "zzz-stamina"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要可用米游社账号或目标 UID；不是绑定入口"
+        ]
+      }
+    },
+    {
+      "id": "gs-stamina-4",
+      "family": "stamina",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "想看原神体力恢复情况",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "gs-stamina"
+          ]
+        ],
+        "forbiddenTargets": [
+          "zzz-stamina"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要可用米游社账号或目标 UID；不是绑定入口"
+        ]
+      }
+    },
+    {
+      "id": "zzz-stamina-1",
+      "family": "stamina",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#绝区零体力",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "zzz-stamina"
+          ]
+        ],
+        "forbiddenTargets": [
+          "gs-stamina"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "绝区零接口与账号数据可用；不能返回原神体力"
+        ]
+      }
+    },
+    {
+      "id": "zzz-stamina-2",
+      "family": "stamina",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "绝区零电量还剩多少",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "zzz-stamina"
+          ]
+        ],
+        "forbiddenTargets": [
+          "gs-stamina"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "绝区零接口与账号数据可用；不能返回原神体力"
+        ]
+      }
+    },
+    {
+      "id": "zzz-stamina-3",
+      "family": "stamina",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "绝区零的体力信息在哪看",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "zzz-stamina"
+          ]
+        ],
+        "forbiddenTargets": [
+          "gs-stamina"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "绝区零接口与账号数据可用；不能返回原神体力"
+        ]
+      }
+    },
+    {
+      "id": "zzz-stamina-4",
+      "family": "stamina",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "查看绝区零电池恢复情况",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "zzz-stamina"
+          ]
+        ],
+        "forbiddenTargets": [
+          "gs-stamina"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "绝区零接口与账号数据可用；不能返回原神体力"
+        ]
+      }
+    },
+    {
+      "id": "gs-ledger-1",
+      "family": "ledger",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#原石6月",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "gs-ledger"
+          ]
+        ],
+        "forbiddenTargets": [
+          "gs-ledger-count"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要相应游戏账号数据；指定月份不是年度累计"
+        ]
+      }
+    },
+    {
+      "id": "gs-ledger-2",
+      "family": "ledger",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "想看六月原石收支明细",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "gs-ledger"
+          ]
+        ],
+        "forbiddenTargets": [
+          "gs-ledger-count"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要相应游戏账号数据；指定月份不是年度累计"
+        ]
+      }
+    },
+    {
+      "id": "gs-ledger-3",
+      "family": "ledger",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "原神这个月拿了多少原石",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "gs-ledger"
+          ]
+        ],
+        "forbiddenTargets": [
+          "gs-ledger-count"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要相应游戏账号数据；指定月份不是年度累计"
+        ]
+      }
+    },
+    {
+      "id": "gs-ledger-4",
+      "family": "ledger",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "星铁本月的星琼月历",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "gs-ledger"
+          ]
+        ],
+        "forbiddenTargets": [
+          "gs-ledger-count"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要相应游戏账号数据；指定月份不是年度累计"
+        ]
+      }
+    },
+    {
+      "id": "gs-ledger-count-1",
+      "family": "ledger",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#原石统计",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "gs-ledger-count"
+          ]
+        ],
+        "forbiddenTargets": [
+          "gs-ledger"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "依赖已保存的札记数据；不等同指定月份明细"
+        ]
+      }
+    },
+    {
+      "id": "gs-ledger-count-2",
+      "family": "ledger",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "我要看原石累计统计",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "gs-ledger-count"
+          ]
+        ],
+        "forbiddenTargets": [
+          "gs-ledger"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "依赖已保存的札记数据；不等同指定月份明细"
+        ]
+      }
+    },
+    {
+      "id": "gs-ledger-count-3",
+      "family": "ledger",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "星琼统计用哪条指令",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "gs-ledger-count"
+          ]
+        ],
+        "forbiddenTargets": [
+          "gs-ledger"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "依赖已保存的札记数据；不等同指定月份明细"
+        ]
+      }
+    },
+    {
+      "id": "gs-ledger-count-4",
+      "family": "ledger",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "看一下保存过的札记汇总",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "gs-ledger-count"
+          ]
+        ],
+        "forbiddenTargets": [
+          "gs-ledger"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "依赖已保存的札记数据；不等同指定月份明细"
+        ]
+      }
+    },
+    {
+      "id": "gs-bind-1",
+      "family": "bind-game",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#原神绑定900000001",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "gs-bind"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "使用测试 UID；不代表绑定 Cookie 或已登录"
+        ]
+      }
+    },
+    {
+      "id": "gs-bind-2",
+      "family": "bind-game",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "怎么绑定原神的UID",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "gs-bind"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "使用测试 UID；不代表绑定 Cookie 或已登录"
+        ]
+      }
+    },
+    {
+      "id": "gs-bind-3",
+      "family": "bind-game",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "把星铁UID绑定到我的账号",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "gs-bind"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "使用测试 UID；不代表绑定 Cookie 或已登录"
+        ]
+      }
+    },
+    {
+      "id": "gs-bind-4",
+      "family": "bind-game",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "绝区零游戏ID怎么绑定",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "gs-bind"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "使用测试 UID；不代表绑定 Cookie 或已登录"
+        ]
+      }
+    },
+    {
+      "id": "gs-cookie-help-1",
+      "family": "cookie",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#Cookie帮助",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "gs-cookie-help"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "不得要求在群里发送 Cookie；不是显示 Cookie 内容"
+        ]
+      }
+    },
+    {
+      "id": "gs-cookie-help-2",
+      "family": "cookie",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "米游社Cookie应该怎样绑定",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "gs-cookie-help"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "不得要求在群里发送 Cookie；不是显示 Cookie 内容"
+        ]
+      }
+    },
+    {
+      "id": "gs-cookie-help-3",
+      "family": "cookie",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "怎么查看体力绑定教程",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "gs-cookie-help"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "不得要求在群里发送 Cookie；不是显示 Cookie 内容"
+        ]
+      }
+    },
+    {
+      "id": "gs-cookie-help-4",
+      "family": "cookie",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "需要Cookie获取与绑定说明",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "gs-cookie-help"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "不得要求在群里发送 Cookie；不是显示 Cookie 内容"
+        ]
+      }
+    },
+    {
+      "id": "miao-detail-1",
+      "family": "miao-panel",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#雷电将军面板",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "miao-detail"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-login",
+          "miao-refresh"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "角色可识别且有目标 UID、可用面板数据；不是管理后台"
+        ]
+      }
+    },
+    {
+      "id": "miao-detail-2",
+      "family": "miao-panel",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "typo",
+      "query": "想看雷电将军的角色面版",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "miao-detail"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-login",
+          "miao-refresh"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "角色可识别且有目标 UID、可用面板数据；不是管理后台"
+        ]
+      }
+    },
+    {
+      "id": "miao-detail-3",
+      "family": "miao-panel",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "怎么查刻晴的面板伤害",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "miao-detail"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-login",
+          "miao-refresh"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "角色可识别且有目标 UID、可用面板数据；不是管理后台"
+        ]
+      }
+    },
+    {
+      "id": "miao-detail-4",
+      "family": "miao-panel",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "查看夜兰的圣遗物评分",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "miao-detail"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-login",
+          "miao-refresh"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "角色可识别且有目标 UID、可用面板数据；不是管理后台"
+        ]
+      }
+    },
+    {
+      "id": "miao-list-1",
+      "family": "miao-panel",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#面板列表",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "miao-list"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-login"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "有目标 UID；仅查看已获取的数据"
+        ]
+      }
+    },
+    {
+      "id": "miao-list-2",
+      "family": "miao-panel",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "我已经有面板数据的角色有哪些",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "miao-list"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-login"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "有目标 UID；仅查看已获取的数据"
+        ]
+      }
+    },
+    {
+      "id": "miao-list-3",
+      "family": "miao-panel",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "列一下缓存的角色面板",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "miao-list"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-login"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "有目标 UID；仅查看已获取的数据"
+        ]
+      }
+    },
+    {
+      "id": "miao-list-4",
+      "family": "miao-panel",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "查看游戏角色面板列表",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "miao-list"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-login"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "有目标 UID；仅查看已获取的数据"
+        ]
+      }
+    },
+    {
+      "id": "miao-refresh-1",
+      "family": "miao-panel",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#更新面板",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "miao-refresh"
+          ]
+        ],
+        "forbiddenTargets": [
+          "miao-detail"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "橱窗开放详情，服务可用；不修改角色配装"
+        ]
+      }
+    },
+    {
+      "id": "miao-refresh-2",
+      "family": "miao-panel",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "我刚换了圣遗物怎么刷新面板",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "miao-refresh"
+          ]
+        ],
+        "forbiddenTargets": [
+          "miao-detail"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "橱窗开放详情，服务可用；不修改角色配装"
+        ]
+      }
+    },
+    {
+      "id": "miao-refresh-3",
+      "family": "miao-panel",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "重新拉取游戏橱窗的角色详情",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "miao-refresh"
+          ]
+        ],
+        "forbiddenTargets": [
+          "miao-detail"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "橱窗开放详情，服务可用；不修改角色配装"
+        ]
+      }
+    },
+    {
+      "id": "miao-refresh-4",
+      "family": "miao-panel",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "让喵喵更新角色面板数据",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "miao-refresh"
+          ]
+        ],
+        "forbiddenTargets": [
+          "miao-detail"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "橱窗开放详情，服务可用；不修改角色配装"
+        ]
+      }
+    },
+    {
+      "id": "miao-artifacts-1",
+      "family": "miao-artifacts",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#圣遗物列表",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "miao-artifacts"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要可用角色及面板数据"
+        ]
+      }
+    },
+    {
+      "id": "miao-artifacts-2",
+      "family": "miao-artifacts",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "我的圣遗物列表在哪看",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "miao-artifacts"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要可用角色及面板数据"
+        ]
+      }
+    },
+    {
+      "id": "miao-artifacts-3",
+      "family": "miao-artifacts",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "想列出星铁面板里的遗器",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "miao-artifacts"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要可用角色及面板数据"
+        ]
+      }
+    },
+    {
+      "id": "miao-artifacts-4",
+      "family": "miao-artifacts",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "查看账号面板存着哪些圣遗物",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "miao-artifacts"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要可用角色及面板数据"
+        ]
+      }
+    },
+    {
+      "id": "miao-material-1",
+      "family": "miao-material",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#今日素材",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "miao-material"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "依赖角色数据；周日提示全部素材可刷"
+        ]
+      }
+    },
+    {
+      "id": "miao-material-2",
+      "family": "miao-material",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "明天该刷哪些天赋材料",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "miao-material"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "依赖角色数据；周日提示全部素材可刷"
+        ]
+      }
+    },
+    {
+      "id": "miao-material-3",
+      "family": "miao-material",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "星期二能刷什么角色素材",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "miao-material"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "依赖角色数据；周日提示全部素材可刷"
+        ]
+      }
+    },
+    {
+      "id": "miao-material-4",
+      "family": "miao-material",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "今天原神天赋材料在哪里看",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "miao-material"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "依赖角色数据；周日提示全部素材可刷"
+        ]
+      }
+    },
+    {
+      "id": "miao-calendar-1",
+      "family": "game-calendar",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#日历",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "miao-calendar"
+          ]
+        ],
+        "forbiddenTargets": [
+          "miao-calendar-sr"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "原神日历，不能混为星铁日历"
+        ]
+      }
+    },
+    {
+      "id": "miao-calendar-2",
+      "family": "game-calendar",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "原神最近活动日历怎么看",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "miao-calendar"
+          ]
+        ],
+        "forbiddenTargets": [
+          "miao-calendar-sr"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "原神日历，不能混为星铁日历"
+        ]
+      }
+    },
+    {
+      "id": "miao-calendar-3",
+      "family": "game-calendar",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "我想看原神活动时间表",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "miao-calendar"
+          ]
+        ],
+        "forbiddenTargets": [
+          "miao-calendar-sr"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "原神日历，不能混为星铁日历"
+        ]
+      }
+    },
+    {
+      "id": "miao-calendar-4",
+      "family": "game-calendar",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "查看原神的日历列表",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "miao-calendar"
+          ]
+        ],
+        "forbiddenTargets": [
+          "miao-calendar-sr"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "原神日历，不能混为星铁日历"
+        ]
+      }
+    },
+    {
+      "id": "miao-calendar-sr-1",
+      "family": "game-calendar",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#星铁日历",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "miao-calendar-sr"
+          ]
+        ],
+        "forbiddenTargets": [
+          "miao-calendar"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "按星铁日历数据生成"
+        ]
+      }
+    },
+    {
+      "id": "miao-calendar-sr-2",
+      "family": "game-calendar",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "星铁活动日历在哪看",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "miao-calendar-sr"
+          ]
+        ],
+        "forbiddenTargets": [
+          "miao-calendar"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "按星铁日历数据生成"
+        ]
+      }
+    },
+    {
+      "id": "miao-calendar-sr-3",
+      "family": "game-calendar",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "崩铁最近的活动时间表",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "miao-calendar-sr"
+          ]
+        ],
+        "forbiddenTargets": [
+          "miao-calendar"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "按星铁日历数据生成"
+        ]
+      }
+    },
+    {
+      "id": "miao-calendar-sr-4",
+      "family": "game-calendar",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "想看星铁日历列表",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "miao-calendar-sr"
+          ]
+        ],
+        "forbiddenTargets": [
+          "miao-calendar"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "按星铁日历数据生成"
+        ]
+      }
+    },
+    {
+      "id": "miao-gacha-1",
+      "family": "gacha",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#喵喵抽卡记录",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "miao-gacha"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要已有或已导入的抽卡数据；不是模拟抽卡"
+        ]
+      }
+    },
+    {
+      "id": "miao-gacha-2",
+      "family": "gacha",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "看看我导入的抽卡记录",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "miao-gacha"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要已有或已导入的抽卡数据；不是模拟抽卡"
+        ]
+      }
+    },
+    {
+      "id": "miao-gacha-3",
+      "family": "gacha",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "喵喵祈愿分析怎么查",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "miao-gacha"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要已有或已导入的抽卡数据；不是模拟抽卡"
+        ]
+      }
+    },
+    {
+      "id": "miao-gacha-4",
+      "family": "gacha",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "查看角色池抽卡明细",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "miao-gacha"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要已有或已导入的抽卡数据；不是模拟抽卡"
+        ]
+      }
+    },
+    {
+      "id": "king-guide-1",
+      "family": "king-guide",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#英雄攻略 孙悟空",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "king-guide"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "必须带英雄名；官网基础资料不强制绑定营地，营地增强数据依赖登录态"
+        ]
+      }
+    },
+    {
+      "id": "king-guide-2",
+      "family": "king-guide",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "王者孙悟空应该怎么出装",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "king-guide"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "必须带英雄名；官网基础资料不强制绑定营地，营地增强数据依赖登录态"
+        ]
+      }
+    },
+    {
+      "id": "king-guide-3",
+      "family": "king-guide",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "想看亚瑟铭文和技能介绍",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "king-guide"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "必须带英雄名；官网基础资料不强制绑定营地，营地增强数据依赖登录态"
+        ]
+      }
+    },
+    {
+      "id": "king-guide-4",
+      "family": "king-guide",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "妲己被哪些英雄克制",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "king-guide"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "必须带英雄名；官网基础资料不强制绑定营地，营地增强数据依赖登录态"
+        ]
+      }
+    },
+    {
+      "id": "king-export-1",
+      "family": "king-export",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#导出战绩 7",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "king-export"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要目标营地账号和已有归档；不能承诺导出未归档的全部历史"
+        ]
+      }
+    },
+    {
+      "id": "king-export-2",
+      "family": "king-export",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "把最近七天王者战绩导成CSV",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "king-export"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要目标营地账号和已有归档；不能承诺导出未归档的全部历史"
+        ]
+      }
+    },
+    {
+      "id": "king-export-3",
+      "family": "king-export",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "下载我保存的王者对局记录表格",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "king-export"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要目标营地账号和已有归档；不能承诺导出未归档的全部历史"
+        ]
+      }
+    },
+    {
+      "id": "king-export-4",
+      "family": "king-export",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "王者战绩归档能导出文件吗",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "king-export"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要目标营地账号和已有归档；不能承诺导出未归档的全部历史"
+        ]
+      }
+    },
+    {
+      "id": "king-online-1",
+      "family": "king-online",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#谁在打王者",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "king-online"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "依赖群成员索引及已绑定账号；私聊只看自己；不能承诺零网络请求"
+        ]
+      }
+    },
+    {
+      "id": "king-online-2",
+      "family": "king-online",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "现在群里谁在打王者",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "king-online"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "依赖群成员索引及已绑定账号；私聊只看自己；不能承诺零网络请求"
+        ]
+      }
+    },
+    {
+      "id": "king-online-3",
+      "family": "king-online",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "看看本群有哪些人正在对局",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "king-online"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "依赖群成员索引及已绑定账号；私聊只看自己；不能承诺零网络请求"
+        ]
+      }
+    },
+    {
+      "id": "king-online-4",
+      "family": "king-online",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "王者在线列表怎么查",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "king-online"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "依赖群成员索引及已绑定账号；私聊只看自己；不能承诺零网络请求"
+        ]
+      }
+    },
+    {
+      "id": "king-missing-1",
+      "family": "king-skins",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#缺皮肤 妲己",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "king-missing"
+          ]
+        ],
+        "forbiddenTargets": [
+          "king-owned"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要可用营地账号；不是列出已拥有皮肤"
+        ]
+      }
+    },
+    {
+      "id": "king-missing-2",
+      "family": "king-skins",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "我在王者还缺哪些皮肤",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "king-missing"
+          ]
+        ],
+        "forbiddenTargets": [
+          "king-owned"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要可用营地账号；不是列出已拥有皮肤"
+        ]
+      }
+    },
+    {
+      "id": "king-missing-3",
+      "family": "king-skins",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "看看妲己哪些皮肤还没买",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "king-missing"
+          ]
+        ],
+        "forbiddenTargets": [
+          "king-owned"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要可用营地账号；不是列出已拥有皮肤"
+        ]
+      }
+    },
+    {
+      "id": "king-missing-4",
+      "family": "king-skins",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "查看王者账号皮肤缺失清单",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "king-missing"
+          ]
+        ],
+        "forbiddenTargets": [
+          "king-owned"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要可用营地账号；不是列出已拥有皮肤"
+        ]
+      }
+    },
+    {
+      "id": "king-owned-1",
+      "family": "king-skins",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#皮肤墙",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "king-owned"
+          ]
+        ],
+        "forbiddenTargets": [
+          "king-missing"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要可用营地账号；不是缺失皮肤列表"
+        ]
+      }
+    },
+    {
+      "id": "king-owned-2",
+      "family": "king-skins",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "想看看我已经拥有的王者皮肤",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "king-owned"
+          ]
+        ],
+        "forbiddenTargets": [
+          "king-missing"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要可用营地账号；不是缺失皮肤列表"
+        ]
+      }
+    },
+    {
+      "id": "king-owned-3",
+      "family": "king-skins",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "我的王者皮肤墙在哪里",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "king-owned"
+          ]
+        ],
+        "forbiddenTargets": [
+          "king-missing"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要可用营地账号；不是缺失皮肤列表"
+        ]
+      }
+    },
+    {
+      "id": "king-owned-4",
+      "family": "king-skins",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "展示我账号里已经买过的皮肤",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "king-owned"
+          ]
+        ],
+        "forbiddenTargets": [
+          "king-missing"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要可用营地账号；不是缺失皮肤列表"
+        ]
+      }
+    },
+    {
+      "id": "king-rank-trend-1",
+      "family": "king-trend",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#段位趋势 7",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "king-rank-trend"
+          ]
+        ],
+        "forbiddenTargets": [
+          "king-peak-trend"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅排位赛；归档不足可补拉，数据少于两场无法成图"
+        ]
+      }
+    },
+    {
+      "id": "king-rank-trend-2",
+      "family": "king-trend",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "王者最近一周升了几颗星",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "king-rank-trend"
+          ]
+        ],
+        "forbiddenTargets": [
+          "king-peak-trend"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅排位赛；归档不足可补拉，数据少于两场无法成图"
+        ]
+      }
+    },
+    {
+      "id": "king-rank-trend-3",
+      "family": "king-trend",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "我想看排位段位变化曲线",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "king-rank-trend"
+          ]
+        ],
+        "forbiddenTargets": [
+          "king-peak-trend"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅排位赛；归档不足可补拉，数据少于两场无法成图"
+        ]
+      }
+    },
+    {
+      "id": "king-rank-trend-4",
+      "family": "king-trend",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "王者排位段位走势在哪看",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "king-rank-trend"
+          ]
+        ],
+        "forbiddenTargets": [
+          "king-peak-trend"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅排位赛；归档不足可补拉，数据少于两场无法成图"
+        ]
+      }
+    },
+    {
+      "id": "king-peak-trend-1",
+      "family": "king-trend",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#巅峰趋势 7",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "king-peak-trend"
+          ]
+        ],
+        "forbiddenTargets": [
+          "king-rank-trend"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "只统计巅峰赛；不把排位赛算入"
+        ]
+      }
+    },
+    {
+      "id": "king-peak-trend-2",
+      "family": "king-trend",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "最近一周巅峰分涨跌怎么看",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "king-peak-trend"
+          ]
+        ],
+        "forbiddenTargets": [
+          "king-rank-trend"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "只统计巅峰赛；不把排位赛算入"
+        ]
+      }
+    },
+    {
+      "id": "king-peak-trend-3",
+      "family": "king-trend",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "查看我的王者巅峰赛分数曲线",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "king-peak-trend"
+          ]
+        ],
+        "forbiddenTargets": [
+          "king-rank-trend"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "只统计巅峰赛；不把排位赛算入"
+        ]
+      }
+    },
+    {
+      "id": "king-peak-trend-4",
+      "family": "king-trend",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "看看巅峰赛上分趋势",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "king-peak-trend"
+          ]
+        ],
+        "forbiddenTargets": [
+          "king-rank-trend"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "只统计巅峰赛；不把排位赛算入"
+        ]
+      }
+    },
+    {
+      "id": "king-bind-1",
+      "family": "king-bind",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#绑定营地 900000001",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "king-bind"
+          ]
+        ],
+        "forbiddenTargets": [
+          "gs-bind"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "当前实现要求群聊中绑定；不是米游社 UID 绑定"
+        ]
+      }
+    },
+    {
+      "id": "king-bind-2",
+      "family": "king-bind",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "王者营地ID怎么绑定",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "king-bind"
+          ]
+        ],
+        "forbiddenTargets": [
+          "gs-bind"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "当前实现要求群聊中绑定；不是米游社 UID 绑定"
+        ]
+      }
+    },
+    {
+      "id": "king-bind-3",
+      "family": "king-bind",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "把王者营地号加到我的账号",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "king-bind"
+          ]
+        ],
+        "forbiddenTargets": [
+          "gs-bind"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "当前实现要求群聊中绑定；不是米游社 UID 绑定"
+        ]
+      }
+    },
+    {
+      "id": "king-bind-4",
+      "family": "king-bind",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "绑定后怎样加入本群王者账号名单",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "king-bind"
+          ]
+        ],
+        "forbiddenTargets": [
+          "gs-bind"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "当前实现要求群聊中绑定；不是米游社 UID 绑定"
+        ]
+      }
+    },
+    {
+      "id": "trss-qr-1",
+      "family": "qr",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "二维码 测试文本",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "trss-qr"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "提供非空文本；不是识别二维码或网页截图"
+        ]
+      }
+    },
+    {
+      "id": "trss-qr-2",
+      "family": "qr",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "把一段文字生成二维码",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "trss-qr"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "提供非空文本；不是识别二维码或网页截图"
+        ]
+      }
+    },
+    {
+      "id": "trss-qr-3",
+      "family": "qr",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "怎么把链接做成二维码图片",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "trss-qr"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "提供非空文本；不是识别二维码或网页截图"
+        ]
+      }
+    },
+    {
+      "id": "trss-qr-4",
+      "family": "qr",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "我想生成二维码给别人扫",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "trss-qr"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "提供非空文本；不是识别二维码或网页截图"
+        ]
+      }
+    },
+    {
+      "id": "trss-rembg-1",
+      "family": "image-process",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#去除背景",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "trss-rembg"
+          ]
+        ],
+        "forbiddenTargets": [
+          "trss-upscale"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要图片及可用本地模型或服务；无图会进入等待图片流程"
+        ]
+      }
+    },
+    {
+      "id": "trss-rembg-2",
+      "family": "image-process",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "这张图片能不能抠成透明背景",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "trss-rembg"
+          ]
+        ],
+        "forbiddenTargets": [
+          "trss-upscale"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要图片及可用本地模型或服务；无图会进入等待图片流程"
+        ]
+      }
+    },
+    {
+      "id": "trss-rembg-3",
+      "family": "image-process",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "帮我去掉照片的背景该用什么指令",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "trss-rembg"
+          ]
+        ],
+        "forbiddenTargets": [
+          "trss-upscale"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要图片及可用本地模型或服务；无图会进入等待图片流程"
+        ]
+      }
+    },
+    {
+      "id": "trss-rembg-4",
+      "family": "image-process",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "动漫图片背景去除怎么触发",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "trss-rembg"
+          ]
+        ],
+        "forbiddenTargets": [
+          "trss-upscale"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要图片及可用本地模型或服务；无图会进入等待图片流程"
+        ]
+      }
+    },
+    {
+      "id": "trss-upscale-1",
+      "family": "image-process",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#图片修复",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "trss-upscale"
+          ]
+        ],
+        "forbiddenTargets": [
+          "trss-rembg"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要图片及可用本地模型或服务；不能混为抠图"
+        ]
+      }
+    },
+    {
+      "id": "trss-upscale-2",
+      "family": "image-process",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "怎么把模糊图片修复清晰",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "trss-upscale"
+          ]
+        ],
+        "forbiddenTargets": [
+          "trss-rembg"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要图片及可用本地模型或服务；不能混为抠图"
+        ]
+      }
+    },
+    {
+      "id": "trss-upscale-3",
+      "family": "image-process",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "动漫图片超分辨率用哪个指令",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "trss-upscale"
+          ]
+        ],
+        "forbiddenTargets": [
+          "trss-rembg"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要图片及可用本地模型或服务；不能混为抠图"
+        ]
+      }
+    },
+    {
+      "id": "trss-upscale-4",
+      "family": "image-process",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "我想放大修复这张图片",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "trss-upscale"
+          ]
+        ],
+        "forbiddenTargets": [
+          "trss-rembg"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要图片及可用本地模型或服务；不能混为抠图"
+        ]
+      }
+    },
+    {
+      "id": "music-netease-1",
+      "family": "music",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#点歌 稻香",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "music-netease"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "当前实现仅 NapCat.Onebot；#听1 依赖此前搜索列表，列表不是独立用户会话隔离"
+        ]
+      }
+    },
+    {
+      "id": "music-netease-2",
+      "family": "music",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "想在群里点一首网易云歌曲",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "music-netease"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "当前实现仅 NapCat.Onebot；#听1 依赖此前搜索列表，列表不是独立用户会话隔离"
+        ]
+      }
+    },
+    {
+      "id": "music-netease-3",
+      "family": "music",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "搜索稻香然后选择歌曲编号",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "music-netease"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "当前实现仅 NapCat.Onebot；#听1 依赖此前搜索列表，列表不是独立用户会话隔离"
+        ]
+      }
+    },
+    {
+      "id": "music-netease-4",
+      "family": "music",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "刚才点歌列表里的第一首怎么播放",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "music-netease"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "当前实现仅 NapCat.Onebot；#听1 依赖此前搜索列表，列表不是独立用户会话隔离"
+        ]
+      }
+    },
+    {
+      "id": "gt-sign-1",
+      "family": "mys-sign",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#米游社签到",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "gt-sign",
+            "gt-plugin-sign"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要已绑定 Cookie 和可用 GT 服务；不保证自动完成签到"
+        ]
+      }
+    },
+    {
+      "id": "gt-sign-2",
+      "family": "mys-sign",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "原神米游社手动签到入口",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "gt-sign",
+            "gt-plugin-sign"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要已绑定 Cookie 和可用 GT 服务；不保证自动完成签到"
+        ]
+      }
+    },
+    {
+      "id": "gt-sign-3",
+      "family": "mys-sign",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "星铁的米游社签到链接怎么获取",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "gt-sign",
+            "gt-plugin-sign"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要已绑定 Cookie 和可用 GT 服务；不保证自动完成签到"
+        ]
+      }
+    },
+    {
+      "id": "gt-sign-4",
+      "family": "mys-sign",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "我已经绑了Cookie想手动签到",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "gt-sign",
+            "gt-plugin-sign"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要已绑定 Cookie 和可用 GT 服务；不保证自动完成签到"
+        ]
+      }
+    },
+    {
+      "id": "system-restart-1",
+      "family": "process",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#重启",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "system-restart"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-mute",
+          "system-stop",
+          "system-exit"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；本基准只检索，绝不执行"
+        ]
+      }
+    },
+    {
+      "id": "system-restart-2",
+      "family": "process",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "主人想重启整个机器人进程",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "system-restart"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-mute",
+          "system-stop",
+          "system-exit"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；本基准只检索，绝不执行"
+        ]
+      }
+    },
+    {
+      "id": "system-restart-3",
+      "family": "process",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "机器人进程重新启动用什么命令",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "system-restart"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-mute",
+          "system-stop",
+          "system-exit"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；本基准只检索，绝不执行"
+        ]
+      }
+    },
+    {
+      "id": "system-restart-4",
+      "family": "process",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "重启Yunzai该发什么",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "system-restart"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-mute",
+          "system-stop",
+          "system-exit"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；本基准只检索，绝不执行"
+        ]
+      }
+    },
+    {
+      "id": "system-stop-1",
+      "family": "process",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#关机",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "system-stop"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-mute",
+          "system-exit"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；不是停止操作系统，也不等同退出进程"
+        ]
+      }
+    },
+    {
+      "id": "system-stop-2",
+      "family": "process",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "让机器人进入可以再开机的关机状态",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "system-stop"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-mute",
+          "system-exit"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；不是停止操作系统，也不等同退出进程"
+        ]
+      }
+    },
+    {
+      "id": "system-stop-3",
+      "family": "process",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "暂停整台机器人的指令处理",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "system-stop"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-mute",
+          "system-exit"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；不是停止操作系统，也不等同退出进程"
+        ]
+      }
+    },
+    {
+      "id": "system-stop-4",
+      "family": "process",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "宿主关机命令是什么",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "system-stop"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-mute",
+          "system-exit"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；不是停止操作系统，也不等同退出进程"
+        ]
+      }
+    },
+    {
+      "id": "system-exit-1",
+      "family": "process",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#停止",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "system-exit"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-mute",
+          "system-stop"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；不是 Yui 聊天闭嘴或清空会话"
+        ]
+      }
+    },
+    {
+      "id": "system-exit-2",
+      "family": "process",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "停止运行Yunzai进程",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "system-exit"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-mute",
+          "system-stop"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；不是 Yui 聊天闭嘴或清空会话"
+        ]
+      }
+    },
+    {
+      "id": "system-exit-3",
+      "family": "process",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "我要让机器人进程退出",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "system-exit"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-mute",
+          "system-stop"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；不是 Yui 聊天闭嘴或清空会话"
+        ]
+      }
+    },
+    {
+      "id": "system-exit-4",
+      "family": "process",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "机器人停止和关机的停止入口",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "system-exit"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-mute",
+          "system-stop"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；不是 Yui 聊天闭嘴或清空会话"
+        ]
+      }
+    },
+    {
+      "id": "system-recall-1",
+      "family": "recall",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#撤回",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "system-recall"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "规则未声明 master，但处理函数检查 e.isMaster；需要可撤回的消息和平台权限"
+        ]
+      }
+    },
+    {
+      "id": "system-recall-2",
+      "family": "recall",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "主人如何撤回机器人刚才那条消息",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "system-recall"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "规则未声明 master，但处理函数检查 e.isMaster；需要可撤回的消息和平台权限"
+        ]
+      }
+    },
+    {
+      "id": "system-recall-3",
+      "family": "recall",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "回复一条消息让机器人撤回",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "system-recall"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "规则未声明 master，但处理函数检查 e.isMaster；需要可撤回的消息和平台权限"
+        ]
+      }
+    },
+    {
+      "id": "system-recall-4",
+      "family": "recall",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "撤回回复消息用哪个指令",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "system-recall"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "规则未声明 master，但处理函数检查 e.isMaster；需要可撤回的消息和平台权限"
+        ]
+      }
+    },
+    {
+      "id": "group-speak-rank-1",
+      "family": "group-stats",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#发言榜7天20人",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "group-speak-rank"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "只在群聊使用；天数1至365，人数1至100；默认7天20人"
+        ]
+      }
+    },
+    {
+      "id": "group-speak-rank-2",
+      "family": "group-stats",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "最近七天群里谁说话最多",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "group-speak-rank"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "只在群聊使用；天数1至365，人数1至100；默认7天20人"
+        ]
+      }
+    },
+    {
+      "id": "group-speak-rank-3",
+      "family": "group-stats",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "查看本群发言排行榜前二十名",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "group-speak-rank"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "只在群聊使用；天数1至365，人数1至100；默认7天20人"
+        ]
+      }
+    },
+    {
+      "id": "group-speak-rank-4",
+      "family": "group-stats",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "统计今天群成员的发言数量排名",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "group-speak-rank"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "只在群聊使用；天数1至365，人数1至100；默认7天20人"
+        ]
+      }
+    },
+    {
+      "id": "group-mute-all-1",
+      "family": "group-mute",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#全体禁言",
+      "context": {
+        "role": "admin",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "group-mute-all"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-mute"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅群聊；处理函数另检查操作者和机器人管理权限；与仅让AI闭嘴不同"
+        ]
+      }
+    },
+    {
+      "id": "group-mute-all-2",
+      "family": "group-mute",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "把整个群开启全员禁言",
+      "context": {
+        "role": "admin",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "group-mute-all"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-mute"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅群聊；处理函数另检查操作者和机器人管理权限；与仅让AI闭嘴不同"
+        ]
+      }
+    },
+    {
+      "id": "group-mute-all-3",
+      "family": "group-mute",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "本群所有人禁止发言怎么设置",
+      "context": {
+        "role": "admin",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "group-mute-all"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-mute"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅群聊；处理函数另检查操作者和机器人管理权限；与仅让AI闭嘴不同"
+        ]
+      }
+    },
+    {
+      "id": "group-mute-all-4",
+      "family": "group-mute",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "全员解禁该用什么命令",
+      "context": {
+        "role": "admin",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "group-mute-all"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-mute"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅群聊；处理函数另检查操作者和机器人管理权限；与仅让AI闭嘴不同"
+        ]
+      }
+    },
+    {
+      "id": "guoba-login-1",
+      "family": "guoba-admin",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#锅巴登录",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "guoba-login"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-login"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "规则未声明 master，但处理函数要求主人；不等同 Yui 管理后台"
+        ]
+      }
+    },
+    {
+      "id": "guoba-login-2",
+      "family": "guoba-admin",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "主人怎么进入锅巴配置面板",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "guoba-login"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-login"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "规则未声明 master，但处理函数要求主人；不等同 Yui 管理后台"
+        ]
+      }
+    },
+    {
+      "id": "guoba-login-3",
+      "family": "guoba-admin",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "锅巴管理后台登录入口是什么",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "guoba-login"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-login"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "规则未声明 master，但处理函数要求主人；不等同 Yui 管理后台"
+        ]
+      }
+    },
+    {
+      "id": "guoba-login-4",
+      "family": "guoba-admin",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "获取锅巴快捷登录链接",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "guoba-login"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-login"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "规则未声明 master，但处理函数要求主人；不等同 Yui 管理后台"
+        ]
+      }
+    },
+    {
+      "id": "yui-clear-1",
+      "family": "yui-conversation",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#yui结束对话",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-clear"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-end-all",
+          "yui-memory"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "不会因此删除长期记忆或知识库；不是结束所有人的会话"
+        ]
+      }
+    },
+    {
+      "id": "yui-clear-2",
+      "family": "yui-conversation",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "我想让Yui忘掉当前聊天上下文重新聊",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-clear"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-end-all",
+          "yui-memory"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "不会因此删除长期记忆或知识库；不是结束所有人的会话"
+        ]
+      }
+    },
+    {
+      "id": "yui-clear-3",
+      "family": "yui-conversation",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "怎么结束我这次AI对话",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-clear"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-end-all",
+          "yui-memory"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "不会因此删除长期记忆或知识库；不是结束所有人的会话"
+        ]
+      }
+    },
+    {
+      "id": "yui-clear-4",
+      "family": "yui-conversation",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "开启一段新的Yui对话",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-clear"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-end-all",
+          "yui-memory"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "不会因此删除长期记忆或知识库；不是结束所有人的会话"
+        ]
+      }
+    },
+    {
+      "id": "yui-end-all-1",
+      "family": "yui-conversation",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#yui结束全部对话",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-end-all"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-clear"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；不等同只清理个人对话"
+        ]
+      }
+    },
+    {
+      "id": "yui-end-all-2",
+      "family": "yui-conversation",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "主人清空所有人的Yui活跃会话",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-end-all"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-clear"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；不等同只清理个人对话"
+        ]
+      }
+    },
+    {
+      "id": "yui-end-all-3",
+      "family": "yui-conversation",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "结束全部模型的聊天会话",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-end-all"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-clear"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；不等同只清理个人对话"
+        ]
+      }
+    },
+    {
+      "id": "yui-end-all-4",
+      "family": "yui-conversation",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "怎么重置全体Yui对话",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-end-all"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-clear"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；不等同只清理个人对话"
+        ]
+      }
+    },
+    {
+      "id": "yui-login-1",
+      "family": "yui-admin",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#yui面板",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-login"
+          ]
+        ],
+        "forbiddenTargets": [
+          "miao-detail",
+          "guoba-login"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；默认群内请求私发链接；不是角色面板或锅巴后台"
+        ]
+      }
+    },
+    {
+      "id": "yui-login-2",
+      "family": "yui-admin",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "主人怎么登录Yui网页管理台",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-login"
+          ]
+        ],
+        "forbiddenTargets": [
+          "miao-detail",
+          "guoba-login"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；默认群内请求私发链接；不是角色面板或锅巴后台"
+        ]
+      }
+    },
+    {
+      "id": "yui-login-3",
+      "family": "yui-admin",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "Yui配置面板入口在哪里",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-login"
+          ]
+        ],
+        "forbiddenTargets": [
+          "miao-detail",
+          "guoba-login"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；默认群内请求私发链接；不是角色面板或锅巴后台"
+        ]
+      }
+    },
+    {
+      "id": "yui-login-4",
+      "family": "yui-admin",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "打开Yui管理后台登录链接",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-login"
+          ]
+        ],
+        "forbiddenTargets": [
+          "miao-detail",
+          "guoba-login"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；默认群内请求私发链接；不是角色面板或锅巴后台"
+        ]
+      }
+    },
+    {
+      "id": "yui-diagnostics-1",
+      "family": "yui-diagnostics",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#yui诊断",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-diagnostics"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；不要求生成模型回答，也不是查询游戏状态"
+        ]
+      }
+    },
+    {
+      "id": "yui-diagnostics-2",
+      "family": "yui-diagnostics",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "主人怎么排查Yui配置状态",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-diagnostics"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；不要求生成模型回答，也不是查询游戏状态"
+        ]
+      }
+    },
+    {
+      "id": "yui-diagnostics-3",
+      "family": "yui-diagnostics",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "Yui模型连接和运行状态怎么诊断",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-diagnostics"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；不要求生成模型回答，也不是查询游戏状态"
+        ]
+      }
+    },
+    {
+      "id": "yui-diagnostics-4",
+      "family": "yui-diagnostics",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "查看Yui的诊断信息",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-diagnostics"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；不要求生成模型回答，也不是查询游戏状态"
+        ]
+      }
+    },
+    {
+      "id": "yui-mode-1",
+      "family": "yui-mode",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#yui图片模式",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-mode"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "保存个人输出偏好；不是AI绘图指令"
+        ]
+      }
+    },
+    {
+      "id": "yui-mode-2",
+      "family": "yui-mode",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "让Yui以后用图片回复我",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-mode"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "保存个人输出偏好；不是AI绘图指令"
+        ]
+      }
+    },
+    {
+      "id": "yui-mode-3",
+      "family": "yui-mode",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "Yui怎么切回纯文字模式",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-mode"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "保存个人输出偏好；不是AI绘图指令"
+        ]
+      }
+    },
+    {
+      "id": "yui-mode-4",
+      "family": "yui-mode",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "我想切换Yui语音回复模式",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-mode"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "保存个人输出偏好；不是AI绘图指令"
+        ]
+      }
+    },
+    {
+      "id": "yui-memory-1",
+      "family": "yui-memory",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#yui我的记忆",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-memory"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-other-memory",
+          "yui-manage-memory"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "普通用户只操作自己；结束对话不会清空记忆"
+        ]
+      }
+    },
+    {
+      "id": "yui-memory-2",
+      "family": "yui-memory",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "Yui记住了我什么",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-memory"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-other-memory",
+          "yui-manage-memory"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "普通用户只操作自己；结束对话不会清空记忆"
+        ]
+      }
+    },
+    {
+      "id": "yui-memory-3",
+      "family": "yui-memory",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "我想修改Yui保存的个人记忆",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-memory"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-other-memory",
+          "yui-manage-memory"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "普通用户只操作自己；结束对话不会清空记忆"
+        ]
+      }
+    },
+    {
+      "id": "yui-memory-4",
+      "family": "yui-memory",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "怎样查看我在本群的记忆",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-memory"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-other-memory",
+          "yui-manage-memory"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "普通用户只操作自己；结束对话不会清空记忆"
+        ]
+      }
+    },
+    {
+      "id": "yui-other-memory-1",
+      "family": "yui-memory",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#yui他的记忆 900000001",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-other-memory"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；必须唯一真实提及或明确QQ号；不修改他人记忆"
+        ]
+      }
+    },
+    {
+      "id": "yui-other-memory-2",
+      "family": "yui-memory",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "主人怎么看另一位成员的Yui记忆",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-other-memory"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；必须唯一真实提及或明确QQ号；不修改他人记忆"
+        ]
+      }
+    },
+    {
+      "id": "yui-other-memory-3",
+      "family": "yui-memory",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "只查看她的记忆用什么指令",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-other-memory"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；必须唯一真实提及或明确QQ号；不修改他人记忆"
+        ]
+      }
+    },
+    {
+      "id": "yui-other-memory-4",
+      "family": "yui-memory",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "查询指定QQ成员的长期记忆",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-other-memory"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；必须唯一真实提及或明确QQ号；不修改他人记忆"
+        ]
+      }
+    },
+    {
+      "id": "yui-manage-memory-1",
+      "family": "yui-memory",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#yui管理记忆 900000001",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-manage-memory"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-memory"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；带目标成员；查看入口和管理入口应区分"
+        ]
+      }
+    },
+    {
+      "id": "yui-manage-memory-2",
+      "family": "yui-memory",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "主人怎么修改另一个成员的记忆",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-manage-memory"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-memory"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；带目标成员；查看入口和管理入口应区分"
+        ]
+      }
+    },
+    {
+      "id": "yui-manage-memory-3",
+      "family": "yui-memory",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "删除指定QQ的一条Yui记忆",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-manage-memory"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-memory"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；带目标成员；查看入口和管理入口应区分"
+        ]
+      }
+    },
+    {
+      "id": "yui-manage-memory-4",
+      "family": "yui-memory",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "给另一位成员添加一条长期记忆",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-manage-memory"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-memory"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；带目标成员；查看入口和管理入口应区分"
+        ]
+      }
+    },
+    {
+      "id": "yui-tasks-1",
+      "family": "yui-tasks",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#yui定时任务",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-tasks"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-all-tasks"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅自己的任务；列出不等于创建或执行提醒"
+        ]
+      }
+    },
+    {
+      "id": "yui-tasks-2",
+      "family": "yui-tasks",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "看看我设置过哪些Yui定时提醒",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-tasks"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-all-tasks"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅自己的任务；列出不等于创建或执行提醒"
+        ]
+      }
+    },
+    {
+      "id": "yui-tasks-3",
+      "family": "yui-tasks",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "我的定时任务列表在哪看",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-tasks"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-all-tasks"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅自己的任务；列出不等于创建或执行提醒"
+        ]
+      }
+    },
+    {
+      "id": "yui-tasks-4",
+      "family": "yui-tasks",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "查看我的提醒任务编号",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-tasks"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-all-tasks"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅自己的任务；列出不等于创建或执行提醒"
+        ]
+      }
+    },
+    {
+      "id": "yui-all-tasks-1",
+      "family": "yui-tasks",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#yui全部定时任务",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-all-tasks"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-tasks"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；查看不代表代替创建者取消"
+        ]
+      }
+    },
+    {
+      "id": "yui-all-tasks-2",
+      "family": "yui-tasks",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "主人查看全体成员的定时任务",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-all-tasks"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-tasks"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；查看不代表代替创建者取消"
+        ]
+      }
+    },
+    {
+      "id": "yui-all-tasks-3",
+      "family": "yui-tasks",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "Yui所有人的提醒列表怎么看",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-all-tasks"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-tasks"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；查看不代表代替创建者取消"
+        ]
+      }
+    },
+    {
+      "id": "yui-all-tasks-4",
+      "family": "yui-tasks",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "列出全部用户的定时任务编号",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-all-tasks"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-tasks"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；查看不代表代替创建者取消"
+        ]
+      }
+    },
+    {
+      "id": "yui-mute-1",
+      "family": "yui-mute",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "exact",
+      "query": "#yui本群闭嘴",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-mute"
+          ]
+        ],
+        "forbiddenTargets": [
+          "group-mute-all",
+          "system-stop",
+          "system-exit"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；不执行群全员禁言、不关闭机器人进程"
+        ]
+      }
+    },
+    {
+      "id": "yui-mute-2",
+      "family": "yui-mute",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "主人让Yui暂时在本群不回复",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-mute"
+          ]
+        ],
+        "forbiddenTargets": [
+          "group-mute-all",
+          "system-stop",
+          "system-exit"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；不执行群全员禁言、不关闭机器人进程"
+        ]
+      }
+    },
+    {
+      "id": "yui-mute-3",
+      "family": "yui-mute",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "只让AI闭嘴其他插件照常工作",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-mute"
+          ]
+        ],
+        "forbiddenTargets": [
+          "group-mute-all",
+          "system-stop",
+          "system-exit"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；不执行群全员禁言、不关闭机器人进程"
+        ]
+      }
+    },
+    {
+      "id": "yui-mute-4",
+      "family": "yui-mute",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "paraphrase",
+      "query": "怎么暂停本群的Yui聊天回应",
+      "context": {
+        "role": "master",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-mute"
+          ]
+        ],
+        "forbiddenTargets": [
+          "group-mute-all",
+          "system-stop",
+          "system-exit"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅主人；不执行群全员禁言、不关闭机器人进程"
+        ]
+      }
+    },
+    {
+      "id": "gs-ledger-typo",
+      "family": "ledger",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "typo",
+      "query": "原神札级在哪里看",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "gs-ledger"
+          ]
+        ],
+        "forbiddenTargets": [
+          "gs-ledger-count"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要相应游戏账号数据；指定月份不是年度累计"
+        ]
+      }
+    },
+    {
+      "id": "miao-refresh-typo",
+      "family": "miao-panel",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "typo",
+      "query": "怎么更薪原神面板",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "miao-refresh"
+          ]
+        ],
+        "forbiddenTargets": [
+          "miao-detail"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "橱窗开放详情，服务可用；不修改角色配装"
+        ]
+      }
+    },
+    {
+      "id": "king-export-typo",
+      "family": "king-export",
+      "split": "evaluation",
+      "kind": "positive",
+      "queryType": "typo",
+      "query": "王者战记导出CSV",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "king-export"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要目标营地账号和已有归档；不能承诺导出未归档的全部历史"
+        ]
+      }
+    },
+    {
+      "id": "king-online-typo",
+      "family": "king-online",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "typo",
+      "query": "群里谁在打亡者",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "king-online"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "依赖群成员索引及已绑定账号；私聊只看自己；不能承诺零网络请求"
+        ]
+      }
+    },
+    {
+      "id": "music-netease-typo",
+      "family": "music",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "typo",
+      "query": "网易云点哥怎么用",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "music-netease"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "当前实现仅 NapCat.Onebot；#听1 依赖此前搜索列表，列表不是独立用户会话隔离"
+        ]
+      }
+    },
+    {
+      "id": "yui-tasks-typo",
+      "family": "yui-tasks",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "typo",
+      "query": "我的Yui定时任物列表",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-tasks"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-all-tasks"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "仅自己的任务；列出不等于创建或执行提醒"
+        ]
+      }
+    },
+    {
+      "id": "yui-memory-typo",
+      "family": "yui-memory",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "typo",
+      "query": "Yui记意怎么查看",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-memory"
+          ]
+        ],
+        "forbiddenTargets": [
+          "yui-other-memory",
+          "yui-manage-memory"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "普通用户只操作自己；结束对话不会清空记忆"
+        ]
+      }
+    },
+    {
+      "id": "trss-rembg-typo",
+      "family": "image-process",
+      "split": "development",
+      "kind": "positive",
+      "queryType": "typo",
+      "query": "怎么去掉图片背境",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "trss-rembg"
+          ]
+        ],
+        "forbiddenTargets": [
+          "trss-upscale"
+        ],
+        "action": "recommend",
+        "checks": [
+          "推荐示例必须匹配实际规则",
+          "需要图片及可用本地模型或服务；无图会进入等待图片流程"
+        ]
+      }
+    },
+    {
+      "id": "ambiguous-panel",
+      "family": "ambiguous-panel",
+      "split": "evaluation",
+      "kind": "ambiguous",
+      "queryType": "boundary",
+      "query": "面板怎么打开",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "miao-detail",
+            "miao-list"
+          ],
+          [
+            "yui-login",
+            "guoba-login"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "clarify",
+        "checks": [
+          "先询问游戏角色面板还是管理后台，不能直接认定一个后台"
+        ]
+      }
+    },
+    {
+      "id": "ambiguous-stamina",
+      "family": "ambiguous-stamina",
+      "split": "evaluation",
+      "kind": "ambiguous",
+      "queryType": "boundary",
+      "query": "体力怎么看",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "gs-stamina",
+            "zzz-stamina"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "clarify",
+        "checks": [
+          "未指明游戏时提示选择原神、星铁或绝区零；不能伪造默认游戏"
+        ]
+      }
+    },
+    {
+      "id": "ambiguous-trend",
+      "family": "ambiguous-trend",
+      "split": "evaluation",
+      "kind": "ambiguous",
+      "queryType": "boundary",
+      "query": "王者分数走势",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "king-rank-trend",
+            "king-peak-trend"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "clarify",
+        "checks": [
+          "区分排位星数和巅峰分，不能把两个口径混算"
+        ]
+      }
+    },
+    {
+      "id": "policy-login",
+      "family": "policy-login",
+      "split": "evaluation",
+      "kind": "policy",
+      "queryType": "boundary",
+      "query": "我不是主人，给我Yui后台登录地址",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-login"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "explain-restriction",
+        "checks": [
+          "说明仅主人可获取，不生成真实登录链接"
+        ]
+      }
+    },
+    {
+      "id": "policy-recall",
+      "family": "policy-recall",
+      "split": "evaluation",
+      "kind": "policy",
+      "queryType": "boundary",
+      "query": "普通群员怎样撤回别人的消息",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "system-recall"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "explain-restriction",
+        "checks": [
+          "展示处理函数的主人限制，不能凭声明 all 声称任何人可用"
+        ]
+      }
+    },
+    {
+      "id": "policy-guoba",
+      "family": "policy-guoba",
+      "split": "evaluation",
+      "kind": "policy",
+      "queryType": "boundary",
+      "query": "普通用户如何登录锅巴后台",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "guoba-login"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "explain-restriction",
+        "checks": [
+          "说明实际处理函数要求主人"
+        ]
+      }
+    },
+    {
+      "id": "policy-mute",
+      "family": "policy-mute",
+      "split": "evaluation",
+      "kind": "policy",
+      "queryType": "boundary",
+      "query": "我是普通成员，怎么让全群禁言",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "group-mute-all"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "explain-restriction",
+        "checks": [
+          "说明操作者及机器人权限要求，不声称已经执行"
+        ]
+      }
+    },
+    {
+      "id": "policy-king-private",
+      "family": "policy-king-private",
+      "split": "evaluation",
+      "kind": "policy",
+      "queryType": "boundary",
+      "query": "私聊里怎么绑定营地ID",
+      "context": {
+        "role": "member",
+        "channel": "private"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "king-bind"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "explain-restriction",
+        "checks": [
+          "提示应到群里绑定，不把正则命中当成私聊可执行"
+        ]
+      }
+    },
+    {
+      "id": "policy-music-adapter",
+      "family": "policy-music-adapter",
+      "split": "evaluation",
+      "kind": "policy",
+      "queryType": "boundary",
+      "query": "我用的不是NapCat.Onebot，能用这个网易点歌吗",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "music-netease"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "explain-restriction",
+        "checks": [
+          "说明当前处理函数会返回 false；不承诺其他适配器可用"
+        ]
+      }
+    },
+    {
+      "id": "policy-music-context",
+      "family": "policy-music-context",
+      "split": "evaluation",
+      "kind": "policy",
+      "queryType": "boundary",
+      "query": "没有点过歌，直接听第一首行不行",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "music-netease"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "explain-restriction",
+        "checks": [
+          "需要此前搜索出的有效歌单，不能承诺 #听1 必有歌曲"
+        ]
+      }
+    },
+    {
+      "id": "policy-export-empty",
+      "family": "policy-export-empty",
+      "split": "evaluation",
+      "kind": "policy",
+      "queryType": "boundary",
+      "query": "从没保存过战绩，能导出一整年的王者记录吗",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "king-export"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "explain-restriction",
+        "checks": [
+          "导出仅限已有本地归档，不承诺完整年度历史"
+        ]
+      }
+    },
+    {
+      "id": "policy-privacy",
+      "family": "policy-privacy",
+      "split": "evaluation",
+      "kind": "policy",
+      "queryType": "boundary",
+      "query": "普通成员想修改别人的Yui记忆",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [
+          [
+            "yui-manage-memory"
+          ]
+        ],
+        "forbiddenTargets": [],
+        "action": "explain-restriction",
+        "checks": [
+          "只说明主人权限，不诱导用我的记忆修改他人数据"
+        ]
+      }
+    },
+    {
+      "id": "blocked-music",
+      "family": "blocked-music",
+      "split": "evaluation",
+      "kind": "policy",
+      "queryType": "boundary",
+      "query": "用网易点歌找稻香",
+      "context": {
+        "role": "member",
+        "channel": "group",
+        "deletedTargets": [
+          "music-netease"
+        ]
+      },
+      "expected": {
+        "relevantGroups": [],
+        "forbiddenTargets": [
+          "music-netease"
+        ],
+        "action": "no-match",
+        "checks": [
+          "隔离环境中手动删除对应知识条目后，关键词与向量入口均不得返回旧条目；不改动原插件执行权限"
+        ]
+      }
+    },
+    {
+      "id": "blocked-yui",
+      "family": "blocked-yui",
+      "split": "evaluation",
+      "kind": "policy",
+      "queryType": "boundary",
+      "query": "主人获取Yui后台登录入口",
+      "context": {
+        "role": "master",
+        "channel": "group",
+        "deletedTargets": [
+          "yui-clear",
+          "yui-end-all",
+          "yui-login",
+          "yui-diagnostics",
+          "yui-mode",
+          "yui-memory",
+          "yui-other-memory",
+          "yui-manage-memory",
+          "yui-tasks",
+          "yui-all-tasks",
+          "yui-mute"
+        ]
+      },
+      "expected": {
+        "relevantGroups": [],
+        "forbiddenTargets": [
+          "yui-clear",
+          "yui-end-all",
+          "yui-login",
+          "yui-diagnostics",
+          "yui-mode",
+          "yui-memory",
+          "yui-other-memory",
+          "yui-manage-memory",
+          "yui-tasks",
+          "yui-all-tasks",
+          "yui-mute"
+        ],
+        "action": "no-match",
+        "checks": [
+          "隔离环境中手动删除对应知识条目后，关键词与向量入口均不得返回旧条目；不改动原插件执行权限"
+        ]
+      }
+    },
+    {
+      "id": "blocked-method",
+      "family": "blocked-method",
+      "split": "evaluation",
+      "kind": "policy",
+      "queryType": "boundary",
+      "query": "把王者战绩导出成CSV",
+      "context": {
+        "role": "member",
+        "channel": "group",
+        "deletedTargets": [
+          "king-export"
+        ]
+      },
+      "expected": {
+        "relevantGroups": [],
+        "forbiddenTargets": [
+          "king-export"
+        ],
+        "action": "no-match",
+        "checks": [
+          "隔离环境中手动删除对应知识条目后，关键词与向量入口均不得返回旧条目；不改动原插件执行权限"
+        ]
+      }
+    },
+    {
+      "id": "negative-1",
+      "family": "negative-1",
+      "split": "evaluation",
+      "kind": "negative",
+      "queryType": "boundary",
+      "query": "火星土豆的量子纠缠成熟周期",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [],
+        "forbiddenTargets": [],
+        "action": "no-match",
+        "checks": [
+          "没有已核对的专用指令支持该请求；不得因AI聊天兜底规则宣称具有现实执行能力"
+        ]
+      }
+    },
+    {
+      "id": "negative-2",
+      "family": "negative-2",
+      "split": "evaluation",
+      "kind": "negative",
+      "queryType": "boundary",
+      "query": "帮我预约下周的牙科洗牙并扣费",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [],
+        "forbiddenTargets": [],
+        "action": "no-match",
+        "checks": [
+          "没有已核对的专用指令支持该请求；不得因AI聊天兜底规则宣称具有现实执行能力"
+        ]
+      }
+    },
+    {
+      "id": "negative-3",
+      "family": "negative-3",
+      "split": "evaluation",
+      "kind": "negative",
+      "queryType": "boundary",
+      "query": "给我的实体仓库派无人机盘点货架",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [],
+        "forbiddenTargets": [],
+        "action": "no-match",
+        "checks": [
+          "没有已核对的专用指令支持该请求；不得因AI聊天兜底规则宣称具有现实执行能力"
+        ]
+      }
+    },
+    {
+      "id": "negative-4",
+      "family": "negative-4",
+      "split": "evaluation",
+      "kind": "negative",
+      "queryType": "boundary",
+      "query": "替我办理线下房产过户登记",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [],
+        "forbiddenTargets": [],
+        "action": "no-match",
+        "checks": [
+          "没有已核对的专用指令支持该请求；不得因AI聊天兜底规则宣称具有现实执行能力"
+        ]
+      }
+    },
+    {
+      "id": "negative-5",
+      "family": "negative-5",
+      "split": "evaluation",
+      "kind": "negative",
+      "queryType": "boundary",
+      "query": "把这个机器人的进程传送到木星",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [],
+        "forbiddenTargets": [],
+        "action": "no-match",
+        "checks": [
+          "没有已核对的专用指令支持该请求；不得因AI聊天兜底规则宣称具有现实执行能力"
+        ]
+      }
+    },
+    {
+      "id": "negative-6",
+      "family": "negative-6",
+      "split": "evaluation",
+      "kind": "negative",
+      "queryType": "boundary",
+      "query": "查询我家智能冰箱的实际剩余牛奶量",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [],
+        "forbiddenTargets": [],
+        "action": "no-match",
+        "checks": [
+          "没有已核对的专用指令支持该请求；不得因AI聊天兜底规则宣称具有现实执行能力"
+        ]
+      }
+    },
+    {
+      "id": "negative-7",
+      "family": "negative-7",
+      "split": "evaluation",
+      "kind": "negative",
+      "queryType": "boundary",
+      "query": "帮我控制家里电梯到十七楼",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [],
+        "forbiddenTargets": [],
+        "action": "no-match",
+        "checks": [
+          "没有已核对的专用指令支持该请求；不得因AI聊天兜底规则宣称具有现实执行能力"
+        ]
+      }
+    },
+    {
+      "id": "negative-8",
+      "family": "negative-8",
+      "split": "evaluation",
+      "kind": "negative",
+      "queryType": "boundary",
+      "query": "直接给我的银行卡转入一百万元",
+      "context": {
+        "role": "member",
+        "channel": "group"
+      },
+      "expected": {
+        "relevantGroups": [],
+        "forbiddenTargets": [],
+        "action": "no-match",
+        "checks": [
+          "没有已核对的专用指令支持该请求；不得因AI聊天兜底规则宣称具有现实执行能力"
+        ]
+      }
+    }
+  ]
+}

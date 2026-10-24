@@ -169,7 +169,10 @@ export const Field = defineComponent({
   },
   methods: {
     onToggle(event: Event) {
-      const value = event.target instanceof HTMLInputElement && event.target.checked
+      const target = event.target instanceof HTMLInputElement ? event.target : null
+      const value = target?.checked || false
+      // 开关由 modelValue 控制；异步保存失败或父组件拒绝变更时，不能残留浏览器自行切换的状态。
+      if (target) target.checked = this.checked
       this.$emit("update:modelValue", typeof this.modelValue === "string" ? String(value) : value)
     },
     onInput(event: Event) {

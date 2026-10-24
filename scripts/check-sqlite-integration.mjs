@@ -51,7 +51,7 @@ try {
   await sqliteClient.init(defaults)
   assert.equal(sqliteClient.status.available, true, "SQLite worker must start with a new baseline database")
   assert.equal(sqliteClient.status.integrity, "ok", "SQLite worker must report an intact baseline database")
-  assert.deepEqual((sqliteClient.status.migrations || []).map(row => row.id), ["001-baseline.sql", "002-tool-call-events.sql", "003-model-call-snapshots.sql", "004-conversation-state.sql", "005-log-session.sql", "006-extension-installations.sql"], "runtime state database must apply the baseline, combined tool/runtime, model snapshot, and conversation state migrations")
+  assert.deepEqual((sqliteClient.status.migrations || []).map(row => row.id), ["001-baseline.sql", "002-tool-call-events.sql", "003-model-call-snapshots.sql", "004-conversation-state.sql", "005-log-session.sql", "006-extension-installations.sql", "007-cosine-retrieval.sql", "008-command-import.sql", "009-command-availability.sql"], "runtime state database must apply the baseline, combined tool/runtime, model snapshot, and conversation state migrations")
   await configStore.attachRuntimeConfigRepository(new SqliteRuntimeConfigRepository(sqliteClient))
   await configStore.update(config => {
     config.memory.groupCapture.enabled = true

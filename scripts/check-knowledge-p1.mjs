@@ -32,6 +32,7 @@ try {
   const { knowledgeRepository } = await import("../output/runtime/knowledge/repository.js")
   const { searchKnowledge } = await import("../output/runtime/knowledge/retrieval.js")
   const { vectorIndex, vectorSpaceMatches } = await import("../output/runtime/knowledge/vector-index.js")
+  const { embeddingIdentity } = await import("../output/runtime/knowledge/embedding-identity.js")
   ;({ knowledgeIndexJobs } = await import("../output/runtime/knowledge/index-jobs.js"))
 
   await configStore.load()
@@ -81,20 +82,19 @@ try {
   // Tests explicitly drive jobs; background scheduling would make race assertions nondeterministic.
   knowledgeIndexJobs.scheduleAvailable = () => {}
 
-  // vec0 must really use each advertised metric. The selected examples make
-  // cosine/l2 and l2/l1 disagree, so the default metric cannot pass by accident.
+  // Direction must win over magnitude: vec0's default L2 would choose b.
   const metricCases = [
     { metric: "cosine", scope: "metric-cosine", query: [1, 0], values: [[10, 1], [1, 1]], expected: "a" },
-    { metric: "l2", scope: "metric-l2-a", query: [1, 0], values: [[10, 1], [1, 1]], expected: "b" },
-    { metric: "l2", scope: "metric-l2-b", query: [1, 1], values: [[3, 3], [1, 4]], expected: "a" },
-    { metric: "l1", scope: "metric-l1", query: [1, 1], values: [[3, 3], [1, 4]], expected: "b" },
   ]
   for (const testCase of metricCases) {
     const space = await vectorIndex.ensureSpace({ modelName: "metric-model", dimensions: 2, distanceMetric: testCase.metric, scopeKey: testCase.scope })
     await vectorIndex.upsertBatch(space, testCase.values.map((vector, index) => ({ ownerType: "metric", ownerId: index ? "b" : "a", contentHash: String(index), vector })))
     assert.equal((await vectorIndex.search(space, testCase.query, 2))[0]?.ownerId, testCase.expected, `${testCase.metric} must control vec0 ranking`)
   }
-  assert.throws(() => vectorIndex.spaceIdFor({ modelName: "bad", dimensions: 2, distanceMetric: "ip" }), /仅支持 cosine、l2、l1/)
+  for (const metric of ["l1", "l2", "ip"]) {
+    assert.throws(() => vectorIndex.spaceIdFor({ modelName: "bad", dimensions: 2, distanceMetric: metric }), /统一使用 cosine/)
+    await assert.rejects(() => knowledgeStore.create({ name: "unsupported", config: { distanceMetric: metric } }), /统一使用 cosine/)
+  }
 
   const base = await knowledgeStore.create({
     name: "P1 流式重建",
@@ -170,7 +170,7 @@ try {
   knowledgeIndexJobs.claim = async jobId => {
     const claimed = await originalClaim(jobId)
     if (claimed?.knowledge_base_id === mismatchBase.id) {
-      await sqliteClient.run("UPDATE knowledge_bases SET embedding_model_name='knowledge-p1-b', embedding_dimensions=3, distance_metric='l1' WHERE id=?", [mismatchBase.id])
+      await sqliteClient.run("UPDATE knowledge_bases SET embedding_model_name='knowledge-p1-b', embedding_dimensions=3 WHERE id=?", [mismatchBase.id])
     }
     return claimed
   }
@@ -244,17 +244,18 @@ try {
   assert.equal((await knowledgeRepository.getBase(base.id)).active_vector_space_id, activeBeforeCancelRace, "canceled job must not publish staging")
   assert.equal((await sqliteClient.get("SELECT status FROM knowledge_index_jobs WHERE id=?", [cancelJob.id]))?.status, "canceled")
 
-  // Model/dimension/metric changes queue a rebuild, suppress incompatible active
+  // Model/dimension changes queue a rebuild, suppress incompatible active
   // metadata immediately, then publish a matching replacement.
   adapterCalls.length = 0
-  const switched = await knowledgeStore.update(base.id, { config: { embeddingModel: "knowledge-p1-b", dimensions: 3, distanceMetric: "l1" } })
+  await assert.rejects(() => knowledgeStore.update(base.id, { config: { distanceMetric: "l2" } }), /统一使用 cosine/)
+  const switched = await knowledgeStore.update(base.id, { config: { embeddingModel: "knowledge-p1-b", dimensions: 3, distanceMetric: "cosine" } })
   assert.equal(switched.config.embeddingModel, "knowledge-p1-b")
   assert.equal(switched.config.dimensions, 3)
-  assert.equal(switched.config.distanceMetric, "l1")
+  assert.equal(switched.config.distanceMetric, "cosine")
   const queuedSwitch = await sqliteClient.get("SELECT id, model_name, dimensions, distance_metric, status FROM knowledge_index_jobs WHERE knowledge_base_id=? AND status='queued' ORDER BY created_at DESC LIMIT 1", [base.id])
-  assert.deepEqual({ model: queuedSwitch.model_name, dimensions: queuedSwitch.dimensions, metric: queuedSwitch.distance_metric, status: queuedSwitch.status }, { model: "knowledge-p1-b", dimensions: 3, metric: "l1", status: "queued" })
+  assert.deepEqual({ model: queuedSwitch.model_name, dimensions: queuedSwitch.dimensions, metric: queuedSwitch.distance_metric, status: queuedSwitch.status }, { model: "knowledge-p1-b", dimensions: 3, metric: "cosine", status: "queued" })
   const oldSpace = await vectorIndex.getSpace(activeBeforeCancelRace)
-  assert.equal(vectorSpaceMatches(oldSpace, { modelName: "knowledge-p1-b", dimensions: 3, distanceMetric: "l1" }), false)
+  assert.equal(vectorSpaceMatches(oldSpace, { modelName: "knowledge-p1-b", dimensions: 3, distanceMetric: "cosine" }), false)
   const callsBeforeMismatchedSearch = adapterCalls.length
   const mismatched = await searchKnowledge({ isMaster: true, user_id: "master" }, "third", { knowledgeBaseIds: [base.id], useVector: true, vectorOnly: true })
   assert.deepEqual(mismatched, [])
@@ -262,7 +263,7 @@ try {
   assert.equal((await knowledgeIndexJobs.runNext(queuedSwitch.id))?.status, "completed")
   const rebuiltBase = await knowledgeRepository.getBase(base.id)
   const rebuiltSpace = await vectorIndex.getSpace(rebuiltBase.active_vector_space_id)
-  assert.equal(vectorSpaceMatches(rebuiltSpace, { modelName: "knowledge-p1-b", dimensions: 3, distanceMetric: "l1" }), true)
+  assert.equal(vectorSpaceMatches(rebuiltSpace, { modelName: "knowledge-p1-b", dimensions: 3, distanceMetric: "cosine" }), true)
 
   // 孤儿空间回收：崩溃遗留、无任何 active/任务行引用的知识库 staging 空间必须被清理，
   // 而记忆召回（memory-items）与仍被引用的空间绝不能被触碰。
@@ -359,6 +360,51 @@ try {
     sqliteClient.status = onlineStatus
   }
   assert.equal((await sqliteClient.get("SELECT COUNT(*) AS total FROM knowledge_index_jobs WHERE knowledge_base_id=?", [offlineBase.id]))?.total, 0, "vector-unavailable must not enqueue doomed jobs")
+
+  // Integrity checks are read-only. Complete spaces must not create jobs;
+  // repair must recognize both missing physical vectors and stale metadata.
+  const repairBase = await knowledgeStore.create({ name: "P1 索引检查", config: { embeddingModel: "knowledge-p1-a", dimensions: 2 } })
+  await knowledgeRepository.replaceDocument({ knowledgeBaseId: repairBase.id, sourceKey: "repair", title: "repair", content: "repair source", contentHash: "repair-source", chunks: chunks(4, "repair") })
+  await knowledgeIndexJobs.queue(repairBase.id, { immediate: true })
+  const repairSpace = await vectorIndex.getSpace((await knowledgeRepository.getBase(repairBase.id)).active_vector_space_id)
+  const readyCalls = adapterCalls.length
+  const readyJobs = (await sqliteClient.get("SELECT COUNT(*) AS n FROM knowledge_index_jobs WHERE knowledge_base_id=?", [repairBase.id])).n
+  const complete = await knowledgeIndexJobs.inspect(repairBase.id)
+  assert.deepEqual({ state: complete.state, total: complete.total, indexed: complete.indexed, missing: complete.missing }, { state: "ready", total: 4, indexed: 4, missing: 0 })
+  assert.equal((await knowledgeIndexJobs.repair(repairBase.id)).status, "ready")
+  assert.equal(adapterCalls.length, readyCalls)
+  assert.equal((await sqliteClient.get("SELECT COUNT(*) AS n FROM knowledge_index_jobs WHERE knowledge_base_id=?", [repairBase.id])).n, readyJobs)
+  const records = await sqliteClient.all("SELECT id,owner_id FROM embedding_records WHERE space_id=? ORDER BY owner_id", [repairSpace.id], "vectors")
+  await sqliteClient.run(`DELETE FROM ${repairSpace.table} WHERE record_id=?`, [records[0].id], "vectors")
+  await sqliteClient.run("DELETE FROM embedding_records WHERE id=?", [records[1].id], "vectors")
+  await sqliteClient.run("UPDATE embedding_records SET content_hash='stale' WHERE id=?", [records[2].id], "vectors")
+  const damaged = await knowledgeIndexJobs.inspect(repairBase.id)
+  assert.deepEqual({ indexed: damaged.indexed, missing: damaged.missing }, { indexed: 1, missing: 3 })
+  assert.equal(adapterCalls.length, readyCalls, "checking physical vector existence must not call models")
+  assert.equal((await knowledgeIndexJobs.repair(repairBase.id, { immediate: true })).status, "completed")
+  assert.equal(adapterCalls.slice(readyCalls).reduce((n, call) => n + call.size, 0), 3, "only missing or stale chunks may be re-embedded")
+  assert.equal((await knowledgeIndexJobs.inspect(repairBase.id)).state, "ready")
+  const lostTable = await vectorIndex.getSpace((await knowledgeRepository.getBase(repairBase.id)).active_vector_space_id)
+  await sqliteClient.exec(`DROP TABLE ${lostTable.table}`, "vectors")
+  assert.equal((await knowledgeIndexJobs.inspect(repairBase.id)).missing, 4, "a missing vec0 table must be reported as missing vectors")
+  assert.equal((await knowledgeIndexJobs.repair(repairBase.id, { immediate: true })).status, "completed")
+  assert.equal((await knowledgeIndexJobs.inspect(repairBase.id)).state, "ready")
+
+  // Paused staging can also lose a vec row while retaining embedding_records.
+  const resumeBase = await knowledgeStore.create({ name: "P1 缺失向量续传", config: { embeddingModel: "knowledge-p1-a", dimensions: 2 } })
+  await knowledgeRepository.replaceDocument({ knowledgeBaseId: resumeBase.id, sourceKey: "resume", title: "resume", content: "resume source", contentHash: "resume-source", chunks: chunks(2, "resume") })
+  const resumeJob = await knowledgeIndexJobs.queue(resumeBase.id)
+  const resumeSpace = await vectorIndex.ensureSpace({ modelName: "knowledge-p1-a", dimensions: 2, scopeKey: `${resumeBase.id}:${resumeJob.id}:1:fp-${embeddingIdentity("knowledge-p1-a")}` })
+  const resumeChunks = await sqliteClient.all("SELECT id,content_hash FROM knowledge_chunks WHERE knowledge_base_id=? ORDER BY ordinal", [resumeBase.id])
+  await vectorIndex.upsertBatch(resumeSpace, resumeChunks.map(row => ({ ownerType: "knowledge_chunk", ownerId: row.id, contentHash: row.content_hash, vector: [1, 0] })))
+  const lost = await sqliteClient.get("SELECT id FROM embedding_records WHERE space_id=? LIMIT 1", [resumeSpace.id], "vectors")
+  await sqliteClient.run(`DELETE FROM ${resumeSpace.table} WHERE record_id=?`, [lost.id], "vectors")
+  await sqliteClient.run("UPDATE knowledge_index_jobs SET status='paused_budget',vector_space_id=? WHERE id=?", [resumeSpace.id, resumeJob.id])
+  const resumeCalls = adapterCalls.length
+  await knowledgeIndexJobs.retry(resumeJob.id)
+  assert.equal((await knowledgeIndexJobs.runNext(resumeJob.id)).status, "completed")
+  assert.equal(adapterCalls.slice(resumeCalls).reduce((n, call) => n + call.size, 0), 1, "resume must heal a missing physical vector despite existing metadata")
+  assert.equal((await knowledgeIndexJobs.inspect(resumeBase.id)).state, "ready")
 
   console.log("ok knowledge-p1")
 } finally {

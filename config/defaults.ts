@@ -646,14 +646,7 @@ export const defaults = {
   },
   knowledge: {
     enabled: true,
-    dynamicCapture: true,
     commandPrefixes: ["#", "/", "*"],
-    excludedPlugins: [],
-    excludedCommands: [],
-    capturePrivate: false,
-    captureGroups: true,
-    maxEvents: 1000,
-    flushDelayMs: 1500,
     indexing: {
       maxFileBytes: 10485760,
       maxChunksPerKnowledgeBase: 100000,
@@ -666,10 +659,12 @@ export const defaults = {
     retrieval: {
       ftsCandidateLimit: 30,
       vectorCandidateLimit: 30,
-      resultLimit: 4,
+      resultLimit: 5,
       resultTokenBudget: 800,
       minRelevance: 0.55,
-      rerankTask: "retrieval_rerank",
+      rerankEnabled: false,
+      rerankTask: "replyer",
+      rerankModel: "",
       rerankMaxCandidates: 8,
       rerankInputTokenBudget: 1000,
       rerankMaxTokens: 128,
@@ -679,6 +674,7 @@ export const defaults = {
       rerankCacheTtlMs: 1800000,
     },
     commandRetrieval: {
+      // 内置指令知识库的统一策略，帮助、工具、自动推荐及管理台测试共用。
       mode: "hybrid",
       lexicalWeight: 1,
       vectorWeight: 0.65,

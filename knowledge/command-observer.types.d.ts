@@ -1,5 +1,4 @@
 import type {
-  CommandDocument,
   CommandHelpDoc,
   CommandParameterHint,
   UnknownRecord,
@@ -48,31 +47,8 @@ export interface CommandRecord extends UnknownRecord {
   observed?: ObservedCommand
   permission?: string
   event?: string
-  priority?: number
+  priority?: number | "Infinity" | "-Infinity"
   updatedAt?: string
-}
-
-export interface CommandEvent extends UnknownRecord {
-  text?: string
-  commandHead?: string
-  signature?: string
-  commandPrefix?: string
-  commandPrefixes?: string[]
-  handledBy?: string
-  exactMatches?: string[]
-  matches?: string[]
-  isGroup?: boolean
-  groupId?: string
-  userId?: string
-  time?: string
-  observedCommandId?: string
-  matchType?: "exact" | "observed" | "fuzzy" | "unmatched"
-}
-
-export interface ManualCommandInput extends UnknownRecord {}
-
-export interface ObserverOptions {
-  scanOnReady?: boolean
 }
 
 export interface CommandObserverStats extends UnknownRecord {

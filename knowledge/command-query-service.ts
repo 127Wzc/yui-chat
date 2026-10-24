@@ -4,6 +4,9 @@ import {
   preferredCommandText,
   safeText,
   tokenize,
+  commandPriorityMetadata,
+  orderEquivalentCommandMatches,
+  buildCommandRetrievalText,
 } from "./command-document-builder.js"
 
 type UnknownRecord = Record<string, unknown>
@@ -19,6 +22,8 @@ interface QueryOptions extends UnknownRecord {
   matchedTokens?: unknown
   stats?: unknown
   observer?: unknown
+  prioritizeCommands?: boolean
+  minRelevance?: unknown
   capture?: unknown
 }
 
@@ -138,12 +143,14 @@ function commandView(command: Command): Command {
   const section = commandSection(command)
   return {
     id: command.id,
+    sourceId: command.sourceId,
     pluginKey: command.pluginKey,
     pluginName: command.pluginName,
     description: command.description,
     summary: command.summary,
     fnc: command.fnc,
     regexp: command.regexp,
+    regexpFlags: command.regexpFlags || "",
     suggestedCommand: command.suggestedCommand,
     examples: commandExamples(command),
     commandHeads: commandHeads(command),
@@ -152,7 +159,12 @@ function commandView(command: Command): Command {
     usageGuide: command.usageGuide,
     permission: command.permission,
     event: command.event,
-    priority: command.priority,
+    ...commandPriorityMetadata(command),
+    origin: command.origin,
+    runtimeMetadata: command.runtimeMetadata,
+    sourceRuleKey: command.sourceRuleKey,
+    sourceStatus: command.sourceStatus,
+    needsReview: command.needsReview,
     dynamic: Boolean(command.dynamic || command.pluginKey === "observed"),
     manual: Boolean(command.manual || command.pluginKey === "manual"),
     observed: command.observed,
@@ -219,6 +231,11 @@ export function buildCommandRecommendationResult(command: Command = {}, query: u
   }
   return {
     ...commandView(item),
+    body: item.body,
+    retrievalText: buildCommandRetrievalText(item),
+    lexicalScore: item.lexicalScore,
+    lexicalRelevance: item.lexicalRelevance,
+    exactCommandMatch: item.exactCommandMatch === true,
     keywords: values(item.keywords),
     matchedTokens: item.matchedTokens,
     score,
@@ -257,14 +274,23 @@ export function findCommandMatches(commands: readonly Command[] = [], query: unk
   const searchText = normalizeSearchQuery(rawText) || rawText
   const queryHead = commandHead(rawText, opts.commandPrefixes || [])
   const tokens = tokenize(searchText)
+  const meaningfulTokens = tokens.filter(token => !["查询", "指令", "命令", "功能", "使用", "方法"].includes(token))
+  const coverageTokens = meaningfulTokens.length ? meaningfulTokens : tokens
+  const threshold = Math.max(0, Math.min(1, numberValue(opts.minRelevance, 0.55)))
+  const commandName = (value: unknown): string => safeText(value).toLowerCase().replace(/^[#/*!]+/u, "").trim()
+  const queryName = commandName(searchText)
   const scored: Command[] = commands.map<Command>(command => {
     const guide = commandGuide(command)
-    const heads = commandHeads(command)
-    const intents = commandIntents(command)
+    const indexed = typeof command.retrievalText === "string"
+    const indexedText = indexed ? safeText(command.retrievalText).toLowerCase() : ""
+    const heads = commandHeads(command).filter(head => !indexed || indexedText.includes(head.toLowerCase()))
+    const exactCommandMatch = queryName.length >= 2 && [...heads, command.suggestedCommand, ...commandExamples(command)].some(head => (!indexed || indexedText.includes(safeText(head).toLowerCase())) && commandName(head) === queryName)
+    const intents = commandIntents(command).filter(intent => !indexed || indexedText.includes(intent.toLowerCase()))
     const parameters = commandParameters(command)
-    const haystack = safeText([
+    const haystack = indexed ? indexedText : safeText([
       command.pluginName,
       command.description,
+      command.retrievalText,
       command.summary,
       command.fnc,
       command.regexp,
@@ -308,15 +334,15 @@ export function findCommandMatches(commands: readonly Command[] = [], query: unk
       score += 18
       lexicalScore += 18
     }
-    if (searchText && text(command.regexp).includes(searchText.replace(/^#/, ""))) {
+    if (!indexed && searchText && text(command.regexp).includes(searchText.replace(/^#/, ""))) {
       score += 8
       lexicalScore += 8
     }
-    if (command.suggestedCommand && searchText && text(command.suggestedCommand).toLowerCase().includes(searchText.replace(/^#/, ""))) {
+    if ((!indexed || indexedText.includes(searchText)) && command.suggestedCommand && searchText && text(command.suggestedCommand).toLowerCase().includes(searchText.replace(/^#/, ""))) {
       score += 12
       lexicalScore += 12
     }
-    if (text(command.description).toLowerCase().includes(searchText) && searchText.length >= 2) {
+    if (!indexed && text(command.description).toLowerCase().includes(searchText) && searchText.length >= 2) {
       score += 8
       lexicalScore += 8
     }
@@ -324,6 +350,9 @@ export function findCommandMatches(commands: readonly Command[] = [], query: unk
     score += Math.min(8, recentUsage)
     if (!preferredCommandText(command)) score -= 6
     const hasQueryMatch = lexicalScore > 0 || Boolean(queryHead && heads.includes(queryHead))
+    const lexicalRelevance = (queryHead && heads.includes(queryHead)) || (searchText.length >= 2 && haystack.includes(searchText))
+      ? 1
+      : coverageTokens.length ? coverageTokens.filter(token => matchedTokens.includes(token)).length / coverageTokens.length : hasQueryMatch ? 1 : 0
     const reason = matchedTokens.length
       ? `匹配关键词：${[...new Set(matchedTokens)].slice(0, 6).join("、")}`
       : recentUsage
@@ -334,6 +363,8 @@ export function findCommandMatches(commands: readonly Command[] = [], query: unk
       usageCount: recentUsage,
       score,
       lexicalScore,
+      lexicalRelevance,
+      exactCommandMatch,
       executableCommand: preferredCommandText(command),
       hasQueryMatch,
       matchedTokens: [...new Set(matchedTokens)].slice(0, 12),
@@ -341,14 +372,27 @@ export function findCommandMatches(commands: readonly Command[] = [], query: unk
       usageGuide: guide,
     }
   })
-  return scored
-    .filter(command => command.hasQueryMatch && numberValue(command.score) > 0 && command.executableCommand)
-    .sort((a, b) => numberValue(b.lexicalScore) - numberValue(a.lexicalScore) || numberValue(b.score) - numberValue(a.score) || numberValue(a.priority) - numberValue(b.priority))
+  const matched = scored
+    .filter(command => command.hasQueryMatch && numberValue(command.lexicalRelevance) >= threshold && numberValue(command.score) > 0 && command.executableCommand)
+    .sort((a, b) => numberValue(b.lexicalScore) - numberValue(a.lexicalScore) || numberValue(b.score) - numberValue(a.score) || text(a.id).localeCompare(text(b.id)))
+  return (opts.prioritizeCommands !== false ? orderEquivalentCommandMatches(matched) : matched)
     .slice(0, limit)
     .map(command => ({
       ...command,
       suggestedCommand: command.executableCommand || command.suggestedCommand,
     }))
+}
+
+/** 先确定相关候选集，再应用宿主调度顺序；向量相近不等于已确认同一功能。 */
+export function selectRelevantCommandCandidates(candidates: readonly Command[]): { results: Command[]; policy: string; filtered: number } {
+  const exact = candidates.filter(item => item.exactCommandMatch === true)
+  const covered = candidates.filter(item => numberValue(item.lexicalRelevance) === 1)
+  const semantic = candidates.filter(item => typeof item.vectorSimilarity === "number" && Number.isFinite(item.vectorSimilarity))
+  const best = Math.max(...semantic.map(item => Number(item.vectorSimilarity)))
+  // 无充分词项证据且未经过模型核验时，只推荐距离最近的一组；容差仅处理 float32 舍入。
+  const nearest = semantic.filter(item => best - Number(item.vectorSimilarity) <= 1e-6)
+  const results = exact.length ? exact : covered.length ? covered : nearest.length ? nearest : [...candidates]
+  return { results, policy: exact.length ? "exact-command" : covered.length ? "keyword-covered" : nearest.length ? "semantic-nearest" : "hybrid-candidates", filtered: candidates.length - results.length }
 }
 
 export function buildCommandRecommendations(commands: readonly Command[] = [], query: unknown = "", opts: QueryOptions = {}): UnknownRecord {
@@ -414,24 +458,26 @@ export function buildCommandDigest(commands: readonly Command[] = [], events: re
   }
 }
 
+export function commandQuality(command: Command, usageCounts: unknown = {}): QualityRow {
+  const issues: string[] = []
+  const usage = usageCount(usageCounts, command.id)
+  if (!(command.suggestedCommand || command.example || values(command.examples).length)) issues.push("missing-example")
+  if (!commandHeads(command).length) issues.push("missing-head")
+  if (!commandParameters(command).length) issues.push("missing-parameters")
+  if (command.dynamic || command.pluginKey === "observed") issues.push("dynamic-observed")
+  if (!values(command.helpDocs).length && !values(command.sourceDocs).length && !text(command.description).trim()) issues.push("missing-doc")
+  if (text(commandGuide(command).confidence) === "low") issues.push("low-confidence")
+  return {
+    ...commandView({ ...command, usageCount: usage }),
+    issues,
+    usageCount: usage,
+    qualityScore: Math.max(0, 100 - issues.length * 18 - (usage ? 0 : 4)),
+  }
+}
+
 export function buildCommandQualityReport(commands: readonly Command[] = [], opts: QueryOptions = {}): UnknownRecord {
   const limit = Math.max(1, Math.min(100, numberValue(opts.limit, 30) || 30))
-  const rows: QualityRow[] = commands.map(command => {
-    const issues: string[] = []
-    const usage = usageCount(opts.usageCounts, command.id)
-    if (!(command.suggestedCommand || command.example || values(command.examples).length)) issues.push("missing-example")
-    if (!commandHeads(command).length) issues.push("missing-head")
-    if (!commandParameters(command).length) issues.push("missing-parameters")
-    if (command.dynamic || command.pluginKey === "observed") issues.push("dynamic-observed")
-    if (!values(command.helpDocs).length && !values(command.sourceDocs).length && !text(command.description).trim()) issues.push("missing-doc")
-    if (text(commandGuide(command).confidence) === "low") issues.push("low-confidence")
-    return {
-      ...commandView({ ...command, usageCount: usage }),
-      issues,
-      usageCount: usage,
-      qualityScore: Math.max(0, 100 - issues.length * 18 - (usage ? 0 : 4)),
-    }
-  })
+  const rows = commands.map(command => commandQuality(command, opts.usageCounts))
   const issueCounts = countValues(rows.flatMap(row => row.issues.length ? row.issues : ["ok"]))
   const byPluginMap = rows.reduce<Record<string, PluginQualitySummary>>((acc, row) => {
     const key = text(row.pluginName || row.pluginKey || "unknown")

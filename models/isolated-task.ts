@@ -7,6 +7,7 @@ import { providerResolver } from "./routing/provider-resolver.js"
 type UnknownRecord = Record<string, unknown>
 
 interface IsolatedTaskOptions {
+  signal?: AbortSignal
   config?: RuntimeConfigObject
   taskName?: string
   channelId?: string
@@ -45,6 +46,15 @@ function attemptError(channel: ResolvedModelChannel, error: unknown): Attempt {
   return { channel: channel.id, adapter: channel.type, error: errorMessage(error), status: "error" }
 }
 
+function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const abort = (): void => reject(signal.reason || new Error("模型请求已取消"))
+    if (signal.aborted) reject(signal.reason)
+    signal.addEventListener("abort", abort, { once: true })
+    operation.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort))
+  })
+}
+
 /**
  * 运行无历史、无人格、无 Skill、无记忆、无 Tool 的项目模型任务。
  * 适合代码草稿等管理端辅助功能，不进入正常聊天链路。
@@ -65,19 +75,23 @@ export async function runIsolatedModelTask(options: IsolatedTaskOptions = {}): P
   const task = record(tasks[taskName])
   const taskMaxTokens = Number(task.maxTokens) || 4096
   // 推理型模型的思考 token 也计入上限，调用方可以显式调大但不能越过统一边界。
-  const maxTokens = Math.max(512, Math.min(65536, Number(options.maxTokens) || taskMaxTokens))
+  const maxTokens = Math.max(1, Math.min(65536, Number(options.maxTokens) || taskMaxTokens))
   const attempts: Attempt[] = []
   // 每次 fallback 都重新创建 controller/timer，让每个候选模型拥有自己的请求期限。
   for (const channel of channels) {
+    options.signal?.throwIfAborted()
     const channelTimeoutMs = Number(channel.timeoutMs)
     const timeoutValue = explicitTimeoutMs || (Number.isFinite(channelTimeoutMs) && channelTimeoutMs > 0 ? channelTimeoutMs : defaultTimeoutMs)
     const timeoutMs = Math.max(1000, Math.min(600000, Number.isFinite(timeoutValue) && timeoutValue > 0 ? timeoutValue : 90000))
     const controller = new AbortController()
+    const abort = (): void => controller.abort(options.signal?.reason || new Error("任务已取消"))
+    options.signal?.addEventListener("abort", abort, { once: true })
+    if (options.signal?.aborted) abort()
     const timer = setTimeout(() => controller.abort(new Error(`项目 AI 生成超过 ${timeoutMs}ms`)), timeoutMs)
     try {
       if (channel.type === "mock") throw new Error("当前任务使用 Mock 模型，请先配置真实模型渠道")
       const adapter = adapterRegistry.get(channel.type)
-      const response = await adapterRegistry.sendMessage({
+      const response = await abortable(adapterRegistry.sendMessage({
         channel,
         messages: [
           { role: "system", content: text(options.systemPrompt) },
@@ -93,7 +107,7 @@ export async function runIsolatedModelTask(options: IsolatedTaskOptions = {}): P
         trace: options.trace || null,
         metadata: options.metadata || {},
         snapshotMetadata: options.snapshotMetadata || options.metadata || {},
-      })
+      }), controller.signal)
       return {
         id: response.id || "",
         text: text(response.text),
@@ -105,10 +119,12 @@ export async function runIsolatedModelTask(options: IsolatedTaskOptions = {}): P
       }
     } catch (error) {
       const failure = controller.signal.aborted && controller.signal.reason instanceof Error ? controller.signal.reason : error
+      if (options.signal?.aborted) throw failure
       attempts.push(attemptError(channel, failure))
       if (text(task.selectionStrategy) !== "fallback") break
     } finally {
       clearTimeout(timer)
+      options.signal?.removeEventListener("abort", abort)
     }
   }
   const last = attempts.at(-1)

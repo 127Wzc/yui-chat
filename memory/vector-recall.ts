@@ -4,7 +4,8 @@ import { modelLogStore } from "../core/observability/model-log.js"
 import { hostRuntime } from "../core/runtime/host-runtime.js"
 import { sqliteClient } from "../core/storage/sqlite/client.js"
 import { vectorIndex } from "../knowledge/vector-index.js"
-import type { VectorMatch, VectorSpace } from "../knowledge/vector-index.js"
+import type { VectorSpace } from "../knowledge/vector-index.js"
+import { embeddingIdentity } from "../knowledge/embedding-identity.js"
 import { resolveEmbeddingDimensions } from "../models/embeddings/dimensions.js"
 import { embeddingRunner } from "../models/embeddings/runner.js"
 
@@ -37,6 +38,14 @@ interface EmbedQueryOptions {
   normalized: string
   query: unknown
   event?: unknown
+  fingerprint?: string
+}
+
+interface MemoryEmbeddingConfig {
+  modelName: string
+  dimensions: number
+  fingerprint: string
+  key: string
 }
 
 function record(value: unknown): UnknownRecord {
@@ -77,22 +86,39 @@ export class MemoryVectorRecall {
     return Boolean(String(this.retrievalConfig().embeddingModel || "").trim()) && Boolean(sqliteClient.status.vector?.available)
   }
 
-  // 空间随模型/维度配置变化重建句柄；ensureSpace 本身幂等，这里只是避免每次召回都跑 DDL。
-  async ensureSpace(): Promise<{ space: VectorSpace | null; modelName: string; dimensions: number }> {
+  embeddingConfig(): MemoryEmbeddingConfig {
     const config = record(configStore.get())
     const retrieval = this.retrievalConfig()
     const modelName = String(retrieval.embeddingModel || "").trim()
     const models = Array.isArray(config.models) ? config.models.map(record) : []
     const model = models.find(item => String(item.name || "") === modelName) || {}
     const dimensions = resolveEmbeddingDimensions(model, Number(retrieval.embeddingDimensions || 0))
-    const key = `${modelName}:${dimensions}`
+    const fingerprint = embeddingIdentity(modelName)
+    return { modelName, dimensions, fingerprint, key: `${fingerprint}:${dimensions}:cosine` }
+  }
+
+  isCurrent(config: MemoryEmbeddingConfig): boolean {
+    try { return this.enabled() && this.embeddingConfig().key === config.key } catch {
+      // 配置暂时无可用模型/维度时视为不兼容，召回安全降级为 FTS。
+      return false
+    }
+  }
+
+  // 指纹与知识库共用：同名模型换上游、协议或参数时也必须隔离空间与查询缓存。
+  async ensureSpace(): Promise<MemoryEmbeddingConfig & { space: VectorSpace | null }> {
+    const config = this.embeddingConfig()
+    const { modelName, dimensions, fingerprint, key } = config
     if (!this.space || this.spaceKey !== key) {
-      const space = await vectorIndex.ensureSpace({ modelName, dimensions, distanceMetric: "cosine", scopeKey: SPACE_SCOPE_KEY })
-      if (!space) return { space: null, modelName, dimensions }
+      const space = await vectorIndex.ensureSpace({ modelName, dimensions, distanceMetric: "cosine", scopeKey: `${SPACE_SCOPE_KEY}:fp-${fingerprint}` })
+      if (!space || !this.isCurrent(config)) return { ...config, space: null }
       this.space = space
       this.spaceKey = key
+      this.queryCache.clear()
+      this.indexed = 0
+      // 查询发现新配置时安排同步；索引未就绪期间只补不到向量候选，FTS 仍可使用。
+      if (!this.syncing) this.markDirty()
     }
-    return { space: this.space, modelName, dimensions }
+    return { ...config, space: this.space }
   }
 
   // 写入方（memory/repository.js、sqlite-store.js）在数据变化后调用；5 秒去抖合并一批写入，
@@ -112,8 +138,11 @@ export class MemoryVectorRecall {
     if (this.syncing || !this.enabled() || Date.now() < this.failUntil) return
     this.syncing = true
     let trace = null
+    let snapshot: MemoryEmbeddingConfig | null = null
     try {
-      const { space, modelName, dimensions } = await this.ensureSpace()
+      const config = await this.ensureSpace()
+      snapshot = config
+      const { space, modelName, dimensions } = config
       if (!space) return
       const rows = await sqliteClient.all<UnknownRecord>(
         `SELECT id, text FROM memory_items
@@ -148,16 +177,25 @@ export class MemoryVectorRecall {
           taskName: "memory-vector-index",
           trace,
         })
-        for (const [index, item] of pending.entries()) {
-          await vectorIndex.upsert(space, { ownerType: OWNER_TYPE, ownerId: item.id, contentHash: item.hash, vector: embedded.vectors[index] })
+        for (let offset = 0; offset < pending.length; offset += 256) {
+          if (!this.isCurrent(config)) throw new Error("记忆向量模型配置在同步期间变化，等待新配置同步")
+          await vectorIndex.upsertBatch(space, pending.slice(offset, offset + 256).map((item, index) => ({ ownerType: OWNER_TYPE, ownerId: item.id, contentHash: item.hash, vector: embedded.vectors[offset + index] })))
         }
         modelLogStore.finishTrace(trace, { status: "ok", metadata: { indexed: pending.length, stale: stale.length, modelName } })
         trace = null
       }
+      if (!this.isCurrent(config)) return
       this.indexed = eligible.size
       this.lastSyncAt = Date.now()
       this.lastError = ""
       this.failureStreak = 0
+      // 仅在当前空间同步成功后回收旧派生索引；失败/预算暂停保留当前已完成进度。
+      for (const old of await vectorIndex.listSpaces()) {
+        if (!this.isCurrent(config)) break
+        if (old.id !== space.id && (old.scopeKey === SPACE_SCOPE_KEY || old.scopeKey.startsWith(`${SPACE_SCOPE_KEY}:fp-`))) {
+          await vectorIndex.deleteSpace(old.id).catch(error => hostRuntime.logger?.warn?.("[yui-chat] 清理旧记忆向量空间失败", errorMessage(error)))
+        }
+      }
     } catch (error: unknown) {
       if (trace) modelLogStore.finishTrace(trace, { status: "error", error })
       this.lastError = errorMessage(error)
@@ -169,6 +207,7 @@ export class MemoryVectorRecall {
       hostRuntime.logger?.warn?.(`[yui-chat] 记忆向量索引同步失败：${this.lastError}`)
     } finally {
       this.syncing = false
+      if (snapshot && this.enabled() && !this.isCurrent(snapshot)) this.markDirty()
     }
   }
 
@@ -176,8 +215,8 @@ export class MemoryVectorRecall {
   // 1) 归一后有效字符 < 4 直接放弃（太短的查询语义太弱，不值得调 API）；
   // 2) 5 分钟 TTL + LRU 128 的内存缓存，命中不调 API、不建 trace；
   // 3) 真实调用才建 memory-recall trace 并成对 finishTrace——按要求进大模型日志。
-  async embedQuery({ modelName, dimensions, normalized, query, event }: EmbedQueryOptions): Promise<number[] | null> {
-    const key = `${modelName}:${dimensions}:${normalized.toLowerCase()}`
+  async embedQuery({ modelName, dimensions, normalized, query, event, fingerprint = embeddingIdentity(modelName) }: EmbedQueryOptions): Promise<number[] | null> {
+    const key = `${fingerprint}:${dimensions}:${normalized.toLowerCase()}`
     const cached = this.queryCache.get(key)
     if (cached && cached.expiresAt > Date.now()) {
       this.queryCache.delete(key)
@@ -204,6 +243,7 @@ export class MemoryVectorRecall {
     }
     const vector = embedded.vectors[0]
     if (!vector) return null
+    if (embeddingIdentity(modelName) !== fingerprint) throw new Error("记忆向量模型配置在查询期间变化，请重试")
     this.queryCache.set(key, { vector, expiresAt: Date.now() + QUERY_CACHE_TTL_MS })
     while (this.queryCache.size > QUERY_CACHE_LIMIT) {
       const oldest = this.queryCache.keys().next().value
@@ -220,28 +260,37 @@ export class MemoryVectorRecall {
     try {
       const normalized = String(query).replace(/\s+/g, "")
       if ([...normalized].length < MIN_QUERY_CHARS) return []
-      const { space, modelName, dimensions } = await this.ensureSpace()
+      const config = await this.ensureSpace()
+      const { space, modelName, dimensions, fingerprint } = config
       if (!space) return []
-      const vector = await this.embedQuery({ modelName, dimensions, normalized, query, event })
-      if (!vector) return []
-      const limit = Math.max(1, Number(this.retrievalConfig().vectorCandidateLimit) || 20)
-      // 向量空间由所有记忆共用：适度多取后再按本轮作用域过滤，降低目标成员被全局近邻挤出的概率。
-      const searchLimit = Math.min(1000, Math.max(limit, limit * Math.min(5, Math.max(1, scopes.length))))
-      const owners: VectorMatch[] = (await vectorIndex.search(space, vector, searchLimit))
+      const now = Date.now()
+      const conditions = scopes.map(() => "(scope_type=? AND owner_id=? AND group_id=?)").join(" OR ")
+      const eligible = await sqliteClient.all<UnknownRecord>(
+        `SELECT id FROM memory_items WHERE (${conditions}) AND status IN ('active','warm','cold')
+         AND type IN ('fact','episode') AND NOT (type='episode' AND source='interaction')
+         AND TRIM(text)<>'' AND (expires_at=0 OR expires_at>?)`,
+        [...scopes.flatMap(scope => [scope.scopeType, scope.ownerId, scope.groupId || ""]), now],
+      )
+      if (!eligible.length) return []
+      const vector = await this.embedQuery({ modelName, dimensions, fingerprint, normalized, query, event })
+      if (!vector || !this.isCurrent(config)) return []
+      const limit = Math.min(1000, Math.max(1, Number(this.retrievalConfig().vectorCandidateLimit) || 20))
+      const owners = (await vectorIndex.search(space, vector, limit, { ownerType: OWNER_TYPE, ownerIds: eligible.map(row => String(row.id)) }))
         .filter(item => item.ownerType === OWNER_TYPE && Math.max(0, 1 - Number(item.distance)) >= MIN_VECTOR_SCORE)
       if (!owners.length) return []
       const ids = [...new Set(owners.map(item => String(item.ownerId)))]
       const rows = await sqliteClient.all<UnknownRecord>(`SELECT * FROM memory_items WHERE id IN (${ids.map(() => "?").join(",")})`, ids)
       const byId = new Map(rows.map(row => [String(row.id || ""), row]))
       const scopeKeys = new Set(scopes.map(scope => `${scope.scopeType}|${scope.ownerId}|${scope.groupId || ""}`))
-      const now = Date.now()
+      if (!this.isCurrent(config)) return []
+      const checkedAt = Date.now()
       const results: UnknownRecord[] = []
       for (const owner of owners) {
         const row = byId.get(String(owner.ownerId))
         if (!row) continue
         if (!scopeKeys.has(`${row.scope_type}|${row.owner_id}|${row.group_id || ""}`)) continue
         if (!["active", "warm", "cold"].includes(String(row.status || ""))) continue
-        if (Number(row.expires_at || 0) > 0 && Number(row.expires_at) <= now) continue
+        if (Number(row.expires_at || 0) > 0 && Number(row.expires_at) <= checkedAt) continue
         if (row.type === "profile" || row.type === "short") continue
         if (row.type === "episode" && row.source === "interaction") continue
         results.push({ ...row, tags: parseTags(row.tags_json), score: Math.max(0, 1 - Number(owner.distance)) })

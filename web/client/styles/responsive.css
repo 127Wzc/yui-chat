@@ -50,7 +50,7 @@
   .page-load-line { top: 0; }
   .top-actions { flex: 1 1 100%; }
   .token-field { flex: 1 1 180px; max-width: none; }
-  .form-grid, .form-grid.dense, .form-grid.three, .metric-grid { grid-template-columns: 1fr; }
+  .form-grid, .form-grid.dense, .form-grid.three, .command-retrieval-controls.form-grid, .metric-grid { grid-template-columns: 1fr; }
   .settings-toggle-grid { grid-template-columns: 1fr; }
   .persona-interaction-workspace { grid-template-columns: 1fr; }
   .persona-interaction-rail { position: static; }

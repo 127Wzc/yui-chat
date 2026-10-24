@@ -1024,7 +1024,6 @@ function validateRuntimeNumbers(config: ConfigRecord, issues: ValidationIssue[])
     ["knowledge.indexing.maxAttempts", config.knowledge?.indexing?.maxAttempts, 1, 20],
     ["knowledge.retrieval.ftsCandidateLimit", config.knowledge?.retrieval?.ftsCandidateLimit, 1, 1000],
     ["knowledge.retrieval.vectorCandidateLimit", config.knowledge?.retrieval?.vectorCandidateLimit, 0, 1000],
-    ["knowledge.retrieval.resultLimit", config.knowledge?.retrieval?.resultLimit, 1, 20],
     ["knowledge.retrieval.resultTokenBudget", config.knowledge?.retrieval?.resultTokenBudget, 0, 20000],
     ["knowledge.retrieval.rerankCallsPerConversation", config.knowledge?.retrieval?.rerankCallsPerConversation, 0, 100],
     ["knowledge.retrieval.rerankCallsPerDay", config.knowledge?.retrieval?.rerankCallsPerDay, 0, 100000],
@@ -1033,6 +1032,7 @@ function validateRuntimeNumbers(config: ConfigRecord, issues: ValidationIssue[])
     ["knowledge.commandRetrieval.vectorWeight", config.knowledge?.commandRetrieval?.vectorWeight, 0, 10],
   ]
   for (const [path, value, min, max] of numericRanges) positiveNumber(issues, path, value, { min, max })
+  positiveNumber(issues, "knowledge.retrieval.resultLimit", config.knowledge?.retrieval?.resultLimit, { min: 1, max: 20, integer: true })
   if (config.memory?.groupCapture?.enabled !== undefined && typeof config.memory.groupCapture.enabled !== "boolean") {
     add(issues, "error", "memory.groupCapture.enabled", "groupCapture.enabled 必须是布尔值")
   }
@@ -1057,12 +1057,27 @@ function validateRuntimeNumbers(config: ConfigRecord, issues: ValidationIssue[])
       }
     }
   }
+  for (const key of ["rerankEnabled"]) if (config.knowledge?.retrieval?.[key] !== undefined && typeof config.knowledge.retrieval[key] !== "boolean") add(issues, "error", `knowledge.retrieval.${key}`, "必须是布尔值")
+  positiveNumber(issues, "knowledge.retrieval.minRelevance", config.knowledge?.retrieval?.minRelevance, { min: 0, max: 1 })
+  for (const [key, min, max] of [["rerankMaxCandidates", 1, 30], ["rerankInputTokenBudget", 200, 30000], ["rerankMaxTokens", 128, 4000], ["rerankTimeoutMs", 1000, 60000], ["rerankCacheTtlMs", 0, 86400000]] as const) positiveNumber(issues, `knowledge.retrieval.${key}`, config.knowledge?.retrieval?.[key], { min, max, integer: true })
+  for (const [area, key] of [["retrieval", "rerankTask"]] as const) {
+    const task = section(config.knowledge?.[area])[key]
+    const modelKey = "rerankModel"
+    const modelName = String(section(config.knowledge?.[area])[modelKey] || "").trim()
+    if (modelName) {
+      const model = asArray(config.models).map(section).find(item => item.name === modelName)
+      const provider = asArray(config.apiProviders).map(section).find(item => item.name === model?.apiProvider)
+      if (!model) add(issues, "error", `knowledge.${area}.${modelKey}`, "模型不存在")
+      else if (modelPurpose(model) !== "chat" || section(model.capabilities).chat === false || String(model.adapter || provider?.type || "mock") === "mock") add(issues, "error", `knowledge.${area}.${modelKey}`, "请选择已接入的文本对话模型")
+    }
+    const required = !modelName && config.knowledge?.retrieval?.rerankEnabled === true
+    if (required && task && !config.modelTasks?.[String(task)]) add(issues, "error", `knowledge.${area}.${key}`, "任务不存在")
+    if (required && task && section(config.modelTasks?.[String(task)]).purpose && section(config.modelTasks?.[String(task)]).purpose !== "chat") add(issues, "error", `knowledge.${area}.${key}`, "请选择文本对话任务")
+  }
   const commandRetrievalMode = String(config.knowledge?.commandRetrieval?.mode || "hybrid").trim().toLowerCase()
   if (!new Set(["lexical", "hybrid"]).has(commandRetrievalMode)) {
     add(issues, "error", "knowledge.commandRetrieval.mode", "指令检索策略只能是 lexical 或 hybrid")
   }
-  positiveNumber(issues, "knowledge.maxEvents", config.knowledge?.maxEvents, { min: 10 })
-  positiveNumber(issues, "knowledge.flushDelayMs", config.knowledge?.flushDelayMs, { min: 100 })
   if (config.logging?.level !== undefined && !isLogLevel(config.logging.level)) {
     add(issues, "error", "logging.level", "日志等级必须是 off、error、warn、info 或 debug")
   }
@@ -1080,11 +1095,6 @@ function validateRuntimeNumbers(config: ConfigRecord, issues: ValidationIssue[])
       for (const prefix of prefixes) {
         if (prefix.length > 4) add(issues, "warn", "knowledge.commandPrefixes", `指令前缀过长：${prefix}`)
       }
-    }
-  }
-  for (const key of ["excludedPlugins", "excludedCommands"]) {
-    if (config.knowledge?.[key] !== undefined && !Array.isArray(config.knowledge[key])) {
-      add(issues, "error", `knowledge.${key}`, `knowledge.${key} 必须是数组`)
     }
   }
   positiveNumber(issues, "mediaRecognition.remoteFetch.maxBytes", config.mediaRecognition?.remoteFetch?.maxBytes, { min: 1024 })

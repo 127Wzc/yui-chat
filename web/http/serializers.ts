@@ -1,3 +1,5 @@
+import { commandPriorityMetadata, commandRuntimeMetadata, commandOriginalMetadata, buildCommandRetrievalText } from "../../knowledge/command-document-builder.js"
+
 type UnknownRecord = Record<string, unknown>
 
 function record(value: unknown): UnknownRecord {
@@ -13,8 +15,11 @@ export function commandKnowledgeView(item: UnknownRecord = {}): UnknownRecord {
     description: item.description,
     summary: item.summary,
     body: item.body || "",
+    retrievalText: buildCommandRetrievalText(item),
+    notes: item.notes || "",
     fnc: item.fnc,
     regexp: item.regexp,
+    regexpFlags: item.regexpFlags || "",
     example: item.example,
     suggestedCommand: item.suggestedCommand,
     examples: item.examples || [],
@@ -24,9 +29,13 @@ export function commandKnowledgeView(item: UnknownRecord = {}): UnknownRecord {
     usageGuide: item.usageGuide,
     permission: item.permission,
     event: item.event,
-    priority: item.priority,
+    ...commandPriorityMetadata(item),
     sourceRuleKey: item.sourceRuleKey || "",
     origin: item.origin || null,
+    runtimeMetadata: commandRuntimeMetadata(item),
+    originalMetadata: commandOriginalMetadata(item),
+    sourceStatus: item.sourceStatus || "current",
+    needsReview: Boolean(item.needsReview),
     dynamic: Boolean(item.dynamic || item.pluginKey === "observed"),
     manual: Boolean(item.manual || item.pluginKey === "manual"),
     overridesCommandId: item.overridesCommandId || "",

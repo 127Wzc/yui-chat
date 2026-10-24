@@ -1,0 +1,34 @@
+[
+  {
+    "query": "怎么查体力",
+    "expected": "stamina"
+  },
+  {
+    "query": "体力",
+    "expected": "stamina"
+  },
+  {
+    "query": "还有多少树脂",
+    "expected": "stamina"
+  },
+  {
+    "query": "提力",
+    "expected": "stamina"
+  },
+  {
+    "query": "每日签到",
+    "expected": "sign"
+  },
+  {
+    "query": "管理面板",
+    "expected": "panel"
+  },
+  {
+    "query": "星铁开拓力",
+    "expected": "trailblaze"
+  },
+  {
+    "query": "火星种土豆",
+    "expected": null
+  }
+]

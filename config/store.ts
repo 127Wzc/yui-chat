@@ -218,6 +218,8 @@ function normalizeModelRoutingDefaults(config: Config): Config {
   if (isObject(modelTasks.imageGeneration)) delete modelTasks.imageGeneration.maxCount
   delete recordProperty(config, "chat").defaultWorkflow
   delete config.workflows
+  const knowledge = recordProperty(config, "knowledge")
+  for (const key of ["enrichment", "excludedPlugins", "excludedCommands", "exclusionRules", "dynamicCapture", "capturePrivate", "captureGroups", "maxEvents", "flushDelayMs"]) delete knowledge[key]
   const defaultTasks: ConfigRecord = isObject(defaults.modelTasks) ? defaults.modelTasks : {}
   if (!isObject(modelTasks.replyer)) modelTasks.replyer = clone(defaultTasks.replyer || {})
   if (!isObject(modelTasks.imageGeneration)) modelTasks.imageGeneration = clone(defaultTasks.imageGeneration || { purpose: "image", modelList: [], selectionStrategy: "fallback" })

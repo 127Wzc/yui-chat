@@ -71,6 +71,8 @@ pnpm i
 | `#yui定时任务` | 查看自己的提醒 |
 | `#yui诊断` | 主人查看运行状态 |
 
+指令知识支持页面即时采集已加载指令，再通过[外部整理与导入流程](docs/command-knowledge.md)在外部整理后增量维护。
+
 配置通过管理台维护。长期数据位于 Yunzai 的 `data/yui-chat/`，临时文件位于插件 `cache/`；配置包不包含聊天、记忆和日志正文。
 
 ## 技术栈
@@ -102,7 +104,7 @@ flowchart LR
 
 ## 文档
 
-- [内置工具与权限](docs/builtin-tools.md)
+- [内置工具与权限](docs/builtin-tools.md) · [指令知识与 RAG](docs/command-knowledge.md)
 - [扩展安装](docs/extension-installation.md)
 - [架构与数据流](docs/architecture.md) · [Responses 与上下文压缩](docs/responses-api.md)
 - [工具开发](docs/tool-authoring-guide.md) · [Custom 框架资源](docs/custom-framework-resources.md)

@@ -1,3 +1,4 @@
+import { knowledgeStore } from "../../../../knowledge/store.js"
 import { knowledgeIndexJobs } from "../../../../knowledge/index-jobs.js"
 import { sqliteClient } from "../../../../core/storage/sqlite/client.js"
 import { hostRuntime } from "../../../../core/runtime/host-runtime.js"
@@ -19,6 +20,12 @@ function serializeJob(job: Record<string, unknown> = {}): Record<string, unknown
 }
 
 export function registerKnowledgeIndexRoutes(app: RouteApp): void {
+  app.get("/api/knowledge/bases/:id/index-status", auth, handleRoute(async (req, res) => {
+    res.json({ ok: true, inspection: await knowledgeIndexJobs.inspect(req.params.id) })
+  }, { errorStatus: 400 }))
+  app.post("/api/knowledge/bases/:id/repair-index", auth, handleRoute(async (req, res) => {
+    res.json({ ok: true, result: await knowledgeIndexJobs.repair(req.params.id, { immediate: req.body?.immediate === true, start: req.body?.start !== false }) })
+  }, { errorStatus: 400 }))
   app.get("/api/knowledge/index-jobs", auth, handleRoute(async (req, res) => {
     const pageSize = Math.max(1, Math.min(100, Number(req.query.pageSize || req.query.limit) || 10))
     const page = Math.max(1, Number(req.query.page) || 1)
@@ -34,6 +41,7 @@ export function registerKnowledgeIndexRoutes(app: RouteApp): void {
   }))
   app.post("/api/knowledge/bases/:id/rebuild", auth, handleRoute(async (req, res) => {
     const immediate = req.body?.immediate === true
+    await knowledgeStore.prepareRebuild(req.params.id)
     const result = await knowledgeIndexJobs.queue(req.params.id, { immediate, start: !immediate && req.body?.start !== false })
     res.json({ ok: true, result })
   }, { errorStatus: 400 }))

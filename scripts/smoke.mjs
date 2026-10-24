@@ -53,6 +53,7 @@ const webServerSourceFiles = [
   "web/http/routes/filters/filters.ts",
   "web/http/routes/knowledge.ts",
   "web/http/routes/knowledge/bases.ts",
+  "web/http/routes/knowledge/commands.ts",
   "web/http/routes/knowledge/indexing.ts",
   "web/http/routes/filters/message-processing.ts",
   "web/http/routes/observability.ts",
@@ -443,6 +444,14 @@ async function checkConfigSafety() {
   const invalidKnowledge = JSON.parse(JSON.stringify(config))
   invalidKnowledge.knowledge.commandPrefixes = []
   assert(!validateConfig(invalidKnowledge).ok, "empty command prefixes should be rejected")
+  for (const [area, key] of [["retrieval", "rerankModel"]]) {
+    const invalidSelection = JSON.parse(JSON.stringify(config))
+    invalidSelection.knowledge[area][key] = "missing-model"
+    assert(validateConfig(invalidSelection).errors.some(issue => issue.path === `knowledge.${area}.${key}`), "unknown knowledge generation model must be rejected")
+    invalidSelection.models.push({ name: "embedding-only", adapter: "openai-compatible", purpose: "embedding", capabilities: { chat: false, embedding: true } })
+    invalidSelection.knowledge[area][key] = "embedding-only"
+    assert(validateConfig(invalidSelection).errors.some(issue => issue.path === `knowledge.${area}.${key}`), "embedding-only model must be rejected for text generation")
+  }
   const invalidLogging = JSON.parse(JSON.stringify(config))
   invalidLogging.logging.level = "verbose"
   assert(!validateConfig(invalidLogging).ok, "unsupported conversation log level should be rejected")
@@ -2912,7 +2921,7 @@ async function checkSqliteStorage() {
   try {
     assert(sqliteClient.status.available, "SQLite state database should initialize in worker")
     assert(sqliteClient.status.integrity === "ok", "SQLite state database should pass quick_check")
-    assert((sqliteClient.status.migrations || []).map(row => row.id).join(",") === "001-baseline.sql,002-tool-call-events.sql,003-model-call-snapshots.sql,004-conversation-state.sql,005-log-session.sql,006-extension-installations.sql", "SQLite state database should apply the baseline, combined tool/runtime, model snapshot, conversation state, and extension installation schema")
+    assert((sqliteClient.status.migrations || []).map(row => row.id).join(",") === "001-baseline.sql,002-tool-call-events.sql,003-model-call-snapshots.sql,004-conversation-state.sql,005-log-session.sql,006-extension-installations.sql,007-cosine-retrieval.sql,008-command-import.sql,009-command-availability.sql", "SQLite state database should apply the baseline, combined tool/runtime, model snapshot, conversation state, and extension installation schema")
     const removed = await sqliteClient.get("SELECT name FROM sqlite_master WHERE type='table' AND name='knowledge_sources'")
     assert(!removed, "baseline state database should not recreate removed transitional tables")
   } finally {
@@ -6302,242 +6311,17 @@ async function checkUnifiedModelLogs() {
 
 async function checkCommandKnowledge() {
   const { buildCommandDoc, commandObserver } = await import("../output/runtime/knowledge/command-observer.js")
-  const { CommandRecommendTool, CommandSearchTool } = await import("../output/runtime/tools/builtins/command.js")
-  const previousCommands = JSON.parse(JSON.stringify(commandObserver.commands || []))
-  const previousEvents = JSON.parse(JSON.stringify(commandObserver.events || []))
-  try {
-    const doc = buildCommandDoc({
-    id: "smoke:aihelp",
-    pluginKey: "yui-chat",
-    pluginName: "Yui Chat",
-    description: "指令检索",
-    fnc: "help",
-    regexp: "^#yuihelp([\\s\\S]*)$",
-    permission: "all",
-    event: "message",
-    priority: 1,
-    helpDocs: [{ source: "README.md", text: "#yuihelp 怎么查体力 #yuichat 你好" }],
-  })
-  assert(doc.suggestedCommand.startsWith("#yuihelp"), "command knowledge should derive suggested command")
-  assert(doc.examples.includes("#yuihelp"), "command knowledge should collect doc command examples")
-  assert(doc.commandHeads.includes("#yuihelp"), "command knowledge should derive command heads")
-  assert(doc.parameterHints.some(item => item.name === "内容"), "command knowledge should derive parameter hints")
-  assert(doc.intentHints.includes("帮助") || doc.intentHints.includes("查询"), "command knowledge should derive intent hints")
-  const scoped = buildCommandDoc({
-    id: "smoke:scoped-help",
-    pluginKey: "scoped-plugin",
-    pluginName: "范围指令",
-    description: "只保留匹配当前指令的帮助片段",
-    summary: "建议指令：/readme/girl.png",
-    fnc: "run",
-    regexp: "^#真实指令([\\s\\S]*)$",
-    permission: "all",
-    event: "message",
-    priority: 1,
-    helpDocs: [{ source: "README.md", text: "#真实指令 查询当前状态\n/readme/girl.png #无关指令" }],
-  })
-  assert(scoped.suggestedCommand.startsWith("#真实指令") && !scoped.examples.includes("/readme/girl.png"), "command help should ignore unrelated README tokens")
-  assert(!scoped.commandHeads.includes("/readme") && !scoped.searchText.includes("/readme/girl.png"), "command search text should not reuse stale derived summaries")
-  const unprefixed = buildCommandDoc({
-    id: "smoke:unprefixed",
-    pluginKey: "unprefixed-plugin",
-    pluginName: "无前缀指令",
-    description: "无前缀触发规则",
-    fnc: "parse",
-    regexp: "^ep\\d+$",
-    permission: "all",
-    event: "message",
-    priority: 1,
-    helpDocs: [{ source: "README.md", text: "resources/readme/girl.png\n#sf帮助" }],
-  })
-  assert(!unprefixed.examples.includes("/readme/girl.png") && !unprefixed.suggestedCommand.includes("/readme"), "README assets should not become examples for unprefixed rules")
-  const { default: PluginsLoader } = await import("../../../lib/plugins/loader.js")
-  const previousPriority = PluginsLoader.priority
-  const previousInitializedForScan = commandObserver.initialized
-  try {
-    commandObserver.commands = [doc]
-    commandObserver.initialized = true
-    PluginsLoader.priority = [{
-      key: "smoke-runtime-plugin",
-      priority: 1,
-      plugin: {
-        name: "Yui Chat",
-        dsc: "运行态指令",
-        rule: [
-          { fnc: "help", reg: /^#yuihelp([\s\S]*)$/, permission: "all", event: "message" },
-          { fnc: "internalHook", reg: "sf-plugin-InternalHook-12345", permission: "all", event: "message" },
-        ],
-      },
-    }]
-    const initialScan = await commandObserver.scan()
-    const runtimeCommand = initialScan.find(item => item.pluginKey === "smoke-runtime-plugin")
-    assert(!initialScan.some(item => item.fnc === "internalHook"), "ephemeral internal hook rules must not enter command knowledge")
-    const manualOverride = await commandObserver.upsertManualCommand({
-      sourceCommandId: runtimeCommand.id,
-      sourceRuleKey: runtimeCommand.sourceRuleKey,
-      sourceOrigin: runtimeCommand.origin,
-      pluginName: "Yui Chat",
-      suggestedCommand: "#yui帮助说明",
-      description: "手工修订后的说明",
-      body: "这是人工修订后的完整正文。",
-    })
-    PluginsLoader.priority[0].plugin.rule[0].reg = /^#yuihelp更新([\s\S]*)$/
-    const scanned = await commandObserver.scan()
-    const preservedManual = scanned.find(item => item.id === manualOverride.id)
-    assert(runtimeCommand && !runtimeCommand.sourceDocs && !runtimeCommand.examples.includes("/readme/girl.png"), "static scan should only use runtime command metadata")
-    assert(runtimeCommand?.origin?.pluginName === "Yui Chat" && runtimeCommand.origin.file === "plugins/smoke-runtime-plugin/index.js" && runtimeCommand.origin.fileRole === "插件入口" && runtimeCommand.origin.method === "help", "static command scans should retain the plugin, source file, and rule method")
-    assert(preservedManual?.manual && preservedManual.description === "手工修订后的说明" && preservedManual.body === "这是人工修订后的完整正文。", "manual command edits should retain their full body after a later runtime scan")
-    assert(!scanned.some(item => item.pluginKey === "smoke-runtime-plugin") && scanned.filter(item => item.pluginName === "Yui Chat" && item.suggestedCommand === "#yui帮助说明").length === 1, "a manual override should survive a future scan even when the source trigger rule changes")
-    await commandObserver.deleteCuratedCommand(manualOverride.id)
-  } finally {
-    PluginsLoader.priority = previousPriority
-    commandObserver.initialized = previousInitializedForScan
-    commandObserver.commands = [doc]
-  }
-  commandObserver.events = [{ exactMatches: [doc.id], matches: [], time: new Date().toISOString() }]
-  commandObserver.rebuildUsageCounts()
-  const previousInitialized = commandObserver.initialized
-  commandObserver.initialized = false
-  let scanGuarded = false
-  try {
-    await commandObserver.scan()
-  } catch (error) {
-    scanGuarded = error?.code === "COMMAND_OBSERVER_NOT_READY"
-  } finally {
-    commandObserver.initialized = previousInitialized
-  }
-  assert(scanGuarded, "command scan should reject before the observer runtime is initialized")
-  const matches = commandObserver.findMatches("#yuihelp", 1)
-  assert(matches[0]?.suggestedCommand?.startsWith("#yuihelp"), "command search should return suggested command")
-  assert(Boolean(matches[0]?.reason), "command search should return recommendation reason")
-  assert(matches[0]?.commandHeads?.includes("#yuihelp"), "command search should include command heads")
-  const structuredRecommendation = commandObserver.recommendCommands("#yuihelp", { limit: 1 })
-  assert(structuredRecommendation.results[0]?.recommendation?.command?.startsWith("#yuihelp"), "command recommendations should expose executable command")
-  assert(structuredRecommendation.results[0]?.recommendation?.nextSteps?.length >= 1, "command recommendations should expose next steps")
-  assert(["high", "medium", "low", "observed"].includes(structuredRecommendation.results[0]?.recommendation?.confidence), "command recommendations should expose confidence")
-  const hybridRecommendation = await commandObserver.recommendCommandsHybrid("#yuihelp", { limit: 1 })
-  assert(hybridRecommendation.results[0]?.recommendation?.command?.startsWith("#yuihelp") && ["lexical", "hybrid"].includes(hybridRecommendation.retrieval?.mode), "hybrid command recommendations should preserve lexical fallback and retrieval metadata")
-  const manual = await commandObserver.upsertManualCommand({
-    suggestedCommand: "#烟测手动命令 <内容>",
-    description: "手动补充烟测",
-    examples: ["#烟测手动命令 hello"],
-    parameterHints: "内容",
-  })
-  assert(manual.manual === true, "manual command should be marked as manual")
-  assert(manual.commandHeads.includes("#烟测手动命令"), "manual command should expose command head")
-  assert(commandObserver.findMatches("手动补充烟测", 1)[0]?.id === manual.id, "manual command should be searchable")
-  const manualRecommendation = commandObserver.recommendCommands("手动补充烟测", { limit: 1 })
-  assert(manualRecommendation.results[0]?.recommendation?.confidence === "manual", "manual command recommendation should expose manual confidence")
-  assert(commandObserver.digest({ limit: 10 }).stats.manualCommands >= 1, "command digest should count manual commands")
-  const manualReplacement = await commandObserver.upsertManualCommand({
-    pluginName: "手动知识",
-    suggestedCommand: "#烟测手动命令 <内容>",
-    description: "二次编辑后的说明",
-  })
-  assert(manualReplacement.id === manual.id, "manual command identity should be stable for plugin name plus command")
-  assert(commandObserver.commands.filter(item => item.pluginName === "手动知识" && item.suggestedCommand === "#烟测手动命令 <内容>").length === 1, "manual command upsert should keep plugin plus command unique")
-  const deletedManual = await commandObserver.deleteCuratedCommand(manual.id)
-  assert(deletedManual.deleted === 1, "manual command should be deletable")
-  assert(!commandObserver.commands.some(item => item.id === manual.id), "manual command should be removed after delete")
-  const noisy = buildCommandDoc({
-    id: "smoke:noisy",
-    pluginKey: "noise-plugin",
-    pluginName: "噪声插件",
-    description: "只是近期被频繁触发的无关指令",
-    fnc: "noise",
-    regexp: "^#无关指令([\\s\\S]*)$",
-    permission: "all",
-    event: "message",
-    priority: 99,
-    helpDocs: [{ source: "README.md", text: "#无关指令 #测试" }],
-  })
-  const relevant = buildCommandDoc({
-    id: "smoke:stamina",
-    pluginKey: "stamina-plugin",
-    pluginName: "体力插件",
-    description: "体力查询",
-    fnc: "stamina",
-    regexp: "^#体力([\\s\\S]*)$",
-    permission: "all",
-    event: "message",
-    priority: 1,
-    helpDocs: [{ source: "README.md", text: "#体力 查询当前体力" }],
-  })
-  commandObserver.commands = [noisy, relevant]
-  commandObserver.events = Array.from({ length: 9 }, () => ({ exactMatches: [noisy.id], matches: [], time: new Date().toISOString() }))
-  commandObserver.rebuildUsageCounts()
-  assert(commandObserver.findMatches("怎么查体力", 1)[0]?.id === relevant.id, "usage-only noisy commands must not outrank semantic matches")
-  const observed = commandObserver.upsertObservedCommand({
-    text: "#未知动态查询 角色",
-    commandHead: "#未知动态查询",
-    signature: "#未知动态查询 <内容>",
-    commandPrefixes: ["#"],
-    handledBy: "[SmokePlugin][dynamicQuery]",
-    exactMatches: [],
-    matches: [],
-    isGroup: true,
-    groupId: "20001",
-    userId: "10001",
-    time: new Date().toISOString(),
-  })
-  assert(observed?.pluginKey === "observed", "dynamic unknown command should become an observed command doc")
-  assert(observed.commandHeads?.includes("#未知动态查询"), "observed command should expose command head")
-  assert(observed.parameterHints?.some(item => item.name === "内容"), "observed command should expose parameter hints")
-  assert(observed.observed?.signatures?.includes("#未知动态查询 <内容>"), "observed command should store analyzed signatures")
-  assert(commandObserver.stats().observedCommands >= 1, "stats should expose observed command count")
-  assert(commandObserver.stats().storage?.format === "split-json-v2", "command knowledge should expose split storage format")
-  assert(commandObserver.stats().storage?.singleWriterOnly === true, "command knowledge should declare the single-writer boundary")
-  const dynamicMatches = commandObserver.findMatches("未知动态查询", 1)
-  assert(dynamicMatches[0]?.suggestedCommand?.startsWith("#未知动态查询"), "dynamic observed commands should be searchable")
-  const customPrefix = commandObserver.upsertObservedCommand({
-    text: "!自定义前缀 帮助",
-    commandPrefixes: ["!"],
-    handledBy: "[SmokePlugin][customPrefix]",
-    exactMatches: [],
-    matches: [],
-    time: new Date().toISOString(),
-  })
-  assert(customPrefix?.suggestedCommand === "!自定义前缀", "observed command should respect configured prefixes")
-  commandObserver.events.push({
-    text: "!自定义前缀 帮助",
-    commandHead: "!自定义前缀",
-    commandPrefix: "!",
-    handledBy: "[SmokePlugin][customPrefix]",
-    exactMatches: [],
-    matches: [],
-    observedCommandId: customPrefix.id,
-    matchType: "observed",
-    time: new Date().toISOString(),
-  })
-  const digest = commandObserver.digest({ limit: 10 })
-  const quality = commandObserver.qualityReport({ limit: 10 })
-  assert(digest.stats.commands >= 2, "command digest should count commands")
-  assert(digest.stats.dynamicCommands >= 1, "command digest should count dynamic commands")
-  assert(digest.stats.exampleCoverageRatio > 0, "command digest should expose example coverage")
-  assert(digest.stats.commandHeadCoverageRatio > 0, "command digest should expose command head coverage")
-  assert(digest.distributions.commandHeads.some(item => item.key === "#体力"), "command digest should include command head distribution")
-  assert(digest.observer.commandPrefixes.includes("#"), "command digest should expose observer prefixes")
-  assert(digest.capture.observed >= 1, "command digest should expose capture observed count")
-  assert(digest.capture.byPrefix.some(item => item.key === "!"), "command digest should group captured events by prefix")
-  assert(digest.distributions.plugins.length > 0, "command digest should include plugin distribution")
-  assert(digest.dynamicCommands.some(item => item.suggestedCommand?.startsWith("#未知动态查询")), "command digest should include observed command samples")
-  assert(quality.summary.commands >= 2 && typeof quality.summary.averageQualityScore === "number", "command quality report should summarize indexed commands")
-  assert(Array.isArray(quality.weakCommands) && Array.isArray(quality.recommendations), "command quality report should expose weak commands and recommendations")
-  const commandSearchOutput = await new CommandSearchTool().execute({ query: "怎么查体力", limit: 1 })
-  assert(commandSearchOutput.includes("触发头") && commandSearchOutput.includes("参数") && commandSearchOutput.includes("推荐置信度") && commandSearchOutput.includes("下一步"), "command_search tool should expose command recommendation analysis")
-  const commandRecommendOutput = JSON.parse(await new CommandRecommendTool().execute({ query: "怎么查体力", limit: 1, includeAudit: true }))
-  assert(commandRecommendOutput.recommendations[0]?.command?.startsWith("#体力"), "command_recommend should return structured executable command")
-  assert(commandRecommendOutput.recommendations[0]?.nextSteps?.length >= 1, "command_recommend should return structured next steps")
-  assert(commandRecommendOutput.audit?.summary?.commands >= 1, "command_recommend should optionally include knowledge quality audit")
-  const { CommandKnowledgeAuditTool } = await import("../output/runtime/tools/builtins/command.js")
-  const auditOutput = await new CommandKnowledgeAuditTool().execute({ limit: 3 })
-  assert(auditOutput.includes("指令知识库质量") && auditOutput.includes("问题分布"), "knowledge audit action should report quality")
-  } finally {
-    commandObserver.commands = previousCommands
-    commandObserver.events = previousEvents
-    commandObserver.rebuildUsageCounts()
-    await commandObserver.save()
-  }
+  const { commandImports } = await import("../output/runtime/knowledge/command-import.js")
+  const { CommandSearchTool, CommandRecommendTool } = await import("../output/runtime/tools/builtins/command.js")
+  const doc = buildCommandDoc({ id: "smoke:imported", pluginKey: "fixture", pluginName: "烟测", fnc: "stamina", regexp: "^#体力$", suggestedCommand: "#体力", description: "查看体力", retrievalText: "查看原神体力与剩余树脂" })
+  await commandImports.apply({ schemaVersion: 1, sourceId: "smoke", documents: [{ id: doc.id, title: "#体力", retrievalText: doc.retrievalText, metadata: doc }] }, { policy: "overwrite" })
+  await commandObserver.load()
+  assert(commandObserver.findMatches("剩余树脂", 5).some(row => row.id === doc.id), "command matching must use the imported retrieval field")
+  const output = await new CommandSearchTool().execute({ query: "剩余树脂", limit: 5 }, { e: { isMaster: true } })
+  assert(output.includes("#体力"), "command search must expose imported commands")
+  const recommendation = JSON.parse(await new CommandRecommendTool().execute({ query: "剩余树脂", limit: 5 }, { e: { isMaster: true } }))
+  assert(recommendation.recommendations.some(row => row.id === doc.id), "recommendation must share the imported catalogue")
+  assert(typeof commandObserver.scan === "undefined" && typeof commandObserver.upsertObservedCommand === "undefined", "runtime scanning and automatic capture must be removed")
 }
 
 async function checkWebAndBoot() {
@@ -6599,6 +6383,8 @@ async function checkWebAndBoot() {
     await readSource("web/client/features/knowledge/knowledge-tab.js"),
     await readSource("web/client/features/knowledge/knowledge-base-workspace.ts"),
     await readSource("web/client/features/knowledge/knowledge-command-maintenance.ts"),
+    await readSource("web/client/features/knowledge/knowledge-command-workbench.ts"),
+    await readSource("web/client/features/knowledge/knowledge-command-editor.ts"),
   ].join("\n")
   const webMemorySource = [
     await readSource("web/client/features/memory/memory-tab.js"),
@@ -6635,18 +6421,18 @@ async function checkWebAndBoot() {
   assert(!webAppSource.includes("/api/persona/expression"), "web app should remove the retired persona expression API")
   assert(webAppSource.includes("/api/persona/initiative-greeting") && webAppSource.includes("/api/persona/initiative-greeting/preview"), "web app should expose initiative greeting APIs")
   assert(webAppSource.includes("/api/knowledge/quality"), "web app should expose command knowledge quality API")
-  assert(webAppSource.includes("/api/knowledge/bases/:id/retrieval") && webAppSource.includes("/api/knowledge/rescan"), "web app should expose protected command retrieval settings and guarded rescan APIs")
+  assert(webAppSource.includes("/api/knowledge/bases/:id/retrieval") && webAppSource.includes("/api/knowledge/commands/import-preview") && !webAppSource.includes("/api/knowledge/rescan"), "web app should expose protected command retrieval settings and guarded rescan APIs")
   assert(webAppSource.includes('app.delete("/api/knowledge/index-jobs/:id"') && webKnowledgeSource.includes("indexJobPagination") && webKnowledgeSource.includes("超期任务自动取消"), "knowledge index history should support paged deletion and seven-day expiration")
   assert(
     pluginEntrySource.includes('path.join(pluginRoot, "output", "runtime", "runtime-entry.js")')
-      && runtimeEntrySource.includes("commandObserver.init({ scanOnReady: false })")
+      && runtimeEntrySource.includes("commandObserver.init()")
       && runtimeEntrySource.includes("const express = hostRuntime.bot?.express")
       && runtimeEntrySource.includes("typeof express.use === \"function\"")
       && !runtimeEntrySource.includes("knowledgeStore.syncBuiltinCommands"),
     "startup should load the compiled entry, preserve the callable Yunzai Express app for the 2536 mount, and leave command scans to the explicit management action",
   )
   assert(webAppSource.includes("progress: parsePayload") && webAppSource.includes("/api/knowledge/index-jobs"), "web app should expose persisted index progress metadata")
-  assert(webAppSource.includes("/api/knowledge/manual-command") && webAppSource.includes("app.get(\"/api/knowledge/commands/:id\"") && webAppSource.includes("app.delete(\"/api/knowledge/commands/:id\""), "web app should expose manual command curation APIs")
+  assert(webAppSource.includes("/api/knowledge/commands/import") && webAppSource.includes("/api/knowledge/commands/:id/history") && webAppSource.includes("app.delete(\"/api/knowledge/commands/:id\""), "web app should expose manual command curation APIs")
   assert(webAppSource.includes("/api/memory/scopes/:scopeType/:ownerId") && webAppSource.includes("/api/memory/groups/:groupId/workspace") && webAppSource.includes("/api/memory/groups/:groupId/members/:userId") && webAppSource.includes("deleteScopedMemory"), "web app should expose authenticated global, group-public, and group-member memory maintenance APIs")
   assert(webAppSource.includes("/api/memory/captures/:scopeType/:scopeId/windows/:windowId/run"), "web app should expose authenticated manual extraction-window execution and retry API")
   assert(webAppSource.includes("/api/setup-guide"), "web app should expose setup guide API")
@@ -6713,13 +6499,13 @@ async function checkWebAndBoot() {
   assert(webMessageFiltersSource.includes('draggable="true"') && webMessageFiltersSource.includes("dropOnFilter") && webMessageFiltersSource.includes("filterGroups"), "message-filter UI should group stages and support drag ordering")
   assert(webMessageFiltersSource.includes("选择已有实现") && webMessageFiltersSource.includes("编写自定义代码") && webMessageFiltersSource.includes("代码过滤器"), "message-filter UI should expose native and Custom code implementation paths")
   assert(!webToolsSource.includes("yui-chat-extension-intent") && !webToolsSource.includes("consumeMessageFilterExtensionIntent") && !webToolsSource.includes("pipelineStage"), "AI capability workspace should not own filter creation or pipeline stages")
-  assert(webKnowledgeSource.includes("qualityMetrics") && webKnowledgeSource.includes("weakCommands") && webKnowledgeSource.includes("knowledge-value-card"), "knowledge page should explain user value and expose the command knowledge quality view")
+  assert(webKnowledgeSource.includes("command-maintenance-stats") && webKnowledgeSource.includes("同步模型维度") && webKnowledgeSource.includes("质量 {{ item.qualityScore }} 分"), "knowledge page should place compact statistics and quality alongside command content")
   assert(!webKnowledgeSource.includes("knowledgeViewOptions") && !webKnowledgeSource.includes("knowledge-viewbar") && !webKnowledgeSource.includes("activeSection") && !webKnowledgeSource.includes("knowledgeSectionItems"), "knowledge page should render the knowledge base workspace directly without a redundant module selector")
-  assert(webKnowledgeSource.includes("saveManual") && webKnowledgeSource.includes("requestDeleteCommand") && webKnowledgeSource.includes("confirmAction"), "knowledge page should use modal confirmations for command deletion")
-  assert(webKnowledgeSource.includes("showExclusionDrawer") && webKnowledgeSource.includes("knowledge-pane-switch") && webKnowledgeSource.includes("activeBasePane"), "knowledge page should expose retrieval exclusions and compact current-base actions")
-  assert(webKnowledgeSource.includes("showCommandMaintenanceDrawer") && webKnowledgeSource.includes("openCommandMaintenance") && webKnowledgeSource.includes("builtin-commands") && webKnowledgeSource.includes("维护内置指令知识库"), "built-in command knowledge base should expose one card-level maintenance entry")
-  assert(webKnowledgeSource.includes("documentOrigin") && webKnowledgeSource.includes("knowledge-command-origin-inline") && webKnowledgeSource.includes("knowledge-command-preview") && webKnowledgeSource.includes("openBuiltinCommandEditor") && webKnowledgeSource.includes("manualSourceCommandId") && webKnowledgeSource.includes("插件") && webKnowledgeSource.includes("文件") && webKnowledgeSource.includes("方法"), "built-in command documents should compactly show their source and open an editable persistent override")
-  assert(webKnowledgeSource.includes("maintenancePaneItems") && webKnowledgeSource.includes("采集概览") && webKnowledgeSource.includes("收录示例") && webKnowledgeSource.includes("收录质量"), "built-in command maintenance should group command, capture, example, and quality workflows")
+  assert(webKnowledgeSource.includes("requestDeleteCommand") && webKnowledgeSource.includes("confirmAction"), "knowledge page should use modal confirmations for command deletion")
+  assert(webKnowledgeSource.includes("import-preview") && webKnowledgeSource.includes("操作记录") && webKnowledgeSource.includes("knowledge-pane-switch") && webKnowledgeSource.includes("activeBasePane"), "knowledge page should expose guided import, audit records and compact current-base actions")
+  assert(webKnowledgeSource.includes("showCommandMaintenanceDrawer") && webKnowledgeSource.includes("openCommandMaintenance") && webKnowledgeSource.includes("builtin-commands") && webKnowledgeSource.includes('title="指令知识库"'), "built-in command knowledge base should expose one card-level maintenance entry")
+  assert(webKnowledgeSource.includes("documentOrigin") && webKnowledgeSource.includes("knowledge-command-origin-inline") && webKnowledgeSource.includes("knowledge-command-preview") && webKnowledgeSource.includes("openBuiltinCommandEditor") && webKnowledgeSource.includes("retrievalText") && webKnowledgeSource.includes("插件") && webKnowledgeSource.includes("文件") && webKnowledgeSource.includes("方法"), "built-in command documents should compactly show their source and open read-only metadata with AI draft generation")
+  assert(webKnowledgeSource.includes("maintenancePaneItems") && webKnowledgeSource.includes('value: "settings"') && webKnowledgeSource.includes("向量更新"), "built-in command maintenance should combine capture with commands and keep retrieval settings separate")
   assert(webShellSource.includes('{ id: "memory", label: "记忆管理"') && webStoreSource.includes('memory: ["config", "memory", "diagnostics"]'), "memory management should be a dedicated sidebar page with its own data slice")
   assert(webMemorySource.includes("group-picker") && webMemorySource.includes("群公共记忆") && webMemorySource.includes("本群记忆") && webMemorySource.includes("全局记忆") && webMemorySource.includes("原始消息（") && webMemorySource.includes("补录历史") && webMemorySource.includes("提炼运行记录") && webMemorySource.includes("扫描昨日及历史") && webMemorySource.includes("等待处理") && webMemorySource.includes("实际模型调用") && webMemorySource.includes("Token 子窗口") && webMemorySource.includes("按日提炼") && webMemorySource.includes("reextractSingleDay") && webMemorySource.includes("runRecordWindows") && webMemorySource.includes("提炼结果（") && webMemorySource.includes("/windows/") && webMemorySource.includes("runExtractionWindow") && webMemorySource.includes("extractionWindowAction") && webMemorySource.includes("立即执行") && webMemorySource.includes("失败重试") && webMemorySource.includes("/api/memory/groups/") && webMemorySource.includes("captureMessageOrder") && webMemorySource.includes("changeCaptureMessageOrder") && webMemorySource.includes("jumpCaptureMessagePage") && webMemorySource.includes("最早在前") && webMemorySource.includes("最新在前"), "memory page should separate source-message backfill from daily extraction runs while exposing token workload, manual execution, failed-day retry, input coverage, message ordering, and page jumps")
   assert(

@@ -1,6 +1,50 @@
 import { commandHead } from "../core/message/command-prefixes.js"
+import vm from "node:vm"
+
+export function boundedCommandMatch(pattern: unknown, input: unknown, _runtime = false, flags = ""): boolean {
+  try { return Boolean(new vm.Script(`new RegExp(${JSON.stringify(String(pattern).slice(0, 2000))}, ${JSON.stringify(flags)}).test(input)`).runInNewContext({ input: String(input).slice(0, 4000) }, { timeout: 15 })) } catch { return false }
+}
 
 export type UnknownRecord = Record<string, unknown>
+
+/** 无穷优先级是宿主支持的运行值，使用字符串避免 JSON 将其写成 null。 */
+export type CommandPriority = number | "Infinity" | "-Infinity"
+export function normalizeCommandPriority(value: unknown): CommandPriority | undefined {
+  if (typeof value !== "number" && (typeof value !== "string" || !value.trim())) return undefined
+  const number = Number(value)
+  if (Number.isNaN(number)) return undefined
+  return number === Infinity ? "Infinity" : number === -Infinity ? "-Infinity" : number
+}
+
+export function commandPriorityLabel(command: UnknownRecord): string {
+  const source = command.manual || command.dynamic ? record(command.runtimeMetadata) : command
+  const priority = normalizeCommandPriority(source.priority)
+  if (priority === undefined) return "未知"
+  const kind = source.priorityKind === "explicit" ? "代码显式配置" : source.priorityKind === "host-default" ? "宿主默认" : "运行态值"
+  return `${priority}（${kind}）`
+}
+
+export function commandPriorityMetadata(command: UnknownRecord): UnknownRecord {
+  const source = command.manual || command.dynamic ? record(command.runtimeMetadata) : command
+  return { priority: normalizeCommandPriority(source.priority) ?? null, priorityLabel: commandPriorityLabel(command), priorityKind: source.priorityKind || "unknown", prioritySource: source.prioritySource || "unknown", pluginOrder: source.pluginOrder, ruleOrder: source.ruleOrder }
+}
+
+/** 已通过相关性与屏蔽筛选的指令按宿主调度顺序排列；缺失信息保留原相关性顺序。 */
+export function compareCommandPriority(a: UnknownRecord, b: UnknownRecord): number {
+  const left = commandPriorityMetadata(a), right = commandPriorityMetadata(b)
+  if (left.priority == null) return right.priority == null ? 0 : 1
+  if (right.priority == null) return -1
+  if (Number(left.priority) < Number(right.priority)) return -1
+  if (Number(left.priority) > Number(right.priority)) return 1
+  const ordinal = (value: unknown): number | undefined => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined
+  const pluginA = ordinal(left.pluginOrder), pluginB = ordinal(right.pluginOrder)
+  if (pluginA === undefined) return pluginB === undefined ? 0 : 1
+  if (pluginB === undefined) return -1
+  if (pluginA !== pluginB) return pluginA - pluginB
+  const ruleA = ordinal(left.ruleOrder), ruleB = ordinal(right.ruleOrder)
+  if (ruleA === undefined) return ruleB === undefined ? 0 : 1
+  return ruleB === undefined ? -1 : ruleA - ruleB
+}
 
 export interface CommandHelpDoc extends UnknownRecord {
   source?: unknown
@@ -55,6 +99,25 @@ function stripUrls(value: unknown = ""): string {
     .replace(/www\.\S+/gi, " ")
 }
 
+/** 保持不同指令的相关性位置，仅对相同推荐指令的实现应用调度优先级。 */
+export function orderEquivalentCommandMatches<T>(rows: readonly T[], command: (row: T) => UnknownRecord = row => row as UnknownRecord): T[] {
+  const key = (row: T): string => preferredCommandText(command(row)).toLowerCase().replace(/\s+/gu, " ").trim()
+  const groups = new Map<string, T[]>()
+  for (const row of rows) {
+    const name = key(row)
+    if (name) groups.set(name, [...(groups.get(name) || []), row])
+  }
+  for (const group of groups.values()) group.sort((a, b) => compareCommandPriority(command(a), command(b)))
+  const offsets = new Map<string, number>()
+  return rows.map(row => {
+    const name = key(row)
+    if (!name) return row
+    const index = offsets.get(name) || 0
+    offsets.set(name, index + 1)
+    return groups.get(name)![index]
+  })
+}
+
 export function tokenize(value: unknown = ""): string[] {
   const text = safeText(value).toLowerCase()
   const words = text.match(/[#/*]?[a-z0-9_\-\u4e00-\u9fa5]{2,}/gi) || []
@@ -73,13 +136,40 @@ const queryNoisePatterns = [
   /^(怎么查询|怎么查|怎么用|怎么弄|怎么)/,
   /^(如何查询|如何查|如何使用|如何用|如何设置|如何)/,
   /^(查一下|看一下|搜一下|搜一搜|查查|看看)/,
+  /^(想知道|想了解|想看|想查|查看)(一下)?/,
 ]
 
 export function normalizeSearchQuery(value: unknown = ""): string {
   let text = safeText(value).toLowerCase()
   for (const pattern of queryNoisePatterns) text = text.replace(pattern, "")
+  if (!/^[#/*!]/u.test(text)) text = text.replace(/还剩多少|还有多少|剩余多少|剩下多少|还剩|剩余/gu, " ").replace(/\s+/gu, " ")
   text = text.replace(/[？?吗呢呀吧啊]+$/g, "")
   return safeText(text)
+}
+
+/** 面向检索的自然语言投影；运行规则和自动猜测参数仍留在元数据中供核对。 */
+export function buildCommandRetrievalText(command: UnknownRecord): string {
+  if (typeof command.retrievalText === "string") return command.retrievalText.trim()
+  const examples = [...new Set([command.suggestedCommand, command.example, ...values(command.examples)].map(safeText).filter(Boolean))].filter(example => {
+    if (example.length > 300 || !isValidCommandText(example)) return false
+    if (!command.regexp) return true
+    try { return boundedCommandMatch(command.regexp, example, true, safeText(command.regexpFlags)) } catch {
+      // 无法安全核验的规则不提供索引示例；原始规则与候选示例仍保留供维护者核对。
+      return false
+    }
+  }).slice(0, 8)
+  const generic = new Set(["查询", "帮助", "设置", "管理", "指令", "功能", "使用"])
+  const intents = values(command.intentHints).map(safeText).filter(value => value && !generic.has(value))
+  const inferred = parameterHintsFromRegexp(command.regexp)
+  const parameters = command.manual ? values(command.parameterHints).map(record).filter(item => item.name && item.description && !inferred.some(auto => auto.name === item.name && auto.description === item.description)) : []
+  const parts = [
+    command.description || command.summary ? `用途：${safeText(command.description || command.summary)}` : "",
+    command.body ? `使用说明：${safeText(command.body)}` : "",
+    intents.length ? `常见问法：${[...new Set(intents)].join("；")}` : "",
+    parameters.length ? `参数：${parameters.map(item => `${safeText(item.name)}：${safeText(item.description)}`).join("；")}` : "",
+    examples.length ? `示例指令：\n${examples.join("\n")}` : "",
+  ]
+  return parts.filter(Boolean).join("\n\n")
 }
 
 function isValidCommandText(value: unknown = ""): boolean {
@@ -313,5 +403,50 @@ export function buildCommandDoc(row: UnknownRecord = {}): CommandDocument {
     parameterHints: usageGuide.parameters,
     keywords: tokenize(searchText),
     searchText,
+  }
+}
+
+/** 已采集运行信息的只读快照；旧人工条目缺失字段不能当作真实运行值。 */
+export function commandOriginalMetadata(source: UnknownRecord = {}): UnknownRecord {
+  if (source.originalMetadata) return record(source.originalMetadata)
+  // 旧覆盖层没有原文时不把补全文字冒充为采集原文；重扫时从来源恢复。
+  const original = source.manual && source.overridesCommandId ? record(source.runtimeMetadata) : source
+  return Object.fromEntries(["pluginKey", "pluginName", "description", "body", "suggestedCommand", "examples", "parameterHints", "fnc", "regexp", "regexpFlags", "permission", "event", "origin", "sourceRuleKey"].filter(key => original[key] !== undefined).map(key => [key, original[key]]))
+}
+
+export function commandRuntimeMetadata(source?: UnknownRecord): unknown {
+  if (!source) return null
+  const snapshot = source.runtimeMetadata ? record(source.runtimeMetadata) : {
+    pluginKey: source.pluginKey,
+    pluginName: source.pluginName,
+    permission: source.manual ? null : source.permission,
+    event: source.manual ? null : source.event,
+    regexp: source.manual ? null : source.regexp,
+    regexpFlags: source.regexpFlags || "",
+    method: record(source.origin).method || (source.manual ? "" : source.fnc),
+    origin: source.origin || null,
+    sourceRuleKey: source.sourceRuleKey || source.overridesSourceRuleKey || "",
+    capturedAt: source.updatedAt || "",
+  }
+  return { ...snapshot, ...commandPriorityMetadata(source) }
+}
+
+/** 人工说明覆盖只继承服务端来源，编辑内容不能替换实际运行规则。 */
+export function preserveCommandSource(input: UnknownRecord, source: UnknownRecord | undefined, sourceId: string): UnknownRecord {
+  return {
+    ...input,
+    sourceCommandId: sourceId,
+    sourceRuleKey: source?.overridesSourceRuleKey || source?.sourceRuleKey || "",
+    sourceOrigin: source?.origin || undefined,
+    ...(sourceId ? {
+      pluginKey: source?.pluginKey,
+      pluginName: source?.pluginName,
+      priority: source?.priority,
+      permission: source?.permission,
+      event: source?.event,
+      fnc: source?.fnc,
+      regexp: source?.regexp,
+      regexpFlags: source?.regexpFlags || "",
+    } : {}),
   }
 }
