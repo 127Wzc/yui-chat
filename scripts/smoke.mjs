@@ -6818,6 +6818,15 @@ async function checkWebAndBoot() {
     })
     const publicMemoryPayload = await publicMemoryResponse.json()
     assert(publicMemoryResponse.ok && publicMemoryPayload.workspace?.groupMemory?.items?.some(item => item.text.includes("每周一")), "group workspace API should add and list searchable public group memories")
+    const memoryDetailPath = `/api/memory/items/${encodeURIComponent(publicMemoryPayload.item.id)}/detail?scopeType=group&ownerId=${memoryGroupId}&groupId=${memoryGroupId}`
+    const anonymousMemoryDetail = await fetch(`http://127.0.0.1:${port}${memoryDetailPath}`)
+    assert(anonymousMemoryDetail.status === 401, "memory provenance must require authentication")
+    const authenticatedMemoryDetail = await fetch(`http://127.0.0.1:${port}${memoryDetailPath}`, { headers: { cookie } })
+    const authenticatedMemoryPayload = await authenticatedMemoryDetail.json()
+    assert(authenticatedMemoryDetail.ok && authenticatedMemoryPayload.item.text.includes("每周一"))
+    assert(authenticatedMemoryPayload.evidence.total === 0, "manual memory must not invent message sources")
+    const wrongOwnerMemoryDetail = await fetch(`http://127.0.0.1:${port}${memoryDetailPath.replace(`ownerId=${memoryGroupId}`, "ownerId=wrong-owner")}`, { headers: { cookie } })
+    assert(wrongOwnerMemoryDetail.status === 400, "memory detail must validate the requested scope and owner")
     const groupMemberMemoryResponse = await fetch(`http://127.0.0.1:${port}/api/memory/groups/${memoryGroupId}/members/${memoryUserId}/facts`, {
       method: "POST",
       headers: { "content-type": "application/json", cookie },

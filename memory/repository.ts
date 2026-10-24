@@ -131,6 +131,33 @@ export class MemoryRepository {
     return row ? { ...row, tags: parse(row.tags_json) } : null
   }
 
+  async listEvidence(memoryId: string, page = 1): Promise<UnknownRecord> {
+    const pageSize = 20
+    const currentPage = Math.max(1, Math.trunc(Number(page) || 1))
+    const total = Number((await sqliteClient.get("SELECT COUNT(*) AS count FROM memory_evidence WHERE memory_id=?", [memoryId]))?.count || 0)
+    // 同时核对来源群和消息 ID，不能只凭 source_event_id 连接到其他群的原文。
+    const rows = await sqliteClient.all<UnknownRecord>(
+      `SELECT e.source_event_id, e.source_type, e.message_id,
+        m.sender_id, m.sender_name, m.sent_at, m.text_content
+       FROM memory_evidence e LEFT JOIN group_memory_messages m
+         ON m.id=e.source_event_id AND e.source_type='group-message:' || m.group_id
+         AND (e.message_id='' OR e.message_id=m.message_id)
+         AND (m.expires_at=0 OR m.expires_at>?)
+       WHERE e.memory_id=? ORDER BY m.sent_at DESC, e.source_event_id ASC LIMIT ? OFFSET ?`,
+      [Date.now(), memoryId, pageSize, (currentPage - 1) * pageSize],
+    )
+    return {
+      total, page: currentPage, pageSize,
+      items: rows.map(row => ({
+        id: row.source_event_id, messageId: row.message_id,
+        groupId: String(row.source_type || "").startsWith("group-message:") ? String(row.source_type).slice(14) : "",
+        available: row.sent_at !== null && row.sent_at !== undefined,
+        senderId: row.sender_id || "", senderName: row.sender_name || "", sentAt: Number(row.sent_at || 0),
+        text: String(row.text_content || ""),
+      })),
+    }
+  }
+
   async update(memoryId: unknown, patch: MemoryItem = {}, options: RepositoryOptions = {}): Promise<MemoryItem | null> {
     const current = await this.get(memoryId)
     if (!current) return null
@@ -249,7 +276,8 @@ export class MemoryRepository {
     const filterParams = query ? [`%${query}%`] : []
     const total = await sqliteClient.get(`SELECT COUNT(*) AS count FROM memory_items WHERE ${base}${filter}`, [...params, ...filterParams])
     const rows = await sqliteClient.all<MemoryItem>(
-      `SELECT * FROM memory_items WHERE ${base}${filter} ORDER BY updated_at DESC LIMIT ? OFFSET ?`,
+      `SELECT memory_items.*, (SELECT COUNT(*) FROM memory_evidence e WHERE e.memory_id=memory_items.id) AS evidence_count
+       FROM memory_items WHERE ${base}${filter} ORDER BY updated_at DESC LIMIT ? OFFSET ?`,
       [...params, ...filterParams, pageSize, (page - 1) * pageSize],
     )
     return { items: rows.map(row => ({ ...row, tags: parse(row.tags_json) })), total: Number(total?.count || 0), page, pageSize }

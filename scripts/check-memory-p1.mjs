@@ -23,6 +23,8 @@ try {
   ;({ sqliteClient } = await import("../output/runtime/core/storage/sqlite/client.js"))
   const { SqliteRuntimeConfigRepository } = await import("../output/runtime/core/storage/sqlite/runtime-config-repository.js")
   const { sqliteMemoryStore } = await import("../output/runtime/memory/sqlite-store.js")
+  const { memoryRepository } = await import("../output/runtime/memory/repository.js")
+  const { lifecycleFor, memoryHalfLifeDays, statusFor } = await import("../output/runtime/memory/decay.js")
   const { validateMemoryWrite } = await import("../output/runtime/memory/write-policy.js")
   const { groupCaptureStore: capture, serializeExtractionResult } = await import("../output/runtime/memory/group-capture.js")
   groupCaptureStore = capture
@@ -61,6 +63,31 @@ try {
   await configStore.load()
   await sqliteClient.init(defaults)
   await configStore.attachRuntimeConfigRepository(new SqliteRuntimeConfigRepository(sqliteClient))
+  const visibilityDay = 86400000
+  const visibilityStart = Date.UTC(2026, 0, 1)
+  const visibilityFact = { type: "fact", scope_type: "user", fact_key: "preference.coffee", tags: ["group-capture", "preference"], confidence: 0.9, last_confirmed_at: visibilityStart }
+  assert.equal(memoryHalfLifeDays(visibilityFact), 180, "English extraction tags and stable preference keys must use the preference half-life")
+  assert.equal(memoryHalfLifeDays({ tags: ["habit"] }), 180)
+  assert.equal(memoryHalfLifeDays({ ...visibilityFact, scope_type: "user_group" }), 90)
+  assert.equal(memoryHalfLifeDays({ fact_key: "identity.name" }), Infinity)
+  assert.equal(memoryHalfLifeDays({ type: "profile" }), Infinity)
+  const visibilityLife = lifecycleFor(visibilityFact, visibilityStart + 180 * visibilityDay)
+  assert.equal(visibilityLife.decay, 0.5)
+  assert.equal(visibilityLife.status, "warm")
+  assert.equal(visibilityFact.confidence, 0.9, "decay must not rewrite stored confidence")
+  for (const [days, status] of [[0, "active"], [180, "warm"], [360, "cold"]]) {
+    const life = lifecycleFor(visibilityFact, visibilityStart + days * visibilityDay)
+    assert.equal(life.status, status)
+    assert.equal(statusFor(visibilityFact, life.nextTransitionAt - 1), status)
+    assert.equal(statusFor(visibilityFact, life.nextTransitionAt), life.nextStatus, "predicted transition must match recall status at its boundary")
+  }
+  const shortDeadline = visibilityStart + visibilityDay
+  const expiringIdentity = { fact_key: "identity.age", last_confirmed_at: visibilityStart, expires_at: shortDeadline }
+  assert.equal(lifecycleFor(expiringIdentity, visibilityStart).nextTransitionAt, shortDeadline)
+  assert.equal(lifecycleFor(expiringIdentity, visibilityStart).nextStatus, "expired")
+  assert.equal(lifecycleFor(expiringIdentity, shortDeadline).status, "expired")
+  assert.equal(lifecycleFor({ ...visibilityFact, status: "archived" }, visibilityStart).nextTransitionAt, 0)
+  assert.equal(lifecycleFor({ type: "profile" }, visibilityStart).halfLifeDays, null, "permanent half-life must be JSON-safe")
   await configStore.update(config => { config.memory.groupCapture.enabled = true })
   const {runMemoryCommand,runMentionMemoryCommand} = await import("../output/runtime/apps/commands/memory.js")
   const {memoryStore: commandMemoryStore} = await import("../output/runtime/memory/store.js")
@@ -463,6 +490,45 @@ try {
   assert.equal(Number((await sqliteClient.get("SELECT COUNT(*) AS count FROM memory_items WHERE owner_id='retry-user' AND fact_key='preference.coffee'"))?.count), 1)
   assert.equal(Number((await sqliteClient.get("SELECT COUNT(*) AS count FROM memory_evidence WHERE memory_id=?", [first.id]))?.count), 1)
 
+  await sqliteClient.transaction([
+    { id: "retry-event", group: "retry-group", message: "retry-message", expires: 0, text: "我喜欢手冲咖啡 <script>不能作为脚本执行</script>" },
+    { id: "visibility-expired", group: "retry-group", message: "expired-message", expires: Date.now() - 1, text: "不应返回的过期原文" },
+    { id: "visibility-cross", group: "other-group", message: "cross-message", expires: 0, text: "不应返回的其他群原文" },
+    { id: "visibility-mismatch", group: "retry-group", message: "actual-message", expires: 0, text: "不应返回的错配消息" },
+  ].map(row => ({
+    sql: "INSERT INTO group_memory_messages(id, group_id, message_id, sender_id, sender_name, sent_at, text_content, content_hash, expires_at) VALUES(?, ?, ?, 'retry-user', '咖啡爱好者', ?, ?, ?, ?)",
+    params: [row.id, row.group, row.message, Date.now(), row.text, row.id, row.expires],
+  })))
+  for (const [eventId, messageId] of [["visibility-expired", "expired-message"], ["visibility-cross", "cross-message"], ["visibility-mismatch", "wrong-message"]]) {
+    await memoryRepository.addEvidence(first.id, { sourceEventId: eventId, messageId, sourceType: "group-message:retry-group" })
+  }
+  const detailInput = { id: first.id, scopeType: "user", ownerId: "retry-user" }
+  const visibilityDetail = await sqliteMemoryStore.getMemoryDetail(detailInput)
+  assert.equal(visibilityDetail.item.confidence, 0.9)
+  assert.equal(visibilityDetail.item.lifecycle.halfLifeDays, 180)
+  assert.equal(visibilityDetail.evidence.total, 4)
+  assert.equal(visibilityDetail.evidence.items.filter(item => item.available).length, 1, "expired, other-group and mismatched sources must not expose original content")
+  assert(visibilityDetail.evidence.items.find(item => item.available).text.includes("手冲咖啡"))
+  assert(visibilityDetail.evidence.items.filter(item => !item.available).every(item => item.text === "" && item.senderId === ""))
+  const visibilityWorkspace = await sqliteMemoryStore.getGroupMemberWorkspace("retry-group", "retry-user")
+  assert.equal(visibilityWorkspace.globalMemory.items.find(item => item.id === first.id).evidenceCount, 4)
+  await assert.rejects(sqliteMemoryStore.getMemoryDetail({ ...detailInput, ownerId: "someone-else" }), /未找到/)
+  await assert.rejects(sqliteMemoryStore.getMemoryDetail({ ...detailInput, scopeType: "user_group", groupId: "retry-group" }), /未找到/)
+  await sqliteClient.run("DELETE FROM group_memory_messages WHERE id='retry-event'")
+  const removedSourceDetail = await sqliteMemoryStore.getMemoryDetail(detailInput)
+  assert.equal(removedSourceDetail.evidence.total, 4, "raw-message cleanup must retain evidence identities")
+  assert(removedSourceDetail.evidence.items.every(item => !item.available))
+  const pagedEvidenceMemory = await memoryRepository.insert({ scopeType: "group", ownerId: "visibility-group", groupId: "visibility-group", type: "fact", text: "带分页来源的测试记忆" }, {
+    evidence: Array.from({ length: 25 }, (_, index) => ({ sourceEventId: `visibility-page-${index}`, messageId: String(index), sourceType: "group-message:visibility-group" })),
+  })
+  const pagedInput = { id: pagedEvidenceMemory.id, scopeType: "group", ownerId: "visibility-group", groupId: "visibility-group" }
+  const sourcePageOne = await sqliteMemoryStore.getMemoryDetail(pagedInput)
+  const sourcePageTwo = await sqliteMemoryStore.getMemoryDetail({ ...pagedInput, evidencePage: 2 })
+  assert.equal(sourcePageOne.evidence.items.length, 20)
+  assert.equal(sourcePageTwo.evidence.items.length, 5)
+  assert.equal(new Set([...sourcePageOne.evidence.items, ...sourcePageTwo.evidence.items].map(item => item.id)).size, 25)
+  await assert.rejects(sqliteMemoryStore.getMemoryDetail({ ...pagedInput, groupId: "other-group" }), /未找到/)
+
   const memberRows = [
     { id: "member-list-message-a", messageId: "member-list-message-a", userId: "member-list-a", name: "记忆较多成员" },
     { id: "member-list-message-b", messageId: "member-list-message-b", userId: "member-list-b", name: "记忆较少成员" },
@@ -549,6 +615,44 @@ try {
   ]
   assert.deepEqual(await groupCaptureStore.applyCandidates({ id: "sensitive-window", group_id: "retry-group" }, sensitiveRows, sensitiveCandidates), [])
   assert.equal(Number((await sqliteClient.get("SELECT COUNT(*) AS count FROM memory_items WHERE owner_id='sensitive-user'"))?.count), 0)
+
+  // 提炼摘要缺少标签：详情补齐字段，同时保护加载期间的编辑和快速切换后的目标。
+  global.location = { hash: "", pathname: "/yui-chat", search: "" }
+  global.localStorage = { getItem() { return null } }
+  const { createSSRApp } = await import("vue")
+  const { renderToString } = await import("vue/server-renderer")
+  const { MemoryTab } = await import("../output/runtime/web/client/features/memory/memory-tab.js")
+  let clientView
+  await renderToString(createSSRApp({ setup() { clientView = MemoryTab.setup().memoryView; return () => null } }))
+  const originalClientFetch = global.fetch
+  const pendingDetails = []
+  global.fetch = () => new Promise(resolve => pendingDetails.push(payload => resolve({ ok: true, json: async () => payload })))
+  const completeDetail = (index, id) => pendingDetails[index]({ ok: true, item: { id, text: `最新${id}`, tags: ["group-capture", "preference"] }, evidence: { items: [], total: 0, page: 1, pageSize: 20 } })
+  const settleClient = () => new Promise(resolve => setImmediate(resolve))
+  const clientScope = { scopeType: "group", ownerId: "client-group", groupId: "client-group" }
+  try {
+    clientView.openMemoryEditor({ id: "first", text: "提炼摘要" }, clientScope)
+    clientView.draft.memoryText = "正在编辑的正文"
+    completeDetail(0, "first")
+    await settleClient()
+    assert.equal(clientView.draft.memoryText, "正在编辑的正文")
+    assert.equal(clientView.draft.memoryTags, "group-capture, preference", "editing an extraction result must preserve stored tags")
+    clientView.openMemoryEditor({ id: "slow", text: "较慢的请求" }, clientScope)
+    clientView.openMemoryEditor({ id: "latest", text: "较快的请求" }, clientScope)
+    completeDetail(2, "latest")
+    await settleClient()
+    completeDetail(1, "slow")
+    await settleClient()
+    assert.equal(clientView.memoryDetail.id, "latest", "a stale response must not overwrite the currently selected memory")
+    assert.equal(clientView.draft.memoryText, "最新latest")
+    clientView.openMemoryEditor({ id: "closed", text: "即将关闭" }, clientScope)
+    clientView.showMemoryDrawer = false
+    completeDetail(3, "closed")
+    await settleClient()
+    assert.equal(clientView.memoryDetail.text, "即将关闭", "a closed drawer must ignore its pending detail response")
+  } finally {
+    global.fetch = originalClientFetch
+  }
 
   console.log("ok memory-p1")
 } finally {

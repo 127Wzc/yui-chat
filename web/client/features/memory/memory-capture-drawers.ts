@@ -82,14 +82,41 @@ export const MemoryCaptureDrawers = {
       :title="view.draft.memoryId ? '查看和编辑记忆' : '添加记忆'"
       :subtitle="view.scopeLabel(view.draft)"
       icon="database"
-      width="560px"
+      width="640px"
       @close="view.showMemoryDrawer = false"
     >
-      <Field label="记忆内容" type="textarea" :rows="8" v-model="view.draft.memoryText" placeholder="写入一条明确、可复用的事实。" />
+      <section v-if="view.memoryDetail" class="memory-detail-overview" aria-label="记忆状态与衰减">
+        <div class="memory-detail-heading"><span class="memory-lifecycle" :class="view.memoryLifecycle(view.memoryDetail).tone">{{ view.memoryLifecycle(view.memoryDetail).label }}</span><span class="muted small">{{ view.memorySourceLabel(view.memoryDetail) }}</span></div>
+        <div class="memory-metrics">
+          <div><span>置信度</span><strong>{{ view.memoryPercent(view.memoryDetail.confidence) }}</strong><progress v-if="view.memoryDetail.confidence != null" :value="view.memoryDetail.confidence" max="1" aria-label="记忆置信度"></progress><small>写入可信程度，不随时间递减</small></div>
+          <div><span>当前活跃度</span><strong>{{ view.memoryPercent(view.memoryDetail.lifecycle?.decay) }}</strong><progress v-if="view.memoryDetail.lifecycle?.decay != null" :value="view.memoryDetail.lifecycle.decay" max="1" aria-label="记忆活跃度"></progress><small>{{ view.memoryDetail.lifecycle ? (view.memoryDetail.lifecycle.halfLifeDays === null ? '此类记忆不随时间衰减' : '半衰期 ' + view.memoryDetail.lifecycle.halfLifeDays + ' 天') : '此存储后端未提供衰减指标' }}</small></div>
+        </div>
+        <dl class="memory-time-grid">
+          <div><dt>最近确认</dt><dd>{{ view.memoryTimeLabel(view.memoryDetail.lifecycle?.lastConfirmedAt || view.memoryDetail.lastSeenAt) }}</dd></div>
+          <div><dt>有效期限</dt><dd>{{ view.memoryDetail.expiresAt ? view.memoryTimeLabel(view.memoryDetail.expiresAt) : '无固定到期时间' }}</dd></div>
+          <div v-if="view.memoryDetail.lifecycle?.nextTransitionAt" class="memory-next-transition"><dt>预计下次变化</dt><dd>{{ view.memoryTimeLabel(view.memoryDetail.lifecycle.nextTransitionAt) }} · {{ view.memoryLifecycle({ status: view.memoryDetail.lifecycle.nextStatus }).label }}</dd></div>
+        </dl>
+        <p class="memory-detail-note">置信度是写入时的评估值，不代表经过统计验证的准确率。活跃度影响召回优先级；再次确认会重新计时，归档不等于删除。</p>
+      </section>
+      <Field label="记忆内容" type="textarea" :rows="4" v-model="view.draft.memoryText" placeholder="写入一条明确、可复用的事实。" />
       <Field label="标签" v-model="view.draft.memoryTags" placeholder="偏好, 沟通方式（可选）" />
+      <section v-if="view.draft.memoryId" class="memory-source-section" aria-label="关联的来源消息">
+        <div class="memory-detail-heading"><h3><Icon name="message" :size="16" />来源消息 <span v-if="view.memoryDetail?.evidenceCount != null" class="badge">{{ view.memoryDetail.evidenceCount }}</span></h3><span v-if="view.memoryDetailLoading" class="muted small" role="status">正在加载…</span></div>
+        <p class="memory-detail-note">这些消息为提炼或强化记忆提供依据。原文按采集保留期限清理，关联标识会保留；人工修订后的内容可能与原始证据不同。</p>
+        <div v-if="view.memorySources.items.length" class="memory-source-list">
+          <article v-for="source in view.memorySources.items" :key="source.id" class="memory-source-card" :class="{ 'is-unavailable': !source.available }">
+            <header><span class="memory-source-avatar"><template v-if="source.available">{{ (source.senderName || source.senderId || '群').slice(0, 1) }}</template><Icon v-else name="message" :size="17" /></span><div><strong>{{ source.available ? (source.senderName || source.senderId || '群成员') : '来源原文不可用' }}</strong><small>{{ source.available ? view.memoryTimeLabel(source.sentAt) : '原文已清理、已过期或未保存在本地' }}</small></div><span v-if="source.groupId" class="memory-source-group">群 {{ source.groupId }}</span></header>
+            <blockquote v-if="source.available">{{ source.text || '这条消息没有可展示的文字，可能包含图片等内容。' }}</blockquote>
+            <details><summary>消息标识</summary><dl><div v-if="source.senderId"><dt>发送者</dt><dd>{{ source.senderId }}</dd></div><div><dt>消息 ID</dt><dd>{{ source.messageId || '未记录' }}</dd></div></dl></details>
+          </article>
+        </div>
+        <p v-else-if="!view.memoryDetailLoading && !view.memoryDetailError" class="memory-source-empty"><Icon name="message" :size="20" /><span>暂无关联消息</span><small>手动添加、画像编辑和平台资料同步通常没有聊天原文证据。</small></p>
+        <div v-if="view.memoryDetailError" class="memory-source-error" role="alert"><span>{{ view.memoryDetailError }}</span><button class="btn small outline" type="button" @click="view.loadMemoryDetail(view.memorySources.items.length ? view.memorySources.page + 1 : 1)">重试加载</button></div>
+        <button v-else-if="view.memorySources.items.length < view.memorySources.total" class="btn small outline memory-source-more" type="button" :disabled="view.memoryDetailLoading" @click="view.loadMemoryDetail(view.memorySources.page + 1)">加载更多来源（已显示 {{ view.memorySources.items.length }} / {{ view.memorySources.total }}）</button>
+      </section>
       <template #actions>
         <button class="btn outline" type="button" @click="view.showMemoryDrawer = false"><Icon name="x" :size="14" />取消</button>
-        <button class="btn primary" type="button" :disabled="view.busy" @click="view.saveMemory"><Icon name="save" :size="14" />保存记忆</button>
+        <button class="btn primary" type="button" :disabled="view.busy || view.memoryDetailLoading || Boolean(view.memoryDetailError)" @click="view.saveMemory"><Icon name="save" :size="14" />保存记忆</button>
       </template>
     </SideDrawer>
 

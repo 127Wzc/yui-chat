@@ -791,6 +791,14 @@ class MemoryStore {
     return item
   }
 
+  async getMemoryDetail(input: UnknownRecord = {}): Promise<UnknownRecord> {
+    const scope = await this.getManagedScope(input.scopeType, input.ownerId)
+    if (scope.scopeType === "group" && input.groupId && String(input.groupId) !== scope.groupId) throw new Error("未找到这条长期记忆。")
+    const item = (scope.items as MemoryRow[]).find(row => row.id === String(input.id || ""))
+    if (!item) throw new Error("未找到这条长期记忆。")
+    return { item, evidence: { items: [], total: 0, page: 1, pageSize: 20 } }
+  }
+
   async deleteManagedMemory(scopeType: unknown, ownerId: unknown, memoryId: unknown): Promise<UnknownRecord> {
     await this.load()
     const type = managedScopeType(scopeType)

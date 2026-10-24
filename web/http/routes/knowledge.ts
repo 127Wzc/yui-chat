@@ -64,6 +64,13 @@ export function registerKnowledgeRoutes(app: RouteApp): void {
   app.get("/api/memory/captures", auth, handleRoute(async (req, res) => {
     res.json({ ok: true, capture: await groupCaptureStore.summary({ includeMessageStats: req.query.light !== "1" }) })
   }))
+  app.get("/api/memory/items/:id/detail", auth, handleRoute(async (req, res) => {
+    const detail = await memoryStore.getMemoryDetail({
+      id: req.params.id, scopeType: req.query.scopeType, ownerId: req.query.ownerId,
+      groupId: req.query.groupId, evidencePage: req.query.evidencePage,
+    })
+    res.json({ ok: true, ...detail })
+  }, { errorStatus: 400 }))
   app.put("/api/memory/captures/:scopeType/:scopeId", auth, handleRoute(async (req, res) => {
     // 群策略默认继承系统值；overrides 中明确开启的字段才使用本群值。
     const policy = await groupCaptureStore.setPolicy(req.params.scopeType, req.params.scopeId, {

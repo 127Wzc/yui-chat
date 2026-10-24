@@ -1,7 +1,7 @@
 import { configStore } from "../config/store.js"
 import { sqliteClient } from "../core/storage/sqlite/client.js"
 import { memoryRepository } from "./repository.js"
-import { statusFor } from "./decay.js"
+import { lifecycleFor, statusFor } from "./decay.js"
 import { buildMemoryPrompt } from "./prompt.js"
 import { resolveMemoryRecallPlan, retrieveMemory } from "./retrieval.js"
 import { groupKey, scopeKey, scopesFor, userKey } from "./scopes.js"
@@ -89,6 +89,7 @@ function normalizeProfile(patch: UnknownRecord = {}): UnknownRecord {
 
 function toLegacy(row: MemoryRow = {}): UnknownRecord {
   const status = row.computedStatus || statusFor(row)
+  const lifecycle = lifecycleFor(row)
   return {
     id: row.id,
     type: row.type,
@@ -99,11 +100,14 @@ function toLegacy(row: MemoryRow = {}): UnknownRecord {
     tags: row.tags || [],
     importance: Number(row.importance || 0),
     confidence: Number(row.confidence || 0),
+    evidenceCount: row.evidence_count === undefined ? undefined : Number(row.evidence_count),
     status,
     lifecycle: {
+      ...lifecycle,
       status,
       lastConfirmedAt: timestamp(row.last_confirmed_at),
       expiresAt: timestamp(row.expires_at),
+      nextTransitionAt: timestamp(lifecycle.nextTransitionAt),
     },
     source: row.source,
     factKey: String(row.fact_key || row.factKey || ""),
@@ -283,6 +287,17 @@ export class SqliteMemoryStore {
     })
     await this.refreshStats()
     return toLegacy(result || {})
+  }
+
+  async getMemoryDetail(input: UnknownRecord = {}): Promise<UnknownRecord> {
+    await this.load()
+    const scope = managedScope(input.scopeType, input.ownerId, input.groupId)
+    const row = await memoryRepository.get(String(input.id || ""))
+    if (!scope || !row || !isManagedMemory(row) || row.status === "deleted" || row.scope_type !== scope.scopeType || row.owner_id !== scope.ownerId || (row.group_id || "") !== scope.groupId || (scope.scopeType === "group" && input.groupId && String(input.groupId) !== scope.groupId)) {
+      throw new Error("未找到这条长期记忆。")
+    }
+    const evidence = await memoryRepository.listEvidence(String(row.id), Number(input.evidencePage || 1))
+    return { item: { ...toLegacy(row), evidenceCount: evidence.total }, evidence }
   }
 
   async saveManagedMemory({ scopeType, ownerId, id, text, tags }: ScopedMemoryInput = {}): Promise<UnknownRecord> {

@@ -10,6 +10,7 @@ export interface MemoryStoreContract extends MemoryBackend {
   listProfiles(options?: UnknownRecord): Promise<UnknownRecord[]>
   listManagedScopes(options?: UnknownRecord): Promise<UnknownRecord[]>
   getManagedScope(scopeType: unknown, ownerId: unknown): Promise<UnknownRecord>
+  getMemoryDetail(input: UnknownRecord): Promise<UnknownRecord>
   saveManagedMemory(input: UnknownRecord): Promise<UnknownRecord>
   deleteManagedMemory(scopeType: unknown, ownerId: unknown, memoryId: unknown): Promise<UnknownRecord>
   getGroupWorkspace(groupId: unknown, options?: UnknownRecord): Promise<UnknownRecord>

@@ -188,6 +188,12 @@ export const MemoryTab = {
     const memberMemoryQuery = ref("")
     const memberMemoryPage = ref(1)
     const showMemoryDrawer = ref(false)
+    const memoryDetail = ref<MemoryRecord | null>(null)
+    const memorySources = ref<MemoryRecord>({ items: [], total: 0, page: 1, pageSize: 20 })
+    const memoryDetailLoading = ref(false)
+    const memoryDetailError = ref("")
+    const memoryDraftBaseline = ref("")
+    let memoryDetailSeq = 0
     const showProfileDrawer = ref(false)
     const showCaptureSettings = ref(false)
     const showReextractDialog = ref(false)
@@ -740,6 +746,22 @@ export const MemoryTab = {
       if (expires) notes.push("有效至 " + timeLabel(expires))
       else if (["active", "warm", "cold"].includes(status)) notes.push("无固定到期时间")
       return { label, tone: `is-${status}`, title: notes.join(" · ") }
+    }
+
+    function memoryPercent(value: unknown): string {
+      return value === undefined || value === null || !Number.isFinite(Number(value)) ? "未记录" : `${Math.round(Math.min(1, Math.max(0, Number(value))) * 100)}%`
+    }
+
+    function memoryTimeLabel(value: unknown): string {
+      if (!value) return "未记录"
+      const time = new Date(typeof value === "number" ? value : String(value))
+      return Number.isNaN(time.getTime()) ? "未记录" : time.toLocaleString("zh-CN", { hour12: false })
+    }
+
+    function memorySourceLabel(item: MemoryRecord = {}): string {
+      const source = String(item.source || "")
+      if (source.startsWith("group-window")) return "群聊提炼"
+      return ({ manual: "手动维护", "manual-edit": "人工修订", "explicit-user": "用户明确记忆", "platform-metadata": "平台资料同步", superseded: "已被修正", "duplicate-merged": "重复记忆已合并" } as Record<string, string>)[source] || "已有记忆"
     }
 
     function resultAction(result: MemoryRecord = {}): MemoryRecord {
@@ -1419,7 +1441,43 @@ export const MemoryTab = {
       draft.memoryId = item?.id || ""
       draft.memoryText = item?.text || ""
       draft.memoryTags = (item?.tags || []).join(", ")
+      memoryDraftBaseline.value = JSON.stringify([draft.memoryText, draft.memoryTags])
+      memoryDetailSeq += 1
+      memoryDetail.value = item
+      memorySources.value = { items: [], total: 0, page: 1, pageSize: 20 }
+      memoryDetailError.value = ""
+      memoryDetailLoading.value = false
       showMemoryDrawer.value = true
+      if (item?.id) void loadMemoryDetail()
+    }
+
+    async function loadMemoryDetail(page = 1): Promise<void> {
+      if (!draft.memoryId || !showMemoryDrawer.value) return
+      const seq = ++memoryDetailSeq
+      const id = draft.memoryId
+      memoryDetailLoading.value = true
+      memoryDetailError.value = ""
+      try {
+        const result = await request(pageUrl(`/api/memory/items/${encodeURIComponent(id)}/detail`, {
+          scopeType: draft.scopeType, ownerId: draft.ownerId, groupId: draft.scopeType === "user" ? "" : draft.groupId, evidencePage: page,
+        }))
+        if (seq !== memoryDetailSeq || !showMemoryDrawer.value || draft.memoryId !== id) return
+        if (page === 1) {
+          // 提炼结果只带事实摘要；补齐真实标签，且不覆盖加载期间已经修改的字段。
+          const [originalText, originalTags] = JSON.parse(memoryDraftBaseline.value) as string[]
+          const latestText = String(result.item.text || "")
+          const latestTags = (result.item.tags || []).join(", ")
+          if (draft.memoryText === originalText) draft.memoryText = latestText
+          if (draft.memoryTags === originalTags) draft.memoryTags = latestTags
+          memoryDraftBaseline.value = JSON.stringify([latestText, latestTags])
+        }
+        memoryDetail.value = result.item
+        memorySources.value = { ...result.evidence, items: page > 1 ? [...memorySources.value.items, ...result.evidence.items] : result.evidence.items }
+      } catch (err) {
+        if (seq === memoryDetailSeq) memoryDetailError.value = errorMessage(err)
+      } finally {
+        if (seq === memoryDetailSeq) memoryDetailLoading.value = false
+      }
     }
 
     async function saveMemory() {
@@ -1588,6 +1646,9 @@ export const MemoryTab = {
     })
     const captureDraftGuard = computed(() => showCaptureSettings.value && Boolean(captureDraft.scopeId.trim()) && captureDraftDirty.value)
     watch(captureDraftGuard, dirty => setDirtyScope("memory:capture-draft", dirty), { immediate: true })
+    watch(() => showMemoryDrawer.value && JSON.stringify([draft.memoryText, draft.memoryTags]) !== memoryDraftBaseline.value,
+      dirty => setDirtyScope("memory:fact-draft", dirty), { immediate: true })
+    watch(showMemoryDrawer, open => { if (!open) { memoryDetailSeq += 1; memoryDetailLoading.value = false } })
     onMounted(() => {
       window.addEventListener("resize", handleCalendarViewportResize)
       refreshWorkspace()
@@ -1597,6 +1658,7 @@ export const MemoryTab = {
       if (calendarRevealTimer) clearTimeout(calendarRevealTimer)
       window.removeEventListener("resize", handleCalendarViewportResize)
       setDirtyScope("memory:capture-draft", false)
+      setDirtyScope("memory:fact-draft", false)
     })
 
     function setCalendarWeeksElement(element: HTMLElement | null): void {
@@ -1605,6 +1667,7 @@ export const MemoryTab = {
 
     // 子工作区只接收这个响应式视图对象，所有 API 请求、确认和刷新仍由父组件统一编排。
     const memoryView = reactive({
+      memoryDetail, memorySources, memoryDetailLoading, memoryDetailError, loadMemoryDetail, memoryPercent, memoryTimeLabel, memorySourceLabel,
       activeWorkspace, extractionPane, busy, captureBusy, captureAction, showGroupPicker, groupPickerQuery, selectedGroupId, selectedPolicy, capturePolicies, filteredPolicies, captureDefaults, captureDraftPolicy, captureDraftDirty, captureDraftEditing, historyBackfillLimit, historyBackfillFrom, backfillLimitMax, extractionModelOptions, groupWorkspace, groupMemory, groupMemoryQuery, groupMemoryPage, duplicatePlan, duplicatePlanBusy,
       members, memberQuery, selectedMember, selectedMemberName, memberWorkspace, memberScope, memberMemoryQuery, memberMemoryPage, currentMemberMemory,
       showMemoryDrawer, showProfileDrawer, showCaptureSettings, showReextractDialog, selectedCapture, captureMessages, captureWindows, captureWindowPage, captureMessageQuery, captureMessagePage, captureMessagePageJump, captureMessageOrder, captureMessagePageCount, captureDraft, draft, windowDetails, windowDetailLoading,

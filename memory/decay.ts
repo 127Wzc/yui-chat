@@ -9,7 +9,7 @@ function record(value: unknown): UnknownRecord {
 export function memoryHalfLifeDays(item: UnknownRecord = {}): number {
   if (item.type === "profile" || item.pinned || String(item.fact_key || item.factKey || "").startsWith("identity.") || /身份|称呼|禁止/.test(String(item.tags || ""))) return Infinity
   if (item.scope_type === "user_group") return 90
-  if (/偏好|习惯/.test(String(item.tags || ""))) return 180
+  if (/^preference\./.test(String(item.fact_key || item.factKey || "")) || /偏好|习惯|preference|habit/i.test(String(item.tags || ""))) return 180
   return 365
 }
 
@@ -29,6 +29,26 @@ export function statusFor(item: UnknownRecord = {}, now = Date.now()): string {
   if (value >= 0.35) return "warm"
   if (value >= 0.15) return "cold"
   return "archived"
+}
+
+/** 与召回共用衰减规则；返回预测时间，不写回状态或改变置信度。 */
+export function lifecycleFor(item: UnknownRecord = {}, now = Date.now()): UnknownRecord {
+  const status = statusFor(item, now)
+  const halfLife = memoryHalfLifeDays(item)
+  const confirmed = Number(item.last_confirmed_at || item.updated_at || item.created_at || now)
+  const expiresAt = Number(item.expires_at || 0)
+  const threshold = ({ active: 0.7, warm: 0.35, cold: 0.15 } as Record<string, number>)[status]
+  let nextTransitionAt = threshold && Number.isFinite(halfLife)
+    ? Math.floor(confirmed - Math.log2(threshold) * halfLife * DAY) + 1 : 0
+  let nextStatus = nextTransitionAt ? ({ active: "warm", warm: "cold", cold: "archived" } as Record<string, string>)[status] : ""
+  if (["active", "warm", "cold"].includes(status) && expiresAt > now && (!nextTransitionAt || expiresAt <= nextTransitionAt)) {
+    nextTransitionAt = expiresAt
+    nextStatus = "expired"
+  }
+  return {
+    status, decay: decayValue(item, now), halfLifeDays: Number.isFinite(halfLife) ? halfLife : null,
+    lastConfirmedAt: confirmed, expiresAt, nextTransitionAt, nextStatus,
+  }
 }
 
 export function expiryFor(type: unknown, config: UnknownRecord = {}, now = Date.now()): number | null {
