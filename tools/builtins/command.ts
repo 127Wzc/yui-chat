@@ -5,6 +5,7 @@ import type { UnknownRecord } from "../../core/message/types.js"
 import type { ToolExecutionContext } from "../support/tool-contract.js"
 import { buildKnowledgePrompt } from "../../knowledge/retrieval.js"
 import { truncateTextToTokens } from "../../core/chat/token-budget.js"
+import { COMMAND_COMPLETENESS_ISSUE_LABELS } from "../../knowledge/command-query-service.js"
 
 interface CommandToolContext extends ToolExecutionContext {
   e?: UnknownRecord
@@ -165,11 +166,11 @@ export class CommandHandoffTool {
   }
 }
 
-/** 指令知识审计工具：报告扫描知识的完整度，不修改知识库。 */
+/** 指令知识审计工具：检查检索正文的资料完整度，不修改知识库。 */
 export class CommandKnowledgeAuditTool {
   name = "command_knowledge_audit"
   source = "builtin"
-  description = "Audit command knowledge quality and report missing examples, trigger heads, parameter hints, and dynamically observed commands."
+  description = "Check completeness of command retrieval text: instructions, purpose, parameters, concrete examples, and items requiring verification. This is not an accuracy or execution-success score."
   parameters = {
     type: "object",
     properties: {
@@ -182,15 +183,15 @@ export class CommandKnowledgeAuditTool {
     const report = record(commandObserver.qualityReport({ limit: Number(args.limit) || 10 }))
     const summary = record(report.summary)
     const issueSummary = Object.entries(record(summary.issues))
-      .map(([name, count]) => `${name}:${count}`)
+      .map(([name, count]) => `${COMMAND_COMPLETENESS_ISSUE_LABELS[name] || (name === "ok" ? "未发现缺项" : name)}:${count}`)
       .join(" / ")
     const rows = records(report.weakCommands).slice(0, Number(args.limit) || 10).map((item, index) =>
       `${index + 1}. ${text(item.pluginName || item.pluginKey)}：${text(item.description || item.fnc) || "无描述"}\n`
-      + `   质量分：${item.qualityScore}  问题：${strings(item.issues).join(", ")}\n`
+      + `   资料完整度：${item.qualityScore}%  问题：${strings(item.issues).map(issue => COMMAND_COMPLETENESS_ISSUE_LABELS[issue] || issue).join("；")}\n`
       + `   建议指令：${text(item.suggestedCommand || item.example) || "缺失"}  触发头：${strings(item.commandHeads).join(" / ") || "缺失"}`,
     )
     return [
-      `指令知识库质量：${summary.okCommands}/${summary.commands} 条无明显问题，平均 ${summary.averageQualityScore} 分。`,
+      `指令资料完整度：${summary.okCommands}/${summary.commands} 条正文未发现缺项，平均 ${summary.averageQualityScore}%。仅为资料格式检查，不代表召回准确率或执行成功。`,
       `问题分布：${issueSummary || "无"}`,
       ...(strings(report.recommendations).length ? ["建议：", ...strings(report.recommendations).map(item => `- ${item}`)] : []),
       ...(rows.length ? ["薄弱指令：", ...rows] : []),

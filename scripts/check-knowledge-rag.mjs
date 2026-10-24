@@ -45,6 +45,26 @@ try {
   const document={id:"cmd-stamina",title:"#体力",retrievalText:"查看原神体力和剩余树脂",metadata:{pluginKey:"fixture",pluginName:"游戏",fnc:"stamina",regexp:"^#体力$",suggestedCommand:"#体力",description:"游戏功能"}}
   const bundle=(documents=[document],sourceId="yunzai")=>({schemaVersion:1,sourceId,documents})
   const apply=(input,options={})=>commandImports.apply(input,options)
+  const {commandQuality,buildCommandQualityReport}=await import("../output/runtime/knowledge/command-query-service.js")
+  const completeText="插件名称：游戏\n插件标识：fixture\n指令：#体力\n用途：查询原神剩余树脂\n参数：无\n示例：#体力\n声明权限：未声明额外角色限制\n前置条件：已绑定账号\n限制：仅返回已有数据\npriority：100\nregexp：^#体力$\nregexpFlags：\"\""
+  const completeCommand={id:"complete",fnc:"stamina",retrievalText:completeText}
+  assert.equal(commandQuality(completeCommand).qualityScore,100,"complete body needs no duplicated metadata")
+  assert.equal(commandQuality(completeCommand).completenessStatus,"complete")
+  assert.deepEqual(commandQuality(completeCommand).issues,[],"explicitly parameter-free commands are complete")
+  const noUsage=commandQuality({...completeCommand,dynamic:true,pluginKey:"observed",usageGuide:{confidence:"low"}})
+  assert.equal(noUsage.qualityScore,commandQuality(completeCommand,{complete:99}).qualityScore,"usage, source and old inferred confidence do not affect completeness")
+  assert.equal(commandQuality({...completeCommand,retrievalText:"查询原神体力",suggestedCommand:"#体力",examples:["#体力"],commandHeads:["#体力"],parameterHints:[{name:"无",description:"无参数"}],description:"齐全的旧元数据"}).qualityScore,0,"metadata cannot fill gaps in the retrieval body")
+  const pendingCommand=commandQuality({...completeCommand,retrievalText:completeText.replace("限制：仅返回已有数据","限制：运行环境待核实")})
+  assert.equal(pendingCommand.qualityScore,75);assert.equal(pendingCommand.completenessStatus,"needs-review");assert(pendingCommand.issues.includes("pending-verification"))
+  assert(!commandQuality({...completeCommand,retrievalText:completeText+"\n备注：待核实调用条件"}).issues.every(issue=>issue!=="pending-verification"))
+  assert.equal(commandQuality({...completeCommand,retrievalText:completeText.replace("参数：无\n","")}).qualityScore,75)
+  for(const sample of ["<内容>","#体力 \\d+","stamina","#体力\nstamina"]){
+    const row=commandQuality({...completeCommand,retrievalText:completeText.replace("示例：#体力",`示例：${sample}`)})
+    assert(row.issues.includes("missing-example"),sample+" must not count as a concrete example")
+  }
+  assert.equal(commandQuality({...completeCommand,retrievalText:completeText.replace("regexp：^#体力$","regexp：^#待核实$")}).qualityScore,100,"raw regex contents do not supply or invalidate body explanations")
+  const audit=buildCommandQualityReport([completeCommand,{id:"incomplete",retrievalText:""}])
+  assert.equal(audit.summary.okCommands,1);assert.equal(audit.summary.averageQualityScore,50);assert.equal(audit.summary.scoreMeaning,"retrieval-text-completeness")
   assert.deepEqual(await commandImports.list(),[],"the imported catalogue starts empty")
   assert.equal(commandChunks(document.retrievalText).length,1)
   assert(commandChunks("长".repeat(10000)).length>1)
@@ -429,15 +449,19 @@ try {
   assert.equal((await api(`/api/knowledge/bases/${base}/search`,"POST",{query:quotaQuery})).data.results.length,12,"HTTP must not retain the former 8-result default")
   assert.equal((await patchLimit(defaults.knowledge.retrieval.resultLimit)).status,200)
   // Quality sorting covers the full matching catalogue before response limiting.
-  const qualityRows=Array.from({length:205},(_,i)=>({...document,id:`quality-sort-${i}`,title:`#质量排序测试${i}`,retrievalText:`质量排序专用内容 ${i}`}))
+  const qualityRows=Array.from({length:205},(_,i)=>({...document,id:`quality-sort-${i}`,title:`#质量排序测试${i}`,retrievalText:completeText+`\n备注：质量排序专用内容 ${i}`}))
   const weakRow={...document,id:"quality-sort-weak",title:"质量排序弱项",retrievalText:"质量排序专用内容 待补充",metadata:{pluginKey:"quality-fixture",fnc:"weak",regexp:"",description:""}}
   await apply(bundle([...qualityRows,weakRow]));await commandObserver.load()
   await sqliteClient.run("UPDATE knowledge_documents SET updated_at=1 WHERE source_key=?",[`command:${weakRow.id}`])
   const qualityUrl=`/api/knowledge/bases/${base}/documents?q=${encodeURIComponent("质量排序专用内容")}`
+  const qualityCalls=embeddingCalls,qualityJobs=await sqliteClient.all("SELECT id FROM knowledge_index_jobs"),qualityDocuments=await sqliteClient.all("SELECT id,content_hash,updated_at FROM knowledge_documents ORDER BY id")
   assert.equal((await api(qualityUrl,"GET",undefined,false)).status,401)
   const allQuality=(await api(qualityUrl)).data.documents
   assert.equal(allQuality.length,206,"the full catalogue remains reachable beyond the former first 200")
   assert.equal(allQuality.at(-1).metadata.commandId,weakRow.id)
+  assert.equal(allQuality[0].qualityScore,100);assert.equal(allQuality[0].completenessStatus,"complete")
+  assert.equal(allQuality.at(-1).completenessStatus,"needs-review")
+  assert(allQuality.at(-1).qualityIssues.some(issue=>issue.includes("待核实")))
   const lowQuality=(await api(`${qualityUrl}&sort=quality-asc&limit=1`)).data.documents
   assert.equal(lowQuality.length,1);assert.equal(lowQuality[0].metadata.commandId,weakRow.id,"sort before limiting, including old entries outside the first page")
   const highQuality=(await api(`${qualityUrl}&sort=quality-desc`)).data.documents
@@ -447,6 +471,7 @@ try {
   assert.deepEqual((await api(`${qualityUrl}&sort=unknown`)).data.documents.map(row=>row.id),allQuality.map(row=>row.id))
   const qualityFiltered=(await api(`/api/knowledge/bases/${base}/documents?sort=quality-asc&q=${encodeURIComponent("质量排序专用内容 待补充")}`)).data.documents
   assert.equal(qualityFiltered.length,1);assert.equal(qualityFiltered[0].metadata.commandId,weakRow.id)
+  assert.equal(embeddingCalls,qualityCalls);assert.deepEqual(await sqliteClient.all("SELECT id FROM knowledge_index_jobs"),qualityJobs);assert.deepEqual(await sqliteClient.all("SELECT id,content_hash,updated_at FROM knowledge_documents ORDER BY id"),qualityDocuments,"completeness checks do not mutate stored content or index work")
   // Origin rendering reads runtime registration keys and explicitly labels missing sources.
   const originExports={}
   const tabSource=await fs.readFile(new URL("../web/client/features/knowledge/knowledge-tab.ts",import.meta.url),"utf8")
@@ -474,8 +499,9 @@ try {
       const html=await renderToString(app);assert(html.includes("全局配置"));assert(html.includes("每次召回上限"));assert(html.includes('value="3"'));assert(html.includes("无需重建索引"))
     }
     if(file==="knowledge-command-workbench"){
+      let prompt=""
       for(const currentView of ["library","import","guide"]){
-        const app=vue.createSSRApp({...component,setup(props,context){const state=component.setup(props,context);state.loading.value=false;state.view.value=currentView;return state}})
+        const app=vue.createSSRApp({...component,setup(props,context){const state=component.setup(props,context);state.loading.value=false;state.view.value=currentView;prompt=state.preparationPrompt;return state}})
         for(const name of ["Field","PagedList","Icon"])app.component(name,{template:"<span />"})
         const html=await renderToString(app)
         assert(html.includes("使用指南"));assert(html.includes("立即采集"))
@@ -483,6 +509,10 @@ try {
         if(currentView==="import"){assert(html.includes("只添加新指令"));assert(html.includes("含当前最多保留 3 个版本"))}
         if(currentView==="guide"){assert(html.includes("scan-command-knowledge.js"));assert(html.includes("复制整理提示词"));assert(html.includes("下载使用指南"))}
       }
+      assert(prompt.includes("仅允许修改 title、retrievalText 和 metadata.suggestedCommand"))
+      assert(prompt.includes("不得为提高评分新增 parameters、parameterHints、examples"))
+      assert(prompt.includes("(.*) 不一定必填"));assert(prompt.includes("不擅自把 complete 改为 true"))
+      assert(prompt.includes("语法匹配不证明实际可用"));assert(prompt.includes("all 为未声明额外角色限制"))
     }
   }
   const {chunkText}=await import("../output/runtime/knowledge/chunking.js");assert.equal(chunkText("a".repeat(200),{targetChars:80,overlapChars:0,minChars:1}).length,3)

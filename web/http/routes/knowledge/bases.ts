@@ -8,7 +8,7 @@ import type { RouteApp } from "../../route-handler.js"
 import { configStore } from "../../../../config/store.js"
 import { updateConfigAndApply } from "../../runtime-config.js"
 import { sqliteClient } from "../../../../core/storage/sqlite/client.js"
-import { commandQuality } from "../../../../knowledge/command-query-service.js"
+import { commandQuality, COMMAND_COMPLETENESS_ISSUE_LABELS } from "../../../../knowledge/command-query-service.js"
 import { commandObserver } from "../../../../knowledge/command-observer.js"
 
 type Row = Record<string, any>
@@ -25,7 +25,8 @@ function builtinPresentation(state: CommandAvailability) {
       searchable: !exclusionReasons.length,
       exclusionReasons,
       qualityScore: quality?.qualityScore,
-      qualityIssues: quality?.issues.map(issue => ({ "missing-example": "缺少示例", "missing-head": "缺少触发词", "missing-parameters": "缺少参数提示", "dynamic-observed": "动态观察条目", "missing-doc": "缺少说明", "low-confidence": "说明置信度低" })[issue] || issue),
+      completenessStatus: quality?.completenessStatus,
+      qualityIssues: quality?.issues.map(issue => COMMAND_COMPLETENESS_ISSUE_LABELS[issue] || issue),
     }
   }
 }
