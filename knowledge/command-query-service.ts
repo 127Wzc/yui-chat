@@ -1,3 +1,4 @@
+import { evaluateCommandCompleteness, type CommandCompleteness } from "./command-completeness.js"
 import { commandHead } from "../core/message/command-prefixes.js"
 import {
   normalizeSearchQuery,
@@ -27,20 +28,14 @@ interface QueryOptions extends UnknownRecord {
   capture?: unknown
 }
 
-interface QualityRow extends Command {
+interface QualityRow extends Command, CommandCompleteness {
   issues: string[]
   qualityScore: number
   usageCount: number
   completenessStatus: "complete" | "incomplete" | "needs-review"
 }
 
-export const COMMAND_COMPLETENESS_ISSUE_LABELS: Record<string, string> = {
-  "missing-command": "正文缺少明确指令，或仍含占位符、函数名",
-  "missing-purpose": "正文缺少具体用途",
-  "missing-parameters": "正文缺少参数说明；无参数请明确写“无”",
-  "missing-example": "正文缺少具体示例，或仍含占位符、函数名",
-  "pending-verification": "正文含待核实或待补充内容",
-}
+export { COMMAND_COMPLETENESS_ISSUE_LABELS } from "./command-completeness.js"
 
 interface PluginQualitySummary {
   pluginName: string
@@ -468,36 +463,8 @@ export function buildCommandDigest(commands: readonly Command[] = [], events: re
 }
 
 export function commandQuality(command: Command, usageCounts: unknown = {}): QualityRow {
-  // Only the authoritative retrieval body is graded. Source metadata and usage do not earn points.
-  const fields = new Map<string, string[]>()
-  let current = ""
-  for (const line of text(command.retrievalText).replace(/\r\n?/gu, "\n").split("\n")) {
-    const heading = line.match(/^\s*([^：:\n]{1,32})[：:]\s*(.*)$/u)
-    if (heading) { current = heading[1].trim(); fields.set(current, [...(fields.get(current) || []), heading[2].trim()]) }
-    else if (current && line.trim()) fields.get(current)!.push(line.trim())
-  }
-  const section = (...names: string[]): string => names.flatMap(name => fields.get(name) || []).join("\n").trim()
-  const pending = /待核实|待补充|待完善|无法确认|尚未确认/u
-  const populated = (value: string): boolean => Boolean(value) && !/^(?:无|暂无|未知|不详|不适用|[-—?？]+)[。.!！]?$/u.test(value) && !pending.test(value)
-  const concrete = (value: string): boolean => populated(value) && !/<[^>\n]+>|[<{｛](?:内容|数字|角色名|歌曲名|参数|QQ号|UID)[>}｝]|\\[dws]|\(\?:|(?:^|\n)\^|\$(?:$|\n)/iu.test(value)
-    && (!command.fnc || value.split("\n").every(line => line.trim() !== text(command.fnc)))
-  const instruction = section("指令", "命令"), purpose = section("用途", "功能")
-  const parameters = section("参数", "参数说明"), examples = section("示例", "使用示例")
-  const reviewText = [...fields].filter(([name]) => !["插件名称", "插件标识", "priority", "regexp", "regexpFlags"].includes(name)).flatMap(([, lines]) => lines).join("\n") || text(command.retrievalText)
-  const issues: string[] = []
   const usage = usageCount(usageCounts, command.id)
-  if (!concrete(instruction)) issues.push("missing-command")
-  if (!populated(purpose)) issues.push("missing-purpose")
-  if (!parameters || pending.test(parameters) || /^(?:未知|不详|不适用|[-—?？]+)$/u.test(parameters)) issues.push("missing-parameters")
-  if (!concrete(examples)) issues.push("missing-example")
-  if (pending.test(reviewText)) issues.push("pending-verification")
-  return {
-    ...commandView({ ...command, usageCount: usage }),
-    issues,
-    usageCount: usage,
-    qualityScore: Math.max(0, 100 - issues.length * 25),
-    completenessStatus: issues.includes("pending-verification") ? "needs-review" : issues.length ? "incomplete" : "complete",
-  }
+  return { ...commandView({ ...command, usageCount: usage }), ...evaluateCommandCompleteness(command), usageCount: usage }
 }
 
 export function buildCommandQualityReport(commands: readonly Command[] = [], opts: QueryOptions = {}): UnknownRecord {
@@ -521,15 +488,16 @@ export function buildCommandQualityReport(commands: readonly Command[] = [], opt
     .sort((a, b) => a.qualityScore - b.qualityScore || text(a.id).localeCompare(text(b.id)))
     .slice(0, limit)
   const recommendations: string[] = []
-  if (issueCounts["missing-command"]) recommendations.push("在 retrievalText 的“指令”行写明触发文本，避免函数名、正则碎片和占位符。")
-  if (issueCounts["missing-purpose"]) recommendations.push("在 retrievalText 的“用途”行说明具体功能，不用插件名称代替说明。")
-  if (issueCounts["missing-example"]) recommendations.push("在 retrievalText 的“示例”行提供具体示例值，注明已知的前置条件；格式完整不代表执行成功。")
-  if (issueCounts["missing-parameters"]) recommendations.push("在 retrievalText 的“参数”行说明参数；无需参数时明确写“无”，不必补充重复元数据。")
+  if (issueCounts["missing-command"]) recommendations.push("在 retrievalText 的“指令”行写明触发文本、带参模板或事件触发方式，避免函数名和正则碎片。")
+  if (issueCounts["missing-purpose"] || issueCounts["pending-purpose"]) recommendations.push("在 retrievalText 的“用途”行说明具体功能，不用插件名称代替说明。")
+  if (["missing-example", "example-invalid", "example-mismatch", "example-unverified"].some(code => issueCounts[code])) recommendations.push("在 retrievalText 的“示例”行提供具体示例值，注明已知的前置条件；格式完整不代表执行成功。")
+  if (issueCounts["missing-parameters"] || issueCounts["pending-parameters"]) recommendations.push("在 retrievalText 的“参数”行说明参数；无需参数时明确写“无”，不必补充重复元数据。")
   if (issueCounts["pending-verification"]) recommendations.push("先核对正文中的待核实或待补充项，不要为提高完整度编造信息。")
   return {
     generatedAt: new Date().toISOString(),
     summary: {
       scoreMeaning: "retrieval-text-completeness",
+      ruleVersion: "command-completeness-v2",
       commands: rows.length,
       issueCommands: rows.filter(row => row.issues.length).length,
       okCommands: rows.filter(row => !row.issues.length).length,

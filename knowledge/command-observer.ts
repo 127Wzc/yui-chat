@@ -1,3 +1,4 @@
+import { prepareCommandCompleteness } from "./command-completeness.js"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 import { configStore, yunzaiRoot } from "../config/store.js"
@@ -37,8 +38,9 @@ class CommandObserver {
     this.patchDeal()
   }
   async load(): Promise<void> {
-    const rows = sqliteClient.status.available ? (await commandImports.list()).map(row => ({ ...row.metadata, id: row.id, retrievalText: row.retrievalText, sourceId: row.sourceId, suggestedCommand: row.metadata.suggestedCommand || row.title, description: row.metadata.description || row.title, imported: true, enabled: row.enabled, commandEnabled: row.commandEnabled, pluginEnabled: row.pluginEnabled })) : []
+    const rows = sqliteClient.status.available ? (await commandImports.list()).map(row => ({ ...row.metadata, id: row.id, title: row.title, metadata: row.metadata, retrievalText: row.retrievalText, sourceId: row.sourceId, suggestedCommand: typeof row.metadata.suggestedCommand === "string" ? row.metadata.suggestedCommand : row.title, description: row.metadata.description || row.title, imported: true, enabled: row.enabled, commandEnabled: row.commandEnabled, pluginEnabled: row.pluginEnabled })) : []
     this.commands = rows.map(row => ({ ...buildCommandDoc(row), ...row })) as CommandRecord[]
+    await prepareCommandCompleteness(this.commands)
   }
   applyAvailability(rows: UnknownRecord[]): void { const byId = new Map(rows.map(row => [String(row.id), row])); this.commands = this.commands.map(row => ({ ...row, ...byId.get(String(row.id)) })) }
   searchableCommands(): CommandRecord[] { return this.commands.filter(row => row.enabled !== false) }

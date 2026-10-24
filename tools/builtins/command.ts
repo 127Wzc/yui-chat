@@ -119,6 +119,9 @@ export class CommandRecommendTool {
           command: text(item.suggestedCommand || item.example),
           issues: strings(item.issues),
           qualityScore: item.qualityScore,
+          deductions: item.deductions,
+          scoreCap: item.scoreCap,
+          capReasons: item.capReasons,
         })),
       }
     }
@@ -187,11 +190,11 @@ export class CommandKnowledgeAuditTool {
       .join(" / ")
     const rows = records(report.weakCommands).slice(0, Number(args.limit) || 10).map((item, index) =>
       `${index + 1}. ${text(item.pluginName || item.pluginKey)}：${text(item.description || item.fnc) || "无描述"}\n`
-      + `   资料完整度：${item.qualityScore}%  问题：${strings(item.issues).map(issue => COMMAND_COMPLETENESS_ISSUE_LABELS[issue] || issue).join("；")}\n`
+      + `   资料完整度：${item.qualityScore}%  扣分：${records(item.deductions).map(deduction => `-${deduction.points} ${text(deduction.reason)}`).join("；") || "无"}${strings(item.capReasons).length ? `；${strings(item.capReasons).join("；")}` : ""}\n`
       + `   建议指令：${text(item.suggestedCommand || item.example) || "缺失"}  触发头：${strings(item.commandHeads).join(" / ") || "缺失"}`,
     )
     return [
-      `指令资料完整度：${summary.okCommands}/${summary.commands} 条正文未发现缺项，平均 ${summary.averageQualityScore}%。仅为资料格式检查，不代表召回准确率或执行成功。`,
+      `指令资料完整度：${summary.okCommands}/${summary.commands} 条未发现扣分项，平均 ${summary.averageQualityScore}%。用于确定整理或排除的优先级，不代表召回准确率或执行成功。`,
       `问题分布：${issueSummary || "无"}`,
       ...(strings(report.recommendations).length ? ["建议：", ...strings(report.recommendations).map(item => `- ${item}`)] : []),
       ...(rows.length ? ["薄弱指令：", ...rows] : []),

@@ -31,7 +31,7 @@
     "check:reasoning": "node scripts/check-reasoning.mjs",
     "check:render": "node scripts/check-render.mjs",
     "check:extension-installation": "node scripts/check-extension-installation.mjs",
-    "check:knowledge-rag": "node scripts/check-knowledge-rag.mjs",
+    "check:knowledge-rag": "node scripts/check-command-regexp-examples.mjs && node scripts/check-command-completeness.mjs && node scripts/check-knowledge-rag.mjs",
     "check:command-benchmark": "node scripts/check-command-benchmark.mjs"
   },
   "dependencies": {

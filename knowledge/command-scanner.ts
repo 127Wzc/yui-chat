@@ -30,14 +30,14 @@ function buildDocument(metadata: Row): Row {
   const identity = ["yunzai-command-v1", metadata.registrationKey, metadata.className, metadata.fnc, metadata.regexp, metadata.regexpFlags]
   const id = `cmd-${sha(JSON.stringify(identity))}`
   const derived = buildCommandDoc(metadata)
-  metadata.suggestedCommand = derived.suggestedCommand || metadata.fnc
+  metadata.suggestedCommand = derived.suggestedCommand
   metadata.examples = derived.examples || []
   return {
-    id, title: String(metadata.suggestedCommand),
+    id, title: String(metadata.suggestedCommand || metadata.description || metadata.pluginName || "待整理指令").slice(0, 500),
     retrievalText: [
       `插件名称：${metadata.pluginName}`, `插件标识：${metadata.pluginKey}`,
-      `指令：${metadata.suggestedCommand}`, `用途：${metadata.description || "待补充说明"}`,
-      metadata.examples.length ? `示例：${metadata.examples.join("；")}` : "",
+      `指令：${metadata.examples.length ? metadata.examples.join(" / ") : "待核实（未生成可验证的示例）"}`, `用途：${metadata.description || "待补充说明"}`,
+      ...(metadata.examples.length ? metadata.examples.map((example: string) => `示例：${example}`) : ["示例：待核实（请结合原始规则整理）"]),
       `priority：${metadata.priority ?? "未知"}`,
       `regexp：${metadata.regexp}`, `regexpFlags：${JSON.stringify(metadata.regexpFlags || "")}`,
     ].filter(Boolean).join("\n"),

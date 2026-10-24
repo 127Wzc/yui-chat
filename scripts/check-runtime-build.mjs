@@ -68,6 +68,8 @@ for (const relative of [
   "knowledge/repository.js",
   "knowledge/retrieval.js",
   "knowledge/command-document-builder.js",
+  "knowledge/command-regexp-examples.js",
+  "knowledge/command-completeness.js",
   "knowledge/command-scanner.js",
   "knowledge/command-import.js",
   "scripts/scan-command-knowledge.js",

@@ -46,25 +46,13 @@ try {
   const bundle=(documents=[document],sourceId="yunzai")=>({schemaVersion:1,sourceId,documents})
   const apply=(input,options={})=>commandImports.apply(input,options)
   const {commandQuality,buildCommandQualityReport}=await import("../output/runtime/knowledge/command-query-service.js")
-  const completeText="插件名称：游戏\n插件标识：fixture\n指令：#体力\n用途：查询原神剩余树脂\n参数：无\n示例：#体力\n声明权限：未声明额外角色限制\n前置条件：已绑定账号\n限制：仅返回已有数据\npriority：100\nregexp：^#体力$\nregexpFlags：\"\""
-  const completeCommand={id:"complete",fnc:"stamina",retrievalText:completeText}
-  assert.equal(commandQuality(completeCommand).qualityScore,100,"complete body needs no duplicated metadata")
+  const completeText="插件名称：游戏\n插件标识：fixture\n指令：#体力\n用途：查询原神剩余树脂\n参数：无\n示例：#体力\npriority：100\nregexp：^#体力$\nregexpFlags：\"\""
+  const completeCommand={...document.metadata,id:"complete",title:"原神体力查询",event:"message",priority:100,regexpFlags:"",retrievalText:completeText}
+  const eventText=completeText.replace("指令：#体力","指令：戳一戳事件触发").replace("用途：查询原神剩余树脂","用途：[戳一戳事件] 响应用户戳一戳").replace("示例：#体力","示例：无（通过戳一戳等事件触发）")
+  assert.equal(commandQuality(completeCommand).qualityScore,100)
   assert.equal(commandQuality(completeCommand).completenessStatus,"complete")
-  assert.deepEqual(commandQuality(completeCommand).issues,[],"explicitly parameter-free commands are complete")
-  const noUsage=commandQuality({...completeCommand,dynamic:true,pluginKey:"observed",usageGuide:{confidence:"low"}})
-  assert.equal(noUsage.qualityScore,commandQuality(completeCommand,{complete:99}).qualityScore,"usage, source and old inferred confidence do not affect completeness")
-  assert.equal(commandQuality({...completeCommand,retrievalText:"查询原神体力",suggestedCommand:"#体力",examples:["#体力"],commandHeads:["#体力"],parameterHints:[{name:"无",description:"无参数"}],description:"齐全的旧元数据"}).qualityScore,0,"metadata cannot fill gaps in the retrieval body")
-  const pendingCommand=commandQuality({...completeCommand,retrievalText:completeText.replace("限制：仅返回已有数据","限制：运行环境待核实")})
-  assert.equal(pendingCommand.qualityScore,75);assert.equal(pendingCommand.completenessStatus,"needs-review");assert(pendingCommand.issues.includes("pending-verification"))
-  assert(!commandQuality({...completeCommand,retrievalText:completeText+"\n备注：待核实调用条件"}).issues.every(issue=>issue!=="pending-verification"))
-  assert.equal(commandQuality({...completeCommand,retrievalText:completeText.replace("参数：无\n","")}).qualityScore,75)
-  for(const sample of ["<内容>","#体力 \\d+","stamina","#体力\nstamina"]){
-    const row=commandQuality({...completeCommand,retrievalText:completeText.replace("示例：#体力",`示例：${sample}`)})
-    assert(row.issues.includes("missing-example"),sample+" must not count as a concrete example")
-  }
-  assert.equal(commandQuality({...completeCommand,retrievalText:completeText.replace("regexp：^#体力$","regexp：^#待核实$")}).qualityScore,100,"raw regex contents do not supply or invalidate body explanations")
-  const audit=buildCommandQualityReport([completeCommand,{id:"incomplete",retrievalText:""}])
-  assert.equal(audit.summary.okCommands,1);assert.equal(audit.summary.averageQualityScore,50);assert.equal(audit.summary.scoreMeaning,"retrieval-text-completeness")
+  const audit=buildCommandQualityReport([completeCommand,{id:"incomplete",title:"待整理条目",retrievalText:""}])
+  assert.equal(audit.summary.okCommands,1);assert(audit.summary.averageQualityScore<80);assert.equal(audit.summary.scoreMeaning,"retrieval-text-completeness")
   assert.deepEqual(await commandImports.list(),[],"the imported catalogue starts empty")
   assert.equal(commandChunks(document.retrievalText).length,1)
   assert(commandChunks("长".repeat(10000)).length>1)
@@ -272,6 +260,22 @@ try {
   const outerOnly=await scanLoadedCommands([{key:"declared-only",class:LivePlugin,plugin:outerOnlyPlugin}])
   assert.equal(outerOnly.documents.length,1);assert.equal(outerOnly.documents[0].metadata.fnc,"secondaryReply")
   assert.deepEqual(outerOnly.warnings,[]);assert.equal(outerOnly.complete,true)
+  const douyinRegexp="^#[Dd]ou[Yy]in[Bb]ot账号$|^#抖音bot账号$"
+  const exampleEntry={key:"DouYin-Plugin",class:{name:"DouYinAdapter"},priority:5000,plugin:{name:"DouYinAdapter",dsc:"DouYin 适配器设置",event:"message",rule:[{reg:douyinRegexp,fnc:"List",permission:"master"},{reg:"^#\\\\s*(检查|我的)*c(oo)?k(ie)?(状态)*$",fnc:"unknown"},{reg:"https?://b23.tv/[0-9A-Za-z]{6,12}",fnc:"parseLink"}]}}
+  const repairedScan=await scanLoadedCommands([exampleEntry]),repairedDocument=repairedScan.documents[0]
+  assert.equal(repairedDocument.metadata.suggestedCommand,"#DouYinBot账号")
+  assert.deepEqual(repairedDocument.metadata.examples,["#DouYinBot账号","#抖音bot账号"])
+  assert(repairedDocument.retrievalText.includes("示例：#DouYinBot账号\n示例：#抖音bot账号"))
+  assert.equal(repairedDocument.metadata.regexp,douyinRegexp);assert.equal(repairedDocument.metadata.permission,"master")
+  assert.equal(repairedDocument.id,"cmd-8ec9bb4d840ec9f0a7f7e4b440a811ae690a9ebc617c847036188525435a6fa2","correcting derived values must preserve the original command identity")
+  for(const unresolved of repairedScan.documents.slice(1)){
+    assert.equal(unresolved.metadata.suggestedCommand,"");assert.deepEqual(unresolved.metadata.examples,[])
+    assert(unresolved.retrievalText.includes("待核实"));assert.notEqual(unresolved.title,unresolved.metadata.fnc,"function names are not fallback commands")
+  }
+  assert.deepEqual(repairedScan.warnings,[],"a derived example gap is a preparation item, not missing source metadata")
+  await fs.writeFile(path.join(host,"plugins/fixture/apps/regexp-examples.ts"),`export class RegexExamples {constructor(){super({name:'示例校验',rule:[{reg:${JSON.stringify(douyinRegexp)},fnc:'List'}]})}}`)
+  const offlineExamples=(await scanCommandMetadata(host)).documents.find(row=>row.metadata.className==="RegexExamples")
+  assert.deepEqual(offlineExamples.metadata.examples,["#DouYinBot账号","#抖音bot账号"],"offline and loaded scans share verified generation")
   const extraEntry={...loadedEntry,key:"unrelated-plugin"},shifted=await scanLoadedCommands([extraEntry,loadedEntry])
   assert.equal(shifted.documents[3].id,runtime1.documents[0].id)
   const reversedPlugin=new LivePlugin();reversedPlugin.rule.reverse()
@@ -449,7 +453,7 @@ try {
   assert.equal((await api(`/api/knowledge/bases/${base}/search`,"POST",{query:quotaQuery})).data.results.length,12,"HTTP must not retain the former 8-result default")
   assert.equal((await patchLimit(defaults.knowledge.retrieval.resultLimit)).status,200)
   // Quality sorting covers the full matching catalogue before response limiting.
-  const qualityRows=Array.from({length:205},(_,i)=>({...document,id:`quality-sort-${i}`,title:`#质量排序测试${i}`,retrievalText:completeText+`\n备注：质量排序专用内容 ${i}`}))
+  const qualityRows=Array.from({length:205},(_,i)=>({...document,id:`quality-sort-${i}`,title:`#质量排序测试${i}`,retrievalText:completeText.replace("用途：查询原神剩余树脂",`用途：查询原神剩余树脂，质量排序专用内容 ${i}`),metadata:{...document.metadata,event:"message",priority:100,regexpFlags:""}}))
   const weakRow={...document,id:"quality-sort-weak",title:"质量排序弱项",retrievalText:"质量排序专用内容 待补充",metadata:{pluginKey:"quality-fixture",fnc:"weak",regexp:"",description:""}}
   await apply(bundle([...qualityRows,weakRow]));await commandObserver.load()
   await sqliteClient.run("UPDATE knowledge_documents SET updated_at=1 WHERE source_key=?",[`command:${weakRow.id}`])
@@ -460,7 +464,10 @@ try {
   assert.equal(allQuality.length,206,"the full catalogue remains reachable beyond the former first 200")
   assert.equal(allQuality.at(-1).metadata.commandId,weakRow.id)
   assert.equal(allQuality[0].qualityScore,100);assert.equal(allQuality[0].completenessStatus,"complete")
+  assert.equal(allQuality[0].qualityRuleVersion,"command-completeness-v2");assert.deepEqual(allQuality[0].qualityDeductions,[])
+  assert.equal(allQuality[0].qualityDimensions.A.maximum,20);assert.equal(allQuality[0].qualityDimensions.D.maximum,25)
   assert.equal(allQuality.at(-1).completenessStatus,"needs-review")
+  assert(allQuality.at(-1).qualityDeductions.every(row=>row.points>0&&row.reason&&row.suggestion))
   assert(allQuality.at(-1).qualityIssues.some(issue=>issue.includes("待核实")))
   const lowQuality=(await api(`${qualityUrl}&sort=quality-asc&limit=1`)).data.documents
   assert.equal(lowQuality.length,1);assert.equal(lowQuality[0].metadata.commandId,weakRow.id,"sort before limiting, including old entries outside the first page")
@@ -497,6 +504,12 @@ try {
       app.component("Icon",{template:"<span />"});app.component("Field",{props:["label","modelValue"],template:'<label>{{ label }}<input :value="modelValue" /></label>'});app.component("Panel",{template:"<section><slot /></section>"})
       for(const name of ["StatusDot","IconButton","PagedList"])app.component(name,{template:"<span />"})
       const html=await renderToString(app);assert(html.includes("全局配置"));assert(html.includes("每次召回上限"));assert(html.includes('value="3"'));assert(html.includes("无需重建索引"))
+      const detailApp=vue.createSSRApp(component,{draft:{},selectedBase:{id:base,name:"测试知识库",protected:true},documents:[allQuality.at(-1)],baseHealth:()=>({}),documentOrigin:()=>null,canEditBuiltinCommand:()=>false,jobLabel:String,jobProgress:()=>0,jobProgressTone:()=>"",jobProgressLabel:String,shortId:String})
+      for(const name of ["Icon","Field","StatusDot","IconButton"])detailApp.component(name,{template:"<span />"})
+      detailApp.component("Panel",{template:"<section><slot /></section>"})
+      detailApp.component("PagedList",{props:["rows"],setup(props,{slots}){return()=>props.rows.flatMap(item=>slots.default({item}))}})
+      const detailHtml=await renderToString(detailApp)
+      assert(detailHtml.includes("扣分明细"));assert(detailHtml.includes(allQuality.at(-1).qualityDeductions[0].reason));assert(detailHtml.includes(allQuality.at(-1).qualityDeductions[0].suggestion))
     }
     if(file==="knowledge-command-workbench"){
       let prompt=""
@@ -509,12 +522,23 @@ try {
         if(currentView==="import"){assert(html.includes("只添加新指令"));assert(html.includes("含当前最多保留 3 个版本"))}
         if(currentView==="guide"){assert(html.includes("scan-command-knowledge.js"));assert(html.includes("复制整理提示词"));assert(html.includes("下载使用指南"))}
       }
-      assert(prompt.includes("仅允许修改 title、retrievalText 和 metadata.suggestedCommand"))
-      assert(prompt.includes("不得为提高评分新增 parameters、parameterHints、examples"))
-      assert(prompt.includes("(.*) 不一定必填"));assert(prompt.includes("不擅自把 complete 改为 true"))
-      assert(prompt.includes("语法匹配不证明实际可用"));assert(prompt.includes("all 为未声明额外角色限制"))
+      assert(prompt.includes("仅允许修改 `title`、`retrievalText`、`metadata.suggestedCommand`，以及原条目中已存在的 `metadata.examples`"))
+      assert(prompt.includes("不得新增原文件中不存在的元数据字段"));assert(prompt.includes("不擅自把 complete 改为 true"))
+      assert(prompt.includes("插件名称、插件标识、指令、用途、参数、示例、priority、regexp、regexpFlags。"))
+      assert(!prompt.includes("示例、声明权限、前置条件、限制"));assert(prompt.includes("“示例”允许重复多行"))
+      assert(prompt.includes("无法确认可靠发送示例"));assert(prompt.includes("缺少可靠链接样本"));assert(prompt.includes("已有的 `metadata.examples` 设为 `[]`"))
+      assert(prompt.includes("模板和占位符仅可在指令行和参数说明中使用"));assert(prompt.includes("超过 8 个时提供最多 8 条代表性示例"))
+      assert(prompt.includes("以上均为软目标"));assert(prompt.includes("不得为满足长度而截断、改写原始正则或遗漏必要内容"))
+      assert(prompt.includes("一条原始规则保持一条文档及原 ID"));assert(prompt.includes("系统内部实际分块遵循导入逻辑"))
     }
   }
+  const eventDocument={id:"event-empty-suggestion",title:"戳一戳回应",retrievalText:eventText,metadata:{pluginKey:"fixture",fnc:"poke",event:"notice.group.poke",regexp:"",regexpFlags:"",suggestedCommand:"",examples:[]}}
+  await apply(bundle([eventDocument]))
+  const importedEvent=(await commandImports.export("yunzai")).documents.find(row=>row.id===eventDocument.id)
+  assert.equal(importedEvent.metadata.suggestedCommand,"","an explicit empty suggestion must not become the document title")
+  assert.deepEqual(importedEvent.metadata.examples,[])
+  assert.equal((await apply(bundle([eventDocument]),{policy:"overwrite"})).summary.unchanged,1,"empty event suggestions round trip without false changes")
+  assert.equal((await commandImports.history(eventDocument.id)).length,0,"an unchanged event creates no history")
   const {chunkText}=await import("../output/runtime/knowledge/chunking.js");assert.equal(chunkText("a".repeat(200),{targetChars:80,overlapChars:0,minChars:1}).length,3)
   console.log("ok knowledge-rag: stable scanner IDs, import policies/atomic audit, 3-version retention, restore/delete, canonical retrieval, incremental vectors/no-op/failure/races, auth and UI")
 }finally{if(server)await new Promise(resolve=>server.close(resolve));jobs?.stop();await sqliteClient?.close().catch(()=>{});await fs.rm(root,{recursive:true,force:true})}

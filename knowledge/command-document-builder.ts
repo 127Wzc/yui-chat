@@ -1,5 +1,6 @@
 import { commandHead } from "../core/message/command-prefixes.js"
 import vm from "node:vm"
+import { commandExamplesFromRegexp, validatedCommandExamples } from "./command-regexp-examples.js"
 
 export function boundedCommandMatch(pattern: unknown, input: unknown, _runtime = false, flags = ""): boolean {
   try { return Boolean(new vm.Script(`new RegExp(${JSON.stringify(String(pattern).slice(0, 2000))}, ${JSON.stringify(flags)}).test(input)`).runInNewContext({ input: String(input).slice(0, 4000) }, { timeout: 15 })) } catch { return false }
@@ -204,10 +205,6 @@ export function commandIdentity(command: UnknownRecord = {}): string {
   return `${plugin}::${commandText}`
 }
 
-function firstAlternative(group: unknown = ""): string {
-  return safeText(group).split("|").map(item => item.trim()).filter(Boolean)[0] || ""
-}
-
 export function commandHeadsFromText(value: unknown = ""): string[] {
   const matches = stripUrls(value).match(/[#!/*][a-zA-Z0-9_\-\u4e00-\u9fa5]{1,32}/g) || []
   return [...new Set(matches.map(item => item.trim()).filter(isValidCommandText))].slice(0, 12)
@@ -322,57 +319,23 @@ function buildUsageGuide(row: UnknownRecord = {}, example = ""): CommandUsageGui
   return { heads, parameters, intents, confidence }
 }
 
-function regexpToCommandExample(source: unknown = ""): string {
-  let text = safeText(source)
-    .replace(/^\^/, "")
-    .replace(/\$$/, "")
-    .replace(/\\\//g, "/")
-    .replace(/\\#/g, "#")
-    .replace(/\\\*/g, "*")
-  text = text.replace(/\(\?:([^()]+)\)\?/g, "")
-  text = text.replace(/\(([^()[\]]+\|[^()[\]]+)\)\?/g, "")
-  text = text.replace(/\(\?:([^()]+)\)/g, (_match, group: string) => firstAlternative(group))
-  text = text.replace(/\(([^()[\]]+\|[^()[\]]+)\)/g, (_match, group: string) => firstAlternative(group))
-  text = text.replace(/\(\\d\+\)|\(\[0-9][^)]*\)|\\d\+|\[0-9][^\]]*]/g, " <数字>")
-  text = text.replace(/\(\[\\s\\S]\*\)|\(\.\*\)|\(\.\+\)|\(\[\\s\\S]\+\)|\[[^\]]*]\*|\[[^\]]*]\+/g, " <内容>")
-  text = text.replace(/\\s\+|\\s\*/g, " ")
-  text = text.replace(/\\([#/*?+.^$()[\]{}|\\])/g, "$1")
-  text = text.replace(/[?+*{}]/g, "")
-  text = text.replace(/\[[^\]]+]/g, "")
-  text = text.replace(/[()|]/g, "")
-  return safeText(text).slice(0, 120)
-}
-
-function readableRegexp(source: unknown = ""): string {
-  const example = regexpToCommandExample(source)
-  if (example) return example
-  return safeText(source)
-    .replace(/^\^/, "")
-    .replace(/\$$/, "")
-    .replace(/\(\?:/g, "(")
-    .replace(/\[[^\]]+]/g, "")
-    .replace(/[\\^$+?.()[\]{}|]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 120)
-}
-
 export function buildCommandDoc(row: UnknownRecord = {}): CommandDocument {
   const helpDocs = helpDocsForCommand(row.helpDocs, row.regexp)
   const helpText = helpDocs.map(doc => safeText(doc.text)).join(" ")
   const regexHeads = extractRegexLiterals(row.regexp)
   const docExamples = commandExamplesFromDocs(helpDocs, regexHeads)
-  const example = readableRegexp(row.regexp)
+  const supplied = [row.suggestedCommand, row.example, ...values(row.examples), ...docExamples]
+  const verified = row.regexp
+    ? validatedCommandExamples(row.regexp, supplied, safeText(row.regexpFlags))
+    : supplied.map(safeText).filter(isValidCommandText)
+  const examples = [...new Set([...verified, ...commandExamplesFromRegexp(row.regexp, safeText(row.regexpFlags))])].slice(0, 8)
+  const example = examples[0] || ""
   const commandHeads = [...new Set([
     ...regexHeads,
     ...commandHeadsFromText(example),
     ...commandHeadsFromDocs(helpText, row.regexp),
   ])].slice(0, 12)
-  const suggestedCommand = preferredCommandText({
-    suggestedCommand: example,
-    examples: docExamples,
-    commandHeads,
-  }) || ""
+  const suggestedCommand = example
   const usageGuide = buildUsageGuide({ ...row, helpDocs }, suggestedCommand)
   const searchText = safeText([
     row.pluginKey,
@@ -396,7 +359,7 @@ export function buildCommandDoc(row: UnknownRecord = {}): CommandDocument {
     summary: safeText(`${safeText(row.pluginName || row.pluginKey)} ${safeText(row.description || row.fnc)} ${suggestedCommand ? `建议指令：${suggestedCommand}` : ""}`),
     example,
     suggestedCommand,
-    examples: [...new Set([suggestedCommand, ...docExamples].filter(Boolean))].slice(0, 8),
+    examples,
     usageGuide,
     commandHeads: commandHeads.length ? commandHeads : usageGuide.heads,
     intentHints: usageGuide.intents,

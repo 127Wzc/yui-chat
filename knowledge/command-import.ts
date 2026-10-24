@@ -42,7 +42,7 @@ function normalize(input: unknown): Bundle {
 }
 function metadataFor(document: ImportDocument, sourceId: string): Row {
   const raw = document.metadata
-  const command = { ...raw, id: document.id, retrievalText: document.retrievalText, suggestedCommand: raw.suggestedCommand || raw.example || document.title, origin: record(raw.origin), description: raw.description || document.title, imported: true }
+  const command = { ...raw, id: document.id, retrievalText: document.retrievalText, suggestedCommand: typeof raw.suggestedCommand === "string" ? raw.suggestedCommand : raw.example || document.title, origin: record(raw.origin), description: raw.description || document.title, imported: true }
   return { commandId: document.id, importSourceId: sourceId, origin: command.origin, command, chunkOptions: { targetChars: 6000, overlapChars: 0, minChars: 1 } }
 }
 function documentFrom(row: Row): ImportDocument {

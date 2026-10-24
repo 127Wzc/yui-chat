@@ -10,13 +10,13 @@ import { updateConfigAndApply } from "../../runtime-config.js"
 import { sqliteClient } from "../../../../core/storage/sqlite/client.js"
 import { commandQuality, COMMAND_COMPLETENESS_ISSUE_LABELS } from "../../../../knowledge/command-query-service.js"
 import { commandObserver } from "../../../../knowledge/command-observer.js"
+import { prepareCommandCompleteness } from "../../../../knowledge/command-completeness.js"
 
 type Row = Record<string, any>
 function builtinPresentation(state: CommandAvailability) {
-  const commands = new Map(commandObserver.commands.map(command => [String(command.id), command]))
   return (document: Row, includeQuality = true): Row => {
     const metadata = document.metadata || JSON.parse(document.metadata_json || "{}")
-    const command = commands.get(String(metadata.commandId)) || metadata.command || { id: metadata.commandId, origin: metadata.origin, suggestedCommand: document.title }
+    const command = { metadata: metadata.command || {}, id: metadata.commandId, title: document.title, retrievalText: document.content ?? metadata.command?.retrievalText ?? "" }
     const availability = commandAvailability(String(metadata.commandId), String(metadata.importSourceId || "yunzai"), metadata.command || {}, state)
     const exclusionReasons: string[] = [...(!availability.pluginEnabled ? ["插件已停用"] : []), ...(!availability.commandEnabled ? ["指令已停用"] : [])]
     const quality = includeQuality ? commandQuality(command, commandObserver.usageCounts) : null
@@ -27,6 +27,11 @@ function builtinPresentation(state: CommandAvailability) {
       qualityScore: quality?.qualityScore,
       completenessStatus: quality?.completenessStatus,
       qualityIssues: quality?.issues.map(issue => COMMAND_COMPLETENESS_ISSUE_LABELS[issue] || issue),
+      qualityDeductions: quality?.deductions,
+      qualityDimensions: quality?.dimensions,
+      qualityScoreCap: quality?.scoreCap,
+      qualityCapReasons: quality?.capReasons,
+      qualityRuleVersion: quality?.ruleVersion,
     }
   }
 }
@@ -83,6 +88,10 @@ export function registerKnowledgeBaseRoutes(app: RouteApp): void {
     const builtin = req.params.id === "builtin-commands"
     const documents = await knowledgeRepository.listDocuments(req.params.id, { query: req.query.q, limit: builtin ? 10000 : req.query.limit })
     if (!builtin) return res.json({ ok: true, documents })
+    await prepareCommandCompleteness(documents.map(document => {
+      const metadata = (document.metadata || JSON.parse(String(document.metadata_json || "{}"))) as Row
+      return { metadata: metadata.command || {}, title: document.title, retrievalText: document.content ?? metadata.command?.retrievalText ?? "" }
+    }))
     const present = builtinPresentation(await readCommandAvailability())
     const rows = documents.map(document => ({ ...document, ...present(document) }))
     if (req.query.sort === "quality-asc" || req.query.sort === "quality-desc") {

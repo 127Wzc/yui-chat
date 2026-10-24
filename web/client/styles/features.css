@@ -235,6 +235,12 @@
 .knowledge-command-origin-inline b { color: var(--muted-foreground); font-size: 10px; font-weight: 650; }
 .knowledge-command-origin-inline strong, .knowledge-command-origin-inline code { max-width: min(32vw, 330px); overflow: hidden; color: var(--foreground); font-size: 11px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
 .knowledge-command-origin-inline code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-weight: 500; }
+.knowledge-quality-details { margin-top: 10px; font-size: 12px; }
+.knowledge-quality-details summary { width: fit-content; cursor: pointer; color: var(--muted-foreground); }
+.knowledge-quality-details ul { padding-left: 18px; margin: 8px 0; }
+.knowledge-quality-details li { margin: 8px 0; }
+.knowledge-quality-details li strong { margin-right: 8px; }
+.knowledge-quality-details li p { margin: 3px 0; }
 .knowledge-document-preview { color: var(--foreground); font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .knowledge-command-preview { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 1; }
 .knowledge-search-box { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--muted); }
