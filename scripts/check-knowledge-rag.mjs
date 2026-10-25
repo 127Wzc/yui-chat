@@ -361,8 +361,13 @@ try {
   const guideUrl="/api/knowledge/bases/builtin-commands/retrieval"
   assert.equal((await api(guideUrl,"PATCH",{fieldDescription:"新说明"},false)).status,401)
   const settingsBefore=await sqliteClient.all("SELECT id FROM knowledge_index_jobs"),vectorsBefore=embeddingCalls
-  const guideSaved=await api(guideUrl,"PATCH",{fieldDescription:"通过设置页保存的字段说明"})
+  const settingsRevision=(await knowledgeRepository.getBase(base)).updated_at
+  const guideSaved=await api(guideUrl,"PATCH",{fieldDescription:"通过设置页保存的字段说明",description:"机器人指令用途与触发条件"})
   assert.equal(guideSaved.status,200);assert.equal(guideSaved.data.base.config.fieldDescription,"通过设置页保存的字段说明");assert.equal(guideSaved.data.index,null)
+  assert.equal(guideSaved.data.base.description,"机器人指令用途与触发条件")
+  assert.equal(guideSaved.data.base.updated_at,settingsRevision,"purpose and field guides cannot invalidate a running index publication")
+  knowledgeStore.initialized=false;await knowledgeStore.init()
+  assert.equal((await knowledgeRepository.getBase(base)).description,"机器人指令用途与触发条件","initialization preserves the maintained purpose")
   assert.deepEqual(await sqliteClient.all("SELECT id FROM knowledge_index_jobs"),settingsBefore);assert.equal(embeddingCalls,vectorsBefore)
   assert.equal((await api(guideUrl,"PATCH",{fieldDescription:null})).status,400)
   assert.equal((await api(guideUrl,"PATCH",{fieldDescription:"长".repeat(2001)})).status,400)
@@ -555,6 +560,7 @@ try {
       app.component("Icon",{template:"<span />"});app.component("Field",{props:["label","modelValue"],template:'<label>{{ label }}<input :value="modelValue" /></label>'});app.component("Panel",{template:"<section><slot /></section>"})
       for(const name of ["StatusDot","IconButton","PagedList"])app.component(name,{template:"<span />"})
       const html=await renderToString(app);assert(html.includes("全局配置"));assert(html.includes("每次召回上限"));assert(html.includes('value="3"'));assert(html.includes("无需重建索引"))
+      for(const label of ["相关性阈值","重排模型","重排最低分"])assert(html.includes(label),`shared setting belongs to global configuration: ${label}`)
       const detailApp=vue.createSSRApp(component,{draft:{},selectedBase:{id:base,name:"测试知识库",protected:true},documents:[allQuality.at(-1)],baseHealth:()=>({}),documentOrigin:()=>null,canEditBuiltinCommand:()=>false,jobLabel:String,jobProgress:()=>0,jobProgressTone:()=>"",jobProgressLabel:String,shortId:String})
       for(const name of ["Icon","Field","StatusDot","IconButton"])detailApp.component(name,{template:"<span />"})
       detailApp.component("Panel",{template:"<section><slot /></section>"})
@@ -582,6 +588,40 @@ try {
       assert(prompt.includes("以上均为软目标"));assert(prompt.includes("原始正则仅在元数据中完整保留"))
       assert(prompt.includes("一条原始规则保持一条文档及原 ID"));assert(prompt.includes("系统内部实际分块遵循导入逻辑"))
     }
+  }
+  // Exercise real page handlers with reactive state: library saves cannot submit or reset global drafts.
+  {
+    const uiStore=vue.reactive({config:{knowledge:{retrieval:{resultLimit:5,minRelevance:0.55,rerankEnabled:false,rerankModel:"",rerankMinScore:null}},models:[]},knowledge:{},dirtyScopes:{}})
+    const builtin={id:"builtin-commands",description:"机器人指令用途",config:{dimensions:0,fieldDescription:"字段解释"}}
+    const patches=[],writes=[],cleanup=[]
+    const uiBoundary={store:uiStore,confirmAction:async()=>true,toast(){},refreshTab:async()=>{},setDirtyScope(key,value){uiStore.dirtyScopes[key]=value},
+      async request(url,options){if(options){writes.push({url,body:JSON.parse(options.body)});return {base:builtin}}return url==="/api/knowledge/bases"?{bases:[builtin]}:{documents:[],grants:[],jobs:[],pagination:{page:1,pageSize:10,total:0}}},
+      async saveConfigPatch(patch){patches.push(patch);for(const [key,value] of Object.entries(patch))uiStore.config.knowledge.retrieval[key.split(".").at(-1)]=value}}
+    const exports={}
+    vm.runInNewContext(ts.transpileModule(await fs.readFile(new URL("../web/client/features/knowledge/knowledge-tab.ts",import.meta.url),"utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText,{exports,setInterval,clearInterval,require:spec=>spec==="vue"?{...vue,onUnmounted:fn=>cleanup.push(fn)}:spec.includes("app/store")?uiBoundary:spec.includes("shared/data")?{asRecord:v=>v||{},asRecords:v=>Array.isArray(v)?v:[],errorMessage:e=>e.message}:spec.includes("shared/format")?{splitTokens:v=>String(v).split(/[,\n]/),shortId:String}:{}})
+    const scope=vue.effectScope(),ui=scope.run(()=>exports.KnowledgeTab.setup())
+    try{
+      await ui.loadBases();assert(!ui.globalSettingsDirty.value)
+      ui.draft.retrievalMinRelevance=0.7;ui.draft.retrievalRerankMinScore=0.3
+      await vue.nextTick();assert(ui.globalSettingsDirty.value);assert(uiStore.dirtyScopes["knowledge-global-settings"])
+      ui.openCommandMaintenance(builtin);await ui.loadBases()
+      assert.equal(ui.draft.retrievalMinRelevance,0.7,"opening/loading a library preserves global edits")
+      ui.draft.commandDescription="更新本库用途"
+      await ui.saveCommandRetrieval()
+      assert.equal(patches.length,0,"saving one library cannot write global retrieval settings")
+      assert.equal(writes.at(-1).body.description,"更新本库用途")
+      assert(!Object.keys(writes.at(-1).body).some(key=>/rerank|minRelevance/i.test(key)))
+      assert(ui.globalSettingsDirty.value)
+      await ui.saveGlobalSettings();await vue.nextTick()
+      assert.equal(patches.length,1);assert.equal(patches[0]["knowledge.retrieval.rerankMinScore"],0.3)
+      assert.equal(uiStore.config.knowledge.retrieval.minRelevance,0.7);assert(!ui.globalSettingsDirty.value)
+      uiStore.config.knowledge.retrieval.resultLimit=8;await vue.nextTick()
+      assert.equal(ui.draft.retrievalResultLimit,8,"clean global draft follows refreshed configuration")
+      ui.draft.retrievalRerankMinScore=0.4;await vue.nextTick()
+      assert(uiStore.dirtyScopes["knowledge-global-settings"],"the optional rerank cutoff also marks unsaved changes")
+      uiStore.config.knowledge.retrieval.resultLimit=9;await vue.nextTick()
+      assert.equal(ui.draft.retrievalRerankMinScore,0.4,"configuration refresh preserves dirty global fields")
+    }finally{for(const fn of cleanup)fn();scope.stop()}
   }
   const eventDocument={id:"event-empty-suggestion",title:"戳一戳回应",retrievalText:eventText,metadata:{pluginKey:"fixture",fnc:"poke",event:"notice.group.poke",regexp:"",regexpFlags:"",suggestedCommand:"",examples:[]}}
   await apply(bundle([eventDocument]))

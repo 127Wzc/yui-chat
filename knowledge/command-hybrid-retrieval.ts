@@ -90,7 +90,7 @@ export async function recommendCommandHybrid(observer: CommandObserverLike, quer
     const state = await readCommandAvailability()
     const results = collapseEquivalentCommandMatches(orderEquivalentCommandMatches(candidates.filter(item => commandAvailability(text(item.id), text(item.sourceId || "yunzai"), item, state).enabled))).slice(0, limit)
     return { query: text(query), generatedAt: new Date().toISOString(), count: results.length, results,
-      knowledgeBase: { id: BUILTIN_COMMANDS_ID, name: base?.name || "内置指令知识库", fieldDescription: baseConfig.fieldDescription || "" },
+      knowledgeBase: { id: BUILTIN_COMMANDS_ID, name: base?.name || "内置指令知识库", description: base?.description || "", fieldDescription: baseConfig.fieldDescription || "" },
       summary: results.length ? results.map((item, index) => `${index + 1}. ${text(record(item.recommendation).command || item.suggestedCommand || item.fnc)}：${text(record(item.recommendation).reason || item.reason || "匹配指令知识库")}`).join("\n") : "没有找到匹配的指令。",
       retrieval: { candidates: candidates.length, ...retrieval, configuredMode: mode, commandOrdering: "relevance-with-command-priority" },
     }

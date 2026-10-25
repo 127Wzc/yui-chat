@@ -23,7 +23,9 @@ try {
   const { knowledgeStore } = await import("../output/runtime/knowledge/store.js")
   const { knowledgeRepository } = await import("../output/runtime/knowledge/repository.js")
   const { commandImports } = await import("../output/runtime/knowledge/command-import.js")
-  const { searchKnowledgeDetailed } = await import("../output/runtime/knowledge/retrieval.js")
+  const { searchKnowledgeDetailed, knowledgeQueryTerms } = await import("../output/runtime/knowledge/retrieval.js")
+  const { normalizeSearchQuery } = await import("../output/runtime/knowledge/command-document-builder.js")
+  const { estimateTokens, selectPromptTools, isBotCommandQuery } = await import("../output/runtime/core/chat/token-budget.js")
   const { vectorIndex } = await import("../output/runtime/knowledge/vector-index.js")
   const { KnowledgeManageTool } = await import("../output/runtime/tools/builtins/command.js")
   const { ToolRegistry } = await import("../output/runtime/tools/support/registry.js")
@@ -51,7 +53,7 @@ try {
   const master={isMaster:true,user_id:"owner"}, user={user_id:"reader"}, otherUser={user_id:"other"}
   const bases=[]
   for(let i=0;i<6;i++){
-    const base=await knowledgeStore.create({name:`资料${i}`,description:`业务${i}的用途和操作场景`,tags:[`领域${i}`],triggerWords:[`业务${i}`],config:{embeddingModel:"selection-embed",dimensions:2}})
+    const base=await knowledgeStore.create({name:`资料${i}`,description:`业务${i}的用途和操作场景`,tags:[`领域${i}`],triggerWords:[`业务${i}`],config:{embeddingModel:"selection-embed",dimensions:2,fieldDescription:`仅业务${i}的字段含义`}})
     bases.push(base)
     await knowledgeStore.ingestText({knowledgeBaseId:base.id,name:`资料${i}`,content:`共同主题 业务${i}的操作流程`})
   }
@@ -67,7 +69,8 @@ try {
   for(const definition of [modelToolDefinition(readerView).function,responsesToolDefinition(readerView)]){
     assert(definition.description.includes("业务0的用途和操作场景"))
     assert(!definition.description.includes(bases[2].id),"unauthorized catalogue must not reach either protocol")
-    assert.deepEqual(new Set(definition.parameters.properties.knowledgeBaseIds.default),new Set(["builtin-commands",bases[0].id,bases[1].id]))
+    assert.equal(definition.parameters.properties.knowledgeBaseIds.default,undefined,"no all-library default on a command recommendation")
+    assert(!definition.description.includes("仅业务0的字段含义"),"field guides are disclosed after selecting a base")
     assert.equal(definition.parameters.properties.scope.default,"authorized")
   }
   assert(otherView.common.description.includes(bases[2].id))
@@ -78,6 +81,13 @@ try {
   assert(discovered[0].description.includes(bases[0].id),"tool discovery shares the same caller-specific directory")
   const signal=new AbortController().signal
   const context={e:user,agent:{signal}}
+  const directory=JSON.parse(await tool.execute({action:"list"},context))
+  assert.equal(directory.length,3)
+  assert(directory.every(base=>base.fieldDescription===undefined))
+  const details=JSON.parse(await tool.execute({action:"list",scope:"selected",knowledgeBaseIds:[bases[1].id]},context))
+  assert.equal(details.length,1);assert.equal(details[0].fieldDescription,"仅业务1的字段含义")
+  assert((await tool.execute({action:"list",knowledgeBaseIds:[bases[2].id]},context)).includes("没有访问"),"detail discovery rechecks base access")
+  assert((await tool.execute({action:"search",query:" "},context)).includes("非空 query"))
   const implicit=await tool.execute({action:"search",query:"共同主题"},context)
   assert(implicit.includes("资料0")&&implicit.includes("资料1")&&!implicit.includes("资料2"))
   const exact=await tool.execute({action:"search",scope:"selected",knowledgeBaseIds:[bases[1].id],query:"共同主题"},context)
@@ -88,6 +98,29 @@ try {
   const unauthorized=await tool.execute({action:"search",knowledgeBaseIds:[bases[0].id,bases[2].id],query:"共同主题"},context)
   assert(unauthorized.includes("没有访问"));assert(!unauthorized.includes("操作流程"))
   await assert.rejects(searchKnowledgeDetailed(user,"共同主题",{knowledgeBaseIds:[bases[2].id]}),/没有访问/)
+
+  // Keep query actions/time/negation and command prefixes, including words containing stop-word characters.
+  assert.equal(normalizeSearchQuery("如何设置群禁言"),"设置群禁言")
+  assert.equal(normalizeSearchQuery("如何查询群禁言"),"查询群禁言")
+  for(const word of ["今天","当前","关闭","不要","我的世界"]){
+    assert(knowledgeQueryTerms(`${word} 入群验证`).includes(word),`retain ${word} as retrieval evidence`)
+  }
+  assert.equal(normalizeSearchQuery("#当前体力"),"#当前体力")
+  assert.equal(normalizeSearchQuery("*关闭验证"),"*关闭验证")
+  for(const query of ["机器人怎么关闭入群验证","如何查体力","#体力怎么用","这个指令有什么参数"]){
+    assert(isBotCommandQuery(query),query)
+    assert.equal(selectPromptTools([readerView,{name:"web_search",description:"机器人指令查询"}],query,{maxTools:1,maxDefinitionTokens:1200})[0]?.name,"knowledge_manage")
+  }
+  for(const query of ["如何做饭","怎么学习英语","查一下今天的新闻"])assert(!isBotCommandQuery(query),query)
+  for(let i=0;i<15;i++)await knowledgeStore.create({name:`扩展资料${i}`,description:"完整用途".repeat(125),config:{fieldDescription:"字段细节".repeat(300)}})
+  const [largeView]=await registry.prepareModelTools([raw],{e:master})
+  const largeDefinition=modelToolDefinition(largeView).function
+  assert(largeDefinition.description.includes("其余库请用 list"))
+  assert(largeDefinition.description.includes("builtin-commands"))
+  assert(!largeDefinition.description.includes("字段细节"))
+  assert(estimateTokens(largeDefinition)<1200,"large catalogues must fit the default definition budget")
+  assert.equal(selectPromptTools([largeView],"机器人有哪些指令",{maxDefinitionTokens:1200})[0]?.name,"knowledge_manage")
+  assert.equal(JSON.parse(await tool.execute({action:"list"},{e:master})).length,22,"the short directory never hides bases from discovery")
 
   // Real SQLite and vector indexes; a barrier proves bounded overlap rather than elapsed time.
   const originalAll=sqliteClient.all.bind(sqliteClient), originalSearch=vectorIndex.search.bind(vectorIndex)

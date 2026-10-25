@@ -36,7 +36,7 @@ export function resolveKnowledgeResultLimit(requested?: unknown): number {
 }
 const parse = (value: unknown): UnknownRecord => { try { return typeof value === "string" ? JSON.parse(value) : value || {} } catch { return {} } }
 export function knowledgeQueryTerms(value: string): string[] {
-  const cleaned = value.toLowerCase().replace(/怎么(?:样|查|看|用)?|如何|请问|一下|什么|能不能|帮我|查询|今天|当前|的|了|吗|呢/gu, " ")
+  const cleaned = normalizeSearchQuery(value)
   const words = cleaned.match(/[\p{L}\p{N}_-]+/gu) || []
   return [...new Set(words.flatMap(word => /^[\p{Script=Han}]+$/u.test(word) && word.length > 2 ? [word, ...Array.from({ length: word.length - 1 }, (_, index) => word.slice(index, index + 2))] : [word]).filter(word => word.length > 1 || /^\d$/u.test(word)))].slice(0, 32)
 }

@@ -40,7 +40,7 @@ Responses 的 `file_search` 是供应商托管能力，需配置 Vector Store；
 
 ## 知识库查询
 
-`knowledge_manage` 支持 `list / search / recommend`。模型可在工具说明中查看当前调用者已授权库的用途与适用场景，优先选择相关库。`scope` 默认 `authorized`：省略 `knowledgeBaseIds` 时查询全部授权库；精确选择时传 `scope: "selected"` 和非空 ID 数组。传入 ID 后只查这些库，不自动扩展；未授权 ID 拒绝整次请求。多个选定库并发召回，汇总后统一执行可选重排。
+`knowledge_manage` 支持 `list / search / recommend`。模型可在工具说明中查看当前调用者已授权库的简要用途，优先选择相关库；目录较大时用 list 发现其余库，指定 ID 的 list 查看完整用途与字段说明。`scope` 默认 `authorized`：省略 `knowledgeBaseIds` 时查询全部授权库；精确选择时传 `scope: "selected"` 和非空 ID 数组。传入 ID 后只查这些库，不自动扩展；未授权 ID 拒绝整次请求。多个选定库并发召回，汇总后统一执行可选重排。推荐发送命令时明确选择内置指令库；查询改写、分层披露和全局设置见[查询策略与设置](command-knowledge.md#查询策略与设置)。
 
 `search` 用于文档、功能说明和跨库问题；`recommend` 仅用于已授权的内置指令库，返回可发送的指令候选。详细参数与排序规则见[查询策略与设置](command-knowledge.md#查询策略与设置)。
 

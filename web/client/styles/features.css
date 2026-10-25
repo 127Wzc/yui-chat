@@ -173,9 +173,9 @@
 .knowledge-content-sort { flex: 0 0 180px; margin: 0; }
 @media (max-width: 640px) { .knowledge-content-filter .filter-search { flex-basis: 100%; } .knowledge-content-sort { flex: 1 1 180px; } }
 .knowledge-global-settings { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); }
-.knowledge-global-settings-description { flex: 1 1 280px; }
+.knowledge-global-settings-description { flex: 1 1 100%; }
 .knowledge-global-settings-description p { margin: 6px 0 0; }
-.knowledge-global-settings > .field { flex: 0 1 180px; min-width: 140px; }
+.knowledge-global-settings-fields, .knowledge-global-settings-actions { width: 100%; }
 .knowledge-console {
   display: grid;
   grid-template-columns: minmax(270px, 310px) minmax(0, 1fr);

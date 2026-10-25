@@ -114,12 +114,13 @@ interface KnowledgeDraft extends KnowledgeRecord {
   baseFieldDescription: string
   baseEmbeddingModel: string
   baseDimensions: number
-  commandMinRelevance: number
-  commandRerankEnabled: string
-  commandRerankModel: string
+  retrievalMinRelevance: number
+  retrievalRerankEnabled: string
+  retrievalRerankModel: string
   commandEmbeddingModel: string
   commandRetrievalMode: string
   commandFieldDescription: string
+  commandDescription: string
   commandEmbeddingDimensions: number
   baseId: string
   baseAutoRetrieve: string
@@ -216,13 +217,14 @@ export const KnowledgeTab = {
       baseFieldDescription: "",
       baseEmbeddingModel: "",
       baseDimensions: 0,
-      commandMinRelevance: cfg.value.retrieval?.minRelevance ?? 0.55,
-      commandRerankEnabled: String(cfg.value.retrieval?.rerankEnabled === true),
-      commandRerankModel: cfg.value.retrieval?.rerankModel || "",
-      commandRerankMinScore: (cfg.value.retrieval?.rerankMinScore ?? "") as number | string,
+      retrievalMinRelevance: cfg.value.retrieval?.minRelevance ?? 0.55,
+      retrievalRerankEnabled: String(cfg.value.retrieval?.rerankEnabled === true),
+      retrievalRerankModel: cfg.value.retrieval?.rerankModel || "",
+      retrievalRerankMinScore: (cfg.value.retrieval?.rerankMinScore ?? "") as number | string,
       commandEmbeddingModel: "",
       commandRetrievalMode: "hybrid",
       commandFieldDescription: "",
+      commandDescription: "",
       commandEmbeddingDimensions: 0,
       baseId: "",
       baseAutoRetrieve: "false",
@@ -241,10 +243,14 @@ export const KnowledgeTab = {
 
     const selectedBase = computed(() => bases.value.find(base => base.id === selectedBaseId.value) || null)
     const globalResultLimit = computed(() => cfg.value.retrieval?.resultLimit ?? 5)
-    const globalSettingsDirty = computed(() => Number(draft.retrievalResultLimit) !== globalResultLimit.value)
+    function globalSettingsSignature(): string {
+      return JSON.stringify([Number(draft.retrievalResultLimit), Number(draft.retrievalMinRelevance), draft.retrievalRerankEnabled === "true", draft.retrievalRerankModel, draft.retrievalRerankMinScore === "" ? null : Number(draft.retrievalRerankMinScore)])
+    }
+    const savedGlobalSettings = computed(() => JSON.stringify([globalResultLimit.value, cfg.value.retrieval?.minRelevance ?? 0.55, cfg.value.retrieval?.rerankEnabled === true, cfg.value.retrieval?.rerankModel || "", cfg.value.retrieval?.rerankMinScore ?? null]))
+    const globalSettingsDirty = computed(() => globalSettingsSignature() !== savedGlobalSettings.value)
     watch(globalSettingsDirty, dirty => setDirtyScope("knowledge-global-settings", dirty))
-    watch(globalResultLimit, (value, previous) => {
-      if (Number(draft.retrievalResultLimit) === previous) draft.retrievalResultLimit = value
+    watch(savedGlobalSettings, (_value, previous) => {
+      if (globalSettingsSignature() === previous) resetGlobalSettings()
     })
     async function saveGlobalSettings(): Promise<void> {
       if (globalSettingsBusy.value) return
@@ -252,8 +258,14 @@ export const KnowledgeTab = {
       if (!Number.isInteger(limit) || limit < 1 || limit > 20) { toast("召回数量请填写 1–20 的整数"); return }
       try {
         globalSettingsBusy.value = true
-        await saveConfigPatch({ "knowledge.retrieval.resultLimit": limit })
-        toast("全局召回数量已保存，所有知识库立即生效")
+        await saveConfigPatch({
+          "knowledge.retrieval.resultLimit": limit,
+          "knowledge.retrieval.minRelevance": Number(draft.retrievalMinRelevance),
+          "knowledge.retrieval.rerankEnabled": draft.retrievalRerankEnabled === "true",
+          "knowledge.retrieval.rerankModel": draft.retrievalRerankModel,
+          "knowledge.retrieval.rerankMinScore": draft.retrievalRerankMinScore === "" ? null : Number(draft.retrievalRerankMinScore),
+        })
+        toast("全局检索设置已保存，所有知识库立即生效")
       } catch (err) { toast(errorMessage(err)) } finally { globalSettingsBusy.value = false }
     }
     const filteredBases = computed(() => {
@@ -269,7 +281,7 @@ export const KnowledgeTab = {
         label: `${model.name}${model.embedding?.defaultDimensions ? ` · ${model.embedding.defaultDimensions} 维` : ""}`,
       })),
     ])
-    const commandModelOptions = computed(() => {
+    const rerankModelOptions = computed(() => {
       const providers = records<KnowledgeRecord>(record(store.config).apiProviders)
       return records<KnowledgeModel>(record(store.config).models).filter(model => {
         const provider = providers.find(item => item.name === model.apiProvider)
@@ -278,11 +290,12 @@ export const KnowledgeTab = {
         return adapter !== "mock" && (purpose === "rerank" || model.name === cfg.value.retrieval?.rerankModel && purpose === "chat")
       }).map(model => ({ value: model.name, label: `${model.apiProvider || "未分配渠道"} / ${model.name}${model.purpose === "rerank" ? "" : "（现有对话模型重排）"}` }))
     })
-    function resetCommandModelSettings(): void {
-      draft.commandMinRelevance = cfg.value.retrieval?.minRelevance ?? 0.55
-      draft.commandRerankEnabled = String(cfg.value.retrieval?.rerankEnabled === true)
-      draft.commandRerankModel = cfg.value.retrieval?.rerankModel || ""
-      draft.commandRerankMinScore = cfg.value.retrieval?.rerankMinScore ?? ""
+    function resetGlobalSettings(): void {
+      draft.retrievalResultLimit = globalResultLimit.value
+      draft.retrievalMinRelevance = cfg.value.retrieval?.minRelevance ?? 0.55
+      draft.retrievalRerankEnabled = String(cfg.value.retrieval?.rerankEnabled === true)
+      draft.retrievalRerankModel = cfg.value.retrieval?.rerankModel || ""
+      draft.retrievalRerankMinScore = cfg.value.retrieval?.rerankMinScore ?? ""
     }
     const activeIndexJob = computed(() => indexJobs.value.find(item => ["queued", "running", "retrying", "canceling"].includes(item.status || "")) || null)
     const latestIndexJob = computed(() => indexJobs.value[0] || null)
@@ -411,9 +424,9 @@ export const KnowledgeTab = {
         const builtin = bases.value.find(base => base.id === "builtin-commands")
         draft.commandRetrievalMode = builtin?.retrievalMode || "hybrid"
         draft.commandFieldDescription = builtin?.config?.fieldDescription || ""
+        draft.commandDescription = builtin?.description || ""
         draft.commandEmbeddingModel = builtin?.config?.embeddingModel || ""
         draft.commandEmbeddingDimensions = Number(builtin?.config?.dimensions || 0)
-        resetCommandModelSettings()
         retrievalBaseline.value = retrievalSignature()
         await loadBaseDetails()
       } catch (err) { toast(errorMessage(err)) }
@@ -669,12 +682,12 @@ export const KnowledgeTab = {
     async function saveCommandRetrieval() {
       try {
         if (draft.commandEmbeddingModel && !Number(draft.commandEmbeddingDimensions)) throw new Error("所选模型未声明默认维度，请先到模型页完善")
-        await saveConfigPatch({ "knowledge.retrieval.minRelevance": Number(draft.commandMinRelevance), "knowledge.retrieval.rerankEnabled": draft.commandRerankEnabled === "true", "knowledge.retrieval.rerankModel": draft.commandRerankModel, "knowledge.retrieval.rerankMinScore": draft.commandRerankMinScore === "" ? null : Number(draft.commandRerankMinScore) })
         const result = await request("/api/knowledge/bases/builtin-commands/retrieval", {
           method: "PATCH",
           body: JSON.stringify({
             mode: draft.commandRetrievalMode,
             fieldDescription: draft.commandFieldDescription,
+            description: draft.commandDescription,
             embeddingModel: draft.commandEmbeddingModel,
             dimensions: Number(draft.commandEmbeddingDimensions || 0),
           }),
@@ -691,8 +704,8 @@ export const KnowledgeTab = {
       draft.commandEmbeddingModel = base.config?.embeddingModel || ""
       draft.commandRetrievalMode = base.retrievalMode || "hybrid"
       draft.commandFieldDescription = base.config?.fieldDescription || ""
+      draft.commandDescription = base.description || ""
       draft.commandEmbeddingDimensions = Number(base.config?.dimensions || 0)
-      resetCommandModelSettings()
       retrievalBaseline.value = retrievalSignature()
       activeMaintenancePane.value = "commands"
       showCommandMaintenanceDrawer.value = true
@@ -725,7 +738,7 @@ export const KnowledgeTab = {
       await refreshKnowledgeContent()
     }
     function retrievalSignature(): string {
-      return JSON.stringify([draft.commandRetrievalMode, draft.commandFieldDescription, draft.commandEmbeddingModel, draft.commandEmbeddingDimensions, draft.commandMinRelevance, draft.commandRerankEnabled, draft.commandRerankModel])
+      return JSON.stringify([draft.commandRetrievalMode, draft.commandDescription, draft.commandFieldDescription, draft.commandEmbeddingModel, draft.commandEmbeddingDimensions])
     }
     const retrievalBaseline = ref(retrievalSignature())
     watch(() => [showCommandMaintenanceDrawer.value, retrievalSignature()], () => {
@@ -760,7 +773,7 @@ export const KnowledgeTab = {
       return confidence === "high" ? "" : confidence === "low" ? "risk-medium" : ""
     }
     return {
-      cfg, knowledge, digest, quality, recommendation, draft, commandModelOptions,
+      cfg, knowledge, digest, quality, recommendation, draft, rerankModelOptions,
       globalSettingsOpen, globalSettingsBusy, globalSettingsDirty, globalResultLimit, saveGlobalSettings,
       showManualDrawer, currentCommand, commandRevision, commandDescriptionChanged, commandAvailabilityChanged, showBaseDrawer, showDocumentDrawer, showGrantDrawer, showCommandMaintenanceDrawer,
       activeMaintenancePane, maintenancePaneItems, bases, selectedBaseId, selectedBase, baseQuery, filteredBases, activeBasePane, basePaneItems,
@@ -788,7 +801,7 @@ export const KnowledgeTab = {
           <Field label="向量维度" type="number" v-model="draft.baseDimensions" placeholder="0 表示采用模型默认值" />
           <Field label="自动召回" type="select" :options="BOOL_OFF_OPTIONS" v-model="draft.baseAutoRetrieve" />
         </div>
-        <Field label="描述" type="textarea" rows="4" v-model="draft.baseDescription" placeholder="说明收录范围、维护人和适用场景" />
+        <Field label="用途与适用场景" type="textarea" rows="3" v-model="draft.baseDescription" placeholder="说明收录范围，以及什么问题应该查询这个库" tip="工具目录提供简要用途，帮助模型选库；选中知识库后可查看完整说明。" />
         <Field label="字段说明" type="textarea" rows="4" v-model="draft.baseFieldDescription" placeholder="可选，说明正文中专用字段的含义" tip="最多 2000 字符。按知识库提供一次，供重排和回答参考；不写入分块，修改无需重建向量。" />
         <Field label="自动召回触发词" hint="逗号或换行" v-model="draft.baseTriggerWords" placeholder="例如：售后, 保修, 退换货" />
         <div class="hint-banner ok"><Icon name="info" :size="14" /><span>新库默认只允许主人访问；可在“授权”页签中逐步开放给角色、用户或群。</span></div>
@@ -856,7 +869,6 @@ export const KnowledgeTab = {
         :draft="draft"
         :digest-metrics="digestMetrics"
         :embedding-model-options="embeddingModelOptions"
-        :model-options="commandModelOptions"
         :model-dimensions="commandModelDimensions"
         :current-dimensions="currentCommandDimensions"
         :active-index-job="activeIndexJob"
@@ -876,6 +888,7 @@ export const KnowledgeTab = {
       />
 
       <KnowledgeBaseWorkspace
+        :rerank-model-options="rerankModelOptions"
         :global-settings-open="globalSettingsOpen"
         :global-settings-busy="globalSettingsBusy"
         :global-settings-dirty="globalSettingsDirty"

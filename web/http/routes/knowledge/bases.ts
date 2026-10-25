@@ -65,7 +65,7 @@ export function registerKnowledgeBaseRoutes(app: RouteApp): void {
     const current = await knowledgeRepository.getBase(req.params.id)
     if (!current) throw new Error("内置指令知识库不存在")
     const vectorChanged = ["embeddingModel", "dimensions", "distanceMetric"].some(key => req.body?.[key] !== undefined && req.body[key] !== current.config?.[key])
-    const settingsChanged = vectorChanged || req.body?.fieldDescription !== undefined
+    const settingsChanged = vectorChanged || req.body?.fieldDescription !== undefined || req.body?.description !== undefined
     const result = settingsChanged ? await knowledgeStore.updateBuiltinRetrieval(req.body || {}) : { base: current, index: null }
     if (mode !== undefined) await updateConfigAndApply(config => { (config.knowledge?.commandRetrieval as Record<string, unknown>).mode = mode; return config })
     res.json({ ok: true, ...result, mode: (configStore.get().knowledge?.commandRetrieval as Record<string, unknown>)?.mode || "hybrid" })

@@ -17,7 +17,7 @@ import { hostRuntime } from "../runtime/host-runtime.js"
 import { modelLogStore } from "../observability/model-log.js"
 import { conversationLog } from "./conversation-log.js"
 import { createAgentTurnState } from "./agent-turn-state.js"
-import { inputTokenLimit, enforcePromptBudgetDetailed, estimateTokens, messageTokens, selectPromptTools } from "./token-budget.js"
+import { inputTokenLimit, enforcePromptBudgetDetailed, estimateTokens, messageTokens, selectPromptTools, isBotCommandQuery } from "./token-budget.js"
 import { executeToolRound } from "./tool-round-executor.js"
 import { normalizeResponseText } from "./response-pipeline.js"
 import {
@@ -731,6 +731,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
   // 类请求里把发送工具挤掉，导致模型拿到了资源却无工具可用。
   const pinnedToolNames = new Set([
     "message_send",
+    ...(isBotCommandQuery(text(prompt)) ? ["knowledge_manage"] : []),
     ...(imageGenerationRequest ? ["generate_image"] : []),
     ...(preferLocalImageMedia ? ["image_media"] : []),
     ...(forceAggregatedWebSearch ? ["web_search"] : []),

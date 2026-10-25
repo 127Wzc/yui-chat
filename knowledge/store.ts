@@ -81,7 +81,8 @@ export class KnowledgeStore {
     await knowledgeRepository.upsertBase({
       id: BUILTIN_COMMANDS_ID,
       name: "内置指令知识库",
-      description: "由外部整理的指令文档导入维护，支持增量索引与版本回退。",
+      description: existing?.description && existing.description !== "由外部整理的指令文档导入维护，支持增量索引与版本回退。"
+        ? existing.description : "机器人插件功能、指令语法、发送示例、参数、权限及触发条件。询问机器人能做什么或命令怎么用时查询；发送命令用 recommend，被动事件及功能解释用 search。",
       type: "command",
       builtIn: true,
       protected: true,
@@ -200,6 +201,7 @@ export class KnowledgeStore {
     const base = await knowledgeRepository.upsertBase({
       id: BUILTIN_COMMANDS_ID,
       protected: true,
+      ...(input.description !== undefined ? { description: text(input.description).trim() } : {}),
       config: {
         ...(current.config || {}),
         ...config,

@@ -12,7 +12,6 @@ export const KnowledgeCommandMaintenance = {
     digestMetrics: { type: Array, default: () => [] },
     modelDimensions: { type: Number, default: 0 },
     currentDimensions: { type: Number, default: 0 },
-    modelOptions: { type: Array, default: () => [] },
     embeddingModelOptions: { type: Array, default: () => [] },
     activeIndexJob: { type: Object, default: null },
     visibleIndexJob: { type: Object, default: null },
@@ -56,7 +55,7 @@ export const KnowledgeCommandMaintenance = {
         </section>
 
         <section v-show="activePane === 'settings'" class="command-maintenance-pane command-maintenance-settings">
-          <div class="knowledge-pane-head"><div><div class="section-title"><Icon name="sliders" :size="13" />知识库设置</div><p class="muted tiny">向量模型、维度和查询策略集中维护。</p></div></div>
+          <div class="knowledge-pane-head"><div><div class="section-title"><Icon name="sliders" :size="13" />知识库设置</div><p class="muted tiny">维护本库的用途、字段说明、嵌入模型和指令推荐方式。共用阈值与重排在工作区“全局配置”中设置。</p></div></div>
           <div class="command-retrieval-card">
             <div class="knowledge-pane-head">
               <div><div class="section-title"><Icon name="search" :size="13" />指令检索方式</div><p class="muted tiny">统一用于帮助指令、AI 工具、自动推荐和召回测试。仅切换方式不会重建索引。</p></div>
@@ -70,14 +69,7 @@ export const KnowledgeCommandMaintenance = {
             </div>
             <div v-if="draft.commandEmbeddingModel && modelDimensions && Number(draft.commandEmbeddingDimensions) !== modelDimensions" class="hint-banner warn"><span>当前设置与模型默认维度不一致。同步后保存将更新向量索引。</span><button class="btn small outline" type="button" :disabled="Boolean(activeIndexJob)" @click="$emit('sync-dimensions')">同步模型维度</button></div>
             <p v-else-if="draft.commandEmbeddingModel && Number(draft.commandEmbeddingDimensions) !== currentDimensions" class="muted tiny">待保存维度：{{ draft.commandEmbeddingDimensions }} 维；保存后更新索引。</p>
-            <div class="form-grid dense command-retrieval-controls">
-              <Field label="相关性阈值" type="number" v-model="draft.commandMinRelevance" tip="用于关键词及向量筛选，不表示正确率。" />
-              <div class="command-rerank-model-field">
-                <Field label="重排模型" type="select" :options="[{value: '', label: '沿用已配置的重排任务'}, ...modelOptions]" v-model="draft.commandRerankModel" tip="选择渠道中的重排序模型；开启后才会调用，关闭或失败时使用融合排名。" />
-                <Field class="command-rerank-inline" :label="draft.commandRerankEnabled === 'true' ? '已开启' : '未开启'" type="switch" v-model="draft.commandRerankEnabled" aria-label="启用模型重排" tip="默认关闭。开启后可能产生模型费用，沿用会话及每日预算；保存设置后生效。" />
-              </div>
-            </div>
-            <Field label="重排最低分（可选）" type="number" v-model="draft.commandRerankMinScore" tip="留空仅排序；按所选模型评测设置，和关键词及向量阈值独立。" />
+            <Field label="用途与适用场景" type="textarea" rows="3" v-model="draft.commandDescription" tip="简要介绍收录范围与适合查询的问题，供工具选库；完整用途在选中本库后提供。修改无需重建向量。" />
             <Field label="字段说明" type="textarea" rows="4" v-model="draft.commandFieldDescription" tip="统一解释 priority、regexp、regexpFlags 等字段，最多 2000 字符。每个知识库在重排和回答时只提供一次，修改无需重建向量。" />
             <div class="row row-end"><button class="btn primary small" type="button" @click="$emit('save-command-retrieval')"><Icon name="save" :size="14" />保存检索设置</button></div>
           </div>

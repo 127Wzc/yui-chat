@@ -6,6 +6,7 @@ export const KnowledgeBaseWorkspace = {
     globalSettingsBusy: { type: Boolean, default: false },
     globalSettingsDirty: { type: Boolean, default: false },
     globalResultLimit: { type: Number, default: 5 },
+    rerankModelOptions: { type: Array, default: () => [] },
     filteredBases: { type: Array, default: () => [] },
     bases: { type: Array, default: () => [] },
     selectedBaseId: { type: String, default: "" },
@@ -71,8 +72,16 @@ export const KnowledgeBaseWorkspace = {
       </div>
       <form v-show="globalSettingsOpen" id="knowledge-global-settings" class="knowledge-global-settings" @submit.prevent="$emit('save-global-settings')">
         <div class="knowledge-global-settings-description"><div class="section-title"><Icon name="sliders" :size="13" />全局召回设置</div><p class="muted tiny">适用于所有知识库、帮助指令、AI 工具和自动召回。保存立即生效，无需重建索引。</p></div>
-        <Field label="每次召回上限" type="number" hint="1–20 条" v-model="draft.retrievalResultLimit" :disabled="globalSettingsBusy" tip="控制最终返回数量；调用方可请求更少的结果。相关性不足时可能少于此数量，内部候选额度保持独立。" />
-        <button class="btn primary small" type="submit" :disabled="globalSettingsBusy || !globalSettingsDirty"><Icon name="save" :size="14" />{{ globalSettingsBusy ? '保存中…' : '保存全局配置' }}</button>
+        <div class="form-grid dense knowledge-global-settings-fields">
+          <Field label="每次召回上限" type="number" hint="1–20 条" v-model="draft.retrievalResultLimit" :disabled="globalSettingsBusy" tip="控制最终返回数量；调用方可请求更少的结果。相关性不足时可能少于此数量，内部候选额度保持独立。" />
+          <Field label="相关性阈值" type="number" v-model="draft.retrievalMinRelevance" :disabled="globalSettingsBusy" tip="0–1，用于关键词及向量筛选，不表示正确率。" />
+          <div class="command-rerank-model-field">
+            <Field label="重排模型" type="select" :options="[{value: '', label: '沿用已配置的重排任务'}, ...rerankModelOptions]" v-model="draft.retrievalRerankModel" :disabled="globalSettingsBusy" tip="全部知识库共用；开启后才调用，关闭或失败时使用融合排名。" />
+            <Field class="command-rerank-inline" :label="draft.retrievalRerankEnabled === 'true' ? '已开启' : '未开启'" type="switch" v-model="draft.retrievalRerankEnabled" :disabled="globalSettingsBusy" aria-label="启用全局模型重排" tip="默认关闭，沿用会话及每日预算；保存后生效。" />
+          </div>
+          <Field label="重排最低分（可选）" type="number" v-model="draft.retrievalRerankMinScore" :disabled="globalSettingsBusy" tip="留空仅排序；和关键词及向量阈值独立。" />
+        </div>
+        <div class="row row-end knowledge-global-settings-actions"><button class="btn primary small" type="submit" :disabled="globalSettingsBusy || !globalSettingsDirty"><Icon name="save" :size="14" />{{ globalSettingsBusy ? '保存中…' : '保存全局配置' }}</button></div>
       </form>
       <Panel flush>
         <div class="knowledge-console">

@@ -129,6 +129,11 @@ export function trimMessagesToBudget<T>(messages: readonly T[] = [], budget = 0)
   return kept
 }
 
+/** 仅为明确的机器人功能咨询保留工具入口；普通“怎么/如何”不作为强信号。 */
+export function isBotCommandQuery(prompt: string): boolean {
+  return /指令|命令|知识库|插件.{0,12}(?:功能|怎么|如何|用法)|(?:机器人|本群|群里).{0,16}(?:功能|能做什么|怎么|如何)|你(?:能做什么|有什么功能|有哪些功能|支持什么功能)|(?:怎么|如何).{0,16}(?:机器人|插件|入群验证|查体力)|[#/*!][^\s]{1,40}.{0,12}(?:怎么用|如何用|用法|参数|权限|触发)/iu.test(prompt)
+}
+
 function scoreTool(tool: unknown, prompt = ""): number {
   const source = record(tool)
   const common = getToolCommon(source)
@@ -160,7 +165,7 @@ function scoreTool(tool: unknown, prompt = ""): number {
     }
   }
   if (source.name === "memory_manage" && /记住|记下|忘记|称呼|偏好|喜欢|讨厌|上次|之前|还记得/.test(promptText)) score += 100
-  if (source.name === "knowledge_manage" && /指令|命令|怎么|如何|帮助|help|知识库|文档/.test(promptText)) score += 100
+  if (source.name === "knowledge_manage" && (isBotCommandQuery(promptText) || /帮助|help|文档/.test(promptText))) score += 100
   if (/图片|图像|照片|视频|语音/.test(promptText) && (tags.includes("media") || /图片|图像|照片|图床|表情包/.test(haystack))) score += 50
   // 图片搜索和图片生成都带有“图片”字样，单靠通用媒体分数会让两者
   // 发生词义抢占。按动作词给出一个明确的首选，避免“搜一张”误触发生成。
@@ -191,9 +196,9 @@ export function selectPromptTools<T>(tools: readonly T[] = [], prompt = "", sele
     .map(tool => {
       const source = record(tool)
       const common = getToolCommon(source)
-      return { tool, score: scoreTool(tool, prompt), tokens: estimateTokens({ name: source.name, description: common.description, parameters: common.parameters }) }
+      return { tool, preferred: source.name === "knowledge_manage" && isBotCommandQuery(prompt), score: scoreTool(tool, prompt), tokens: estimateTokens({ name: source.name, description: common.description, parameters: common.parameters }) }
     })
-    .sort((left, right) => right.score - left.score || text(record(left.tool).name).localeCompare(text(record(right.tool).name)))
+    .sort((left, right) => Number(right.preferred) - Number(left.preferred) || right.score - left.score || text(record(left.tool).name).localeCompare(text(record(right.tool).name)))
   const selected: T[] = []
   let used = 0
   for (const item of ranked) {

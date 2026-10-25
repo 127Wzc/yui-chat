@@ -143,8 +143,8 @@ export class KnowledgeRepository {
       tags: item.tags,
       distanceMetric: normalizeDistanceMetric(item.config.distanceMetric),
     }
-    // 字段说明不是索引输入；仅修改它时保留发布守卫使用的版本时间。
-    const fieldDescriptionOnly = current && item.name === current.name && item.description === current.description
+    // 用途和字段说明不是索引输入；只修改这些说明时保留发布守卫的版本时间。
+    const explanationOnly = current && item.name === current.name
       && item.protected === Boolean(current.protected)
       && Object.keys({ ...current.config, ...retrieval }).every(key => key === "fieldDescription"
         || JSON.stringify(current.config?.[key]) === JSON.stringify(retrieval[key as keyof typeof retrieval]))
@@ -156,7 +156,7 @@ export class KnowledgeRepository {
          distance_metric=excluded.distance_metric, chunk_strategy_json=excluded.chunk_strategy_json,
          retrieval_json=excluded.retrieval_json, protected=excluded.protected,
          updated_at=CASE WHEN ? THEN knowledge_bases.updated_at ELSE MAX(knowledge_bases.updated_at+1, excluded.updated_at) END`,
-      [item.id, item.name, item.description, String(item.config.embeddingModel || ""), Number(item.config.dimensions || 0), retrieval.distanceMetric, JSON.stringify(item.config.chunking || {}), JSON.stringify(retrieval), item.protected ? 1 : 0, timestamp, timestamp, fieldDescriptionOnly ? 1 : 0],
+      [item.id, item.name, item.description, String(item.config.embeddingModel || ""), Number(item.config.dimensions || 0), retrieval.distanceMetric, JSON.stringify(item.config.chunking || {}), JSON.stringify(retrieval), item.protected ? 1 : 0, timestamp, timestamp, explanationOnly ? 1 : 0],
     )
     return this.getBase(baseId)
   }
