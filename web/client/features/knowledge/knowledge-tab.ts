@@ -88,6 +88,7 @@ interface KnowledgeModel extends KnowledgeRecord {
 }
 
 interface KnowledgeApiResponse extends KnowledgeRecord {
+  trace?: KnowledgeRecord
   result?: KnowledgeRecord
   base?: KnowledgeBase
   bases?: KnowledgeBase[]
@@ -114,9 +115,11 @@ interface KnowledgeDraft extends KnowledgeRecord {
   baseFieldDescription: string
   baseEmbeddingModel: string
   baseDimensions: number
-  retrievalMinRelevance: number
+  retrievalMinRelevance: number | string
   retrievalRerankEnabled: string
   retrievalRerankModel: string
+  retrievalRerankResultLimit: number
+  retrievalRerankMinScore: number | string
   commandEmbeddingModel: string
   commandRetrievalMode: string
   commandFieldDescription: string
@@ -197,6 +200,14 @@ export const KnowledgeTab = {
     let indexPollBusy = false
     const retrievalResults = ref<KnowledgeItem[]>([])
     const retrievalDiagnostics = ref<KnowledgeRecord | null>(null)
+    const retrievalTrace = ref<KnowledgeRecord | null>(null)
+    let retrievalRevision = 0
+    watch(selectedBaseId, () => {
+      retrievalRevision++
+      retrievalResults.value = []
+      retrievalDiagnostics.value = null
+      retrievalTrace.value = null
+    }, { flush: "sync" })
     const documentQuery = ref("")
     const documentSort = ref("updated")
     const baseBusy = ref(false)
@@ -220,6 +231,7 @@ export const KnowledgeTab = {
       retrievalMinRelevance: cfg.value.retrieval?.minRelevance ?? 0.55,
       retrievalRerankEnabled: String(cfg.value.retrieval?.rerankEnabled === true),
       retrievalRerankModel: cfg.value.retrieval?.rerankModel || "",
+      retrievalRerankResultLimit: cfg.value.retrieval?.rerankResultLimit ?? 5,
       retrievalRerankMinScore: (cfg.value.retrieval?.rerankMinScore ?? "") as number | string,
       commandEmbeddingModel: "",
       commandRetrievalMode: "hybrid",
@@ -244,9 +256,9 @@ export const KnowledgeTab = {
     const selectedBase = computed(() => bases.value.find(base => base.id === selectedBaseId.value) || null)
     const globalResultLimit = computed(() => cfg.value.retrieval?.resultLimit ?? 5)
     function globalSettingsSignature(): string {
-      return JSON.stringify([Number(draft.retrievalResultLimit), Number(draft.retrievalMinRelevance), draft.retrievalRerankEnabled === "true", draft.retrievalRerankModel, draft.retrievalRerankMinScore === "" ? null : Number(draft.retrievalRerankMinScore)])
+      return JSON.stringify([Number(draft.retrievalResultLimit), Number(draft.retrievalMinRelevance), draft.retrievalRerankEnabled === "true", draft.retrievalRerankModel, draft.retrievalRerankMinScore === "" ? null : Number(draft.retrievalRerankMinScore), Number(draft.retrievalRerankResultLimit)])
     }
-    const savedGlobalSettings = computed(() => JSON.stringify([globalResultLimit.value, cfg.value.retrieval?.minRelevance ?? 0.55, cfg.value.retrieval?.rerankEnabled === true, cfg.value.retrieval?.rerankModel || "", cfg.value.retrieval?.rerankMinScore ?? null]))
+    const savedGlobalSettings = computed(() => JSON.stringify([globalResultLimit.value, cfg.value.retrieval?.minRelevance ?? 0.55, cfg.value.retrieval?.rerankEnabled === true, cfg.value.retrieval?.rerankModel || "", cfg.value.retrieval?.rerankMinScore ?? null, cfg.value.retrieval?.rerankResultLimit ?? 5]))
     const globalSettingsDirty = computed(() => globalSettingsSignature() !== savedGlobalSettings.value)
     watch(globalSettingsDirty, dirty => setDirtyScope("knowledge-global-settings", dirty))
     watch(savedGlobalSettings, (_value, previous) => {
@@ -256,15 +268,23 @@ export const KnowledgeTab = {
       if (globalSettingsBusy.value) return
       const limit = Number(draft.retrievalResultLimit)
       if (!Number.isInteger(limit) || limit < 1 || limit > 20) { toast("召回数量请填写 1–20 的整数"); return }
+      const rerankLimit = Number(draft.retrievalRerankResultLimit)
+      if (!Number.isInteger(rerankLimit) || rerankLimit < 1 || rerankLimit > 20) { toast("重排返回数量请填写 1–20 的整数"); return }
+      const relevance = Number(draft.retrievalMinRelevance)
+      if (draft.retrievalMinRelevance === "" || !Number.isFinite(relevance) || relevance < 0 || relevance > 1) { toast("相关性阈值请填写 0–1 的数值"); return }
+      const rerankScore = draft.retrievalRerankMinScore === "" ? null : Number(draft.retrievalRerankMinScore)
+      if (rerankScore !== null && !Number.isFinite(rerankScore)) { toast("重排最低分请填写有限数值，或留空不截断"); return }
       try {
         globalSettingsBusy.value = true
         await saveConfigPatch({
           "knowledge.retrieval.resultLimit": limit,
-          "knowledge.retrieval.minRelevance": Number(draft.retrievalMinRelevance),
+          "knowledge.retrieval.minRelevance": relevance,
           "knowledge.retrieval.rerankEnabled": draft.retrievalRerankEnabled === "true",
           "knowledge.retrieval.rerankModel": draft.retrievalRerankModel,
-          "knowledge.retrieval.rerankMinScore": draft.retrievalRerankMinScore === "" ? null : Number(draft.retrievalRerankMinScore),
+          "knowledge.retrieval.rerankMinScore": rerankScore,
+          "knowledge.retrieval.rerankResultLimit": rerankLimit,
         })
+        globalSettingsOpen.value = false
         toast("全局检索设置已保存，所有知识库立即生效")
       } catch (err) { toast(errorMessage(err)) } finally { globalSettingsBusy.value = false }
     }
@@ -296,6 +316,17 @@ export const KnowledgeTab = {
       draft.retrievalRerankEnabled = String(cfg.value.retrieval?.rerankEnabled === true)
       draft.retrievalRerankModel = cfg.value.retrieval?.rerankModel || ""
       draft.retrievalRerankMinScore = cfg.value.retrieval?.rerankMinScore ?? ""
+      draft.retrievalRerankResultLimit = cfg.value.retrieval?.rerankResultLimit ?? 5
+    }
+    function openGlobalSettings(): void {
+      if (!globalSettingsDirty.value) resetGlobalSettings()
+      globalSettingsOpen.value = true
+    }
+    async function closeGlobalSettings(): Promise<void> {
+      if (globalSettingsBusy.value) return
+      if (globalSettingsDirty.value && !await confirmAction({ title: "放弃未保存的全局配置？", message: "关闭后将放弃本次检索与重排设置的修改。", confirmText: "放弃修改" })) return
+      resetGlobalSettings()
+      globalSettingsOpen.value = false
     }
     const activeIndexJob = computed(() => indexJobs.value.find(item => ["queued", "running", "retrying", "canceling"].includes(item.status || "")) || null)
     const latestIndexJob = computed(() => indexJobs.value[0] || null)
@@ -468,7 +499,6 @@ export const KnowledgeTab = {
       indexInspection.value = null
       indexJobPage.value = 1
       draft.sourceBaseId = baseId
-      retrievalResults.value = []
       await loadBaseDetails()
     }
 
@@ -565,13 +595,18 @@ export const KnowledgeTab = {
     }
 
     async function testRetrieval() {
+      if (baseBusy.value) return
+      const baseId = selectedBaseId.value
+      const revision = ++retrievalRevision
       try {
-        if (!selectedBaseId.value || !draft.retrievalQuery.trim()) throw new Error("请输入要测试的问题")
+        if (!baseId || !draft.retrievalQuery.trim()) throw new Error("请输入要测试的问题")
         baseBusy.value = true
-        const result = await request(`/api/knowledge/bases/${encodeURIComponent(selectedBaseId.value)}/search`, { method: "POST", body: JSON.stringify({ query: draft.retrievalQuery.trim() }) }) as KnowledgeApiResponse
+        const result = await request(`/api/knowledge/bases/${encodeURIComponent(baseId)}/search`, { method: "POST", body: JSON.stringify({ query: draft.retrievalQuery.trim(), compare: true }) }) as KnowledgeApiResponse
+        if (revision !== retrievalRevision || selectedBaseId.value !== baseId) return
         retrievalResults.value = result.results || []
         retrievalDiagnostics.value = result.retrieval || null
-        toast(retrievalResults.value.length ? `召回 ${retrievalResults.value.length} 条内容` : "没有召回内容，请检查原文或索引状态")
+        retrievalTrace.value = result.trace || null
+        toast(`召回 ${result.trace?.candidates?.length || 0} 条候选，最终返回 ${retrievalResults.value.length} 条内容`)
       } catch (err) { toast(errorMessage(err)) } finally { baseBusy.value = false }
     }
 
@@ -732,6 +767,9 @@ export const KnowledgeTab = {
       const states=new Map<string,KnowledgeRecord>((result.availability || []).map((row:KnowledgeRecord)=>[row.id,row]))
       documents.value=documents.value.map(row=>{const state=states.get(String(row.metadata?.commandId || ""));return state?{...row,searchable:state.enabled,exclusionReasons:state.enabled?[]:["知识推荐已停用"]}:row})
       retrievalResults.value=retrievalResults.value.filter(row=>states.get(String(row.commandId || row.metadata?.commandId || ""))?.enabled !== false)
+      retrievalTrace.value = null
+      retrievalDiagnostics.value = null
+      retrievalRevision++
     }
     async function commandDescriptionChanged(): Promise<void> {
       commandRevision.value++
@@ -774,10 +812,10 @@ export const KnowledgeTab = {
     }
     return {
       cfg, knowledge, digest, quality, recommendation, draft, rerankModelOptions,
-      globalSettingsOpen, globalSettingsBusy, globalSettingsDirty, globalResultLimit, saveGlobalSettings,
+      globalSettingsOpen, globalSettingsBusy, globalSettingsDirty, globalResultLimit, saveGlobalSettings, openGlobalSettings, closeGlobalSettings,
       showManualDrawer, currentCommand, commandRevision, commandDescriptionChanged, commandAvailabilityChanged, showBaseDrawer, showDocumentDrawer, showGrantDrawer, showCommandMaintenanceDrawer,
       activeMaintenancePane, maintenancePaneItems, bases, selectedBaseId, selectedBase, baseQuery, filteredBases, activeBasePane, basePaneItems,
-      documents, grants, indexJobs, indexJobPagination, retrievalResults, retrievalDiagnostics, documentQuery, documentSort, baseBusy, embeddingModelOptions, activeIndexJob, latestIndexJob, visibleIndexJob,
+      documents, grants, indexJobs, indexJobPagination, retrievalResults, retrievalDiagnostics, retrievalTrace, documentQuery, documentSort, baseBusy, embeddingModelOptions, activeIndexJob, latestIndexJob, visibleIndexJob,
       digestMetrics, commandModelDimensions, currentCommandDimensions, selectCommandEmbeddingModel, syncCommandDimensions, refreshKnowledgeContent,
       documentOrigin, canEditBuiltinCommand, shortId, recConfidenceTone, baseHealth, jobLabel, jobProgress, jobProgressLabel, jobProgressTone,
       BOOL_OFF_OPTIONS,
@@ -907,6 +945,7 @@ export const KnowledgeTab = {
         :index-job-pagination="indexJobPagination"
         :retrieval-results="retrievalResults"
         :retrieval-diagnostics="retrievalDiagnostics"
+        :retrieval-trace="retrievalTrace"
         :document-query="documentQuery"
         :document-sort="documentSort"
         :draft="draft"
@@ -921,7 +960,8 @@ export const KnowledgeTab = {
         :job-progress-label="jobProgressLabel"
         :short-id="shortId"
         @refresh-bases="loadBases"
-        @toggle-global-settings="globalSettingsOpen = !globalSettingsOpen"
+        @open-global-settings="openGlobalSettings"
+        @close-global-settings="closeGlobalSettings"
         @save-global-settings="saveGlobalSettings"
         @create-base="createBase"
         @select-base="selectBase"

@@ -10,7 +10,7 @@ import { vectorIndex, vectorSpaceMatches } from "./vector-index.js"
 import { configStore } from "../config/store.js"
 import { defaults } from "../config/defaults.js"
 import { embeddingIdentity } from "./embedding-identity.js"
-import { rerankKnowledge } from "./retrieval-rerank.js"
+import { rerankKnowledge, type KnowledgeRerankTrace } from "./retrieval-rerank.js"
 import { normalizeSearchQuery, commandPriorityMetadata, commandRuntimeMetadata, orderEquivalentCommandMatches, collapseEquivalentCommandMatches } from "./command-document-builder.js"
 import { DEFAULT_COMMAND_FIELD_DESCRIPTION } from "./field-description.js"
 
@@ -20,8 +20,22 @@ export interface KnowledgeResult {
   fieldDescription?: string; retrievalMethod?: string; lexicalRelevance?: number; vectorSimilarity?: number; distance?: number; distanceMetric?: string; rerankScore?: number; exactCommandMatch?: boolean
 }
 export interface KnowledgeSearchOptions {
-  knowledgeBaseIds?: unknown[]; candidateLimit?: unknown; vectorOnly?: boolean; useVector?: boolean; vectorCandidateLimit?: unknown; vectorWeight?: unknown; limit?: unknown; rerank?: boolean; prioritizeCommands?: boolean; signal?: AbortSignal; sendableCommandsOnly?: boolean
+  knowledgeBaseIds?: unknown[]; candidateLimit?: unknown; vectorOnly?: boolean; useVector?: boolean; vectorCandidateLimit?: unknown; vectorWeight?: unknown; limit?: unknown; rerank?: boolean; prioritizeCommands?: boolean; signal?: AbortSignal; sendableCommandsOnly?: boolean; includeTrace?: boolean
 }
+export type KnowledgeProcessingResult = "returned" | "return_limit" | "recall_limit" | "below_threshold" | "candidate_limit" | "input_budget" | "command_conflict" | "unavailable"
+export interface KnowledgeRetrievalCandidate extends KnowledgeResult {
+  recallRank: number; rerankRank?: number; finalRank?: number; keywordRank?: number; vectorRank?: number; processingResult: KnowledgeProcessingResult
+}
+export interface KnowledgeRetrievalTrace {
+  query: string
+  candidates: KnowledgeRetrievalCandidate[]
+  directResultIds: string[]
+  finalResultIds: string[]
+  rerankSucceeded: boolean
+  rerank?: KnowledgeRerankTrace
+  config: { minRelevance: number; rerankMinScore: number | null; resultLimit: number; rerankResultLimit: number; weights: Array<{ baseId: string; keyword: number; vector: number }> }
+}
+export interface KnowledgeSearchResponse { results: KnowledgeResult[]; retrieval: RetrievalDiagnostics; trace?: KnowledgeRetrievalTrace }
 export interface KnowledgePromptResult { knowledgeBaseId?: unknown; knowledgeBaseName?: unknown; fieldDescription?: unknown; title?: unknown; content?: unknown }
 export interface RetrievalDiagnostics { mode: string; configuredMode?: string; relevancePolicy?: string; relevanceFiltered?: number; vectorAvailable: boolean; fallbackReasons: string[]; filtered: number; candidates: number; rerank: string; bases: UnknownRecord[]; threshold: number; commandOrdering?: string }
 const queryCache = new Map<string, { vectors: number[][]; expires: number }>()
@@ -48,7 +62,7 @@ function toResult(row: UnknownRecord): KnowledgeResult {
 const projection = "c.id AS chunk_id, c.document_id, c.content, d.title, d.metadata_json, b.id AS knowledge_base_id, b.name AS knowledge_base_name, b.retrieval_json AS base_retrieval_json"
 const baseCommandFilter = `(b.id<>'builtin-commands' OR ${commandEnabledSql()})`
 const joins = "knowledge_chunks c JOIN knowledge_documents d ON d.id=c.document_id JOIN knowledge_bases b ON b.id=c.knowledge_base_id"
-export async function searchKnowledgeDetailed(e: UnknownRecord, query: unknown, options: KnowledgeSearchOptions = {}): Promise<{ results: KnowledgeResult[]; retrieval: RetrievalDiagnostics }> {
+export async function searchKnowledgeDetailed(e: UnknownRecord, query: unknown, options: KnowledgeSearchOptions = {}): Promise<KnowledgeSearchResponse> {
   const root = configStore.get() as UnknownRecord
   const strategy = root.knowledge?.retrieval || {}
   const queryText = text(query).trim().slice(0, 4000)
@@ -159,12 +173,19 @@ export async function searchKnowledgeDetailed(e: UnknownRecord, query: unknown, 
     } catch { state.state = "embedding_or_index_failed"; return [] }
   }
   const fused = new Map<string, { item: KnowledgeResult; rankScore: number; methods: Set<string> }>()
+  const routeRanks = new Map<string, { keywordRank?: number; vectorRank?: number }>()
   const add = (item: KnowledgeResult, rank: number, weight: number, method: string): void => {
     if (weight <= 0) return
     const key = `${item.knowledgeBaseId}:${item.commandId ? `command:${item.commandId}` : item.id}`
     const current = fused.get(key) || { item, rankScore: 0, methods: new Set<string>() }
     if (current.methods.has(method)) return
     current.methods.add(method); current.rankScore += weight / (61 + rank)
+    if (options.includeTrace) {
+      const ranks = routeRanks.get(current.item.id) || {}
+      if (method === "keyword") ranks.keywordRank = rank + 1
+      else ranks.vectorRank = rank + 1
+      routeRanks.set(current.item.id, ranks)
+    }
     if (method === "vector") Object.assign(current.item, { vectorSimilarity: item.vectorSimilarity, distance: item.distance, distanceMetric: item.distanceMetric })
     fused.set(key, current)
   }
@@ -193,28 +214,61 @@ export async function searchKnowledgeDetailed(e: UnknownRecord, query: unknown, 
   options.signal?.throwIfAborted()
   for (const base of diagnostics.bases) if (base.state !== "ready") diagnostics.fallbackReasons.push(`${base.id}:${base.state}`)
   diagnostics.mode = diagnostics.vectorAvailable ? options.vectorOnly ? "vector" : "hybrid" : "lexical"
-  let results = [...fused.values()].sort((a, b) => Number(Boolean(b.item.exactCommandMatch)) - Number(Boolean(a.item.exactCommandMatch)) || b.rankScore - a.rankScore || a.item.title.localeCompare(b.item.title) || a.item.commandId.localeCompare(b.item.commandId) || a.item.id.localeCompare(b.item.id)).map(value => ({ ...value.item, score: value.rankScore, retrievalMethod: [...value.methods].join("+") }))
+  let results: KnowledgeResult[] = [...fused.values()].sort((a, b) => Number(Boolean(b.item.exactCommandMatch)) - Number(Boolean(a.item.exactCommandMatch)) || b.rankScore - a.rankScore || a.item.title.localeCompare(b.item.title) || a.item.commandId.localeCompare(b.item.commandId) || a.item.id.localeCompare(b.item.id)).map(value => ({ ...value.item, score: value.rankScore, retrievalMethod: [...value.methods].join("+") }))
   diagnostics.candidates = results.length
+  const recalled = options.includeTrace ? results : []
+  let rerankTrace: KnowledgeRerankTrace | undefined
   if (options.rerank !== false) {
-    const reranked = await rerankKnowledge(e, queryText, results, strategy, options.signal)
+    const reranked = await rerankKnowledge(e, queryText, results, strategy, options.signal, options.includeTrace === true)
     diagnostics.rerank = reranked.state
     diagnostics.filtered += Math.max(0, results.length - reranked.results.length)
     results = reranked.results
+    rerankTrace = reranked.trace
   }
-  if (options.prioritizeCommands !== false && allowed.includes("builtin-commands")) {
-    const commands = orderEquivalentCommandMatches(results.filter(item => item.knowledgeBaseId === "builtin-commands"), item => item.metadata.command)
-    const retained = new Set(collapseEquivalentCommandMatches(commands, item => item.metadata.command).map(item => item.id))
-    let index = 0
-    // 先替换原位置，再折叠冲突组；普通知识不被跨组优先级改变顺序。
-    results = results.map(item => item.knowledgeBaseId === "builtin-commands" ? commands[index++] : item)
-      .filter(item => item.knowledgeBaseId !== "builtin-commands" || retained.has(item.id))
+  const prioritizeCommands = options.prioritizeCommands !== false && allowed.includes("builtin-commands")
+  if (prioritizeCommands) {
     diagnostics.commandOrdering = "relevance-with-command-priority"
   }
-  if (allowed.includes("builtin-commands")) {
-    const state = await readCommandAvailability()
-    results = results.filter(item => item.knowledgeBaseId !== "builtin-commands" || commandAvailability(item.commandId, text(item.metadata.importSourceId || "yunzai"), item.metadata.command || {}, state).enabled)
+  const availability = allowed.includes("builtin-commands") ? await readCommandAvailability() : null
+  const isAvailable = (item: KnowledgeResult): boolean => !availability || item.knowledgeBaseId !== "builtin-commands" || commandAvailability(item.commandId, text(item.metadata.importSourceId || "yunzai"), item.metadata.command || {}, availability).enabled
+  // 两阶段共用同一份启停状态及冲突处理规则，不重复检索或请求模型。
+  const finalize = (items: KnowledgeResult[]): KnowledgeResult[] => {
+    if (prioritizeCommands) {
+      const commands = orderEquivalentCommandMatches(items.filter(item => item.knowledgeBaseId === "builtin-commands"), item => item.metadata.command)
+      const retained = new Set(collapseEquivalentCommandMatches(commands, item => item.metadata.command).map(item => item.id))
+      let index = 0
+      items = items.map(item => item.knowledgeBaseId === "builtin-commands" ? commands[index++] : item)
+        .filter(item => item.knowledgeBaseId !== "builtin-commands" || retained.has(item.id))
+    }
+    return items.filter(isAvailable)
   }
-  return { results: results.slice(0, resultLimit), retrieval: diagnostics }
+  results = finalize(results)
+  // 重排成功后再收紧最终数量，避免同指令折叠提前占用返回名额；降级沿用全局上限。
+  const finalLimit = ["applied", "cached"].includes(diagnostics.rerank)
+    ? Math.min(resultLimit, Math.max(1, Math.min(20, Math.trunc(number(strategy.rerankResultLimit, defaults.knowledge.retrieval.rerankResultLimit)))))
+    : resultLimit
+  const finalResults = results.slice(0, finalLimit)
+  if (!options.includeTrace) return { results: finalResults, retrieval: diagnostics }
+  const rerankSucceeded = ["applied", "cached"].includes(diagnostics.rerank)
+  const finalRanks = new Map(finalResults.map((item, index) => [item.id, index + 1]))
+  const retained = new Set(results.map(item => item.id))
+  const scores = new Map((rerankSucceeded ? rerankTrace?.scores || [] : []).map(item => [item.id, item.score]))
+  const scoredRanks = new Map(recalled.filter(item => scores.has(item.id)).sort((a, b) => scores.get(b.id)! - scores.get(a.id)!).map((item, index) => [item.id, index + 1]))
+  const excluded = new Map(rerankTrace?.excluded.map(item => [item.id, item.reason]))
+  const minScore = strategy.rerankMinScore == null || strategy.rerankMinScore === "" ? null : Number(strategy.rerankMinScore)
+  const candidates = recalled.map((item, index): KnowledgeRetrievalCandidate => {
+    const score = scores.get(item.id)
+    const processingResult: KnowledgeProcessingResult = !isAvailable(item) ? "unavailable" : finalRanks.has(item.id) ? "returned"
+      : rerankSucceeded && excluded.has(item.id) ? excluded.get(item.id)!
+      : rerankSucceeded && score !== undefined && minScore !== null && score < minScore ? "below_threshold"
+      : !retained.has(item.id) ? "command_conflict"
+      : rerankSucceeded ? "return_limit" : "recall_limit"
+    return { ...item, ...routeRanks.get(item.id), recallRank: index + 1, rerankRank: scoredRanks.get(item.id), rerankScore: score, finalRank: finalRanks.get(item.id), processingResult }
+  })
+  return { results: finalResults, retrieval: diagnostics, trace: {
+    query: queryText, candidates, directResultIds: finalize(recalled).slice(0, resultLimit).map(item => item.id), finalResultIds: finalResults.map(item => item.id), rerankSucceeded, rerank: rerankTrace,
+    config: { minRelevance: diagnostics.threshold, rerankMinScore: minScore, resultLimit, rerankResultLimit: Number(strategy.rerankResultLimit ?? defaults.knowledge.retrieval.rerankResultLimit), weights: allowed.map(baseId => ({ baseId, keyword: number(baseId === "builtin-commands" ? root.knowledge?.commandRetrieval?.lexicalWeight : 1, 1), vector: number(options.vectorWeight ?? (baseId === "builtin-commands" ? root.knowledge?.commandRetrieval?.vectorWeight : 1), baseId === "builtin-commands" ? 0.65 : 1) })) },
+  } }
 }
 export async function searchKnowledge(e: UnknownRecord, query: unknown, options: KnowledgeSearchOptions = {}): Promise<KnowledgeResult[]> { return (await searchKnowledgeDetailed(e, query, options)).results }
 export function buildKnowledgePrompt(results: readonly KnowledgePromptResult[] = [], tokenBudget = 800): string {

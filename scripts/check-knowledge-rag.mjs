@@ -21,7 +21,7 @@ global.Bot = { express:null, wsf:{}, uin:[] };global.segment={at:String,image:St
 let sqliteClient, jobs, server
 try {
   const { defaults } = await import("../output/runtime/config/defaults.js")
-  const { configStore } = await import("../output/runtime/config/store.js")
+  const { configStore, dataDir } = await import("../output/runtime/config/store.js")
   ;({ sqliteClient } = await import("../output/runtime/core/storage/sqlite/client.js"))
   const { SqliteRuntimeConfigRepository } = await import("../output/runtime/core/storage/sqlite/runtime-config-repository.js")
   const { knowledgeStore } = await import("../output/runtime/knowledge/store.js")
@@ -152,24 +152,21 @@ try {
   assert.equal(toolRecommendation.knowledgeBase.fieldDescription,guide)
   assert(toolRecommendation.recommendations.some(row=>row.retrievalText.includes("树脂")))
   assert((await new KnowledgeManageTool().execute({...toolArgs,action:"search",knowledgeBaseIds:[base]},toolContext)).includes(guide))
-  // Exercise real rerank packing and cache logic with an isolated model/budget fixture.
-  const rerankExports={},rerankPrompts=[],rerankBudget={day:"",calls:0,scopes:{}}
+  // Exercise real rerank packing and cache logic with an isolated model fixture.
+  const rerankExports={},rerankPrompts=[]
   const rerankRoot={models:[{name:"rank"}],modelTasks:{},apiProviders:[]}
   vm.runInNewContext(ts.transpileModule(await fs.readFile(new URL("../knowledge/retrieval-rerank.ts",import.meta.url),"utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{
     exports:rerankExports,require:spec=>{
-      if(spec==="node:path")return {default:path}
       if(spec==="node:crypto")return {default:crypto}
-      if(spec.includes("atomic-json-repository"))return {AtomicJsonRepository:class{async update(fn){fn(rerankBudget)}}}
       if(spec.includes("config/store"))return {configStore:{get:()=>rerankRoot},dataDir:root}
       if(spec.includes("token-budget"))return {estimateTokens,truncateTextToTokens}
-      if(spec.includes("host-runtime"))return {hostRuntime:{}}
       if(spec.includes("adapters/registry"))return {adapterRegistry:{}}
       if(spec.includes("provider-resolver"))return {modelPurpose:model=>model.purpose || "chat"}
       if(spec.includes("isolated-task"))return {runIsolatedModelTask:async request=>{rerankPrompts.push(request);const input=JSON.parse(request.prompt);return {text:JSON.stringify(input.candidates.map(row=>({id:row.id,relevance:0.9})))}}}
       throw Error("unexpected rerank dependency: "+spec)
     },
   })
-  const rankConfig={rerankEnabled:true,rerankModel:"rank",rerankInputTokenBudget:1000,rerankCacheTtlMs:60000,rerankCallsPerConversation:20}
+  const rankConfig={rerankEnabled:true,rerankModel:"rank",rerankInputTokenBudget:1000,rerankCacheTtlMs:60000}
   const rankCandidates=[{id:"a",title:"指令一",content:"指令一的用途",score:1,knowledgeBaseId:base,fieldDescription:guide,metadata:{implementation:"must not reach model"}},{id:"b",title:"指令二",content:"指令二的用途",score:1,knowledgeBaseId:base,fieldDescription:guide},{id:"c",title:"其他文档",content:"其他资料",score:1,knowledgeBaseId:"other",fieldDescription:"独立说明"}]
   assert.equal((await rerankExports.rerankKnowledge({},"用途",rankCandidates,rankConfig)).state,"applied")
   const rankedInput=JSON.parse(rerankPrompts[0].prompt)
@@ -229,7 +226,7 @@ try {
   assert.equal(hybridInputs[0].length,6,"reranking receives the full retained candidate pool")
   assert.equal((await semanticSearch({limit:2})).results.length,2)
   assert.equal((await semanticSearch({limit:100})).results.length,defaults.knowledge.retrieval.resultLimit)
-  for(const state of ["failed_fallback","budget_exhausted"]){
+  for(const state of ["failed_fallback","input_budget"]){
     hybridRerankState=state
     assert.equal((await semanticSearch()).results.length,defaults.knowledge.retrieval.resultLimit,"rerank fallback must retain multiple valid semantic candidates")
   }
@@ -350,11 +347,11 @@ try {
   const registry=(await import(pathToFileURL(path.join(host,"lib/plugins/loader.js")).href)).default
   registry.priority=[loadedEntry]
   // Real HTTP auth, preview-conflict detection, editing, audit and restore.
-  const { issueWebAccessToken } = await import("../output/runtime/web/http/auth.js"),{registerCommandKnowledgeRoutes}=await import("../output/runtime/web/http/routes/knowledge/commands.js")
-  const {registerKnowledgeBaseRoutes}=await import("../output/runtime/web/http/routes/knowledge/bases.js")
+  const { issueWebAccessToken } = await import("../output/runtime/web/http/auth.js")
+  const {registerKnowledgeRoutes}=await import("../output/runtime/web/http/routes/knowledge.js")
   const {registerConfigRoutes}=await import("../output/runtime/web/http/routes/configuration.js")
   const token=issueWebAccessToken("fixture").token
-  const app=express();app.use(express.json({limit:"12mb"}));registerCommandKnowledgeRoutes(app);registerKnowledgeBaseRoutes(app);registerConfigRoutes(app);server=app.listen(0,"127.0.0.1");await once(server,"listening")
+  const app=express();app.use(express.json({limit:"12mb"}));registerKnowledgeRoutes(app);registerConfigRoutes(app);server=app.listen(0,"127.0.0.1");await once(server,"listening")
   const api=async(url,method="GET",body,authorized=true)=>{const response=await fetch(`http://127.0.0.1:${server.address().port}${url}`,{method,headers:{...(authorized?{"yui-chat-token":token}:{}),"content-type":"application/json"},...(body?{body:JSON.stringify(body)}:{})});return {status:response.status,data:await response.json().catch(()=>({}))}}
   assert.equal((await api("/api/knowledge/commands/catalog","GET",null,false)).status,401)
   assert.equal((await api("/api/knowledge/commands/collect","POST",{},false)).status,401)
@@ -478,9 +475,24 @@ try {
   assert.equal((await api("/api/config","PATCH",{patch:{"knowledge.retrieval.resultLimit":3}},false)).status,401)
   assert.equal((await patchLimit(3)).status,200)
   for(const invalid of [0,21,2.5,"invalid"]){assert.equal((await patchLimit(invalid)).status,400);assert.equal(configStore.get().knowledge.retrieval.resultLimit,3)}
+  const patchRerankLimit=value=>api("/api/config","PATCH",{patch:{"knowledge.retrieval.rerankResultLimit":value}})
+  assert.equal((await api("/api/config","PATCH",{patch:{"knowledge.retrieval.rerankResultLimit":2}},false)).status,401)
+  assert.equal((await patchRerankLimit(2)).status,200)
+  for(const invalid of [0,21,2.5,"invalid"]){assert.equal((await patchRerankLimit(invalid)).status,400);assert.equal(configStore.get().knowledge.retrieval.rerankResultLimit,2)}
+  assert.equal(JSON.parse((await sqliteClient.get("SELECT overrides_json FROM runtime_config WHERE id=1")).overrides_json).knowledge.retrieval.rerankResultLimit,2)
+  assert.equal((await patchRerankLimit(defaults.knowledge.retrieval.rerankResultLimit)).status,200)
   assert.equal(JSON.parse((await sqliteClient.get("SELECT overrides_json FROM runtime_config WHERE id=1")).overrides_json).knowledge.retrieval.resultLimit,3)
   assert.deepEqual(await sqliteClient.all("SELECT id FROM knowledge_index_jobs"),limitJobs)
   assert.equal(embeddingCalls,callsBeforeLimit,"saving the final limit must not build vectors")
+  const compareUrl=`/api/knowledge/bases/${base}/search`
+  assert.equal((await api(compareUrl,"POST",{query:"限额测试",useVector:false,compare:true},false)).status,401)
+  const compared=await api(compareUrl,"POST",{query:"限额测试",useVector:false,compare:true})
+  assert.equal(compared.status,200);assert.equal(compared.data.results.length,3)
+  assert(compared.data.trace.candidates.length>=12,"the authenticated overview includes all recalled candidates, not only final results")
+  assert.equal(compared.data.trace.directResultIds.length,3)
+  assert.deepEqual(compared.data.trace.finalResultIds,compared.data.results.map(row=>row.id))
+  assert(!compared.data.trace.rerankSucceeded);assert(compared.data.trace.candidates.every(row=>row.rerankScore===undefined&&row.rerankRank===undefined))
+  assert.equal((await api(compareUrl,"POST",{query:"限额测试",useVector:false})).data.trace,undefined)
   const event={isMaster:true},quotaQuery="限额测试"
   const {resolveKnowledgeResultLimit}=await import("../output/runtime/knowledge/document-retrieval.js")
   for(const value of [undefined,null,NaN,Infinity,0,-1])assert.equal(resolveKnowledgeResultLimit(value),3)
@@ -551,20 +563,28 @@ try {
   await assert.rejects(runtimeExports.saveConfigAndApply(settings),/runtime apply failed/);failRuntime=false
   await runtimeExports.updateConfigAndApply(config=>config);assert.equal(runtimeCalls,2)
   await runtimeExports.updateConfigAndApply(config=>({...config,knowledge:{enabled:false}}));assert.equal(runtimeCalls,2,"knowledge settings do not reload unrelated services")
+  // Render the real shared dialog and fields, including their teleported content.
+  const primitives={},components={}
+  vm.runInNewContext(ts.transpileModule(await fs.readFile(new URL("../web/client/ui/primitives.ts",import.meta.url),"utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText,{exports:primitives,require:()=>vue})
+  vm.runInNewContext(ts.transpileModule(await fs.readFile(new URL("../web/client/ui/components.ts",import.meta.url),"utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText,{exports:components,require:spec=>spec==="vue"?vue:spec.includes("primitives")?primitives:{}})
   // Compile/render the management components and verify default policy and removed AI/exclusion controls.
+  const comparisonComponents=await import("../output/runtime/web/client/features/knowledge/knowledge-retrieval-results.js")
   for(const file of ["knowledge-command-workbench","knowledge-command-editor","knowledge-command-maintenance","knowledge-base-workspace"]){
-    const exports={};vm.runInNewContext(ts.transpileModule(await fs.readFile(new URL(`../web/client/features/knowledge/${file}.ts`,import.meta.url),"utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText,{exports,require:spec=>spec==="vue"?vue:{},setTimeout,clearTimeout})
+    const exports={};vm.runInNewContext(ts.transpileModule(await fs.readFile(new URL(`../web/client/features/knowledge/${file}.ts`,import.meta.url),"utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText,{exports,require:spec=>spec==="vue"?vue:spec.includes("knowledge-retrieval-results")?comparisonComponents:{},setTimeout,clearTimeout})
     const component=Object.values(exports)[0];assert(vue.compile(component.template))
     if(file==="knowledge-base-workspace"){
       const app=vue.createSSRApp(component,{draft:{retrievalResultLimit:3},globalResultLimit:3,globalSettingsOpen:true,globalSettingsDirty:true,baseHealth:()=>({}),documentOrigin:()=>null,canEditBuiltinCommand:()=>false,jobLabel:String,jobProgress:()=>0,jobProgressTone:()=>"",jobProgressLabel:String,shortId:String})
-      app.component("Icon",{template:"<span />"});app.component("Field",{props:["label","modelValue"],template:'<label>{{ label }}<input :value="modelValue" /></label>'});app.component("Panel",{template:"<section><slot /></section>"})
+      app.component("Icon",{template:"<span />"});app.component("HelpTip",{template:"<span />"});app.component("Field",components.Field);app.component("Dialog",primitives.Dialog);app.component("SideDrawer",components.SideDrawer);app.component("Panel",{template:"<section><slot /></section>"})
       for(const name of ["StatusDot","IconButton","PagedList"])app.component(name,{template:"<span />"})
-      const html=await renderToString(app);assert(html.includes("全局配置"));assert(html.includes("每次召回上限"));assert(html.includes('value="3"'));assert(html.includes("无需重建索引"))
-      for(const label of ["相关性阈值","重排模型","重排最低分"])assert(html.includes(label),`shared setting belongs to global configuration: ${label}`)
+      const context={};const pageHtml=await renderToString(app,context);const html=context.teleports.body
+      assert(!pageHtml.includes("每次召回上限"),"global fields must be outside the workspace layout")
+      assert(html.includes('role="dialog"'));assert(html.includes("ui-dialog"));assert(html.includes("每次召回上限"));assert(html.includes('value="3"'));assert(html.includes("无需重建索引"))
+      for(const label of ["相关性阈值","重排模型","重排最低分","重排返回上限","0–1","默认 0.3","负分或大于 1"])assert(html.includes(label),`shared setting belongs to global configuration: ${label}`)
       const detailApp=vue.createSSRApp(component,{draft:{},selectedBase:{id:base,name:"测试知识库",protected:true},documents:[allQuality.at(-1)],baseHealth:()=>({}),documentOrigin:()=>null,canEditBuiltinCommand:()=>false,jobLabel:String,jobProgress:()=>0,jobProgressTone:()=>"",jobProgressLabel:String,shortId:String})
       for(const name of ["Icon","Field","StatusDot","IconButton"])detailApp.component(name,{template:"<span />"})
       detailApp.component("Panel",{template:"<section><slot /></section>"})
-      detailApp.component("PagedList",{props:["rows"],setup(props,{slots}){return()=>props.rows.flatMap(item=>slots.default({item}))}})
+      detailApp.component("Dialog",primitives.Dialog);detailApp.component("SideDrawer",components.SideDrawer)
+      detailApp.component("PagedList",{props:["rows","pageSize","label"],setup(props,{slots}){return()=>props.rows.flatMap(item=>slots.default({item}))}})
       const detailHtml=await renderToString(detailApp)
       assert(detailHtml.includes("扣分明细"));assert(detailHtml.includes(allQuality.at(-1).qualityDeductions[0].reason));assert(detailHtml.includes(allQuality.at(-1).qualityDeductions[0].suggestion))
     }
@@ -593,15 +613,25 @@ try {
   {
     const uiStore=vue.reactive({config:{knowledge:{retrieval:{resultLimit:5,minRelevance:0.55,rerankEnabled:false,rerankModel:"",rerankMinScore:null}},models:[]},knowledge:{},dirtyScopes:{}})
     const builtin={id:"builtin-commands",description:"机器人指令用途",config:{dimensions:0,fieldDescription:"字段解释"}}
-    const patches=[],writes=[],cleanup=[]
-    const uiBoundary={store:uiStore,confirmAction:async()=>true,toast(){},refreshTab:async()=>{},setDirtyScope(key,value){uiStore.dirtyScopes[key]=value},
-      async request(url,options){if(options){writes.push({url,body:JSON.parse(options.body)});return {base:builtin}}return url==="/api/knowledge/bases"?{bases:[builtin]}:{documents:[],grants:[],jobs:[],pagination:{page:1,pageSize:10,total:0}}},
-      async saveConfigPatch(patch){patches.push(patch);for(const [key,value] of Object.entries(patch))uiStore.config.knowledge.retrieval[key.split(".").at(-1)]=value}}
+    let listedBases=[builtin]
+    const patches=[],writes=[],cleanup=[],confirmations=[];let acceptClose=false,failSave=false
+    const searchTrace={query:"页面测试",candidates:[],directResultIds:[],finalResultIds:[],rerankSucceeded:false}
+    let searchResponse=async()=>({results:[],retrieval:{rerank:"disabled"},trace:searchTrace})
+    const uiBoundary={store:uiStore,confirmAction:async options=>{confirmations.push(options);return acceptClose},toast(){},refreshTab:async()=>{},setDirtyScope(key,value){uiStore.dirtyScopes[key]=value},
+      async request(url,options){if(options){writes.push({url,body:JSON.parse(options.body)});return url.endsWith("/search")?searchResponse():{base:builtin}}return url==="/api/knowledge/bases"?{bases:listedBases}:{documents:[],grants:[],jobs:[],pagination:{page:1,pageSize:10,total:0}}},
+      async saveConfigPatch(patch){if(failSave)throw Error("fixture save failed");patches.push(patch);for(const [key,value] of Object.entries(patch))uiStore.config.knowledge.retrieval[key.split(".").at(-1)]=value}}
     const exports={}
     vm.runInNewContext(ts.transpileModule(await fs.readFile(new URL("../web/client/features/knowledge/knowledge-tab.ts",import.meta.url),"utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText,{exports,setInterval,clearInterval,require:spec=>spec==="vue"?{...vue,onUnmounted:fn=>cleanup.push(fn)}:spec.includes("app/store")?uiBoundary:spec.includes("shared/data")?{asRecord:v=>v||{},asRecords:v=>Array.isArray(v)?v:[],errorMessage:e=>e.message}:spec.includes("shared/format")?{splitTokens:v=>String(v).split(/[,\n]/),shortId:String}:{}})
     const scope=vue.effectScope(),ui=scope.run(()=>exports.KnowledgeTab.setup())
     try{
       await ui.loadBases();assert(!ui.globalSettingsDirty.value)
+      ui.openGlobalSettings();assert(ui.globalSettingsOpen.value)
+      ui.draft.retrievalRerankResultLimit=2;await vue.nextTick()
+      assert(uiStore.dirtyScopes["knowledge-global-settings"])
+      await ui.closeGlobalSettings();assert(ui.globalSettingsOpen.value);assert.equal(ui.draft.retrievalRerankResultLimit,2)
+      acceptClose=true;await ui.closeGlobalSettings();await vue.nextTick()
+      assert(!ui.globalSettingsOpen.value);assert(!ui.globalSettingsDirty.value);assert.equal(ui.draft.retrievalRerankResultLimit,5);assert.equal(confirmations.length,2)
+      ui.openGlobalSettings();ui.draft.retrievalRerankResultLimit=2
       ui.draft.retrievalMinRelevance=0.7;ui.draft.retrievalRerankMinScore=0.3
       await vue.nextTick();assert(ui.globalSettingsDirty.value);assert(uiStore.dirtyScopes["knowledge-global-settings"])
       ui.openCommandMaintenance(builtin);await ui.loadBases()
@@ -612,8 +642,12 @@ try {
       assert.equal(writes.at(-1).body.description,"更新本库用途")
       assert(!Object.keys(writes.at(-1).body).some(key=>/rerank|minRelevance/i.test(key)))
       assert(ui.globalSettingsDirty.value)
-      await ui.saveGlobalSettings();await vue.nextTick()
+      for(const invalid of [0,21,2.5]){ui.draft.retrievalRerankResultLimit=invalid;await ui.saveGlobalSettings();assert.equal(patches.length,0);assert(ui.globalSettingsOpen.value)}
+      ui.draft.retrievalRerankResultLimit=2
+      failSave=true;await ui.saveGlobalSettings();assert(ui.globalSettingsOpen.value);assert(ui.globalSettingsDirty.value)
+      failSave=false;await ui.saveGlobalSettings();await vue.nextTick()
       assert.equal(patches.length,1);assert.equal(patches[0]["knowledge.retrieval.rerankMinScore"],0.3)
+      assert.equal(patches[0]["knowledge.retrieval.rerankResultLimit"],2);assert(!ui.globalSettingsOpen.value)
       assert.equal(uiStore.config.knowledge.retrieval.minRelevance,0.7);assert(!ui.globalSettingsDirty.value)
       uiStore.config.knowledge.retrieval.resultLimit=8;await vue.nextTick()
       assert.equal(ui.draft.retrievalResultLimit,8,"clean global draft follows refreshed configuration")
@@ -621,6 +655,15 @@ try {
       assert(uiStore.dirtyScopes["knowledge-global-settings"],"the optional rerank cutoff also marks unsaved changes")
       uiStore.config.knowledge.retrieval.resultLimit=9;await vue.nextTick()
       assert.equal(ui.draft.retrievalRerankMinScore,0.4,"configuration refresh preserves dirty global fields")
+      ui.draft.retrievalQuery="页面测试";await ui.testRetrieval()
+      assert.equal(writes.at(-1).body.compare,true);assert.equal(ui.retrievalTrace.value.query,"页面测试")
+      listedBases=[{id:"replacement-base"}];await ui.loadBases()
+      assert.equal(ui.retrievalTrace.value,null,"implicit library selection after refresh also clears stale comparison data")
+      listedBases=[builtin];await ui.loadBases()
+      let completeSearch;searchResponse=()=>new Promise(resolve=>{completeSearch=resolve})
+      const delayed=ui.testRetrieval();await ui.selectBase("another-base")
+      completeSearch({results:[{id:"old"}],retrieval:{rerank:"applied"},trace:searchTrace});await delayed
+      assert.equal(ui.retrievalTrace.value,null);assert.equal(ui.retrievalDiagnostics.value,null);assert.equal(ui.retrievalResults.value.length,0,"a response from a previously selected library cannot overwrite the current page")
     }finally{for(const fn of cleanup)fn();scope.stop()}
   }
   const eventDocument={id:"event-empty-suggestion",title:"戳一戳回应",retrievalText:eventText,metadata:{pluginKey:"fixture",fnc:"poke",event:"notice.group.poke",regexp:"",regexpFlags:"",suggestedCommand:"",examples:[]}}
@@ -640,6 +683,41 @@ try {
   assert(!configStore.get().modelTasks.replyer.modelList.includes("native-rank"),"rerank models cannot enter chat routing")
   assert.deepEqual(configStore.get().modelTasks.rerank.modelList,["native-rank"])
   assert(!JSON.stringify(configStore.getPublic()).includes("fixture-sensitive"),"new nested model options remain recursively redacted")
+  // Repeated Web and chat reranks use the same path; retired quota configuration and ledger are inert.
+  const previousRetrieval=configStore.get().knowledge.retrieval
+  const originalRerank=adapterRegistry.rerank
+  const budgetFile=path.join(dataDir,"command-kb","rerank-budget.json")
+  const readBudget=()=>fs.readFile(budgetFile,"utf8").catch(error=>{if(error.code==="ENOENT")return null;throw error})
+  await fs.mkdir(path.dirname(budgetFile),{recursive:true})
+  await fs.writeFile(budgetFile,"invalid retired ledger")
+  const budgetBeforeWeb=await readBudget()
+  let webRankCalls=0
+  adapterRegistry.rerank=async request=>{webRankCalls++;return {model:request.channel.model,results:request.documents.map((_,index)=>({index,score:0.9})),usage:{promptTokens:1,completionTokens:0,totalTokens:1}}}
+  try {
+    await configStore.update(c=>{c.knowledge.retrieval.rerankEnabled=true;c.knowledge.retrieval.rerankModel="native-rank";c.knowledge.retrieval.rerankCallsPerDay=0;c.knowledge.retrieval.rerankCallsPerConversation=0})
+    const persistedRetrieval=JSON.parse((await sqliteClient.get("SELECT overrides_json FROM runtime_config WHERE id=1")).overrides_json).knowledge?.retrieval || {}
+    for(const key of ["rerankCallsPerDay","rerankCallsPerConversation"]){
+      assert(!Object.hasOwn(configStore.get().knowledge.retrieval,key));assert(!Object.hasOwn(persistedRetrieval,key),"retired quota fields are removed from persisted overrides")
+    }
+    assert.equal((await api(compareUrl,"POST",{query:"限额测试",compare:true},false)).status,401)
+    assert.equal((await api("/api/knowledge?q="+encodeURIComponent("限额测试"),"GET",null,false)).status,401)
+    assert.equal(webRankCalls,0)
+    for(let i=0;i<5;i++){
+      const web=await api(compareUrl,"POST",{query:`限额测试 ${i}`,useVector:false,compare:true})
+      assert.equal(web.status,200);assert.equal(web.data.retrieval.rerank,"applied")
+      assert(!Object.hasOwn(web.data.trace.rerank,"budgetMode"));assert(!Object.hasOwn(web.data.trace.rerank,"budget"))
+      assert(web.data.trace.candidates.some(row=>typeof row.rerankScore==="number"))
+    }
+    const legacyWeb=await api("/api/knowledge?q="+encodeURIComponent("限额测试"))
+    assert.equal(legacyWeb.status,200);assert.equal(legacyWeb.data.recommendation.retrieval.rerank,"applied")
+    assert.equal(webRankCalls,6);assert.equal(await readBudget(),budgetBeforeWeb)
+    const normal=await searchDocuments({isMaster:true,user_id:"web-admin"},"限额测试 11",{knowledgeBaseIds:[base],useVector:false,includeTrace:true})
+    assert.equal(normal.retrieval.rerank,"applied");assert.equal(webRankCalls,7)
+    assert(normal.trace.candidates.some(row=>typeof row.rerankScore==="number"));assert.equal(await readBudget(),budgetBeforeWeb)
+  } finally {
+    adapterRegistry.rerank=originalRerank
+    await configStore.update(c=>{for(const key of ["rerankEnabled","rerankModel"])c.knowledge.retrieval[key]=previousRetrieval[key]})
+  }
   await knowledgeStore.updateBuiltinRetrieval({embeddingModel:"",dimensions:0})
   const legacyText="插件名称：测试\n插件标识：fixture\n指令：#原图\n用途：获取此前图片的原图 stoken ws\n参数：无\n示例：#原图\npriority：-100\nregexp：^#原图$\nregexpFlags：\"\""
   const legacyMetadata={commandId:"legacy-clean",importSourceId:"clean-source",command:{id:"legacy-clean",pluginName:"测试",pluginKey:"fixture",suggestedCommand:"#原图",regexp:"^#原图$",regexpFlags:"",priority:-100,event:"message",retrievalText:legacyText}}

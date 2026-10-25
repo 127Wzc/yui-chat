@@ -122,7 +122,7 @@ export function registerKnowledgeBaseRoutes(app: RouteApp): void {
     const result = await searchKnowledgeDetailed(
       { isMaster: true, isGroup: false, user_id: "web-admin" },
       String(req.body?.query || ""),
-      { knowledgeBaseIds: [req.params.id], limit: req.body?.limit, useVector: req.body?.useVector !== false },
+      { knowledgeBaseIds: [req.params.id], limit: req.body?.limit, useVector: req.body?.useVector !== false, includeTrace: req.body?.compare === true },
     )
     res.json({ ok: true, ...result })
   }, { errorStatus: 400 }))

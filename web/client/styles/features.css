@@ -171,11 +171,10 @@
 .knowledge-stage { min-width: 0; }
 .knowledge-content-filter { flex-wrap: wrap; }
 .knowledge-content-sort { flex: 0 0 180px; margin: 0; }
+.knowledge-global-settings-fields.form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.knowledge-global-settings-fields > .command-rerank-model-field { grid-column: 1 / -1; }
+@media (max-width: 640px) { .knowledge-global-settings-fields.form-grid { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 640px) { .knowledge-content-filter .filter-search { flex-basis: 100%; } .knowledge-content-sort { flex: 1 1 180px; } }
-.knowledge-global-settings { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); }
-.knowledge-global-settings-description { flex: 1 1 100%; }
-.knowledge-global-settings-description p { margin: 6px 0 0; }
-.knowledge-global-settings-fields, .knowledge-global-settings-actions { width: 100%; }
 .knowledge-console {
   display: grid;
   grid-template-columns: minmax(270px, 310px) minmax(0, 1fr);
@@ -1837,3 +1836,30 @@
   .command-plugin-commands .command-workbench-entry { grid-template-columns: 20px minmax(0, 1fr); }
   .command-plugin-commands .command-workbench-entry > .command-availability-switch { grid-column: 2; justify-self: end; }
 }
+
+/* 召回测试：保留同次查询的全部候选，排序只改变管理台展示。 */
+.knowledge-retrieval-results { display: grid; gap: 12px; min-width: 0; }
+.knowledge-retrieval-summary p + p { margin-top: 6px; }
+.knowledge-retrieval-counts { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; }
+.knowledge-retrieval-viewbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+.knowledge-retrieval-viewbar .segmented { max-width: 100%; flex-wrap: wrap; }
+.knowledge-retrieval-fulltext { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.knowledge-retrieval-table-wrap { max-width: 100%; overflow-x: auto; }
+.knowledge-retrieval-table { width: 100%; min-width: 820px; border-collapse: collapse; font-size: 12px; }
+.knowledge-retrieval-table th { padding: 10px 6px; text-align: right; background: var(--muted); border-bottom: 1px solid var(--border); white-space: nowrap; }
+.knowledge-retrieval-table td { padding: 12px 6px; text-align: right; font-variant-numeric: tabular-nums; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.knowledge-retrieval-table th:first-child, .knowledge-retrieval-table td:first-child, .knowledge-retrieval-table th:last-child, .knowledge-retrieval-table td:last-child { text-align: left; }
+.knowledge-retrieval-table .is-expanded { background: var(--muted); }
+.knowledge-retrieval-sort { display: inline-flex; gap: 4px; align-items: center; padding: 2px 0; color: var(--muted-foreground); background: transparent; border: 0; font: inherit; }
+.knowledge-retrieval-sort.active { color: var(--foreground); font-weight: 700; }
+.knowledge-retrieval-title { width: 25%; min-width: 170px; }
+.knowledge-retrieval-title > button, .knowledge-retrieval-card-title { display: inline-flex; align-items: center; gap: 4px; padding: 0; text-align: left; border: 0; color: var(--foreground); background: transparent; font: inherit; font-weight: 600; }
+.knowledge-retrieval-title > button .icon { flex-shrink: 0; }
+.knowledge-retrieval-title > p { margin-top: 4px; padding-left: 16px; }
+.knowledge-retrieval-rank-change { display: block; color: var(--muted-foreground); font-size: 11px; }
+.knowledge-retrieval-detail td { padding: 0 0 12px; }
+.knowledge-retrieval-detail td > div { padding: 14px; background: var(--muted); border-radius: var(--radius-sm); text-align: left; }
+.knowledge-retrieval-body { white-space: pre-wrap; overflow-wrap: anywhere; margin: 10px 0; }
+.knowledge-retrieval-body.is-preview { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+.knowledge-retrieval-footer { line-height: 1.6; }
+@media (pointer: coarse) { .knowledge-retrieval-sort { min-height: 44px; } .knowledge-retrieval-title > button, .knowledge-retrieval-card-title { min-height: 44px; } }

@@ -424,6 +424,7 @@ async function checkConfigSafety() {
   assert(manifest.sections.some(section => section.fields.some(field => field.path === "system.backups.maxAgeDays")), "schema manifest should expose backup age retention")
   assert(manifest.sections.some(section => section.fields.some(field => field.path === "memory.retrieval.embeddingTokensPerDay")), "schema manifest should expose the memory embedding budget")
   assert(manifest.sections.some(section => section.fields.some(field => field.path === "knowledge.indexing.globalEmbeddingTokensPerDay")), "schema manifest should expose the knowledge embedding budget")
+  assert(manifest.sections.some(section => section.fields.some(field => field.path === "knowledge.retrieval.rerankResultLimit")), "schema manifest should expose the rerank return limit")
   assert(manifest.sections.some(section => section.fields.some(field => field.path === "security.linkSafety.screenshotAllowedHosts")), "schema manifest should expose the centralized URL screenshot host allowlist")
   const contextFieldPaths = manifest.sections.find(section => section.group === "Context")?.fields.map(field => field.path) || []
   assert(contextFieldPaths.includes("context.recentMessageCount") && retiredContextConfigKeys.every(key => !contextFieldPaths.includes(`context.${key}`)), "schema should expose only the unified recent-message count for context capture and injection")

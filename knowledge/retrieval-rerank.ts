@@ -1,27 +1,34 @@
-import path from "node:path"
 import crypto from "node:crypto"
-import { AtomicJsonRepository } from "../core/storage/atomic-json-repository.js"
-import { configStore, dataDir } from "../config/store.js"
+import { configStore } from "../config/store.js"
 import { estimateTokens, truncateTextToTokens } from "../core/chat/token-budget.js"
 import { runIsolatedModelTask } from "../models/isolated-task.js"
 import { adapterRegistry } from "../models/adapters/registry.js"
 import { providerResolver, modelPurpose } from "../models/routing/provider-resolver.js"
-import { hostRuntime } from "../core/runtime/host-runtime.js"
 
 type RecordValue = Record<string, any>
 interface Ranked { id: string; content: string; title: string; score: number; knowledgeBaseId?: string; fieldDescription?: string }
-let budgetUnavailable = false
-const budget = new AtomicJsonRepository<{ day: string; calls: number; scopes: Record<string, number> }>({ file: path.join(dataDir, "command-kb", "rerank-budget.json"), defaultValue: { day: "", calls: 0, scopes: {} }, normalize(value) { if (!value || typeof value.day !== "string" || !Number.isFinite(value.calls) || value.calls < 0 || !value.scopes || typeof value.scopes !== "object" || Object.values(value.scopes).some(count => !Number.isFinite(count) || count < 0)) throw new Error("重排预算结构无效"); return value }, onReadError(error) { budgetUnavailable = true; hostRuntime.logger?.warn?.("[yui-chat] 重排预算账本读取异常，已隔离", error) } })
-const sessions = new WeakMap<object, string>()
-export function bindKnowledgeSession(event: unknown, sessionId: string): void { if (event && typeof event === "object") sessions.set(event, sessionId) }
-const cache = new Map<string, { expires: number; scores: Map<string, number> }>()
-export async function rerankKnowledge<T extends Ranked>(event: RecordValue, query: string, candidates: T[], config: RecordValue, signal?: AbortSignal): Promise<{ results: T[]; state: string }> {
-  if (!config.rerankEnabled || !candidates.length) return { results: candidates, state: "disabled" }
+export interface KnowledgeRerankTrace {
+  inputIds: string[]
+  excluded: Array<{ id: string; reason: "candidate_limit" | "input_budget" }>
+  scores: Array<{ id: string; score: number }>
+  elapsedMs: number
+  model?: string
+}
+const cache = new Map<string, { expires: number; scores: Map<string, number>; model?: string }>()
+export async function rerankKnowledge<T extends Ranked>(event: RecordValue, query: string, candidates: T[], config: RecordValue, signal?: AbortSignal, captureTrace = false): Promise<{ results: T[]; state: string; trace?: KnowledgeRerankTrace }> {
+  const started = Date.now()
+  const trace: KnowledgeRerankTrace | undefined = captureTrace ? { inputIds: [], excluded: [], scores: [], elapsedMs: 0 } : undefined
+  const finish = (results: T[], state: string): { results: T[]; state: string; trace?: KnowledgeRerankTrace } => {
+    if (!trace) return { results, state }
+    trace.elapsedMs = Date.now() - started
+    return { results, state, trace }
+  }
+  if (!config.rerankEnabled || !candidates.length) return finish(candidates, "disabled")
   const root = configStore.get() as RecordValue
   const task = String(config.rerankTask || "rerank")
   const model = String(config.rerankModel || "").trim()
-  if (model && !root.models?.some((item: RecordValue) => item.name === model)) return { results: candidates, state: "model_unavailable" }
-  if (!model && !root.modelTasks?.[task]) return { results: candidates, state: "task_unavailable" }
+  if (model && !root.models?.some((item: RecordValue) => item.name === model)) return finish(candidates, "model_unavailable")
+  if (!model && !root.modelTasks?.[task]) return finish(candidates, "task_unavailable")
   const configuredModel = root.models?.find((item: RecordValue) => item.name === model)
   const taskConfig = root.modelTasks?.[task]
   const dedicated = configuredModel ? modelPurpose(configuredModel) === "rerank" : taskConfig?.purpose === "rerank" || task === "rerank"
@@ -46,28 +53,25 @@ export async function rerankKnowledge<T extends Ranked>(event: RecordValue, quer
     if (!item.content) continue
     selected.push(item); fieldDescriptions = descriptions
   }
-  if (!selected.length) return { results: candidates, state: "input_budget" }
+  if (trace) {
+    trace.inputIds = selected.map(item => item.id)
+    const inputIds = new Set(trace.inputIds), poolIds = new Set(pool.map(item => item.id))
+    trace.excluded = candidates.filter(item => !inputIds.has(item.id)).map(item => ({ id: item.id, reason: poolIds.has(item.id) ? "input_budget" : "candidate_limit" }))
+  }
+  if (!selected.length) return finish(candidates, "input_budget")
   const prompt = payload()
   const key = crypto.createHash("sha256").update(JSON.stringify(["rerank-v3", prompt, task, model, root.modelTasks[task], root.models, root.apiProviders])).digest("hex")
   const threshold = config.rerankMinScore == null || config.rerankMinScore === "" ? -Infinity : Number(config.rerankMinScore)
   const apply = (scores: Map<string, number>): T[] => candidates.filter(item => scores.has(item.id) && scores.get(item.id)! >= threshold).map(item => ({ ...item, rerankScore: scores.get(item.id)! })).sort((a, b) => scores.get(b.id)! - scores.get(a.id)!)
   const cached = cache.get(key)
-  if (cached && cached.expires > Date.now()) return { results: apply(cached.scores), state: "cached" }
-  const day = new Date(Date.now() + 28800000).toISOString().slice(0, 10)
-  const scope = crypto.createHash("sha256").update(String(sessions.get(event) || event.retrievalSessionId || event.sessionId || `${event.group_id || "private"}:${event.user_id || "anonymous"}`)).digest("hex")
-  let reserved = false
-  try { await budget.update(state => {
-    if (state.day !== day) { state.day = day; state.calls = 0; state.scopes = {} }
-    if (state.calls >= Number(config.rerankCallsPerDay ?? 100) || (state.scopes[scope] || 0) >= Number(config.rerankCallsPerConversation ?? 3)) return
-    // 旧会话达到容量后保守拒绝新会话，不通过淘汰重置计数绕过预算。
-    if (!(scope in state.scopes) && Object.keys(state.scopes).length >= 1000) return
-    state.calls++; state.scopes[scope] = (state.scopes[scope] || 0) + 1; reserved = true
-  }) } catch { return { results: candidates, state: "budget_unavailable" } }
-  if (budgetUnavailable) return { results: candidates, state: "budget_unavailable" }
-  if (!reserved) return { results: candidates, state: "budget_exhausted" }
+  if (cached && cached.expires > Date.now()) {
+    if (trace) { trace.scores = [...cached.scores].map(([id, score]) => ({ id, score })); trace.model = cached.model }
+    return finish(apply(cached.scores), "cached")
+  }
   try {
     signal?.throwIfAborted()
     const scores = new Map<string, number>()
+    let usedModel: string | undefined
     if (dedicated) {
       const channels = providerResolver.resolveCandidateChannels({ taskName: task, channelId: model || undefined, config: root })
       const controller = new AbortController()
@@ -88,6 +92,7 @@ export async function rerankKnowledge<T extends Ranked>(event: RecordValue, quer
               scores.set(selected[item.index].id, item.score)
             }
             completed = true
+            usedModel = String(channel.model)
             break
           } catch (error) {
             scores.clear()
@@ -110,13 +115,16 @@ export async function rerankKnowledge<T extends Ranked>(event: RecordValue, quer
         if (!item || !selected.some(candidate => candidate.id === item.id) || scores.has(item.id) || typeof item.relevance !== "number" || item.relevance < 0 || item.relevance > 1 || !Number.isFinite(item.relevance)) throw new Error("重排结果无效")
         scores.set(item.id, item.relevance)
       }
+      const actualModel = root.models?.find((item: RecordValue) => item.name === response.channel)
+      usedModel = actualModel?.modelIdentifier ? String(actualModel.modelIdentifier) : undefined
     }
-    cache.set(key, { scores, expires: Date.now() + Math.max(0, Number(config.rerankCacheTtlMs) || 0) })
+    if (trace) { trace.scores = [...scores].map(([id, score]) => ({ id, score })); trace.model = usedModel }
+    cache.set(key, { scores, model: usedModel, expires: Date.now() + Math.max(0, Number(config.rerankCacheTtlMs) || 0) })
     while (cache.size > 128) cache.delete(cache.keys().next().value!)
-    return { results: apply(scores), state: "applied" }
+    return finish(apply(scores), "applied")
   } catch {
     signal?.throwIfAborted()
-    // 超时、无模型或非法输出保留本地融合结果；已预留的调用计数不返还。
-    return { results: candidates, state: "failed_fallback" }
+    // 超时、无模型或非法输出保留本地融合结果。
+    return finish(candidates, "failed_fallback")
   }
 }

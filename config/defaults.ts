@@ -664,16 +664,15 @@ export const defaults = {
       resultTokenBudget: 800,
       minRelevance: 0.55,
       rerankEnabled: false,
-      // 专用模型分数尺度不同；按评测设置，null 表示只排序不截断。
-      rerankMinScore: null,
+      // 0–1 分数采用温和门槛；专用模型可能返回原始分，null 表示不截断。
+      rerankMinScore: 0.3,
+      rerankResultLimit: 5,
       rerankTask: "rerank",
       rerankModel: "",
       rerankMaxCandidates: 20,
       rerankInputTokenBudget: 6000,
       rerankMaxTokens: 1024,
       rerankTimeoutMs: 10000,
-      rerankCallsPerConversation: 3,
-      rerankCallsPerDay: 100,
       rerankCacheTtlMs: 1800000,
     },
     commandRetrieval: {

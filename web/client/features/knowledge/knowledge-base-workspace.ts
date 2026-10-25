@@ -1,6 +1,9 @@
+import { KnowledgeRetrievalResults } from "./knowledge-retrieval-results.js"
+
 // 知识库工作区：库列表、内容/召回/授权/索引四个操作面板；状态和动作由父组件持有。
 export const KnowledgeBaseWorkspace = {
   name: "KnowledgeBaseWorkspace",
+  components: { KnowledgeRetrievalResults },
   props: {
     globalSettingsOpen: { type: Boolean, default: false },
     globalSettingsBusy: { type: Boolean, default: false },
@@ -21,6 +24,7 @@ export const KnowledgeBaseWorkspace = {
     indexJobPagination: { type: Object, default: () => ({ page: 1, pageSize: 10, total: 0 }) },
     retrievalResults: { type: Array, default: () => [] },
     retrievalDiagnostics: { type: Object, default: null },
+    retrievalTrace: { type: Object, default: null },
     documentQuery: { type: String, default: "" },
     documentSort: { type: String, default: "updated" },
     draft: { type: Object, required: true },
@@ -36,7 +40,8 @@ export const KnowledgeBaseWorkspace = {
     shortId: { type: Function, required: true },
   },
   emits: [
-    "toggle-global-settings",
+    "open-global-settings",
+    "close-global-settings",
     "save-global-settings",
     "refresh-bases",
     "create-base",
@@ -68,21 +73,21 @@ export const KnowledgeBaseWorkspace = {
     <div class="section-stage knowledge-stage">
       <div class="section-intro">
         <div><h2>知识库工作区</h2><p>先选库，再集中处理内容、召回、授权与索引异常。</p></div>
-        <div class="row"><button class="btn small outline" type="button" :aria-expanded="globalSettingsOpen" aria-controls="knowledge-global-settings" @click="$emit('toggle-global-settings')"><Icon name="sliders" :size="14" />全局配置</button><button class="btn small outline" type="button" @click="$emit('refresh-bases')"><Icon name="refresh" :size="14" />刷新</button><button class="btn primary small" type="button" @click="$emit('create-base')"><Icon name="plus" :size="14" />新建知识库</button></div>
+        <div class="row"><button class="btn small outline" type="button" aria-haspopup="dialog" :aria-expanded="globalSettingsOpen" @click="$emit('open-global-settings')"><Icon name="sliders" :size="14" />全局配置</button><button class="btn small outline" type="button" @click="$emit('refresh-bases')"><Icon name="refresh" :size="14" />刷新</button><button class="btn primary small" type="button" @click="$emit('create-base')"><Icon name="plus" :size="14" />新建知识库</button></div>
       </div>
-      <form v-show="globalSettingsOpen" id="knowledge-global-settings" class="knowledge-global-settings" @submit.prevent="$emit('save-global-settings')">
-        <div class="knowledge-global-settings-description"><div class="section-title"><Icon name="sliders" :size="13" />全局召回设置</div><p class="muted tiny">适用于所有知识库、帮助指令、AI 工具和自动召回。保存立即生效，无需重建索引。</p></div>
+      <Dialog :open="globalSettingsOpen" title="知识库全局配置" description="所有知识库、帮助指令、AI 工具和自动召回共用。保存立即生效，无需重建索引。" size="lg" @close="$emit('close-global-settings')">
         <div class="form-grid dense knowledge-global-settings-fields">
-          <Field label="每次召回上限" type="number" hint="1–20 条" v-model="draft.retrievalResultLimit" :disabled="globalSettingsBusy" tip="控制最终返回数量；调用方可请求更少的结果。相关性不足时可能少于此数量，内部候选额度保持独立。" />
-          <Field label="相关性阈值" type="number" v-model="draft.retrievalMinRelevance" :disabled="globalSettingsBusy" tip="0–1，用于关键词及向量筛选，不表示正确率。" />
+          <Field label="每次召回上限" type="number" hint="1–20 条 · 默认 5" v-model="draft.retrievalResultLimit" :disabled="globalSettingsBusy" description="控制最终返回总数；调用方可请求更少，相关性不足时不凑满。" />
+          <Field label="相关性阈值" type="number" hint="0–1 · 默认 0.55" v-model="draft.retrievalMinRelevance" :disabled="globalSettingsBusy" description="用于关键词及向量筛选，越高越严格；不是正确率。余弦相似度原始范围为 −1–1。" />
           <div class="command-rerank-model-field">
             <Field label="重排模型" type="select" :options="[{value: '', label: '沿用已配置的重排任务'}, ...rerankModelOptions]" v-model="draft.retrievalRerankModel" :disabled="globalSettingsBusy" tip="全部知识库共用；开启后才调用，关闭或失败时使用融合排名。" />
-            <Field class="command-rerank-inline" :label="draft.retrievalRerankEnabled === 'true' ? '已开启' : '未开启'" type="switch" v-model="draft.retrievalRerankEnabled" :disabled="globalSettingsBusy" aria-label="启用全局模型重排" tip="默认关闭，沿用会话及每日预算；保存后生效。" />
+            <Field class="command-rerank-inline" :label="draft.retrievalRerankEnabled === 'true' ? '已开启' : '未开启'" type="switch" v-model="draft.retrievalRerankEnabled" :disabled="globalSettingsBusy" aria-label="启用全局模型重排" tip="默认关闭；开启后按需调用重排模型，保存后生效。" />
           </div>
-          <Field label="重排最低分（可选）" type="number" v-model="draft.retrievalRerankMinScore" :disabled="globalSettingsBusy" tip="留空仅排序；和关键词及向量阈值独立。" />
+          <Field label="重排返回上限" type="number" hint="1–20 条 · 默认 5" v-model="draft.retrievalRerankResultLimit" :disabled="globalSettingsBusy" description="仅重排成功时生效；最终数量取此值、召回上限和调用方请求数中的最小值。关闭或失败时沿用召回上限。" />
+          <Field label="重排最低分（可选）" type="number" hint="默认 0.3" v-model="draft.retrievalRerankMinScore" :disabled="globalSettingsBusy" description="越高越相关；对话模型范围为 0–1，专用模型可能返回负分或大于 1 的原始分，请按模型调整。留空仅排序，与相关性阈值独立。" />
         </div>
-        <div class="row row-end knowledge-global-settings-actions"><button class="btn primary small" type="submit" :disabled="globalSettingsBusy || !globalSettingsDirty"><Icon name="save" :size="14" />{{ globalSettingsBusy ? '保存中…' : '保存全局配置' }}</button></div>
-      </form>
+        <template #footer><button class="btn outline" type="button" :disabled="globalSettingsBusy" @click="$emit('close-global-settings')">取消</button><button class="btn primary" type="button" :disabled="globalSettingsBusy || !globalSettingsDirty" @click="$emit('save-global-settings')"><Icon name="save" :size="14" />{{ globalSettingsBusy ? '保存中…' : '保存全局配置' }}</button></template>
+      </Dialog>
       <Panel flush>
         <div class="knowledge-console">
           <aside class="knowledge-sidebar">
@@ -151,14 +156,10 @@ export const KnowledgeBaseWorkspace = {
             </section>
 
             <section v-else-if="activeBasePane === 'retrieval'" class="knowledge-pane">
-              <div class="knowledge-pane-head"><div><div class="section-title"><Icon name="search" :size="13" />召回测试</div><p class="muted tiny">像真实用户一样提问，确认命中的来源、原文和排序。每次最多 {{ globalResultLimit }} 条，由全局配置统一控制。</p></div></div>
+              <div class="knowledge-pane-head"><div><div class="section-title"><Icon name="search" :size="13" />召回测试</div><p class="muted tiny">像真实用户一样提问，确认命中的来源、原文和排序。每次最多 {{ globalResultLimit }} 条；重排成功时还受重排返回上限限制，均在全局配置中管理。</p></div></div>
               <p v-if="selectedBase.id === 'builtin-commands'" class="muted tiny">统一推荐方式：{{ selectedBase.retrievalMode === 'lexical' ? '关键词推荐' : '混合推荐（默认）' }}；与帮助指令及 AI 工具共用。</p>
               <div class="knowledge-search-box"><Field label="测试问题" v-model="draft.retrievalQuery" placeholder="例如：怎么查体力？" @enter="$emit('test-retrieval')" /><button class="btn primary" type="button" :disabled="baseBusy" @click="$emit('test-retrieval')"><Icon name="play" :size="14" />{{ baseBusy ? '检索中…' : '开始测试' }}</button></div>
-              <div v-if="retrievalDiagnostics" class="item subtle"><p><span v-if="retrievalDiagnostics.configuredMode">配置方式 {{ retrievalDiagnostics.configuredMode === 'lexical' ? '关键词' : '混合' }} · </span>实际召回 {{ retrievalDiagnostics.mode === 'lexical' ? '关键词' : retrievalDiagnostics.mode === 'hybrid' ? '混合' : retrievalDiagnostics.mode }} · 向量 {{ retrievalDiagnostics.vectorAvailable ? '可用' : '未使用或不可用' }} · 过滤 {{ retrievalDiagnostics.filtered }} 条 · 重排 {{ retrievalDiagnostics.rerank }}</p><p v-if="retrievalDiagnostics.relevancePolicy" class="muted tiny">候选依据：{{ ({'exact-command': '精确指令匹配', 'keyword-covered': '完整关键词匹配', 'rerank-validated': '模型相关性核验', 'hybrid-candidates': '混合候选'})[retrievalDiagnostics.relevancePolicy] || retrievalDiagnostics.relevancePolicy }}；相关性筛选排除 {{ retrievalDiagnostics.relevanceFiltered || 0 }} 条，不为凑数量补入弱命中。</p><p v-if="retrievalDiagnostics.fallbackReasons?.length" class="muted tiny">降级原因：{{ retrievalDiagnostics.fallbackReasons.join('；') }}</p><p class="muted tiny">{{ retrievalDiagnostics.commandOrdering === 'relevance-with-command-priority' ? '不同指令按相关性排列；同一推荐指令的多个实现按调度优先级排列，同级遵循框架顺序。' : '结果按相关性排列。' }}融合分不是正确率或概率。</p></div>
-              <div v-if="retrievalResults.length" class="knowledge-result-list">
-                <article v-for="(item, index) in retrievalResults" :key="item.id" class="knowledge-result-card"><div class="item-head"><div class="item-title">{{ index + 1 }}. {{ item.title }}</div><span class="badge accent">{{ item.source || selectedBase.name }}</span></div><p>{{ item.content }}</p><p class="muted tiny">来源 {{ item.retrievalMethod || '未知' }} · 融合分 {{ item.score }}<span v-if="item.rerankScore != null"> · 重排分 {{ item.rerankScore }}</span><span v-if="item.vectorSimilarity != null"> · 向量相似度 {{ item.vectorSimilarity }}（{{ item.distanceMetric }}）</span></p><p v-if="item.commandId" class="muted tiny">{{ item.metadata?.command?.pluginName }} · 优先级 {{ item.metadata?.command?.priorityLabel || (item.metadata?.command?.priority ?? '未知') }} · 权限 {{ item.metadata?.command?.permission || '未知' }} · 处理函数 {{ item.metadata?.command?.fnc || '未知' }}</p><p v-if="item.commandId" class="muted tiny" style="overflow-wrap:anywhere">{{ item.metadata?.origin?.file || '未定位' }} · {{ item.metadata?.command?.regexp }}</p></article>
-              </div>
-              <div v-else class="provider-empty-state"><Icon name="search" :size="24" /><strong>还没有测试结果</strong><p>测试后会展示实际命中的原文，方便快速发现内容或索引问题。</p></div>
+              <KnowledgeRetrievalResults :trace="retrievalTrace" :diagnostics="retrievalDiagnostics" />
             </section>
 
             <section v-else-if="activeBasePane === 'grants'" class="knowledge-pane">

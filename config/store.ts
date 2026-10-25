@@ -220,6 +220,8 @@ function normalizeModelRoutingDefaults(config: Config): Config {
   delete recordProperty(config, "chat").defaultWorkflow
   delete config.workflows
   const knowledge = recordProperty(config, "knowledge")
+  const retrieval = recordProperty(knowledge, "retrieval")
+  for (const key of ["rerankCallsPerConversation", "rerankCallsPerDay"]) delete retrieval[key]
   for (const key of ["enrichment", "excludedPlugins", "excludedCommands", "exclusionRules", "dynamicCapture", "capturePrivate", "captureGroups", "maxEvents", "flushDelayMs"]) delete knowledge[key]
   const defaultTasks: ConfigRecord = isObject(defaults.modelTasks) ? defaults.modelTasks : {}
   if (!isObject(modelTasks.replyer)) modelTasks.replyer = clone(defaultTasks.replyer || {})

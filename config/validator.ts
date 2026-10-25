@@ -1030,14 +1030,13 @@ function validateRuntimeNumbers(config: ConfigRecord, issues: ValidationIssue[])
     ["knowledge.retrieval.ftsCandidateLimit", config.knowledge?.retrieval?.ftsCandidateLimit, 1, 1000],
     ["knowledge.retrieval.vectorCandidateLimit", config.knowledge?.retrieval?.vectorCandidateLimit, 0, 1000],
     ["knowledge.retrieval.resultTokenBudget", config.knowledge?.retrieval?.resultTokenBudget, 0, 20000],
-    ["knowledge.retrieval.rerankCallsPerConversation", config.knowledge?.retrieval?.rerankCallsPerConversation, 0, 100],
-    ["knowledge.retrieval.rerankCallsPerDay", config.knowledge?.retrieval?.rerankCallsPerDay, 0, 100000],
     ["knowledge.commandRetrieval.vectorCandidateLimit", config.knowledge?.commandRetrieval?.vectorCandidateLimit, 0, 1000],
     ["knowledge.commandRetrieval.lexicalWeight", config.knowledge?.commandRetrieval?.lexicalWeight, 0, 10],
     ["knowledge.commandRetrieval.vectorWeight", config.knowledge?.commandRetrieval?.vectorWeight, 0, 10],
   ]
   for (const [path, value, min, max] of numericRanges) positiveNumber(issues, path, value, { min, max })
   positiveNumber(issues, "knowledge.retrieval.resultLimit", config.knowledge?.retrieval?.resultLimit, { min: 1, max: 20, integer: true })
+  positiveNumber(issues, "knowledge.retrieval.rerankResultLimit", config.knowledge?.retrieval?.rerankResultLimit, { min: 1, max: 20, integer: true })
   if (config.memory?.groupCapture?.enabled !== undefined && typeof config.memory.groupCapture.enabled !== "boolean") {
     add(issues, "error", "memory.groupCapture.enabled", "groupCapture.enabled 必须是布尔值")
   }

@@ -112,39 +112,60 @@ try {
   assert(!prefixMatches.some(row=>row.id==="hash" && row.exactCommandMatch))
   assert.equal(prefixMatches.find(row=>row.id==="star")?.exactCommandMatch,true)
 
-  // Use the real rerank orchestrator with isolated config/budget; no paid requests.
-  const exports={}, budget={day:"",calls:0,scopes:{}}
-  let calls=0,fail=false
+  // Use the real rerank orchestrator with isolated configuration; no paid requests.
+  const exports={}
+  let calls=0,fail=false,legacy=false
   vm.runInNewContext(ts.transpileModule(await fs.readFile(new URL("../knowledge/retrieval-rerank.ts",import.meta.url),"utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{
     exports,AbortController,setTimeout,clearTimeout,require:specifier=>{
-      if(specifier==="node:path")return {default:path}
       if(specifier==="node:crypto")return {default:crypto}
-      if(specifier.includes("atomic-json-repository"))return {AtomicJsonRepository:class{async update(fn){fn(budget)}}}
       if(specifier.includes("config/store"))return {configStore:{get:()=>cfg},dataDir:root}
       if(specifier.includes("token-budget"))return {estimateTokens,truncateTextToTokens}
-      if(specifier.includes("host-runtime"))return {hostRuntime:{}}
       if(specifier.includes("provider-resolver"))return {modelPurpose:model=>model.purpose,providerResolver}
       if(specifier.includes("adapters/registry"))return {adapterRegistry:{async rerank(request){calls++;if(fail)throw Error("fixture down");return adapter.rerank(request)}}}
-      if(specifier.includes("isolated-task"))return {runIsolatedModelTask(){throw Error("dedicated model must not use chat")}}
+      if(specifier.includes("isolated-task"))return {runIsolatedModelTask(){if(!legacy)throw Error("dedicated model must not use chat");return {channel:"legacy-fallback",text:JSON.stringify([{id:"weather",relevance:0.1},{id:"image",relevance:0.9}])}}}
       throw Error("unexpected dependency "+specifier)
     },
   })
   const rows=[{id:"weather",title:"天气",content:"查看天气",score:0.02},{id:"image",title:"原图",content:"获取原图",score:0.01}]
-  const settings={...cfg.knowledge.retrieval,rerankMinScore:null,rerankCallsPerConversation:20}
+  const settings={...cfg.knowledge.retrieval,rerankMinScore:null}
+  assert.equal(defaults.knowledge.retrieval.rerankMinScore,0.3)
+  assert.equal(defaults.knowledge.retrieval.rerankResultLimit,5)
   const disabled=await exports.rerankKnowledge({},"原图",rows,{...settings,rerankEnabled:false})
-  assert.equal(disabled.state,"disabled");assert.equal(calls,0);assert.equal(budget.calls,0)
+  assert.equal(disabled.state,"disabled");assert.equal(calls,0)
   const ranked=await exports.rerankKnowledge({},"原图",rows,settings)
   assert.equal(ranked.state,"applied");assert.deepEqual(Array.from(ranked.results,row=>row.id),["image","weather"])
   assert.equal(calls,1)
   const filtered=await exports.rerankKnowledge({},"原图",rows,{...settings,rerankMinScore:0})
   assert.equal(filtered.state,"cached");assert.deepEqual(Array.from(filtered.results,row=>row.id),["image"])
   assert.equal(calls,1,"threshold edits reuse scores without extra requests")
+  const defaultFiltered=await exports.rerankKnowledge({},"原图",rows,{...settings,rerankMinScore:defaults.knowledge.retrieval.rerankMinScore})
+  assert.deepEqual(Array.from(defaultFiltered.results,row=>row.id),["image"],"the default cutoff also accepts provider scores above one")
+  const traced=await exports.rerankKnowledge({},"原图",rows,{...settings,rerankMinScore:0},undefined,true)
+  assert.equal(traced.state,"cached");assert.equal(calls,1)
+  assert.equal(traced.trace.scores.length,2,"the trace retains scores below the cutoff")
+  assert.equal(traced.trace.scores.find(row=>row.id==="weather").score,-1)
+  assert.equal(traced.trace.model,channel.model,"cache preserves the actual model even when the original call did not request a trace")
+  assert.equal(ranked.trace,undefined)
   fail=true
-  const fallback=await exports.rerankKnowledge({},"另一个问题",rows,settings)
+  const fallback=await exports.rerankKnowledge({},"另一个问题",rows,settings,undefined,true)
   assert.equal(fallback.state,"failed_fallback");assert.deepEqual(fallback.results,rows)
-  const exhausted=await exports.rerankKnowledge({},"预算",rows,{...settings,rerankCallsPerDay:0})
-  assert.equal(exhausted.state,"budget_exhausted")
-  console.log("ok command hybrid: real /rerank HTTP, score/index validation, cancellation, purpose routing, clean text, Chinese terms, prefix distinction, conflict-only sorting, disabled/cache/failure/budget paths")
+  assert.equal(fallback.trace.scores.length,0)
+  fail=false
+  const beforeRepeated=calls
+  const event={user_id:"reader",sessionId:"same-session"}
+  for(let i=0;i<105;i++){
+    const result=await exports.rerankKnowledge(event,`连续重排 ${i}`,rows,settings,undefined,true)
+    assert.equal(result.state,"applied");assert.equal(result.results[0].rerankScore,2.5)
+    assert(!Object.hasOwn(result.trace,"budget"));assert(!Object.hasOwn(result.trace,"budgetMode"))
+  }
+  assert.equal(calls,beforeRepeated+105,"one conversation can run more than the former daily call ceiling")
+  const beforeOff=calls
+  assert.equal((await exports.rerankKnowledge(event,"关闭重排",rows,{...settings,rerankEnabled:false})).state,"disabled")
+  assert.equal(calls,beforeOff)
+  legacy=true;rank.purpose="chat";cfg.models.push({name:"legacy-fallback",purpose:"chat",modelIdentifier:"actual-chat-ranker"})
+  const legacyResult=await exports.rerankKnowledge({},"对话模型重排",rows,settings,undefined,true)
+  assert.equal(legacyResult.state,"applied");assert.equal(legacyResult.trace.model,"actual-chat-ranker","legacy task fallback reports the model actually used")
+  console.log("ok command hybrid: real /rerank HTTP, score/index validation, cancellation, purpose routing, clean text, Chinese terms, prefix distinction, conflict-only sorting, disabled/cache/failure and repeated calls")
 } finally {
   server.closeAllConnections()
   await new Promise(resolve=>server.close(resolve))
