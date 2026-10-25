@@ -183,6 +183,49 @@ try {
   assert.equal(rerankPrompts.length,3)
   assert(estimateTokens(rerankPrompts[2].prompt)<=400,"serialized rerank input stays within budget including escaping")
   assert.equal((await rerankExports.rerankKnowledge({},"长".repeat(5000),rankCandidates,rankConfig)).state,"input_budget")
+  // Unequal semantic scores must retain multiple candidates before the global final cap.
+  const queryRuntime=await import("../output/runtime/knowledge/command-query-service.js")
+  const documentRuntime=await import("../output/runtime/knowledge/document-retrieval.js")
+  const availabilityRuntime=await import("../output/runtime/knowledge/command-availability.js")
+  const builderRuntime=await import("../output/runtime/knowledge/command-document-builder.js")
+  const hybridExports={},hybridInputs=[]
+  const semanticCommands=Array.from({length:6},(_,index)=>({id:`semantic-${index}`,pluginKey:"semantic-fixture",suggestedCommand:`#语义候选${index}`,retrievalText:`候选说明 ${index}`}))
+  const semanticVectors=semanticCommands.map((command,index)=>({id:`chunk-${index}`,commandId:command.id,metadata:{commandId:command.id},score:1/(61+index),vectorSimilarity:0.95-index*0.05,distance:0.05+index*0.05,distanceMetric:"cosine"}))
+  const hybridConfig={knowledge:{commandRetrieval:{mode:"hybrid",vectorCandidateLimit:30},retrieval:{rerankEnabled:false}}}
+  let hybridRerankState="disabled"
+  vm.runInNewContext(ts.transpileModule(await fs.readFile(new URL("../knowledge/command-hybrid-retrieval.ts",import.meta.url),"utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{
+    exports:hybridExports,require:spec=>{
+      if(spec.includes("command-availability"))return availabilityRuntime
+      if(spec.includes("config/store"))return {configStore:{get:()=>hybridConfig}}
+      if(spec.includes("./repository"))return {knowledgeRepository:{getBase:async()=>({config:{embeddingModel:"semantic-fixture",dimensions:2}})}}
+      if(spec.includes("document-retrieval"))return {resolveKnowledgeResultLimit:documentRuntime.resolveKnowledgeResultLimit,searchKnowledgeDetailed:async()=>({results:semanticVectors,retrieval:{vectorAvailable:true,filtered:2}})}
+      if(spec.includes("./access"))return {assertKnowledgeAccess:async()=>{throw Error("unexpected authorization call")}}
+      if(spec.includes("retrieval-rerank"))return {rerankKnowledge:async(_event,_query,candidates)=>{
+        hybridInputs.push(candidates.map(row=>row.id))
+        return {results:hybridRerankState==="applied"?candidates.slice(1,3).reverse():candidates,state:hybridRerankState}
+      }}
+      if(spec.includes("command-query-service"))return queryRuntime
+      if(spec.includes("command-document-builder"))return builderRuntime
+      throw Error("unexpected hybrid dependency: "+spec)
+    },
+  })
+  const semanticObserver={recommendCommands:query=>({query,results:[]}),searchableCommands:()=>semanticCommands}
+  const semanticSearch=options=>hybridExports.recommendCommandHybrid(semanticObserver,"语义提问",options)
+  const semanticResults=await semanticSearch()
+  assert.equal(semanticResults.results.length,defaults.knowledge.retrieval.resultLimit,"distinct vector scores must not collapse the final result count to one")
+  assert.deepEqual(Array.from(semanticResults.results,row=>row.id),semanticCommands.slice(0,5).map(row=>row.id))
+  assert.equal(semanticResults.retrieval.relevancePolicy,"hybrid-candidates")
+  assert.equal(semanticResults.retrieval.relevanceFiltered,0)
+  assert.equal(semanticResults.retrieval.filtered,2,"upstream threshold exclusions remain in diagnostics")
+  assert.equal(hybridInputs[0].length,6,"reranking receives the full retained candidate pool")
+  assert.equal((await semanticSearch({limit:2})).results.length,2)
+  assert.equal((await semanticSearch({limit:100})).results.length,defaults.knowledge.retrieval.resultLimit)
+  for(const state of ["failed_fallback","budget_exhausted"]){
+    hybridRerankState=state
+    assert.equal((await semanticSearch()).results.length,defaults.knowledge.retrieval.resultLimit,"rerank fallback must retain multiple valid semantic candidates")
+  }
+  hybridRerankState="applied"
+  assert.deepEqual(Array.from((await semanticSearch()).results,row=>row.id),["semantic-2","semantic-1"],"successful reranking can still filter and reorder candidates")
   await knowledgeRepository.setGrant({knowledgeBaseId:base,principalType:"user",principalId:"no-grants",access:"deny"})
   assert.deepEqual(await knowledgeStore.list({user_id:"no-grants"}),[],"an empty authorization list must not expose metadata")
   const untouchedCount=embeddings.length

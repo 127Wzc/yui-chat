@@ -69,11 +69,9 @@ export async function recommendCommandHybrid(observer: CommandObserverLike, quer
   }
   const rerankRelevant = async (candidates: UnknownRecord[]): Promise<{ results: UnknownRecord[]; state: string; policy: string; filtered: number }> => {
     const selected = selectRelevantCommandCandidates(candidates)
-    const input = selected.policy === "semantic-nearest" ? candidates : selected.results
-    const reranked = await rerankKnowledge(event, text(query), input.map(item => ({ ...item, id: text(item.id), title: text(item.suggestedCommand), content: text(item.retrievalText || item.description) + (item.retrievalText ? "" : "\n" + text(item.body)), score: numberValue(item.fusionScore), knowledgeBaseId: BUILTIN_COMMANDS_ID, fieldDescription: text(baseConfig.fieldDescription) })), record(knowledge.retrieval))
+    const reranked = await rerankKnowledge(event, text(query), selected.results.map(item => ({ ...item, id: text(item.id), title: text(item.suggestedCommand), content: text(item.retrievalText || item.description) + (item.retrievalText ? "" : "\n" + text(item.body)), score: numberValue(item.fusionScore), knowledgeBaseId: BUILTIN_COMMANDS_ID, fieldDescription: text(baseConfig.fieldDescription) })), record(knowledge.retrieval))
     const validated = ["applied", "cached"].includes(reranked.state)
-    const results = selected.policy === "semantic-nearest" && !validated ? selected.results : reranked.results
-    return { results, state: reranked.state, policy: selected.policy === "semantic-nearest" && validated ? "rerank-validated" : selected.policy, filtered: candidates.length - results.length }
+    return { results: reranked.results, state: reranked.state, policy: selected.policy === "hybrid-candidates" && validated ? "rerank-validated" : selected.policy, filtered: candidates.length - reranked.results.length }
   }
   const localResult = async (reason?: string): Promise<UnknownRecord> => {
     const candidates: UnknownRecord[] = ((Array.isArray(lexical.results) ? lexical.results : []) as UnknownRecord[]).map((item, index) => ({ ...item, retrievalMethod: "keyword", fusionScore: 1 / (60 + index + 1) }))

@@ -8,6 +8,39 @@
 
 SQLite 中已导入的文档是唯一有效目录；帮助指令、AI 工具、管理台召回测试读取同一份内容。来源字段用于展示和核对，`retrievalText` 是唯一检索正文，关键词与向量不再分别拼装另一份内容。导入知识不会注册或执行宿主指令，实际权限仍由原插件检查。
 
+## 数据库与索引架构
+
+知识库采用本地 SQLite 双库架构，通过 `better-sqlite3` 在独立 Worker 中读写，连接启用 WAL 和外键约束。当前依赖版本为 `better-sqlite3 12.10.0`、`sqlite-vec 0.1.9`，见 [package.json](../package.json)。以下存储与向量机制由内置指令库和普通知识库共用，关键词召回则按库类型分流。
+
+| 层次 | 默认位置与表 | 内容与职责 |
+| --- | --- | --- |
+| 正文与设置 | `data/yui-chat/storage/state.sqlite3`：`knowledge_bases`、`knowledge_documents`、`knowledge_chunks` | 知识库设置、有效文档、分块、内容 SHA256 摘要及当前向量空间引用 |
+| 全文索引 | 同一状态库：`knowledge_fts` | SQLite FTS5 虚拟表，索引标题和分块正文，使用 `unicode61` tokenizer；可由正文重建 |
+| 索引任务 | 同一状态库：`knowledge_index_jobs`、`knowledge_vector_tasks` | 全量构建/发布与指令文档增量更新、旧块清理的持久化任务 |
+| 向量索引 | `data/yui-chat/storage/vectors.sqlite3`：`embedding_spaces`、`embedding_records`、`vec_<space>` | 空间定义、分块所有者与内容摘要，以及 sqlite-vec `vec0` 虚拟表中的浮点向量；属于可重建的派生数据 |
+
+文档按知识库归属，分块通过文档 ID 关联正文；向量记录通过 `owner_type=knowledge_chunk`、`owner_id=分块 UUID` 回连分块。向量空间按模型、维度、Cosine 度量及作用域隔离，知识库通过 `active_vector_space_id` 指向已发布空间。作用域包含分片策略及模型配置指纹；指纹覆盖模型、供应商与参数，因此同名模型更换上游也会使旧索引不兼容。表关系见 [SQLite 表结构](sqlite-baseline-er.md)。
+
+```mermaid
+flowchart LR
+    Import["导入 / 编辑文档"] --> State["state.sqlite3<br/>正文与分块"]
+    State --> FTS["knowledge_fts<br/>FTS5 全文索引"]
+    State --> Jobs["持久化索引任务"]
+    Jobs --> Embed["所选 Embedding 模型"]
+    Embed --> Vec["vectors.sqlite3<br/>vec0 向量空间"]
+    Query["查询与知识库授权"] --> Lexical["关键词候选<br/>普通库：FTS5 / LIKE<br/>指令库：专用正文评分"]
+    FTS --> Lexical
+    State --> Lexical
+    Query --> QueryEmbed["同模型查询向量"]
+    QueryEmbed --> Vec
+    Lexical --> Fusion["相关性门槛 / RRF 融合"]
+    Vec --> Fusion
+    Fusion --> Rerank["可选模型重排"]
+    Rerank --> Result["按全局上限返回"]
+```
+
+Embedding 模型由每个知识库的 `config.embeddingModel` 与 `config.dimensions` 选择，未内置固定模型或固定维度；模型未配置或索引未就绪时使用关键词召回。分块与增量发布规则见[增量向量与分片](#增量向量与分片)，召回评分见[索引与相似度算法](#索引与相似度算法)。
+
 ## 采集脚本与永久 ID
 
 推荐在“知识库 → 内置指令知识库 → 维护”完成以下三步：
@@ -116,11 +149,51 @@ node plugins/yui-chat/output/runtime/scripts/scan-command-knowledge.js > command
 
 一条指令优先一个分块：检索正文不超过 6000 字符时整条保留，过长才按段落切成有界分块，零重叠且不丢短尾段。文档更新按块内容摘要复用旧块 UUID，多余块删除，变化块获得新 UUID。
 
+上述规则由 `knowledge/command-import.ts` 的 `commandChunks()` 实现，超过 6000 字符后目标块长为 1600 字符。普通知识库则使用 `knowledge/chunking.ts` 的结构化文本分块：优先保留标题、段落、列表与围栏代码块，超长段落再按句子或字符边界切分；默认目标 800 字符，超长段落切分时默认重叠 120 字符，`minChars=80` 用于选择边界，不丢弃短尾段。分块策略是文本结构规则，不调用模型做语义切分。
+
 正常导入只在兼容的当前向量空间处理变化文档，不复制整库或切换整库空间。同一文档连续更新合并为最新待办，旧模型请求返回后再次核对文档摘要、向量空间和模型身份，不能把旧结果发布到新内容上。元数据变化但检索正文未变时复用向量。
 
 待更新文档与待清理旧块的任务在正文事务中一起持久化。后台处理失败保留任务，按分钟间隔最多自动尝试三次，可在维护列表查看失败原因并手动重试；期间保留新正文的关键词检索，旧块不能作为当前正文返回。进程重启可继续未完成任务。索引检查只读；显式“补齐缺失”复用兼容向量，只为缺失块调用 embedding。
 
 更换模型、维度或进行不兼容的分片升级时，沿用独立 staging 空间和发布切换；完整构建结束后清理旧派生空间。已有 L1/L2 库升级后保留正文、停用不兼容索引，等待显式重建。
+
+## 索引与相似度算法
+
+### 关键词召回
+
+**普通知识库**由 `knowledge/document-retrieval.ts` 查询 `knowledge_fts`：查询先转小写、去除常见问句词，再提取词项，连续中文额外生成相邻双字词，最多保留 32 项。FTS5 使用词项 OR 匹配和 BM25 排序，代码取 `-bm25(knowledge_fts)` 作为正向分数。`unicode61` 不对连续中文做中文分词，因此候选不足时再用转义后的 `LIKE` 子串匹配标题与正文，最多使用前 12 个查询词项。
+
+普通库的 `lexicalRelevance` 为“标题与正文中命中的查询词项数 / 查询词项总数”；先按相关性阈值过滤，再按覆盖率、BM25 等排序并截取候选。BM25 用于全文检索排序，覆盖率用于相关性门槛，两者不是同一个分数。
+
+**内置指令知识库**由 `knowledge/retrieval.ts` 分流到 `knowledge/command-query-service.ts`，读取已导入且启用的指令，在内存中对 `retrievalText` 做专用评分。它清理问句前后缀并生成整词和中文相邻双字词，以正文子串、完整词项、指令触发头与用途提示的命中累积分数，对触发头和建议指令命中额外加分。已有 `retrievalText` 时，触发头、用途提示和精确指令证据须能在正文中找到，不能单凭元数据扩大匹配范围。
+
+指令的相关性按有效查询词项覆盖率计算；完整查询或触发头命中记为 1。通过阈值后按专用词法分排序，再用辅助分和 ID 打破同分。该路径不依赖 BM25 进行关键词排序；其分块仍保有 FTS5 投影，向量召回复用公共查询模块。
+
+### 向量近邻与余弦相似度
+
+`knowledge/vector-index.ts` 为每个空间创建 `vec0(embedding float[维度] distance_metric=cosine, +record_id TEXT)`，查询使用 `embedding MATCH 查询向量 AND k=候选数`。当前为 sqlite-vec 的精确 KNN 扫描，没有配置 HNSW、IVF 等近似近邻索引；`vec_<space>` 是空间对应的虚拟表。KNN 与距离配置参见 [sqlite-vec 查询文档](https://alexgarcia.xyz/sqlite-vec/features/knn.html)，扫描与过滤机制参见 [vec0 文档](https://alexgarcia.xyz/sqlite-vec/features/vec0.html)。
+
+对查询向量 `q` 和分块向量 `v`，度量约定为：
+
+```text
+cosineSimilarity(q, v) = dot(q, v) / (norm(q) * norm(v))
+distance = 1 - cosineSimilarity(q, v)
+vectorSimilarity = 1 - distance
+```
+
+距离越小越近，相似度越大越相关；理论余弦相似度范围为 [-1, 1]。查询按距离升序取候选，再按相似度阈值过滤，当前默认 `knowledge.retrieval.minRelevance=0.55`。检索先确定可访问的知识库；指令存在停用项时，先把可检索分块限定到 KNN 集合，再回查当前正文与启停状态。查询向量按模型配置指纹、维度、度量和查询正文缓存，最多 128 项、有效期一天；缓存和索引均不跨不兼容模型复用。
+
+### 排名融合与可选重排
+
+关键词与向量各自产生通过相关性门槛的候选后，使用加权 RRF（Reciprocal Rank Fusion，倒数排名融合），按排名累加而非直接相加 BM25 与余弦值：
+
+```text
+fusionScore(item) = sum(weight(method) / (60 + rank(method, item)))
+```
+
+`rank` 从 1 开始；某一路未命中就不贡献分数。普通知识查询默认关键词与向量权重均为 1；内置指令推荐默认关键词权重 1、向量权重 0.65，由 `knowledge.commandRetrieval` 配置。指令候选按永久指令 ID 去重，多块命中不重复累计同一路分数。普通查询默认关键词候选额度、向量候选额度各 30；指令推荐默认关键词最多 20、向量最多 30，均是候选额度而非承诺返回数。
+
+指令在融合后依次选择精确指令匹配、完整关键词覆盖的候选；两者均不存在时保留已通过门槛的融合候选。可选模型重排由 `knowledge/retrieval-rerank.ts` 请求文本模型输出 0–1 相关性分数，再按同一阈值过滤和排序。默认关闭，启用时默认最多重排 8 个候选；有效重排只保留被模型评分且通过门槛的候选，未进入重排输入的候选不补回。超时、无效输出或预算不足时保留重排前结果。最终数量、等价指令调度排序与设置见下节。
 
 ## 查询策略与设置
 
@@ -130,7 +203,7 @@ node plugins/yui-chat/output/runtime/scripts/scan-command-knowledge.js > command
 
 每个知识库可在设置中维护 `config.fieldDescription`（最多 2000 字符）；内置指令库预置插件字段、priority、regexp、regexpFlags 的含义，普通知识库默认留空。说明随已授权检索结果传递，重排输入和回答上下文分别按库提供一次；候选仅传 ID、标题、正文及库 ID，不携带整份元数据或处理函数源码。说明与正文同属不可信参考资料，受输入预算截断；说明不参与分块、关键词匹配或向量生成，修改仅影响后续模型解释并使重排缓存失效，不增加条目历史，也不重建向量。
 
-不同指令按相关性排列；仅同一推荐指令的多个实现按宿主优先级及规则顺序排列。相似度和融合分不是正确概率。向量不可用时降级关键词；访问授权与原插件执行权限分别检查。
+不同指令按相关性排列；仅同一推荐指令的多个实现按宿主优先级及规则顺序排列。有精确指令或完整关键词匹配时优先对应候选；其余已通过相关性门槛的关键词与向量候选保留融合排序，再经可选重排和全局数量上限返回，不再只保留相似度最高的一组。重排关闭、预算不足或失败时保留这些候选；没有通过门槛的结果仍返回空。相似度和融合分不是正确概率。向量不可用时降级关键词；访问授权与原插件执行权限分别检查。
 
 个人和群记忆保留独立的写入、作用域隔离与召回流程，本次指令导入不更改记忆正文。记忆空间与查询缓存按上游模型身份隔离，模型变化期间拒绝过期输出。
 

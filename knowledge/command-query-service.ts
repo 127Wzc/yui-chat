@@ -387,16 +387,12 @@ export function findCommandMatches(commands: readonly Command[] = [], query: unk
     }))
 }
 
-/** 先确定相关候选集，再应用宿主调度顺序；向量相近不等于已确认同一功能。 */
+/** 优先明确匹配证据，否则保留已通过相关性门槛的融合候选。 */
 export function selectRelevantCommandCandidates(candidates: readonly Command[]): { results: Command[]; policy: string; filtered: number } {
   const exact = candidates.filter(item => item.exactCommandMatch === true)
   const covered = candidates.filter(item => numberValue(item.lexicalRelevance) === 1)
-  const semantic = candidates.filter(item => typeof item.vectorSimilarity === "number" && Number.isFinite(item.vectorSimilarity))
-  const best = Math.max(...semantic.map(item => Number(item.vectorSimilarity)))
-  // 无充分词项证据且未经过模型核验时，只推荐距离最近的一组；容差仅处理 float32 舍入。
-  const nearest = semantic.filter(item => best - Number(item.vectorSimilarity) <= 1e-6)
-  const results = exact.length ? exact : covered.length ? covered : nearest.length ? nearest : [...candidates]
-  return { results, policy: exact.length ? "exact-command" : covered.length ? "keyword-covered" : nearest.length ? "semantic-nearest" : "hybrid-candidates", filtered: candidates.length - results.length }
+  const results = exact.length ? exact : covered.length ? covered : [...candidates]
+  return { results, policy: exact.length ? "exact-command" : covered.length ? "keyword-covered" : "hybrid-candidates", filtered: candidates.length - results.length }
 }
 
 export function buildCommandRecommendations(commands: readonly Command[] = [], query: unknown = "", opts: QueryOptions = {}): UnknownRecord {
