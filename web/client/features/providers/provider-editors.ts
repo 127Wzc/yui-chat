@@ -36,7 +36,7 @@ interface ProviderConfig extends UnknownRecord {
   type?: string
 }
 interface RequestResult extends UnknownRecord { models?: RemoteModel[]; result?: { channel?: string; operation?: string; dimensions?: number; vectorCount?: number }; config?: UnknownRecord; diagnostics?: UnknownRecord }
-type ModelConfig = UnknownRecord & { name: string; adapter?: string; purpose?: string; modelIdentifier?: string; apiProvider?: string; capabilities?: { chat?: boolean; embedding?: boolean }; embedding?: { protocol?: string; defaultDimensions?: number; allowedDimensions?: number[]; supportsDimensionOverride?: boolean; batchSize?: number; timeoutMs?: number; params?: UnknownRecord }; image?: UnknownRecord; visual?: boolean; toolUse?: boolean; timeoutMs?: number; contextWindowTokens?: number; stream?: boolean; priceIn?: number; priceOut?: number; reasoning?: { target?: string; effort?: string }; params?: UnknownRecord; responses?: ResponsesModelConfig; toolPolicy?: ModelToolPolicyConfig }
+type ModelConfig = UnknownRecord & { name: string; adapter?: string; purpose?: string; modelIdentifier?: string; apiProvider?: string; capabilities?: { chat?: boolean; embedding?: boolean }; rerank?: { params?: UnknownRecord }; embedding?: { protocol?: string; defaultDimensions?: number; allowedDimensions?: number[]; supportsDimensionOverride?: boolean; batchSize?: number; timeoutMs?: number; params?: UnknownRecord }; image?: UnknownRecord; visual?: boolean; toolUse?: boolean; timeoutMs?: number; contextWindowTokens?: number; stream?: boolean; priceIn?: number; priceOut?: number; reasoning?: { target?: string; effort?: string }; params?: UnknownRecord; responses?: ResponsesModelConfig; toolPolicy?: ModelToolPolicyConfig }
 type Emit = (event: string) => void
 
 function imageAdapterValue(protocol: unknown): string {
@@ -197,7 +197,7 @@ export const ModelEditor = {
   props: { model: Object },
   setup(props: { model: ModelConfig }, { emit }: { emit: Emit }) {
     const initialPurpose = props.model.purpose
-      || (props.model.adapter === "typesafe" ? "decision" : "")
+      || (props.model.adapter === "systemone" ? "decision" : "")
       || (props.model.adapter === "openai-images" || props.model.adapter === "openai-chat-completions" || props.model.adapter === "gemini-images" ? "image" : props.model.capabilities?.chat === false && props.model.capabilities?.embedding ? "embedding" : "chat")
     const draft = reactive({
       modelIdentifier: props.model.modelIdentifier || "",
@@ -209,12 +209,13 @@ export const ModelEditor = {
       chatProtocol: props.model.adapter === "openai-responses" ? "responses" : "chat-completions",
       chatCapability: String(props.model.capabilities?.chat !== false),
       embeddingCapability: String(Boolean(props.model.capabilities?.embedding)),
-      embeddingProtocol: props.model.embedding?.protocol || "openai-compatible",
+      embeddingProtocol: props.model.embedding?.protocol || "embeddings",
       embeddingDimensions: props.model.embedding?.defaultDimensions ?? 1024,
       embeddingAllowedDimensions: (props.model.embedding?.allowedDimensions || []).join(", "),
       embeddingSupportsOverride: String(props.model.embedding?.supportsDimensionOverride !== false),
       embeddingBatchSize: props.model.embedding?.batchSize ?? 16,
       embeddingTimeoutMs: props.model.embedding?.timeoutMs ?? 30000,
+      rerankParams: toJson(props.model.rerank?.params || {}),
       embeddingParams: toJson(props.model.embedding?.params || {}),
       visual: String(Boolean(props.model.visual)),
       toolUse: String(props.model.toolUse !== false),
@@ -236,10 +237,11 @@ export const ModelEditor = {
     let initializeReasoning = props.model.reasoning === undefined
     const chatAdapter = computed(() => draft.chatProtocol === "responses" ? "openai-responses"
       : props.model.adapter === "openai-responses" || props.model.adapter === "openai-images" ? "openai-compatible"
-      : props.model.adapter === "gemini-images" ? "gemini" : props.model.adapter)
-    watch(() => [draft.modelIdentifier, draft.reasoningTarget, chatAdapter.value], async (_value, _previous, onCleanup) => {
+      : props.model.adapter === "gemini-images" ? "gemini" : ["embeddings", "rerank", "systemone"].includes(String(props.model.adapter)) ? "openai-compatible" : props.model.adapter)
+    watch(() => [draft.purpose, draft.modelIdentifier, draft.reasoningTarget, chatAdapter.value], async (_value, _previous, onCleanup) => {
       let cancelled = false
       onCleanup(() => { cancelled = true })
+      if (draft.purpose !== "chat") { reasoningLoading.value = false; reasoningError.value = ""; return }
       reasoningLoading.value = true
       reasoningError.value = ""
       try {
@@ -298,7 +300,7 @@ export const ModelEditor = {
       draft.embeddingCapability = "true"
       draft.visual = "false"
       draft.toolUse = "false"
-      draft.embeddingProtocol = "openai-compatible"
+      draft.embeddingProtocol = "embeddings"
       draft.embeddingDimensions = 1024
       draft.embeddingAllowedDimensions = "1024"
       draft.embeddingSupportsOverride = "false"
@@ -318,7 +320,7 @@ export const ModelEditor = {
           body: JSON.stringify({
             modelIdentifier: draft.modelIdentifier,
             purpose: draft.purpose,
-            adapter: draft.purpose === "image" ? imageAdapterValue(draft.imageProtocol) : chatAdapter.value,
+            adapter: draft.purpose === "image" ? imageAdapterValue(draft.imageProtocol) : draft.purpose === "rerank" ? "rerank" : draft.purpose === "embedding" ? "embeddings" : draft.purpose === "decision" ? "systemone" : chatAdapter.value,
             image: draft.purpose === "image" ? {
               protocol: draft.imageProtocol,
               ...(draft.imageAspectRatio ? { aspectRatio: draft.imageAspectRatio } : {}),
@@ -338,9 +340,10 @@ export const ModelEditor = {
               chat: draft.purpose === "chat",
               embedding: draft.purpose === "embedding",
             },
+            rerank: draft.purpose === "rerank" ? { params: parseJsonText(draft.rerankParams, `${name} rerank params`, {}) } : null,
             embedding: draft.purpose === "embedding"
               ? {
-                protocol: draft.embeddingProtocol || "openai-compatible",
+                protocol: draft.embeddingProtocol || "embeddings",
                 defaultDimensions: Number(draft.embeddingDimensions || 0),
                 allowedDimensions: splitTokens(draft.embeddingAllowedDimensions).map(Number).filter(Number.isFinite),
                 supportsDimensionOverride: draft.embeddingSupportsOverride !== "false",
@@ -365,7 +368,7 @@ export const ModelEditor = {
     }
     return {
       draft, toolPolicyOptions, reasoningLoading, reasoningError, loadingModels, saving, fetchedModels, modelFilter, filteredFetchedModels,
-      purposeOptions: [{ value: "chat", label: "文本对话" }, { value: "image", label: "图片生成" }, { value: "embedding", label: "向量检索" }, { value: "decision", label: "决策判断" }],
+      purposeOptions: [{ value: "chat", label: "文本对话" }, { value: "image", label: "图片生成" }, { value: "embedding", label: "嵌入模型" }, { value: "rerank", label: "重排序" }, { value: "decision", label: "决策判断" }],
       imageAdapterOptions: [{ value: "openai-images", label: "OpenAI Images（兼容协议）" }, { value: "openai-chat-completions", label: "OpenAI Chat Completions（生图/编辑）" }, { value: "gemini-images", label: "Gemini 图片协议" }],
       fetchModels, chooseModelIdentifier, applyBgePreset, save, BOOL_OPTIONS, BOOL_OFF_OPTIONS, INHERIT_BOOL_OPTIONS,
       REASONING_TARGET_OPTIONS, reasoningEffortOptions, TOOL_POLICY_MODE_OPTIONS, TOOL_SOURCE_OPTIONS,
@@ -396,9 +399,13 @@ export const ModelEditor = {
         ${MODEL_TOOL_POLICY_EDITOR_TEMPLATE}
         ${RESPONSES_MODEL_EDITOR_TEMPLATE}
       </template>
-      <Collapse v-if="draft.purpose === 'embedding'" title="向量模型参数" hint="知识库 / 记忆可复用" nested>
+      <Collapse v-if="draft.purpose === 'rerank'" title="重排序参数" hint="兼容 /rerank 接口" nested>
+        <p class="muted tiny">使用渠道地址下的 /rerank 接口，可接入 BGE Reranker 等模型；在知识库设置中选择并开启后使用。</p>
+        <Field label="额外参数 JSON" type="textarea" :rows="3" v-model="draft.rerankParams" tip="通常保持 {}，按服务文档填写额外选项。" />
+      </Collapse>
+      <Collapse v-if="draft.purpose === 'embedding'" title="嵌入模型参数" hint="知识库 / 记忆可复用" nested>
         <div class="form-grid dense">
-          <Field label="Embedding 协议" type="select" :options="[{ value: 'openai-compatible', label: 'OpenAI Compatible' }]" v-model="draft.embeddingProtocol" />
+          <Field label="Embedding 协议" type="select" :options="[{ value: 'embeddings', label: 'embeddings（兼容接口）' }, { value: 'gemini', label: 'Gemini 原生嵌入' }]" v-model="draft.embeddingProtocol" />
           <Field label="默认维度" type="number" v-model="draft.embeddingDimensions" tip="BGE-M3 固定为 1024。" />
           <Field label="允许维度" v-model="draft.embeddingAllowedDimensions" placeholder="1024" tip="逗号分隔；留空表示不限制。" />
           <Field label="允许覆盖维度" type="select" :options="BOOL_OFF_OPTIONS" v-model="draft.embeddingSupportsOverride" />

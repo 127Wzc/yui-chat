@@ -1,3 +1,4 @@
+import { cleanCommandRetrievalText } from "./command-retrieval-text.js"
 import { prepareCommandCompleteness } from "./command-completeness.js"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
@@ -38,7 +39,7 @@ class CommandObserver {
     this.patchDeal()
   }
   async load(): Promise<void> {
-    const rows = sqliteClient.status.available ? (await commandImports.list()).map(row => ({ ...row.metadata, id: row.id, title: row.title, metadata: row.metadata, retrievalText: row.retrievalText, sourceId: row.sourceId, suggestedCommand: typeof row.metadata.suggestedCommand === "string" ? row.metadata.suggestedCommand : row.title, description: row.metadata.description || row.title, imported: true, enabled: row.enabled, commandEnabled: row.commandEnabled, pluginEnabled: row.pluginEnabled })) : []
+    const rows = sqliteClient.status.available ? (await commandImports.list()).map(row => ({ ...row.metadata, id: row.id, title: row.title, metadata: row.metadata, retrievalText: cleanCommandRetrievalText(row.retrievalText, row.metadata), sourceId: row.sourceId, suggestedCommand: typeof row.metadata.suggestedCommand === "string" ? row.metadata.suggestedCommand : row.title, description: row.metadata.description || row.title, imported: true, enabled: row.enabled, commandEnabled: row.commandEnabled, pluginEnabled: row.pluginEnabled })) : []
     this.commands = rows.map(row => ({ ...buildCommandDoc(row), ...row })) as CommandRecord[]
     await prepareCommandCompleteness(this.commands)
   }

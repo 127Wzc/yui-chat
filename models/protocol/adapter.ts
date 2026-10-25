@@ -1,4 +1,4 @@
-import type { DecisionRequest, DecisionResponse, EmbeddingRequest, EmbeddingResponse, ImageGenerationRequest, ImageGenerationResponse, ModelListRequest, ModelRequest, ModelResponse } from "./types.js"
+import type { RerankRequest, RerankResponse, DecisionRequest, DecisionResponse, EmbeddingRequest, EmbeddingResponse, ImageGenerationRequest, ImageGenerationResponse, ModelListRequest, ModelRequest, ModelResponse } from "./types.js"
 
 /**
  * 模型适配器的 TS 目标基类。
@@ -25,6 +25,13 @@ export abstract class ModelAdapter {
 
   /** 是否支持 embedding。 */
   readonly supportsEmbeddings: boolean = false
+
+  /** 是否支持专用检索重排序。 */
+  readonly supportsRerank: boolean = false
+
+  async rerank(_request: RerankRequest): Promise<RerankResponse> {
+    throw new Error(`${this.id} 适配器不支持重排序`)
+  }
 
   /** 是否支持图片生成。 */
   readonly supportsImageGeneration: boolean = false

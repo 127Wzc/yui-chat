@@ -32,7 +32,7 @@ interface SubAgentSettings extends UnknownRecord {
   systemPrompt?: string
 }
 interface RoutingConfig extends UnknownRecord {
-  modelTasks?: Record<string, { modelList?: string[]; selectionStrategy?: string }>
+  modelTasks?: Record<string, { modelList?: string[]; selectionStrategy?: string; purpose?: string }>
   subAgent?: SubAgentSettings
   mediaRecognition?: { recognitionModel?: string }
   chat?: { modelRequestTimeoutMs?: number; modelStream?: boolean; defaultTask?: string }
@@ -75,7 +75,7 @@ const SubAgentConfig = {
   setup(props: { cfg: RoutingConfig }) {
     const taskNames = computed(() => {
       const modelTasks = props.cfg.modelTasks || {}
-      const names = Object.keys(modelTasks)
+      const names = Object.keys(modelTasks).filter(name => name !== "rerank" && modelTasks[name]?.purpose !== "rerank")
       return names.length ? names : ["replyer"]
     })
     const sub = props.cfg.subAgent || {}
@@ -185,7 +185,7 @@ export const ModelRoutingBuilder = {
   setup(props: { cfg: RoutingConfig; modelNames: string[]; compact: boolean }) {
     const chatModels = computed(() => (props.cfg.models || []).filter(model => {
       const purpose = String(model.purpose || "").toLowerCase()
-      if (purpose === "image" || purpose === "embedding" || purpose === "decision") return false
+      if (purpose === "image" || purpose === "embedding" || purpose === "decision" || purpose === "rerank") return false
       return model.capabilities?.chat !== false
     }))
     const modelLabel = (name = "") => {

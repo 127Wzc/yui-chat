@@ -355,7 +355,10 @@ export function normalizeTool(tool: unknown, defaults: unknown = {}): Normalized
     policy: jsonRecord(policy) as ToolCommon["policy"],
     provenance: jsonRecord(provenance),
   }
-  return { ...sourceFields, name: text(sourceTool.name), execute: (execute as ToolExecutor).bind(tool), common }
+  return { ...sourceFields, name: text(sourceTool.name), execute: (execute as ToolExecutor).bind(tool), common,
+    ...(typeof sourceTool.describeForContext === "function"
+      ? { describeForContext: (sourceTool.describeForContext as NonNullable<ToolDefinition["describeForContext"]>).bind(tool) } : {}),
+  }
 }
 
 function normalizeStickerExpressionChannel(value: unknown): StickerExpressionChannelContract | undefined {

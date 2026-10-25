@@ -81,7 +81,7 @@ export const providerTemplates: Record<string, ProviderTemplate> = {
     modelIdentifier: "claude-3-5-haiku-latest", visual: true, toolUse: true, taskName: "replyer", params: { max_tokens: 1024 },
   },
   typesafe: {
-    id: "typesafe", label: "TypeSafe 决策模型", adapter: "typesafe", providerName: "typesafe",
+    id: "typesafe", label: "TypeSafe 决策模型", adapter: "systemone", providerName: "typesafe",
     baseURL: "https://api.typesafe.ai/v1", authType: "bearer", authHeader: "Authorization",
     modelIdentifier: "jev-latest", visual: false, toolUse: false, taskName: "", params: {},
   },
@@ -103,6 +103,7 @@ export function getProviderTemplate(id: unknown = ""): ProviderTemplate {
     "openai-compatible": "openai_compatible",
     "local-openai": "local_openai",
     "chat-glm": "chatglm",
+    "systemone": "typesafe",
   }
   return providerTemplates[key] || providerTemplates[aliases[key]] || providerTemplates.openai_compatible
 }

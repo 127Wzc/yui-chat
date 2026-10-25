@@ -583,7 +583,7 @@ function usageShape(usage: unknown = {}): UsageShape {
 }
 
 function estimateRequestInput(meta: UnknownRecord = {}): number {
-  if (meta.operation === "embedding") return Math.max(0, asInt(meta.estimatedInputTokens))
+  if (["embedding", "rerank"].includes(String(meta.operation))) return Math.max(0, asInt(meta.estimatedInputTokens))
   const messages = Array.isArray(meta.messages) ? meta.messages : []
   const tools = Array.isArray(meta.tools) ? meta.tools : []
   return messages.reduce((sum: number, item: unknown) => sum + messageTokens(item), 0)
@@ -1239,7 +1239,7 @@ class ModelLogStore {
       snapshot.updated_at = endedAt
       this.enqueueDetail({ kind: "snapshot", row: snapshot, terminal: true, priority: "high" })
     }
-    const budgetEstimate = call.requestMeta.operation === "embedding"
+    const budgetEstimate = ["embedding", "rerank"].includes(String(call.requestMeta.operation))
       ? (usage.input || call.row.estimated_input_tokens || 0)
       : usage.estimatedInput + usage.estimatedOutput
     this.enqueueDetail({ kind: "model", row, terminal: true, priority: "high" })
@@ -1815,11 +1815,35 @@ class ModelLogStore {
       }
       daily.set(row.day, day); models.set(row.model_name, model); purposes.set(row.purpose, purpose)
     }
+    // 日账本仍按内部键聚合；展示名称来自调用时快照，不能用当前配置覆盖历史。
+    const displayNames = new Map<string, { models: Set<string>; providers: Set<string> }>()
+    const rememberName = (row: UnknownRecord): void => {
+      const key = String(row.model_name || "")
+      if (!models.has(key)) return
+      const value = displayNames.get(key) || { models: new Set<string>(), providers: new Set<string>() }
+      if (row.model_identifier) value.models.add(String(row.model_identifier))
+      if (row.provider_name) value.providers.add(String(row.provider_name))
+      displayNames.set(key, value)
+    }
+    if (models.size && sqliteClient.status.available) {
+      const names = await sqliteClient.all<UnknownRecord>("SELECT model_name, model_identifier, provider_name FROM model_call_events WHERE started_at>=? AND started_at<=? AND model_identifier<>'' GROUP BY model_name, model_identifier, provider_name", [start, end])
+      names.forEach(rememberName)
+    }
+    for (const row of this.memoryModels.values()) if (row.started_at >= start && row.started_at <= end) rememberName(row)
+    const configuredModels = (configStore.get().models || []).map(record)
+    const publicModels = [...models.values()].sort((a, b) => b.total - a.total).map(model => {
+      const historical = displayNames.get(model.name)
+      const configured = configuredModels.find(item => item.name === model.name)
+      return { ...model,
+        model_display_name: historical?.models.size ? [...historical.models].join("、") : String(configured?.modelIdentifier || configured?.model || "未记录模型名称"),
+        provider_name: historical?.providers.size ? [...historical.providers].join("、") : String(configured?.apiProvider || ""),
+      }
+    })
     return {
       range: { from: start, to: end },
       totals: { ...totals, currency: COST_CURRENCY },
       daily: [...daily.values()].sort((a, b) => a.day.localeCompare(b.day)),
-      models: [...models.values()].sort((a, b) => b.total - a.total),
+      models: publicModels,
       purposes: [...purposes.values()].sort((a, b) => b.total - a.total),
       persistence: { available: Boolean(sqliteClient.status.available), queued: this.detailQueue.length, queuedBytes: this.detailQueueBytes, droppedEvents: this.droppedEvents, lastFlushAt: this.lastFlushAt ? new Date(this.lastFlushAt).toISOString() : "", lastError: this.lastError },
     }
@@ -2042,7 +2066,7 @@ class ModelLogStore {
     const sessionId = String(run?.session_id || row.session_id || "")
     return {
       ...row,
-      model_display_name: row.model_identifier || row.model_name || "未知模型",
+      model_display_name: row.model_identifier || record(route.actualModel).model || record(route.actualModel).modelIdentifier || row.model_name || "未知模型",
       channel_name: row.provider_name || "未记录渠道",
       metadata,
       protocol,

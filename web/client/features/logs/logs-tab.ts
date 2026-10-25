@@ -1,3 +1,4 @@
+import { modelDisplayName, modelDisplayLabel } from "../../shared/model-display.js"
 import { computed, onMounted, onUnmounted, reactive, ref } from "vue"
 import { confirmAction, request, saveConfigPatch, setDeveloperMode, store, toast } from "../../app/store/store.js"
 import { asRecord, errorMessage, type UnknownRecord } from "../../shared/data.js"
@@ -188,7 +189,7 @@ interface ConversationDetail extends UnknownRecord {
 
 interface LogSummary extends UnknownRecord {
   totals?: { total?: number; calls?: number; failures?: number; cost?: number; currency?: string; toolSuccessRate?: number; toolFailures?: number }
-  models?: Array<{ name?: string }>
+  models?: Array<{ name?: string; model_display_name?: string; provider_name?: string }>
   persistence?: { available?: boolean; queued?: number; droppedEvents?: number; lastFlushAt?: string; lastError?: string }
 }
 
@@ -408,13 +409,17 @@ function protocolLabel(value: unknown): string {
     "gemini-generate-content": "Gemini GenerateContent",
     "gemini-image-generation": "Gemini 图片生成",
     "gemini-images": "Gemini 图片生成",
+    embeddings: "embeddings",
+    rerank: "rerank",
+    systemone: "systemone",
+    "typesafe-systemone": "systemone",
     mock: "Mock",
   }
   const key = String(value || "")
   return labels[key] || key || "未知协议"
 }
 
-function protocolShortLabel(value: unknown): string {
+export function protocolShortLabel(value: unknown): string {
   const key = String(value || "").trim()
   if (["openai-responses", "responses", "responses-api"].includes(key)) return "Responses"
   if (["openai-compatible", "qwen", "chatglm", "chat-completions", "chat"].includes(key)) return "Chat"
@@ -422,6 +427,8 @@ function protocolShortLabel(value: unknown): string {
   if (["claude", "claude-messages"].includes(key)) return "Claude"
   if (["gemini", "gemini-generate-content"].includes(key)) return "Gemini"
   if (["gemini-images", "gemini-image-generation"].includes(key)) return "Gemini Image"
+  if (["systemone", "typesafe-systemone", "typesafe"].includes(key)) return "systemone"
+  if (["embeddings", "rerank"].includes(key)) return key
   if (key === "mock") return "Mock"
   return key || "未知"
 }
@@ -437,7 +444,7 @@ export function modelNamesLabel(item: LogRun | LogModelCall = {}): string {
     ? item.model_names.map(value => String(value || "").trim()).filter(Boolean)
     : []
   if (names.length) return names.join("、")
-  return String(item.model_display_name || item.model_identifier || item.model_name || "未知模型")
+  return modelDisplayName({ model_display_name: item.model_display_name, model_identifier: item.model_identifier, name: item.model_name }) || "未知模型"
 }
 
 export function channelNamesLabel(item: LogRun | LogModelCall = {}): string {
@@ -481,12 +488,10 @@ function messagePreview(value: unknown, limit = 72): string {
 }
 
 function modelLabel(model: ModelRef = {}): string {
-  const name = model.id || model.name || model.model || "-"
-  const provider = model.provider ? `/${model.provider}` : ""
-  return `${name}${provider}`
+  return modelDisplayLabel(model, model.provider) || "未知模型"
 }
 
-function modelRouteDetail(item: LogModelCall): string {
+export function modelRouteDetail(item: LogModelCall): string {
   const metadata = modelMetadata(item)
   const route = item.route || asRecord<{ availableModels?: ModelRef[]; actualModel?: ModelRef }>(metadata.route)
   const available = (item.available_models || route.availableModels || []).map(modelLabel).filter(Boolean)
@@ -503,7 +508,8 @@ function scopeLabel(row: LogRun = { id: "" }): string {
 function sourceLabel(value: unknown = ""): string {
   const labels: Record<string, string> = {
     "knowledge-index-rebuild": "向量重建",
-    embedding: "向量调用",
+    embedding: "嵌入调用",
+    rerank: "重排序调用",
     "group-memory-consolidation": "群聊记忆提炼",
     firstPerson: "第一人称对话",
     management: "管理任务",
@@ -519,7 +525,8 @@ function purposeLabel(value: unknown = ""): string {
   const labels: Record<string, string> = {
     embedding_knowledge: "知识库向量",
     embedding_memory: "记忆向量",
-    embedding: "向量调用",
+    embedding: "嵌入调用",
+    rerank: "重排序调用",
     chat: "对话",
     "search-aggregate": "托管搜索子请求",
     "memory-consolidation": "记忆提炼",
@@ -868,7 +875,9 @@ export const LogsTab = {
     const modelOptions = computed(() => [{ value: "", label: "全部模型" }, ...modelRows.value.map(item => {
       const configModels = asRecord(store.config).models
       const model = Array.isArray(configModels) ? configModels.map(value => asRecord(value)).find(model => model.name === item.name) : null
-      return { value: item.name, label: model ? `${model.apiProvider || '渠道'} · ${model.modelIdentifier || model.model || item.name}` : item.name }
+      // 调用时的名称优先于当前配置，模型删除或改名后也不把内部键展示成模型名。
+      const historical = item.model_display_name ? item : model || { name: item.name }
+      return { value: item.name, label: modelDisplayLabel(historical, item.provider_name || model?.apiProvider) }
     })])
 
     onMounted(() => {

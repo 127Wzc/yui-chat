@@ -4,7 +4,7 @@ import { asRecord, errorMessage, type UnknownRecord } from "../../shared/data.js
 import { AddChannelForm, ModelEditor, ProviderEditor } from "./provider-editors.js"
 import { ModelRoutingBuilder } from "./provider-routing.js"
 import { ProviderImportDialog } from "./provider-import-dialog.js"
-import { modelDisplayName, providerModelCounts, runLocked } from "./provider-shared.js"
+import { modelDisplayName, modelTestMessage, providerModelCounts, runLocked } from "./provider-shared.js"
 interface ProviderTemplate extends UnknownRecord {
   id: string
   label?: string
@@ -48,7 +48,7 @@ interface ProvidersSlice extends UnknownRecord {
   diagnostics?: UnknownRecord
 }
 interface ApiResult extends UnknownRecord {
-  result?: { channel?: string; operation?: string; dimensions?: number; vectorCount?: number }
+  result?: { channel?: string; model?: string; provider?: string; protocol?: string; adapter?: string; operation?: string; dimensions?: number; vectorCount?: number }
   config?: UnknownRecord
   diagnostics?: UnknownRecord
   removedModels?: unknown[]
@@ -58,6 +58,7 @@ interface ProviderCard extends ApiProvider {
   channelCount: number
   visualCount: number
   toolCount: number
+  rerankCount: number
   embeddingCount: number
   imageCount: number
   decisionCount: number
@@ -75,7 +76,7 @@ export const ProvidersTab = {
     const channels = computed(() => providerSlice.value.channels || [])
     const modelByName = computed<Record<string, ModelConfig>>(() => Object.fromEntries((cfg.value.models || []).map(model => [model.name, model])))
     const modelNames = computed(() => (cfg.value.models || [])
-      .filter(model => model.purpose !== "image" && model.purpose !== "embedding" && model.purpose !== "decision")
+      .filter(model => model.purpose !== "image" && model.purpose !== "embedding" && model.purpose !== "decision" && model.purpose !== "rerank")
       .map(model => model.name))
     const defaultReplyChannel = computed(() => cfg.value.chat?.defaultChannel || cfg.value.modelTasks?.replyer?.modelList?.[0] || "")
     const defaultImageChannel = computed(() => cfg.value.modelTasks?.imageGeneration?.modelList?.[0] || "")
@@ -150,19 +151,21 @@ export const ProvidersTab = {
         card.visualCount ? `${card.visualCount} 视觉` : "",
         card.toolCount ? `${card.toolCount} 工具` : "",
         card.imageCount ? `${card.imageCount} 图片` : "",
-        card.embeddingCount ? `${card.embeddingCount} 向量` : "",
+        card.embeddingCount ? `${card.embeddingCount} 嵌入` : "",
+        card.rerankCount ? `${card.rerankCount} 重排序` : "",
         card.decisionCount ? `${card.decisionCount} 决策` : "",
       ].filter(Boolean).join(" · ")
     })
     function purposeOf(ch: Channel): { icon: string; label: string } {
       if (ch.purpose === "image" || ch.imageGeneration) return { icon: "image", label: "图片生成" }
-      if (ch.purpose === "embedding" || ch.embedding) return { icon: "database", label: "向量检索" }
+      if (ch.purpose === "embedding" || ch.embedding) return { icon: "database", label: "嵌入模型" }
+      if (ch.purpose === "rerank") return { icon: "list", label: "重排序" }
       if (ch.purpose === "decision") return { icon: "scale", label: "决策判断" }
       return { icon: "message", label: "文本对话" }
     }
     function capabilityTags(ch: Channel): string[] {
       if (ch.purpose === "embedding" || ch.embedding) return ch.embeddingDimensions ? [`${ch.embeddingDimensions} 维`] : []
-      if (ch.purpose === "image" || ch.imageGeneration || ch.purpose === "decision") return []
+      if (ch.purpose === "image" || ch.imageGeneration || ch.purpose === "decision" || ch.purpose === "rerank") return []
       return [ch.visual ? "视觉" : "", ch.toolUse ? "工具" : "", ch.reasoningLabel || ""].filter(Boolean)
     }
     function defaultLabel(ch: Channel): string {
@@ -171,7 +174,7 @@ export const ProvidersTab = {
       return ""
     }
     function canSetDefault(ch: Channel): boolean {
-      return canManage(ch) && !isDefault(ch) && ch.purpose !== "embedding" && ch.purpose !== "decision" && !ch.embedding
+      return canManage(ch) && !isDefault(ch) && ch.purpose !== "embedding" && ch.purpose !== "decision" && ch.purpose !== "rerank" && !ch.embedding
     }
     const openModelEditor = (id: string) => { editingId.value = id || "" }
     const openProviderEditor = (name: string) => { editingProvider.value = name || "" }
@@ -203,9 +206,8 @@ export const ProvidersTab = {
             body: JSON.stringify({ channelId: id }),
           }))
           const tested = result.result || {}
-          toast(tested.operation === "embedding"
-            ? `向量测试通过：${tested.channel || "-"}（${tested.dimensions || "-"} 维）`
-            : `测试通过：${tested.channel || "-"}`)
+          const selected = typeof channelId === "string" ? selectedProviderChannels.value.find(channel => channel.id === id) : channelId
+          toast(modelTestMessage(tested, selected || {}))
           return result
         } catch (err) {
           toast(errorMessage(err))
@@ -254,8 +256,8 @@ export const ProvidersTab = {
     async function setDefault(ch: Channel) {
       const name = modelByName.value[ch.id]?.name || ch.id
       const image = ch.purpose === "image" || ch.imageGeneration === true
-      if (ch.purpose === "embedding" || ch.embedding || ch.purpose === "decision") {
-        toast(ch.purpose === "decision" ? "决策模型请在引用它的功能里选择，例如日常定格" : "向量模型请在知识库或记忆设置中选择")
+      if (ch.purpose === "embedding" || ch.embedding || ch.purpose === "decision" || ch.purpose === "rerank") {
+        toast(ch.purpose === "decision" ? "决策模型请在引用它的功能里选择，例如日常定格" : ch.purpose === "rerank" ? "重排序模型请在知识库的重排设置中选择" : "嵌入模型请在知识库或记忆设置中选择")
         return
       }
       const taskName = image ? "imageGeneration" : (cfg.value.chat?.defaultTask || "replyer")

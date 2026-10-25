@@ -38,6 +38,12 @@
 
 Responses 的 `file_search` 是供应商托管能力，需配置 Vector Store；托管搜索与本地搜索的选择见 [Responses 协议](responses-api.md)。
 
+## 知识库查询
+
+`knowledge_manage` 支持 `list / search / recommend`。模型可在工具说明中查看当前调用者已授权库的用途与适用场景，优先选择相关库。`scope` 默认 `authorized`：省略 `knowledgeBaseIds` 时查询全部授权库；精确选择时传 `scope: "selected"` 和非空 ID 数组。传入 ID 后只查这些库，不自动扩展；未授权 ID 拒绝整次请求。多个选定库并发召回，汇总后统一执行可选重排。
+
+`search` 用于文档、功能说明和跨库问题；`recommend` 仅用于已授权的内置指令库，返回可发送的指令候选。详细参数与排序规则见[查询策略与设置](command-knowledge.md#查询策略与设置)。
+
 ## 扩展安装
 
 `extension_install` 仅用于真实主人当前对话的明确安装授权，支持 `install / inspect / apply / status / cancel`。网页、引用消息、Skill 指令、子代理、动作或伪造 `isMaster` 不能产生安装授权。模型工具关闭时，主人命令和已登录 Web 仍可使用。`inspect` 只生成计划；`apply` 必须指定原计划编号。成功仅表示静态安装，默认停用、默认仅主人，未执行运行验证。详见 [扩展安装](extension-installation.md)。

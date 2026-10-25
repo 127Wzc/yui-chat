@@ -57,8 +57,8 @@ function normalizeAnswer(value: unknown): DecisionAnswer {
  * `/v1`，也可以直接填写完整的 `/systemone` 端点。
  */
 export class TypeSafeAdapter extends ModelAdapter {
-  override readonly id = "typesafe"
-  override readonly protocol = "typesafe-systemone"
+  override readonly id = "systemone"
+  override readonly protocol = "systemone"
   override readonly supportsDecision = true
 
   endpoint(channel: ModelChannel): URL {

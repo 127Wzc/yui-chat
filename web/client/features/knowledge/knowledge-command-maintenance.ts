@@ -64,7 +64,7 @@ export const KnowledgeCommandMaintenance = {
             </div>
             <div class="form-grid dense">
               <Field label="推荐方式" type="select" :options="[{value: 'hybrid', label: '混合推荐（默认）'}, {value: 'lexical', label: '关键词推荐'}]" v-model="draft.commandRetrievalMode" tip="混合推荐结合关键词与向量；向量未配置或不可用时自动降级，并在测试结果中说明。" />
-              <Field label="向量模型" type="select" :options="embeddingModelOptions" :model-value="draft.commandEmbeddingModel" @update:model-value="$emit('select-embedding-model', $event)" :disabled="Boolean(activeIndexJob)" tip="选择已配置的 embedding 模型；关键词模式下保留模型和已有索引。" />
+              <Field label="嵌入模型" type="select" :options="embeddingModelOptions" :model-value="draft.commandEmbeddingModel" @update:model-value="$emit('select-embedding-model', $event)" :disabled="Boolean(activeIndexJob)" tip="选择已配置的 embedding 模型；关键词模式下保留模型和已有索引。" />
               <Field v-if="draft.commandEmbeddingModel" label="当前配置维度" :model-value="currentDimensions ? currentDimensions + ' 维' : '尚未配置'" disabled tip="只读，表示已保存的维度；Cosine（余弦）固定不变。" />
               <Field v-if="draft.commandEmbeddingModel" label="所选模型默认维度" :model-value="modelDimensions ? modelDimensions + ' 维' : '模型未声明默认维度'" disabled tip="维度跟随模型配置；如未声明，请先到模型页完善。" />
             </div>
@@ -73,10 +73,11 @@ export const KnowledgeCommandMaintenance = {
             <div class="form-grid dense command-retrieval-controls">
               <Field label="相关性阈值" type="number" v-model="draft.commandMinRelevance" tip="用于关键词及向量筛选，不表示正确率。" />
               <div class="command-rerank-model-field">
-                <Field label="重排模型" type="select" :options="[{value: '', label: '沿用已配置的重排任务'}, ...modelOptions]" v-model="draft.commandRerankModel" tip="可预先选择渠道模型；开启重排后才会调用。" />
+                <Field label="重排模型" type="select" :options="[{value: '', label: '沿用已配置的重排任务'}, ...modelOptions]" v-model="draft.commandRerankModel" tip="选择渠道中的重排序模型；开启后才会调用，关闭或失败时使用融合排名。" />
                 <Field class="command-rerank-inline" :label="draft.commandRerankEnabled === 'true' ? '已开启' : '未开启'" type="switch" v-model="draft.commandRerankEnabled" aria-label="启用模型重排" tip="默认关闭。开启后可能产生模型费用，沿用会话及每日预算；保存设置后生效。" />
               </div>
             </div>
+            <Field label="重排最低分（可选）" type="number" v-model="draft.commandRerankMinScore" tip="留空仅排序；按所选模型评测设置，和关键词及向量阈值独立。" />
             <Field label="字段说明" type="textarea" rows="4" v-model="draft.commandFieldDescription" tip="统一解释 priority、regexp、regexpFlags 等字段，最多 2000 字符。每个知识库在重排和回答时只提供一次，修改无需重建向量。" />
             <div class="row row-end"><button class="btn primary small" type="button" @click="$emit('save-command-retrieval')"><Icon name="save" :size="14" />保存检索设置</button></div>
           </div>

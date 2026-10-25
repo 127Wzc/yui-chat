@@ -34,9 +34,9 @@ export const COMMAND_COMPLETENESS_ISSUE_LABELS: Record<string, string> = {
   "examples-sync": "已有示例数组与正文不一致", "pending-verification": "资料仍有待核实内容", "regexp-length": "原始正则较长，占用检索正文",
 }
 
-const VERSION = "command-completeness-v2"
+const VERSION = "command-completeness-v3"
 const limits: Record<Dimension, number> = { A: 20, B: 20, C: 15, D: 25, E: 20, regexp: 5 }
-const labels = ["插件名称", "插件标识", "指令", "用途", "参数", "示例", "priority", "regexp", "regexpFlags"]
+const labels = ["插件名称", "插件标识", "指令", "用途", "参数", "示例", "priority", "regexp", "regexpFlags", "权限", "别名", "前置条件", "可信状态"]
 const pending = /待核实|待补充|待完善|无法确认|尚未确认/u
 const placeholder = /<[^>\n]+>|[｛{](?:内容|数字|角色名|歌曲名|参数|QQ号|UID)[｝}]|\\[dws]|\(\?:|\$\^/iu
 const fragment = /\$\^|\\[dws]|\(\?[!:<=]|(?:^|\n)\^|\$(?:$|\n)/u
@@ -111,6 +111,7 @@ export function evaluateCommandCompleteness(command: Row, executeRegex = true): 
   if (!event) add("source-event", "A", 5, "event", "未提供事件信息，无法确认触发类型", "重新采集外层事件声明")
 
   for (const [label, name] of [["插件名称", "pluginName"], ["插件标识", "pluginKey"], ["priority", "priority"], ["regexp", "regexp"], ["regexpFlags", "regexpFlags"]]) {
+    if (["priority", "regexp", "regexpFlags"].includes(name) && !fields.has(label)) continue
     const expected = string(m[name] ?? (name === "priority" ? "未知" : ""))
     let actual = ["regexp", "插件名称", "插件标识"].includes(label) ? (fields.get(label) || []).join("\n") : section(label)
     if (name === "regexpFlags") {
@@ -124,7 +125,7 @@ export function evaluateCommandCompleteness(command: Row, executeRegex = true): 
   const duplicates = [...fields].filter(([name, values]) => name !== "示例" && values.length > 1).map(([name]) => name)
   if (duplicates.length) add("field-duplicate", "B", Math.min(3, duplicates.length), duplicates.join("、"), "非示例字段重复", "每类字段保留一处，示例可重复多行")
   const positions = order.filter(name => labels.includes(name)).map(name => labels.indexOf(name))
-  if (positions.some((value, index) => index > 0 && value < positions[index - 1])) add("field-order", "B", 2, "retrievalText", "九类字段未按约定顺序组织", "按插件名称至 regexpFlags 的顺序整理")
+  if (positions.some((value, index) => index > 0 && value < positions[index - 1])) add("field-order", "B", 2, "retrievalText", "检索字段未按约定顺序组织", "按插件名称、标识、指令、用途、参数和示例组织，运行字段仅留在元数据")
   const extra = [...fields.keys()].filter(name => !labels.includes(name))
   if (extra.length) add("field-extra", "B", Math.min(3, extra.length), extra.join("、"), "正文包含额外或旧格式字段", "移除冗余标签，必要的已知特殊条件简写进用途")
   if (orphan) add("field-orphan", "B", 2, "retrievalText", "正文开头存在无法归入字段的游离内容", "使用逐行字段和值组织说明")
@@ -171,7 +172,7 @@ export function evaluateCommandCompleteness(command: Row, executeRegex = true): 
   if (Object.hasOwn(m, "examples") && (!Array.isArray(m.examples) || m.examples.some(value => typeof value !== "string") || JSON.stringify(originalExamples) !== JSON.stringify(shouldBeEmpty ? [] : examples))) add("examples-sync", "E", 5, "metadata.examples", "已有示例数组与正文示例不一致", "同步已有数组；原来不存在时不要求新增")
 
   const regexPenalty = regexLength > 3000 ? 5 : regexLength > 1500 ? 3 : regexLength > 800 ? 2 : regexLength > 300 ? 1 : 0
-  if (regexPenalty) add("regexp-length", "regexp", regexPenalty, "regexp", `原始正则共 ${regexLength} 字符，占用检索正文`, "检查源插件是否可精简重复结构或枚举，修正后重新采集；整理模型仍须完整保留原值")
+  if (regexPenalty && fields.has("regexp")) add("regexp-length", "regexp", regexPenalty, "regexp", `原始正则共 ${regexLength} 字符，占用检索正文`, "检查源插件是否可精简重复结构或枚举，修正后重新采集；整理模型仍须完整保留原值")
   const reviewText = [...fields].filter(([name]) => !["插件名称", "插件标识", "priority", "regexp", "regexpFlags"].includes(name)).flatMap(([, values]) => values).join("\n") || body
   const needsReview = pending.test(reviewText) || check.state === "unverified" || deductions.some(item => item.code === "source-internal")
   const issues = [...new Set(deductions.map(item => item.code))]

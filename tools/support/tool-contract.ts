@@ -143,6 +143,8 @@ export interface ToolExecutionContext {
 export interface ToolDefinition {
   name: string
   common?: ToolCommon
+  /** 按真实调用者生成仅含说明和参数的模型视图；不得修改注册表中的共享定义。 */
+  describeForContext?: (context: ToolExecutionContext) => Promise<{ description?: string; parameters?: Record<string, JsonValue> }>
   execute: (args: Record<string, unknown>, context?: ToolExecutionContext) => Promise<unknown> | unknown
   [key: string]: unknown
 }

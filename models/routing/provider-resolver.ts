@@ -1,3 +1,4 @@
+import { specializedModelAdapter, specializedAdapterPurpose } from "../protocol/specialized-adapters.js"
 import { configStore } from "../../config/store.js"
 import type { RuntimeConfigObject } from "../../config/types.js"
 import { isJsonValue, type JsonValue } from "../../core/message-chain/types.js"
@@ -183,27 +184,29 @@ function capabilities(model: ModelConfig): UnknownRecord {
   return record(model.capabilities)
 }
 
-function channelPurpose(value: unknown, declared?: unknown): "chat" | "image" | "decision" {
+function channelPurpose(value: unknown, declared?: unknown): "chat" | "image" | "embedding" | "decision" | "rerank" {
   const purpose = text(declared).trim().toLowerCase()
-  if (purpose === "image" || purpose === "chat" || purpose === "decision") return purpose
+  if (purpose === "image" || purpose === "chat" || purpose === "decision" || purpose === "embedding" || purpose === "rerank") return purpose
   const type = text(value).trim().toLowerCase()
-  if (type === "typesafe") return "decision"
+  const specialized = specializedAdapterPurpose(type)
+  if (specialized) return specialized
   return ["openai-images", "openai-chat-completions", "gemini-images"].includes(type) ? "image" : "chat"
 }
 
-export function modelPurpose(model: ModelConfig | UnknownRecord = {}): "chat" | "image" | "embedding" | "decision" {
+export function modelPurpose(model: ModelConfig | UnknownRecord = {}): "chat" | "image" | "embedding" | "decision" | "rerank" {
   const declared = text(model.purpose).trim().toLowerCase()
-  if (declared === "image" || declared === "embedding" || declared === "chat" || declared === "decision") return declared
+  if (declared === "image" || declared === "embedding" || declared === "chat" || declared === "decision" || declared === "rerank") return declared
   const adapter = text(model.adapter).trim().toLowerCase()
-  if (adapter === "typesafe") return "decision"
+  const specialized = specializedAdapterPurpose(adapter)
+  if (specialized) return specialized
   if (["openai-images", "openai-chat-completions", "gemini-images"].includes(adapter)) return "image"
   return capabilities(model).embedding === true && capabilities(model).chat === false ? "embedding" : "chat"
 }
 
-function taskPurpose(taskName: string, task: ModelTask): "chat" | "image" | "embedding" | "decision" {
+function taskPurpose(taskName: string, task: ModelTask): "chat" | "image" | "embedding" | "decision" | "rerank" {
   const declared = text(task.purpose).trim().toLowerCase()
-  if (declared === "image" || declared === "embedding" || declared === "chat" || declared === "decision") return declared
-  return taskName === "imageGeneration" ? "image" : taskName === "embedding" ? "embedding" : "chat"
+  if (declared === "image" || declared === "embedding" || declared === "chat" || declared === "decision" || declared === "rerank") return declared
+  return taskName === "imageGeneration" ? "image" : taskName === "embedding" ? "embedding" : taskName === "rerank" ? "rerank" : "chat"
 }
 
 function embeddingConfig(model: ModelConfig): UnknownRecord {
@@ -290,8 +293,8 @@ export class ProviderResolver {
     const view = viewOf(config)
     const provider = view.apiProviders.find(item => text(item.name) === text(model.apiProvider)) || {}
     const reasoning = normalizeReasoningConfig(model.reasoning)
-    const purpose = modelPurpose(model)
-    let type = firstText(model.adapter, provider.type, "mock")
+    const purpose = modelPurpose({ ...model, adapter: firstText(model.adapter, provider.type) })
+    let type = specializedModelAdapter(purpose, firstText(model.adapter, provider.type, "mock"))
     if (purpose === "image") {
       if (type === "gemini") type = "gemini-images"
       else if (["openai-compatible", "qwen", "chatglm", "openai-responses", "claude", "openai-chat-completions"].includes(type)) type = "openai-images"
@@ -329,7 +332,7 @@ export class ProviderResolver {
       stream: Boolean(stream),
       reasoning,
       provider,
-      modelConfig: jsonRecord(model),
+      modelConfig: jsonRecord(purpose === "embedding" ? { ...model, embedding: { ...record(model.embedding), protocol: record(model.embedding).protocol === "gemini" || model.adapter === "gemini" || (!model.adapter && provider.type === "gemini") ? "gemini" : "embeddings" } } : model),
     }
   }
 
@@ -351,7 +354,7 @@ export class ProviderResolver {
     )
     const channelType = text(channel.type).trim()
     const purpose = channelPurpose(channelType, channel.purpose)
-    let type = channelType
+    let type = specializedModelAdapter(purpose, channelType)
     if (purpose === "image") {
       if (type === "gemini") type = "gemini-images"
       else if (["openai-compatible", "qwen", "chatglm", "openai-responses", "claude", "openai-chat-completions"].includes(type)) type = "openai-images"
@@ -586,6 +589,7 @@ export class ProviderResolver {
         fallbackTasks: taskRows.filter(item => item.selectionStrategy === "fallback").length,
         visualModels: view.models.filter(model => Boolean(model.visual)).length,
         toolUseModels: view.models.filter(model => model.toolUse !== false).length,
+        rerankModels: view.models.filter(model => modelPurpose(model) === "rerank").length,
         embeddingModels: view.models.filter(model => Boolean(capabilities(model).embedding)).length,
       },
       providerUsage: Object.values(providerUsage),

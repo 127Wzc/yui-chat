@@ -1,3 +1,4 @@
+import { cleanCommandRetrievalText } from "./command-retrieval-text.js"
 import crypto from "node:crypto"
 import { configStore } from "../config/store.js"
 import { sqliteClient } from "../core/storage/sqlite/client.js"
@@ -31,8 +32,9 @@ function normalize(input: unknown): Bundle {
     seen.add(row.id)
     if (typeof row.retrievalText !== "string" || !row.retrievalText.trim() || row.retrievalText.length > 60000) throw new Error(`检索正文不能为空且最多 60000 字符：${row.id}`)
     const metadata = cloneJsonValue(record(row.metadata))
+    if (!cleanCommandRetrievalText(row.retrievalText, metadata)) throw new Error(`清理后的检索正文不能为空：${row.id}`)
     if (JSON.stringify(metadata).length > 100000) throw new Error(`元数据过大：${row.id}`)
-    return { id: row.id, title: String(row.title || metadata.suggestedCommand || metadata.fnc || row.id).slice(0, 500), retrievalText: row.retrievalText.replace(/\r\n?/g, "\n").trim(), metadata }
+    return { id: row.id, title: String(row.title || metadata.suggestedCommand || metadata.fnc || row.id).slice(0, 500), retrievalText: cleanCommandRetrievalText(row.retrievalText, metadata), metadata }
   })
   const deletedIds = bundle.deletedIds === undefined ? [] : bundle.deletedIds
   if (!Array.isArray(deletedIds) || deletedIds.length > 10000 || deletedIds.some(id => typeof id !== "string" || !id || id.length > 900 || seen.has(id))) throw new Error("deletedIds 必须是有效 ID 数组，且不能同时出现在 documents 中")
@@ -85,44 +87,64 @@ async function plan(input: unknown, options: ImportOptions): Promise<{ bundle: B
   const revision = signature(rows.map(row => [row.id, row.updated_at, row.content_hash, row.metadata_json]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))))
   return { bundle, rows, changes, summary, revision }
 }
+async function applyImport(input: unknown, options: ImportOptions, schedule = true): Promise<Row> {
+  const { bundle, changes, summary, revision } = await plan(input, options)
+  if (options.expectedRevision && options.expectedRevision !== revision) throw Object.assign(new Error("预览后知识库已变化，请重新预览"), { statusCode: 409 })
+  const runId = crypto.randomUUID(), timestamp = Date.now(), operations: SqliteOperation[] = [{ sql: "INSERT INTO knowledge_import_runs(id, source_id, operation, summary_json, created_at) VALUES(?,?,?,?,?)", params: [runId, bundle.sourceId, options.operation || "import", JSON.stringify({ ...summary, policy: options.policy || "skip" }), timestamp] }]
+  let chunkDelta = 0
+  for (const change of changes) {
+    const sourceKey = key(change.id), current = change.current as Row | undefined
+    if (current) {
+      const snapshot = { sourceId: bundle.sourceId, document: documentFrom(current) }
+      operations.push({ sql: "INSERT INTO knowledge_document_history(knowledge_base_id,source_key,snapshot_json,operation,created_at) VALUES(?,?,?,?,?)", params: [COMMAND_BASE, sourceKey, JSON.stringify(snapshot), change.operation, timestamp] },
+        { sql: "DELETE FROM knowledge_document_history WHERE knowledge_base_id=? AND source_key=? AND id NOT IN (SELECT id FROM knowledge_document_history WHERE knowledge_base_id=? AND source_key=? ORDER BY id DESC LIMIT ?)", params: [COMMAND_BASE, sourceKey, COMMAND_BASE, sourceKey, change.operation === "delete" ? 3 : 2] })
+    }
+    const oldChunks = current ? await sqliteClient.all<Row>("SELECT id FROM knowledge_chunks WHERE document_id=?", [current.id]) : []
+    if (change.operation === "delete") { chunkDelta -= oldChunks.length; operations.push({ sql: "DELETE FROM knowledge_documents WHERE id=?", params: [current!.id] }) }
+    else {
+      const chunks = commandChunks(change.document.retrievalText)
+      chunkDelta += chunks.length - oldChunks.length
+      const prepared = await knowledgeRepository.prepareDocument({ knowledgeBaseId: COMMAND_BASE, sourceType: "command", sourceKey, title: change.document.title, content: change.document.retrievalText, contentHash: contentHash(change.document.retrievalText), metadata: change.metadata, chunks })
+      operations.push(...prepared.operations)
+      if (prepared.result.changed) operations.push({ sql: "INSERT INTO knowledge_vector_tasks(kind,owner_id,knowledge_base_id,content_hash,updated_at) VALUES('document',?,?,?,?) ON CONFLICT(kind,owner_id) DO UPDATE SET content_hash=excluded.content_hash, updated_at=excluded.updated_at, attempts=0,retry_at=0,error=''", params: [prepared.result.id, COMMAND_BASE, contentHash(change.document.retrievalText), timestamp] })
+    }
+    // Cleanup is idempotent and durable; the worker checks whether a chunk was retained before deleting.
+    for (const chunk of oldChunks) operations.push({ sql: "INSERT INTO knowledge_vector_tasks(kind,owner_id,knowledge_base_id,content_hash,updated_at) VALUES('delete',?,?, '',?) ON CONFLICT(kind,owner_id) DO UPDATE SET updated_at=excluded.updated_at,attempts=0,retry_at=0,error=''", params: [chunk.id, COMMAND_BASE, timestamp] })
+    operations.push({ sql: "INSERT INTO knowledge_import_changes(run_id,document_key,operation,before_hash,after_hash) VALUES(?,?,?,?,?)", params: [runId, change.id, options.operation === "restore" ? "restore" : change.operation, current?.content_hash || "", change.document ? contentHash(change.document.retrievalText) : ""] })
+  }
+  if (chunkDelta > 0) {
+    const maxChunks = Math.max(1, Number(record(record(configStore.get().knowledge).indexing).maxChunksPerKnowledgeBase) || 100000)
+    const total = Number((await sqliteClient.get("SELECT COUNT(*) AS n FROM knowledge_chunks WHERE knowledge_base_id=?", [COMMAND_BASE]))?.n || 0) + chunkDelta
+    if (total > maxChunks) throw new Error(`知识库分块将达到 ${total}，超过 ${maxChunks} 上限`)
+  }
+  for (const change of changes.filter(row => row.operation !== "delete")) operations.push({ sql: "DELETE FROM knowledge_document_history WHERE knowledge_base_id=? AND source_key=? AND id NOT IN (SELECT id FROM knowledge_document_history WHERE knowledge_base_id=? AND source_key=? ORDER BY id DESC LIMIT 2)", params: [COMMAND_BASE, key(change.id), COMMAND_BASE, key(change.id)] })
+  if (changes.length) operations.push({ sql: "UPDATE knowledge_bases SET updated_at=MAX(updated_at+1,?) WHERE id=?", params: [timestamp, COMMAND_BASE] })
+  await sqliteClient.transaction(operations)
+  if (changes.length && schedule) knowledgeIndexJobs.scheduleAvailable()
+  return { runId, summary, changed: changes.length > 0 }
+}
 export const commandImports = {
   preview(input: unknown, options: ImportOptions = {}): Promise<Row> { return serialize(async () => { const result = await plan(input, options); return { summary: result.summary, revision: result.revision, changes: result.changes.map(row => ({ id: row.id, operation: row.operation, title: row.document?.title || row.current.title })) } }) },
   apply(input: unknown, options: ImportOptions = {}): Promise<Row> {
+    return serialize(() => applyImport(input, options))
+  },
+  /** 显式重建的正文清理和投影更新也占用同一写队列，并保留历史/审计。 */
+  rebuildRetrieval<T>(rebuild: () => Promise<T>): Promise<T> {
     return serialize(async () => {
-      const { bundle, changes, summary, revision } = await plan(input, options)
-      if (options.expectedRevision && options.expectedRevision !== revision) throw Object.assign(new Error("预览后知识库已变化，请重新预览"), { statusCode: 409 })
-      const runId = crypto.randomUUID(), timestamp = Date.now(), operations: SqliteOperation[] = [{ sql: "INSERT INTO knowledge_import_runs(id, source_id, operation, summary_json, created_at) VALUES(?,?,?,?,?)", params: [runId, bundle.sourceId, options.operation || "import", JSON.stringify({ ...summary, policy: options.policy || "skip" }), timestamp] }]
-      let chunkDelta = 0
-      for (const change of changes) {
-        const sourceKey = key(change.id), current = change.current as Row | undefined
-        if (current) {
-          const snapshot = { sourceId: bundle.sourceId, document: documentFrom(current) }
-          operations.push({ sql: "INSERT INTO knowledge_document_history(knowledge_base_id,source_key,snapshot_json,operation,created_at) VALUES(?,?,?,?,?)", params: [COMMAND_BASE, sourceKey, JSON.stringify(snapshot), change.operation, timestamp] },
-            { sql: "DELETE FROM knowledge_document_history WHERE knowledge_base_id=? AND source_key=? AND id NOT IN (SELECT id FROM knowledge_document_history WHERE knowledge_base_id=? AND source_key=? ORDER BY id DESC LIMIT ?)", params: [COMMAND_BASE, sourceKey, COMMAND_BASE, sourceKey, change.operation === "delete" ? 3 : 2] })
-        }
-        const oldChunks = current ? await sqliteClient.all<Row>("SELECT id FROM knowledge_chunks WHERE document_id=?", [current.id]) : []
-        if (change.operation === "delete") { chunkDelta -= oldChunks.length; operations.push({ sql: "DELETE FROM knowledge_documents WHERE id=?", params: [current!.id] }) }
-        else {
-          const chunks = commandChunks(change.document.retrievalText)
-          chunkDelta += chunks.length - oldChunks.length
-          const prepared = await knowledgeRepository.prepareDocument({ knowledgeBaseId: COMMAND_BASE, sourceType: "command", sourceKey, title: change.document.title, content: change.document.retrievalText, contentHash: contentHash(change.document.retrievalText), metadata: change.metadata, chunks })
-          operations.push(...prepared.operations)
-          if (prepared.result.changed) operations.push({ sql: "INSERT INTO knowledge_vector_tasks(kind,owner_id,knowledge_base_id,content_hash,updated_at) VALUES('document',?,?,?,?) ON CONFLICT(kind,owner_id) DO UPDATE SET content_hash=excluded.content_hash, updated_at=excluded.updated_at, attempts=0,retry_at=0,error=''", params: [prepared.result.id, COMMAND_BASE, contentHash(change.document.retrievalText), timestamp] })
-        }
-        // Cleanup is idempotent and durable; the worker checks whether a chunk was retained before deleting.
-        for (const chunk of oldChunks) operations.push({ sql: "INSERT INTO knowledge_vector_tasks(kind,owner_id,knowledge_base_id,content_hash,updated_at) VALUES('delete',?,?, '',?) ON CONFLICT(kind,owner_id) DO UPDATE SET updated_at=excluded.updated_at,attempts=0,retry_at=0,error=''", params: [chunk.id, COMMAND_BASE, timestamp] })
-        operations.push({ sql: "INSERT INTO knowledge_import_changes(run_id,document_key,operation,before_hash,after_hash) VALUES(?,?,?,?,?)", params: [runId, change.id, options.operation === "restore" ? "restore" : change.operation, current?.content_hash || "", change.document ? contentHash(change.document.retrievalText) : ""] })
+      const busy = await sqliteClient.get("SELECT id FROM knowledge_index_jobs WHERE knowledge_base_id=? AND status IN ('queued','running','canceling','retrying')", [COMMAND_BASE])
+      if (busy) throw Object.assign(new Error("已有索引任务，请完成或取消后再重建"), { code: "KNOWLEDGE_INDEX_ALREADY_RUNNING", statusCode: 409 })
+      const groups = new Map<string, ImportDocument[]>()
+      for (const row of await currentRows()) {
+        const sourceId = record(JSON.parse(row.metadata_json)).importSourceId
+        if (!sourceId) continue
+        const document = documentFrom(row)
+        if (cleanCommandRetrievalText(document.retrievalText, document.metadata) === document.retrievalText) continue
+        groups.set(sourceId, [...(groups.get(sourceId) || []), document])
       }
-      if (chunkDelta > 0) {
-        const maxChunks = Math.max(1, Number(record(record(configStore.get().knowledge).indexing).maxChunksPerKnowledgeBase) || 100000)
-        const total = Number((await sqliteClient.get("SELECT COUNT(*) AS n FROM knowledge_chunks WHERE knowledge_base_id=?", [COMMAND_BASE]))?.n || 0) + chunkDelta
-        if (total > maxChunks) throw new Error(`知识库分块将达到 ${total}，超过 ${maxChunks} 上限`)
+      for (const [sourceId, documents] of groups) {
+        await applyImport({ schemaVersion: 1, sourceId, complete: false, documents }, { policy: "overwrite", operation: "edit" }, false)
       }
-      for (const change of changes.filter(row => row.operation !== "delete")) operations.push({ sql: "DELETE FROM knowledge_document_history WHERE knowledge_base_id=? AND source_key=? AND id NOT IN (SELECT id FROM knowledge_document_history WHERE knowledge_base_id=? AND source_key=? ORDER BY id DESC LIMIT 2)", params: [COMMAND_BASE, key(change.id), COMMAND_BASE, key(change.id)] })
-      if (changes.length) operations.push({ sql: "UPDATE knowledge_bases SET updated_at=MAX(updated_at+1,?) WHERE id=?", params: [timestamp, COMMAND_BASE] })
-      await sqliteClient.transaction(operations)
-      if (changes.length) knowledgeIndexJobs.scheduleAvailable()
-      return { runId, summary, changed: changes.length > 0 }
+      return rebuild()
     })
   },
   async list(): Promise<Row[]> {

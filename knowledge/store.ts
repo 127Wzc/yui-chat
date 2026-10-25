@@ -10,7 +10,7 @@ import { resolveEmbeddingDimensions } from "../models/embeddings/dimensions.js"
 import { normalizeDistanceMetric, vectorIndex } from "./vector-index.js"
 import type { KnowledgeIndexJobOptions } from "./index-jobs.js"
 import { buildCommandRetrievalText } from "./command-document-builder.js"
-import { commandChunks } from "./command-import.js"
+import { commandChunks, commandImports } from "./command-import.js"
 
 type UnknownRecord = Record<string, unknown>
 
@@ -295,6 +295,12 @@ export class KnowledgeStore {
 
   /** 显式重建时识别分片策略/算法版本；启动只加载既有投影。 */
   async prepareRebuild(baseId: unknown): Promise<number> {
+    return baseId === BUILTIN_COMMANDS_ID
+      ? commandImports.rebuildRetrieval(() => this.prepareRebuildDocuments(baseId))
+      : this.prepareRebuildDocuments(baseId)
+  }
+
+  private async prepareRebuildDocuments(baseId: unknown): Promise<number> {
     const base = await knowledgeRepository.getBase(baseId)
     if (!base) throw new Error("知识库不存在")
     const busy = await sqliteClient.get("SELECT id FROM knowledge_index_jobs WHERE knowledge_base_id=? AND status IN ('queued','running','canceling','retrying')", [baseId])
@@ -307,10 +313,11 @@ export class KnowledgeStore {
       const metadata = record(document.metadata)
       const command = record(metadata.command)
       const documentText = metadata.importSourceId ? text(document.content) : document.source_type === "command" ? buildCommandRetrievalText(command) || text(document.content) : text(document.content)
-      if (document.source_type === "command") { metadata.retrievalTextVersion = 2; metadata.command = { ...command, retrievalText: documentText }; metadata.chunkContext = `指令：${text(document.title)}` }
+      if (document.source_type === "command") { metadata.retrievalTextVersion = 3; metadata.command = { ...command, retrievalText: documentText }; metadata.chunkContext = `指令：${text(document.title)}` }
       const options = document.source_type === "command" ? { targetChars: 800, overlapChars: 0, minChars: 20, ...record(metadata.chunkOptions), context: metadata.chunkContext || `指令：${text(document.title)}` } : record(base.config?.chunking)
       if (document.source_type === "command") { metadata.chunkOptions = { targetChars: options.targetChars, overlapChars: options.overlapChars, minChars: options.minChars }; metadata.chunkContext = options.context }
       const result = await knowledgeRepository.replaceDocument({ knowledgeBaseId: baseId, sourceType: document.source_type, sourceKey: document.source_key, title: document.title, content: documentText, contentHash: contentHash(documentText), metadata, chunks: metadata.importSourceId ? commandChunks(documentText) : chunkText(documentText, options) })
+      await knowledgeRepository.rebuildLexicalDocument(document.id)
       if (result.changed) changed++
     }
     return changed

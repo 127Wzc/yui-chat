@@ -13,7 +13,8 @@ interface RemoteModel extends UnknownRecord {
 export const MODEL_PURPOSE_OPTIONS = [
   { value: "chat", label: "文本对话", icon: "message", description: "回复、工具调用和视觉理解" },
   { value: "image", label: "图片生成", icon: "image", description: "画图与图片编辑" },
-  { value: "embedding", label: "向量检索", icon: "database", description: "知识库与记忆的向量化" },
+  { value: "embedding", label: "嵌入模型", icon: "database", description: "为知识库与记忆生成向量" },
+  { value: "rerank", label: "重排序", icon: "list", description: "对检索候选进行相关性排序" },
   { value: "decision", label: "决策判断", icon: "scale", description: "结构化判断，如日常定格" },
 ]
 
@@ -60,7 +61,7 @@ export const ProviderImportDialog = {
 
     function reset() {
       const type = String(props.provider?.type || "")
-      purpose.value = type === "typesafe" ? "decision" : "chat"
+      purpose.value = type === "systemone" ? "decision" : "chat"
       imageProtocol.value = type === "gemini" ? "gemini-images" : "openai-images"
       stream.value = ""
       query.value = ""
@@ -109,7 +110,7 @@ export const ProviderImportDialog = {
             body: JSON.stringify({
               modelIdentifiers: identifiers,
               purpose: purpose.value,
-              adapter: image ? (imageProtocol.value === "gemini-images" ? "gemini-images" : "openai-images") : undefined,
+              adapter: image ? (imageProtocol.value === "gemini-images" ? "gemini-images" : "openai-images") : purpose.value === "rerank" ? "rerank" : purpose.value === "embedding" ? "embeddings" : purpose.value === "decision" ? "systemone" : undefined,
               image: image ? { protocol: imageProtocol.value } : undefined,
               stream: (purpose.value === "chat" || image) && stream.value !== "" ? stream.value === "true" : undefined,
             }),

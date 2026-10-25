@@ -249,8 +249,25 @@ export class ToolRegistry {
     })
   }
 
+  /** 每轮隔离动态模型定义，防止将其他用户的知识库目录留在共享工具上。 */
+  async prepareModelTools(tools: NormalizedTool[], context: RegistryExecutionContext): Promise<NormalizedTool[]> {
+    return (await Promise.all(tools.map(async tool => {
+      if (typeof tool.describeForContext !== "function") return tool
+      try {
+        const view = await tool.describeForContext(context)
+        return { ...tool, common: { ...tool.common,
+          ...(typeof view.description === "string" ? { description: view.description } : {}),
+          ...(view.parameters ? { parameters: view.parameters } : {}),
+        } }
+      } catch {
+        hostRuntime.logger?.warn?.(`[yui-chat] 工具 ${tool.name} 的当前调用者说明生成失败，本轮不提供该工具`)
+        return null
+      }
+    }))).filter((tool): tool is NormalizedTool => tool !== null)
+  }
+
   async searchAllowedTools(query = "", context: RegistryExecutionContext = {}, limit = 8): Promise<UnknownRecord[]> {
-    const allowed = await this.getAllowedTools(context)
+    const allowed = await this.prepareModelTools(await this.getAllowedTools(context), context)
     const normalizedQuery = text(query).toLowerCase()
     const terms = [...new Set([
       ...(normalizedQuery.match(/[\p{Script=Han}]/gu) || []),

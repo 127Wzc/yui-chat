@@ -219,6 +219,7 @@ export const KnowledgeTab = {
       commandMinRelevance: cfg.value.retrieval?.minRelevance ?? 0.55,
       commandRerankEnabled: String(cfg.value.retrieval?.rerankEnabled === true),
       commandRerankModel: cfg.value.retrieval?.rerankModel || "",
+      commandRerankMinScore: (cfg.value.retrieval?.rerankMinScore ?? "") as number | string,
       commandEmbeddingModel: "",
       commandRetrievalMode: "hybrid",
       commandFieldDescription: "",
@@ -273,14 +274,15 @@ export const KnowledgeTab = {
       return records<KnowledgeModel>(record(store.config).models).filter(model => {
         const provider = providers.find(item => item.name === model.apiProvider)
         const adapter = model.adapter || provider?.type || "mock"
-        const purpose = model.purpose || (adapter === "typesafe" ? "decision" : ["openai-images", "openai-chat-completions", "gemini-images"].includes(adapter) ? "image" : model.capabilities?.chat === false && model.capabilities?.embedding ? "embedding" : "chat")
-        return purpose === "chat" && model.capabilities?.chat !== false && adapter !== "mock"
-      }).map(model => ({ value: model.name, label: `${model.apiProvider || "未分配渠道"} / ${model.name}` }))
+        const purpose = model.purpose || (adapter === "systemone" ? "decision" : ["openai-images", "openai-chat-completions", "gemini-images"].includes(adapter) ? "image" : model.capabilities?.chat === false && model.capabilities?.embedding ? "embedding" : "chat")
+        return adapter !== "mock" && (purpose === "rerank" || model.name === cfg.value.retrieval?.rerankModel && purpose === "chat")
+      }).map(model => ({ value: model.name, label: `${model.apiProvider || "未分配渠道"} / ${model.name}${model.purpose === "rerank" ? "" : "（现有对话模型重排）"}` }))
     })
     function resetCommandModelSettings(): void {
       draft.commandMinRelevance = cfg.value.retrieval?.minRelevance ?? 0.55
       draft.commandRerankEnabled = String(cfg.value.retrieval?.rerankEnabled === true)
       draft.commandRerankModel = cfg.value.retrieval?.rerankModel || ""
+      draft.commandRerankMinScore = cfg.value.retrieval?.rerankMinScore ?? ""
     }
     const activeIndexJob = computed(() => indexJobs.value.find(item => ["queued", "running", "retrying", "canceling"].includes(item.status || "")) || null)
     const latestIndexJob = computed(() => indexJobs.value[0] || null)
@@ -667,7 +669,7 @@ export const KnowledgeTab = {
     async function saveCommandRetrieval() {
       try {
         if (draft.commandEmbeddingModel && !Number(draft.commandEmbeddingDimensions)) throw new Error("所选模型未声明默认维度，请先到模型页完善")
-        await saveConfigPatch({ "knowledge.retrieval.minRelevance": Number(draft.commandMinRelevance), "knowledge.retrieval.rerankEnabled": draft.commandRerankEnabled === "true", "knowledge.retrieval.rerankModel": draft.commandRerankModel })
+        await saveConfigPatch({ "knowledge.retrieval.minRelevance": Number(draft.commandMinRelevance), "knowledge.retrieval.rerankEnabled": draft.commandRerankEnabled === "true", "knowledge.retrieval.rerankModel": draft.commandRerankModel, "knowledge.retrieval.rerankMinScore": draft.commandRerankMinScore === "" ? null : Number(draft.commandRerankMinScore) })
         const result = await request("/api/knowledge/bases/builtin-commands/retrieval", {
           method: "PATCH",
           body: JSON.stringify({

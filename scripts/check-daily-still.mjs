@@ -129,7 +129,7 @@ try {
   const typesafe = new TypeSafeAdapter()
   assert.equal(typesafe.endpoint({ baseURL: "" }).toString(), "https://api.typesafe.ai/v1/systemone")
   assert.equal(typesafe.endpoint({ baseURL: "https://proxy.test/v1/systemone/" }).toString(), "https://proxy.test/v1/systemone")
-  assert.equal(adapterRegistry.listAdapters().find(item => item.id === "typesafe")?.supportsDecision, true)
+  assert.equal(adapterRegistry.listAdapters().find(item => item.id === "systemone")?.supportsDecision, true)
   // TypeSafe 请求体与响应解析：非数字字段丢弃，错误响应带上服务端消息。
   const originalFetch = globalThis.fetch
   const fetchCalls = []
@@ -167,8 +167,8 @@ try {
 
   // 决策：未配置模型走关键词；模型分值低于阈值不发送；请求失败回退关键词。
   const decisionConfig = {
-    apiProviders: [{ name: "ts", type: "typesafe", baseURL: "https://api.typesafe.ai/v1", apiKey: "k", authType: "bearer" }],
-    models: [{ name: "jev", modelIdentifier: "jev-latest", apiProvider: "ts", adapter: "typesafe", purpose: "decision", capabilities: { chat: false, embedding: false } }],
+    apiProviders: [{ name: "ts", type: "systemone", baseURL: "https://api.typesafe.ai/v1", apiKey: "k", authType: "bearer" }],
+    models: [{ name: "jev", modelIdentifier: "jev-latest", apiProvider: "ts", adapter: "systemone", purpose: "decision", capabilities: { chat: false, embedding: false } }],
     modelTasks: {}, chat: {},
   }
   const baseInput = { config: decisionConfig, moods, state: { 对方: "今天又加班到十点，好累" }, plainText: "今天又加班到十点，好累", now: new Date(2026, 0, 1, 12, 0) }
@@ -186,7 +186,7 @@ try {
   const lowScore = await decideDailyStill({ ...baseInput, decision: { model: "jev", sendThreshold: 0.6 } })
   assert.equal(lowScore.send, false)
   assert.equal(lowScore.reason, "not-a-moment")
-  assert.equal(decideCalls[0].channel.type, "typesafe")
+  assert.equal(decideCalls[0].channel.type, "systemone")
   assert.ok(Object.hasOwn(decideCalls[0].questions.mood.criteria, "none"))
   assert.equal(Object.hasOwn(decideCalls[0].questions.mood.criteria, "冒泡"), false)
   decideAnswer = { send_now: { type: "noul", noul: 0.9 }, mood: { type: "choice", choice: "安慰", confidence: 0.2 } }

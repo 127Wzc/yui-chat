@@ -26,13 +26,20 @@ function flag(value: unknown): string {
   return value ? "yes" : "no"
 }
 
+function channelDisplayLabel(config: unknown, channel: unknown): string {
+  const id = text(channel)
+  const models = record(config).models
+  const model = Array.isArray(models) ? models.map(record).find(item => item.name === id) : null
+  return model ? [...new Set([text(model.apiProvider), text(model.modelIdentifier || model.model || model.name)].filter(Boolean))].join(" · ").replace(/\s+/g, " ") : id
+}
+
 /** 对话链路日志只负责结构化摘要，不保存正文或凭证；详细拓扑由持久化观测层负责。 */
 export const conversationLog = Object.freeze({
   started(config: LogConfig, options: UnknownRecord): void {
     output.info(config, `开始 scope=${text(options.scope)} source=${text(options.source)} promptChars=${number(options.promptChars)}`)
   },
   modelRequest(config: LogConfig, options: UnknownRecord): void {
-    output.debug(config, `模型请求 channel=${text(options.channel)} adapter=${text(options.adapter)} messages=${number(options.messages)} tools=${number(options.tools)} maxTokens=${number(options.maxTokens)} timeout=${number(options.timeoutMs)}ms stream=${flag(options.stream)}${options.phase ? ` phase=${text(options.phase)}` : ""}`)
+    output.debug(config, `模型请求 channel=${channelDisplayLabel(config, options.channel)} adapter=${text(options.adapter)} messages=${number(options.messages)} tools=${number(options.tools)} maxTokens=${number(options.maxTokens)} timeout=${number(options.timeoutMs)}ms stream=${flag(options.stream)}${options.phase ? ` phase=${text(options.phase)}` : ""}`)
   },
   /** 只在真正触发压缩时输出：未超窗口的正常请求不该产生噪音。 */
   promptCompressed(config: LogConfig, options: UnknownRecord): void {
@@ -71,11 +78,11 @@ export const conversationLog = Object.freeze({
     const mediaSummary = options.mediaDirectOutputDetected || options.mediaCorrectionAttempted ? ` mediaDirect=${flag(options.mediaDirectOutputDetected)} mediaCorrection=${text(options.mediaCorrectionStatus || "not-needed")}` : ""
     const usage = record(options.usage)
     const chainSummary = options.mediaCandidateSeen ? ` mediaResources=seen` : ""
-    output.info(config, `完成 scope=${text(options.scope)} channel=${text(options.channel)} duration=${number(options.durationMs)}ms tools=${number(options.tools)} requiresFinalReply=${flag(options.requiresFinalReply !== false)} toolLimit=${flag(options.toolLimitReached)} deduplicated=${flag(options.toolDeduplicated)} finalization=${finalization}${executionSummary}${mediaSummary}${chainSummary} tokens=${number(usage.total)} input=${number(usage.input)} output=${number(usage.output)}`)
+    output.info(config, `完成 scope=${text(options.scope)} channel=${channelDisplayLabel(config, options.channel)} duration=${number(options.durationMs)}ms tools=${number(options.tools)} requiresFinalReply=${flag(options.requiresFinalReply !== false)} toolLimit=${flag(options.toolLimitReached)} deduplicated=${flag(options.toolDeduplicated)} finalization=${finalization}${executionSummary}${mediaSummary}${chainSummary} tokens=${number(usage.total)} input=${number(usage.input)} output=${number(usage.output)}`)
   },
   failed(config: LogConfig, options: UnknownRecord): void {
     const route = [
-      options.channel ? `channel=${text(options.channel)}` : "",
+      options.channel ? `channel=${channelDisplayLabel(config, options.channel)}` : "",
       options.adapter ? `adapter=${text(options.adapter)}` : "",
       options.attempts ? `attempts=${number(options.attempts)}` : "",
     ].filter(Boolean).join(" ")

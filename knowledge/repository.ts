@@ -1,3 +1,4 @@
+import { lexicalIndexText } from "./lexical-text.js"
 import crypto from "node:crypto"
 import { chunkStrategyHash } from "./chunking.js"
 import { sqliteClient } from "../core/storage/sqlite/client.js"
@@ -198,6 +199,12 @@ export class KnowledgeRepository {
   }
 
   /** Compose document, FTS, history and audit changes into one caller-owned transaction. */
+  /** 显式重建只更新全文投影，不修改正文或生成向量。 */
+  async rebuildLexicalDocument(documentId: unknown): Promise<void> {
+    const rows = await sqliteClient.all<UnknownRecord>("SELECT c.id,c.content,d.title FROM knowledge_chunks c JOIN knowledge_documents d ON d.id=c.document_id WHERE d.id=?", [documentId])
+    if (rows.length) await sqliteClient.transaction(rows.map(row => ({ sql: "UPDATE knowledge_fts SET title=?,content=? WHERE chunk_id=?", params: [lexicalIndexText(row.title), lexicalIndexText(row.content), row.id] })))
+  }
+
   async prepareDocument({ knowledgeBaseId, sourceType = "text", sourceKey, title, content, contentHash, metadata = {}, chunks = [] }: DocumentInput): Promise<{ operations: SqliteOperation[]; result: UnknownRecord }> {
     const timestamp = now()
     const normalizedSourceKey = String(sourceKey || "source").slice(0, 1000)
@@ -237,11 +244,11 @@ export class KnowledgeRepository {
         const chunkId = id()
         return [
           { sql: "INSERT INTO knowledge_chunks(id, knowledge_base_id, document_id, ordinal, content, content_hash) VALUES(?, ?, ?, ?, ?, ?)", params: [chunkId, knowledgeBaseId, documentId, ordinal, chunk.content, chunk.contentHash] },
-          { sql: "INSERT INTO knowledge_fts(chunk_id, knowledge_base_id, title, content) VALUES(?, ?, ?, ?)", params: [chunkId, knowledgeBaseId, normalizedTitle, chunk.content] },
+          { sql: "INSERT INTO knowledge_fts(chunk_id, knowledge_base_id, title, content) VALUES(?, ?, ?, ?)", params: [chunkId, knowledgeBaseId, lexicalIndexText(normalizedTitle), lexicalIndexText(chunk.content)] },
         ]
       }),
     ]
-    operations.push({ sql: "UPDATE knowledge_fts SET title=? WHERE chunk_id IN (SELECT id FROM knowledge_chunks WHERE document_id=?)", params: [normalizedTitle, documentId] })
+    operations.push({ sql: "UPDATE knowledge_fts SET title=? WHERE chunk_id IN (SELECT id FROM knowledge_chunks WHERE document_id=?)", params: [lexicalIndexText(normalizedTitle), documentId] })
     operations.push(...previous.filter(row => !retained.has(String(row.id))).map(row => ({ sql: "DELETE FROM knowledge_chunks WHERE id=?", params: [row.id] })))
     operations.push({ sql: "UPDATE knowledge_bases SET updated_at=MAX(updated_at+1, ?) WHERE id=?", params: [timestamp, knowledgeBaseId] })
     return { operations, result: { id: documentId, sourceId: normalizedSourceKey, changed: true, created: !existing, chunks: normalizedChunks.length } }

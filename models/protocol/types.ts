@@ -227,3 +227,17 @@ export interface EmbeddingResponse {
 }
 
 export type ModelToolResult = ToolOutput | string | JsonValue
+
+/** 专用重排服务以输入索引关联候选，分数保留供应商的原始尺度。 */
+export interface RerankRequest {
+  channel: ModelChannel
+  query: string
+  documents: string[]
+  signal?: AbortSignal
+  onRequest?: (capture: ModelRequestCapture) => void
+}
+export interface RerankResponse {
+  model: string
+  results: Array<{ index: number; score: number }>
+  usage: ModelUsage
+}

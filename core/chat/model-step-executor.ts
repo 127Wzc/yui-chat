@@ -672,7 +672,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
       })
       if (record(root.subAgent).enabled !== true) enabledTools = enabledTools.filter(tool => tool.name !== "dispatch_subagent")
     }
-    enabledTools = filterModelLocalTools(enabledTools)
+    enabledTools = await toolRegistry.prepareModelTools(filterModelLocalTools(enabledTools), registryContext(toolContext))
   }
   const allowedToolCandidates = enabledTools
   if (adapter.supportsNativeToolSearch) {

@@ -163,6 +163,8 @@ try {
       if(spec.includes("config/store"))return {configStore:{get:()=>rerankRoot},dataDir:root}
       if(spec.includes("token-budget"))return {estimateTokens,truncateTextToTokens}
       if(spec.includes("host-runtime"))return {hostRuntime:{}}
+      if(spec.includes("adapters/registry"))return {adapterRegistry:{}}
+      if(spec.includes("provider-resolver"))return {modelPurpose:model=>model.purpose || "chat"}
       if(spec.includes("isolated-task"))return {runIsolatedModelTask:async request=>{rerankPrompts.push(request);const input=JSON.parse(request.prompt);return {text:JSON.stringify(input.candidates.map(row=>({id:row.id,relevance:0.9})))}}}
       throw Error("unexpected rerank dependency: "+spec)
     },
@@ -188,7 +190,8 @@ try {
   const documentRuntime=await import("../output/runtime/knowledge/document-retrieval.js")
   const availabilityRuntime=await import("../output/runtime/knowledge/command-availability.js")
   const builderRuntime=await import("../output/runtime/knowledge/command-document-builder.js")
-  const hybridExports={},hybridInputs=[]
+  const hybridExports={},hybridInputs=[],pendingVectors=[]
+  let parallelKeywordCalls=0
   const semanticCommands=Array.from({length:6},(_,index)=>({id:`semantic-${index}`,pluginKey:"semantic-fixture",suggestedCommand:`#语义候选${index}`,retrievalText:`候选说明 ${index}`}))
   const semanticVectors=semanticCommands.map((command,index)=>({id:`chunk-${index}`,commandId:command.id,metadata:{commandId:command.id},score:1/(61+index),vectorSimilarity:0.95-index*0.05,distance:0.05+index*0.05,distanceMetric:"cosine"}))
   const hybridConfig={knowledge:{commandRetrieval:{mode:"hybrid",vectorCandidateLimit:30},retrieval:{rerankEnabled:false}}}
@@ -198,7 +201,12 @@ try {
       if(spec.includes("command-availability"))return availabilityRuntime
       if(spec.includes("config/store"))return {configStore:{get:()=>hybridConfig}}
       if(spec.includes("./repository"))return {knowledgeRepository:{getBase:async()=>({config:{embeddingModel:"semantic-fixture",dimensions:2}})}}
-      if(spec.includes("document-retrieval"))return {resolveKnowledgeResultLimit:documentRuntime.resolveKnowledgeResultLimit,searchKnowledgeDetailed:async()=>({results:semanticVectors,retrieval:{vectorAvailable:true,filtered:2}})}
+      if(spec.includes("document-retrieval"))return {resolveKnowledgeResultLimit:documentRuntime.resolveKnowledgeResultLimit,searchKnowledgeDetailed:async(_event,_query,options)=>{
+        if(options.vectorOnly)return new Promise(resolve=>pendingVectors.push(()=>resolve({results:semanticVectors,retrieval:{vectorAvailable:true,filtered:2}})))
+        parallelKeywordCalls++
+        while(pendingVectors.length)pendingVectors.shift()()
+        return {results:[],retrieval:{vectorAvailable:false,filtered:0}}
+      }}
       if(spec.includes("./access"))return {assertKnowledgeAccess:async()=>{throw Error("unexpected authorization call")}}
       if(spec.includes("retrieval-rerank"))return {rerankKnowledge:async(_event,_query,candidates)=>{
         hybridInputs.push(candidates.map(row=>row.id))
@@ -211,7 +219,8 @@ try {
   })
   const semanticObserver={recommendCommands:query=>({query,results:[]}),searchableCommands:()=>semanticCommands}
   const semanticSearch=options=>hybridExports.recommendCommandHybrid(semanticObserver,"语义提问",options)
-  const semanticResults=await semanticSearch()
+  const semanticResults=await Promise.race([semanticSearch(),new Promise((_,reject)=>setTimeout(()=>reject(Error("keyword and vector tasks must start concurrently")),1000))])
+  assert.equal(parallelKeywordCalls,1)
   assert.equal(semanticResults.results.length,defaults.knowledge.retrieval.resultLimit,"distinct vector scores must not collapse the final result count to one")
   assert.deepEqual(Array.from(semanticResults.results,row=>row.id),semanticCommands.slice(0,5).map(row=>row.id))
   assert.equal(semanticResults.retrieval.relevancePolicy,"hybrid-candidates")
@@ -289,9 +298,8 @@ try {
     assert(!Object.hasOwn(row.metadata,"implementation"),"collection must not include handler source code")
     assert(row.retrievalText.includes(`插件名称：${row.metadata.pluginName}`))
     assert(row.retrievalText.includes(`插件标识：${row.metadata.pluginKey}`))
-    assert(row.retrievalText.includes(`priority：${row.metadata.priority??"未知"}`))
-    assert(row.retrievalText.includes(`regexp：${row.metadata.regexp}`))
-    assert(row.retrievalText.includes(`regexpFlags：${JSON.stringify(row.metadata.regexpFlags||"")}`))
+    assert(!/^\s*(?:priority|regexp|regexpFlags)[：:]/mu.test(row.retrievalText),"runtime fields stay in metadata")
+    assert(Object.hasOwn(row.metadata,"priority") && Object.hasOwn(row.metadata,"regexp") && Object.hasOwn(row.metadata,"regexpFlags"))
     assert(!row.retrievalText.includes("数值越小"),"field semantics belong to the base guide")
   }
   assert.deepEqual(runtime1.warnings,[],"unreadable handlers do not warn or mark collection incomplete")
@@ -507,7 +515,7 @@ try {
   assert.equal(allQuality.length,206,"the full catalogue remains reachable beyond the former first 200")
   assert.equal(allQuality.at(-1).metadata.commandId,weakRow.id)
   assert.equal(allQuality[0].qualityScore,100);assert.equal(allQuality[0].completenessStatus,"complete")
-  assert.equal(allQuality[0].qualityRuleVersion,"command-completeness-v2");assert.deepEqual(allQuality[0].qualityDeductions,[])
+  assert.equal(allQuality[0].qualityRuleVersion,"command-completeness-v3");assert.deepEqual(allQuality[0].qualityDeductions,[])
   assert.equal(allQuality[0].qualityDimensions.A.maximum,20);assert.equal(allQuality[0].qualityDimensions.D.maximum,25)
   assert.equal(allQuality.at(-1).completenessStatus,"needs-review")
   assert(allQuality.at(-1).qualityDeductions.every(row=>row.points>0&&row.reason&&row.suggestion))
@@ -567,11 +575,11 @@ try {
       }
       assert(prompt.includes("仅允许修改 `title`、`retrievalText`、`metadata.suggestedCommand`，以及原条目中已存在的 `metadata.examples`"))
       assert(prompt.includes("不得新增原文件中不存在的元数据字段"));assert(prompt.includes("不擅自把 complete 改为 true"))
-      assert(prompt.includes("插件名称、插件标识、指令、用途、参数、示例、priority、regexp、regexpFlags。"))
+      assert(prompt.includes("插件名称、插件标识、指令、用途、参数、示例。"))
       assert(!prompt.includes("示例、声明权限、前置条件、限制"));assert(prompt.includes("“示例”允许重复多行"))
       assert(prompt.includes("无法确认可靠发送示例"));assert(prompt.includes("缺少可靠链接样本"));assert(prompt.includes("已有的 `metadata.examples` 设为 `[]`"))
       assert(prompt.includes("模板和占位符仅可在指令行和参数说明中使用"));assert(prompt.includes("超过 8 个时提供最多 8 条代表性示例"))
-      assert(prompt.includes("以上均为软目标"));assert(prompt.includes("不得为满足长度而截断、改写原始正则或遗漏必要内容"))
+      assert(prompt.includes("以上均为软目标"));assert(prompt.includes("原始正则仅在元数据中完整保留"))
       assert(prompt.includes("一条原始规则保持一条文档及原 ID"));assert(prompt.includes("系统内部实际分块遵循导入逻辑"))
     }
   }
@@ -582,6 +590,31 @@ try {
   assert.deepEqual(importedEvent.metadata.examples,[])
   assert.equal((await apply(bundle([eventDocument]),{policy:"overwrite"})).summary.unchanged,1,"empty event suggestions round trip without false changes")
   assert.equal((await commandImports.history(eventDocument.id)).length,0,"an unchanged event creates no history")
+  await configStore.update(c=>{
+    c.apiProviders.push({name:"native-rank-fixture",type:"openai-compatible",baseURL:"https://rank.invalid/v1",apiKey:"fixture-only"})
+    c.models.push({name:"native-rank",modelIdentifier:"bge-reranker-v2-m3",apiProvider:"native-rank-fixture",adapter:"openai-compatible",purpose:"rerank",capabilities:{chat:false,embedding:false},rerank:{params:{privateCredential:"fixture-sensitive"}}})
+    c.modelTasks.replyer.modelList.push("native-rank")
+    c.modelTasks.rerank={purpose:"rerank",modelList:["native-rank"],selectionStrategy:"fallback"}
+  })
+  assert.equal(configStore.get().models.find(row=>row.name==="native-rank").purpose,"rerank","normalization preserves dedicated rerank purpose")
+  assert(!configStore.get().modelTasks.replyer.modelList.includes("native-rank"),"rerank models cannot enter chat routing")
+  assert.deepEqual(configStore.get().modelTasks.rerank.modelList,["native-rank"])
+  assert(!JSON.stringify(configStore.getPublic()).includes("fixture-sensitive"),"new nested model options remain recursively redacted")
+  await knowledgeStore.updateBuiltinRetrieval({embeddingModel:"",dimensions:0})
+  const legacyText="插件名称：测试\n插件标识：fixture\n指令：#原图\n用途：获取此前图片的原图 stoken ws\n参数：无\n示例：#原图\npriority：-100\nregexp：^#原图$\nregexpFlags：\"\""
+  const legacyMetadata={commandId:"legacy-clean",importSourceId:"clean-source",command:{id:"legacy-clean",pluginName:"测试",pluginKey:"fixture",suggestedCommand:"#原图",regexp:"^#原图$",regexpFlags:"",priority:-100,event:"message",retrievalText:legacyText}}
+  await knowledgeRepository.replaceDocument({knowledgeBaseId:"builtin-commands",sourceType:"command",sourceKey:"command:legacy-clean",title:"获取原图",content:legacyText,contentHash:"legacy-clean-hash",metadata:legacyMetadata,chunks:commandChunks(legacyText)})
+  const beforeCleanupCalls=embeddingCalls
+  await knowledgeStore.prepareRebuild("builtin-commands")
+  const cleanedLegacy=(await commandImports.export("clean-source")).documents[0]
+  assert(!/^\s*(?:priority|regexp|regexpFlags)[：:]/mu.test(cleanedLegacy.retrievalText))
+  assert.equal(cleanedLegacy.metadata.regexp,"^#原图$")
+  assert.equal(cleanedLegacy.metadata.priority,-100)
+  assert.equal((await commandImports.history("legacy-clean")).length,1,"explicit cleanup records the previous body")
+  assert((await sqliteClient.get("SELECT COUNT(*) AS n FROM knowledge_fts WHERE knowledge_fts MATCH ?",['"原图" AND "stoken" AND "ws"'])).n>0,"Chinese short terms and ASCII identifiers have real FTS hits")
+  await knowledgeStore.prepareRebuild("builtin-commands")
+  assert.equal((await commandImports.history("legacy-clean")).length,1,"repeated rebuild is content-idempotent")
+  assert.equal(embeddingCalls,beforeCleanupCalls,"preparing an FTS-only rebuild must not call embedding")
   const {chunkText}=await import("../output/runtime/knowledge/chunking.js");assert.equal(chunkText("a".repeat(200),{targetChars:80,overlapChars:0,minChars:1}).length,3)
   console.log("ok knowledge-rag: stable scanner IDs, import policies/atomic audit, 3-version retention, restore/delete, canonical retrieval, incremental vectors/no-op/failure/races, auth and UI")
 }finally{if(server)await new Promise(resolve=>server.close(resolve));jobs?.stop();await sqliteClient?.close().catch(()=>{});await fs.rm(root,{recursive:true,force:true})}

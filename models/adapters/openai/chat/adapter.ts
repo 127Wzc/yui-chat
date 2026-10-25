@@ -226,6 +226,34 @@ export class OpenAICompatibleAdapter extends ModelAdapter {
     })
   }
 
+  override readonly supportsRerank: boolean = true
+
+  override async rerank({ channel, query, documents, signal, onRequest }: Parameters<ModelAdapter["rerank"]>[0]): ReturnType<ModelAdapter["rerank"]> {
+    const config = record(record(channel.modelConfig).rerank)
+    const url = this.buildEmbeddingsUrl(channel)
+    url.pathname = url.pathname.replace(/\/embeddings$/, "/rerank")
+    const body = { ...record(channel.params), ...record(config.params), model: channel.model, query, documents, top_n: documents.length, return_documents: false }
+    notifyModelRequest(onRequest, "rerank", body)
+    return fetchWithTimeout(url, {
+      method: "POST", headers: this.buildHeaders(channel), body: JSON.stringify(body),
+      timeoutMs: Number(channel.timeoutMs || 10000), signal,
+      consume: async response => {
+        const data = await readJsonResponse(response)
+        if (!response.ok) throw responseError(data, response.status)
+        const rows = array(data.results)
+        const seen = new Set<number>()
+        if (rows.length !== documents.length) throw new Error("重排结果数量不完整")
+        const results = rows.map(value => {
+          const row = record(value), index = row.index, score = row.relevance_score
+          if (typeof index !== "number" || !Number.isInteger(index) || index < 0 || index >= documents.length || seen.has(index) || typeof score !== "number" || !Number.isFinite(score)) throw new Error("重排结果索引或分数无效")
+          seen.add(index)
+          return { index, score }
+        })
+        return { model: stringValue(data.model || channel.model), results, usage: tokenUsage(data) }
+      },
+    })
+  }
+
   buildHeaders(channel: ModelChannel): Record<string, string> {
     const headers: Record<string, string> = { "Content-Type": "application/json", ...stringRecord(channel.headers) }
     if (!channel.apiKey || channel.authType === "none" || channel.authType === "query") return headers

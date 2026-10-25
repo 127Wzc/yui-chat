@@ -37,9 +37,8 @@ function buildDocument(metadata: Row): Row {
     retrievalText: [
       `插件名称：${metadata.pluginName}`, `插件标识：${metadata.pluginKey}`,
       `指令：${metadata.examples.length ? metadata.examples.join(" / ") : "待核实（未生成可验证的示例）"}`, `用途：${metadata.description || "待补充说明"}`,
+      `参数：待核实`,
       ...(metadata.examples.length ? metadata.examples.map((example: string) => `示例：${example}`) : ["示例：待核实（请结合原始规则整理）"]),
-      `priority：${metadata.priority ?? "未知"}`,
-      `regexp：${metadata.regexp}`, `regexpFlags：${JSON.stringify(metadata.regexpFlags || "")}`,
     ].filter(Boolean).join("\n"),
     metadata,
   }

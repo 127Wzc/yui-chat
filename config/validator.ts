@@ -1,3 +1,4 @@
+import { specializedModelAdapter, specializedAdapterPurpose } from "../models/protocol/specialized-adapters.js"
 import { COMMON_REASONING_TARGETS, getReasoningOptions } from "../models/configuration/reasoning.js"
 import { parseActions } from "../core/actions/contract.js"
 import { isLogLevel } from "./logging.js"
@@ -98,8 +99,8 @@ interface ConfigRecord extends ConfigSection {
   logging?: ConfigSection
 }
 
-const adapterIds = new Set(["mock", "openai-compatible", "openai-responses", "openai-images", "openai-chat-completions", "qwen", "gemini", "gemini-images", "claude", "chatglm", "typesafe"])
-const modelPurposes = new Set(["chat", "image", "embedding", "decision"])
+const adapterIds = new Set(["mock", "openai-compatible", "openai-responses", "openai-images", "openai-chat-completions", "qwen", "gemini", "gemini-images", "claude", "chatglm", "systemone", "embeddings", "rerank"])
+const modelPurposes = new Set(["chat", "image", "embedding", "decision", "rerank"])
 const authTypes = new Set(["bearer", "none", "query", "x-api-key", "api-key", "custom-header"])
 const selectionStrategies = new Set(["sequential", "random", "fallback"])
 const boundaryRoles = new Set(["user", "groupAdmin", "groupOwner", "master"])
@@ -125,7 +126,8 @@ function modelPurpose(model: ConfigSection): string {
   const declared = String(model.purpose || "").trim().toLowerCase()
   if (modelPurposes.has(declared)) return declared
   const adapter = String(model.adapter || "").trim().toLowerCase()
-  if (adapter === "typesafe") return "decision"
+  const specialized = specializedAdapterPurpose(adapter)
+  if (specialized) return specialized
   if (["openai-images", "openai-chat-completions", "gemini-images"].includes(adapter)) return "image"
   return section(model.capabilities).embedding === true && section(model.capabilities).chat === false ? "embedding" : "chat"
 }
@@ -395,9 +397,11 @@ function validateProviders(config: ConfigRecord, issues: ValidationIssue[]): voi
     if (model.purpose !== undefined && !modelPurposes.has(String(model.purpose).trim().toLowerCase())) {
       add(issues, "error", `models.${index}.purpose`, `未知模型用途：${String(model.purpose)}`)
     }
-    if (purpose === "decision" && adapter !== "typesafe") {
-      add(issues, "warn", `models.${index}.adapter`, `决策模型 ${modelName} 使用 ${adapter}，当前仅支持 TypeSafe System One 协议`)
-    }
+    const specialized = specializedModelAdapter(purpose, adapter)
+    if (specialized !== adapter) add(issues, "error", `models.${index}.adapter`, `${purpose} 模型必须使用 ${specialized} 协议`)
+    const adapterPurpose = specializedAdapterPurpose(adapter)
+    if (adapterPurpose && adapterPurpose !== purpose) add(issues, "error", `models.${index}.purpose`, `${adapter} 协议只支持 ${adapterPurpose} 用途`)
+    if (model.rerank !== undefined && (!isObject(model.rerank) || model.rerank.params !== undefined && !isObject(model.rerank.params))) add(issues, "error", `models.${index}.rerank`, "rerank 及其 params 必须是对象")
     if (purpose === "image" && ["openai-responses", "claude"].includes(adapter)) {
       add(issues, "warn", `models.${index}.adapter`, `图片模型 ${modelName} 使用 ${adapter}，当前仅支持 OpenAI Images 或 Gemini 图片协议`)
     }
@@ -529,7 +533,7 @@ function validateProviders(config: ConfigRecord, issues: ValidationIssue[]): voi
     }
     if (!Array.isArray(task.modelList)) add(issues, "error", `modelTasks.${taskName}.modelList`, "modelList 必须是数组")
     const declaredPurpose = task.purpose === undefined ? "" : String(task.purpose).trim().toLowerCase()
-    const taskPurpose = declaredPurpose || (taskName === "imageGeneration" ? "image" : taskName === "embedding" ? "embedding" : "chat")
+    const taskPurpose = declaredPurpose || (taskName === "imageGeneration" ? "image" : taskName === "embedding" ? "embedding" : taskName === "rerank" ? "rerank" : "chat")
     if (!modelPurposes.has(taskPurpose)) add(issues, "error", `modelTasks.${taskName}.purpose`, `未知任务用途：${taskPurpose}`)
     for (const modelNameValue of asArray(task.modelList)) {
       const modelName = String(modelNameValue)
@@ -817,6 +821,7 @@ function validateSubAgent(config: ConfigRecord, issues: ValidationIssue[]): void
   if (taskName && !modelTasks[taskName]) {
     add(issues, "error", "subAgent.task", `子代理任务不存在：${taskName}`)
   }
+  if (taskName === "rerank" || section(modelTasks[taskName]).purpose === "rerank") add(issues, "error", "subAgent.task", "重排序任务不能用于子代理对话")
   if (sub.allowedTools !== undefined) requireArray(issues, "subAgent.allowedTools", sub.allowedTools)
 }
 
@@ -1057,6 +1062,8 @@ function validateRuntimeNumbers(config: ConfigRecord, issues: ValidationIssue[])
       }
     }
   }
+  const rerankMinScore = config.knowledge?.retrieval?.rerankMinScore
+  if (rerankMinScore !== undefined && rerankMinScore !== null && (typeof rerankMinScore !== "number" || !Number.isFinite(rerankMinScore))) add(issues, "error", "knowledge.retrieval.rerankMinScore", "重排最低分必须是有限数值或 null")
   for (const key of ["rerankEnabled"]) if (config.knowledge?.retrieval?.[key] !== undefined && typeof config.knowledge.retrieval[key] !== "boolean") add(issues, "error", `knowledge.retrieval.${key}`, "必须是布尔值")
   positiveNumber(issues, "knowledge.retrieval.minRelevance", config.knowledge?.retrieval?.minRelevance, { min: 0, max: 1 })
   for (const [key, min, max] of [["rerankMaxCandidates", 1, 30], ["rerankInputTokenBudget", 200, 30000], ["rerankMaxTokens", 128, 4000], ["rerankTimeoutMs", 1000, 60000], ["rerankCacheTtlMs", 0, 86400000]] as const) positiveNumber(issues, `knowledge.retrieval.${key}`, config.knowledge?.retrieval?.[key], { min, max, integer: true })
@@ -1068,11 +1075,11 @@ function validateRuntimeNumbers(config: ConfigRecord, issues: ValidationIssue[])
       const model = asArray(config.models).map(section).find(item => item.name === modelName)
       const provider = asArray(config.apiProviders).map(section).find(item => item.name === model?.apiProvider)
       if (!model) add(issues, "error", `knowledge.${area}.${modelKey}`, "模型不存在")
-      else if (modelPurpose(model) !== "chat" || section(model.capabilities).chat === false || String(model.adapter || provider?.type || "mock") === "mock") add(issues, "error", `knowledge.${area}.${modelKey}`, "请选择已接入的文本对话模型")
+      else if (!["chat", "rerank"].includes(modelPurpose(model)) || String(model.adapter || provider?.type || "mock") === "mock") add(issues, "error", `knowledge.${area}.${modelKey}`, "请选择已接入的重排序模型")
     }
     const required = !modelName && config.knowledge?.retrieval?.rerankEnabled === true
     if (required && task && !config.modelTasks?.[String(task)]) add(issues, "error", `knowledge.${area}.${key}`, "任务不存在")
-    if (required && task && section(config.modelTasks?.[String(task)]).purpose && section(config.modelTasks?.[String(task)]).purpose !== "chat") add(issues, "error", `knowledge.${area}.${key}`, "请选择文本对话任务")
+    if (required && task && section(config.modelTasks?.[String(task)]).purpose && !["chat", "rerank"].includes(String(section(config.modelTasks?.[String(task)]).purpose))) add(issues, "error", `knowledge.${area}.${key}`, "请选择重排序任务")
   }
   const commandRetrievalMode = String(config.knowledge?.commandRetrieval?.mode || "hybrid").trim().toLowerCase()
   if (!new Set(["lexical", "hybrid"]).has(commandRetrievalMode)) {

@@ -1,3 +1,4 @@
+import { isSendableCommand } from "./command-retrieval-text.js"
 import { evaluateCommandCompleteness, type CommandCompleteness } from "./command-completeness.js"
 import { commandHead } from "../core/message/command-prefixes.js"
 import {
@@ -281,9 +282,9 @@ export function findCommandMatches(commands: readonly Command[] = [], query: unk
   const meaningfulTokens = tokens.filter(token => !["查询", "指令", "命令", "功能", "使用", "方法"].includes(token))
   const coverageTokens = meaningfulTokens.length ? meaningfulTokens : tokens
   const threshold = Math.max(0, Math.min(1, numberValue(opts.minRelevance, 0.55)))
-  const commandName = (value: unknown): string => safeText(value).toLowerCase().replace(/^[#/*!]+/u, "").trim()
-  const queryName = commandName(searchText)
-  const scored: Command[] = commands.map<Command>(command => {
+  const commandName = (value: unknown): string => safeText(value).trim()
+  const queryName = commandName(/^[#/*!]/u.test(safeText(query)) ? query : searchText)
+  const scored: Command[] = commands.filter(isSendableCommand).map<Command>(command => {
     const guide = commandGuide(command)
     const indexed = typeof command.retrievalText === "string"
     const indexedText = indexed ? safeText(command.retrievalText).toLowerCase() : ""
@@ -387,12 +388,10 @@ export function findCommandMatches(commands: readonly Command[] = [], query: unk
     }))
 }
 
-/** 优先明确匹配证据，否则保留已通过相关性门槛的融合候选。 */
+/** 覆盖率作为排序证据，不能在融合后排除其他已通过门槛的语义候选。 */
 export function selectRelevantCommandCandidates(candidates: readonly Command[]): { results: Command[]; policy: string; filtered: number } {
-  const exact = candidates.filter(item => item.exactCommandMatch === true)
-  const covered = candidates.filter(item => numberValue(item.lexicalRelevance) === 1)
-  const results = exact.length ? exact : covered.length ? covered : [...candidates]
-  return { results, policy: exact.length ? "exact-command" : covered.length ? "keyword-covered" : "hybrid-candidates", filtered: candidates.length - results.length }
+  const results = candidates.filter(isSendableCommand)
+  return { results, policy: "hybrid-candidates", filtered: candidates.length - results.length }
 }
 
 export function buildCommandRecommendations(commands: readonly Command[] = [], query: unknown = "", opts: QueryOptions = {}): UnknownRecord {

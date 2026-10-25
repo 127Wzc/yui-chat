@@ -1,3 +1,4 @@
+import { cleanCommandRetrievalText } from "./command-retrieval-text.js"
 import { commandHead } from "../core/message/command-prefixes.js"
 import vm from "node:vm"
 import { commandExamplesFromRegexp, validatedCommandExamples } from "./command-regexp-examples.js"
@@ -100,15 +101,21 @@ function stripUrls(value: unknown = ""): string {
     .replace(/www\.\S+/gi, " ")
 }
 
+function commandConflictKey(command: UnknownRecord): string {
+  // 完整示例优先，不能用 safeText 折叠内部空白后误合并两个发送文本。
+  return typeof command.suggestedCommand === "string" ? command.suggestedCommand.trim() : preferredCommandText(command)
+}
+
 /** 保持不同指令的相关性位置，仅对相同推荐指令的实现应用调度优先级。 */
 export function orderEquivalentCommandMatches<T>(rows: readonly T[], command: (row: T) => UnknownRecord = row => row as UnknownRecord): T[] {
-  const key = (row: T): string => preferredCommandText(command(row)).toLowerCase().replace(/\s+/gu, " ").trim()
+  const key = (row: T): string => commandConflictKey(command(row))
   const groups = new Map<string, T[]>()
   for (const row of rows) {
     const name = key(row)
     if (name) groups.set(name, [...(groups.get(name) || []), row])
   }
-  for (const group of groups.values()) group.sort((a, b) => compareCommandPriority(command(a), command(b)))
+  if (![...groups.values()].some(group => group.length > 1)) return [...rows]
+  for (const group of groups.values()) if (group.length > 1) group.sort((a, b) => compareCommandPriority(command(a), command(b)))
   const offsets = new Map<string, number>()
   return rows.map(row => {
     const name = key(row)
@@ -150,7 +157,7 @@ export function normalizeSearchQuery(value: unknown = ""): string {
 
 /** 面向检索的自然语言投影；运行规则和自动猜测参数仍留在元数据中供核对。 */
 export function buildCommandRetrievalText(command: UnknownRecord): string {
-  if (typeof command.retrievalText === "string") return command.retrievalText.trim()
+  if (typeof command.retrievalText === "string") return cleanCommandRetrievalText(command.retrievalText, command)
   const examples = [...new Set([command.suggestedCommand, command.example, ...values(command.examples)].map(safeText).filter(Boolean))].filter(example => {
     if (example.length > 300 || !isValidCommandText(example)) return false
     if (!command.regexp) return true
@@ -412,4 +419,16 @@ export function preserveCommandSource(input: UnknownRecord, source: UnknownRecor
       regexpFlags: source?.regexpFlags || "",
     } : {}),
   }
+}
+
+/** 保持不同指令的相对位置，每个冲突组最多展示两个实现。 */
+export function collapseEquivalentCommandMatches<T>(rows: readonly T[], command: (row: T) => UnknownRecord = row => row as UnknownRecord): T[] {
+  const counts = new Map<string, number>()
+  return rows.filter(row => {
+    const name = commandConflictKey(command(row))
+    if (!name) return true
+    const count = (counts.get(name) || 0) + 1
+    counts.set(name, count)
+    return count <= 2
+  })
 }

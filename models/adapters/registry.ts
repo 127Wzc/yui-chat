@@ -3,6 +3,7 @@ import { configStore } from "../../config/store.js"
 import { ClaudeAdapter } from "./claude.js"
 import { GeminiAdapter, GeminiImagesAdapter } from "./gemini.js"
 import { MockAdapter } from "./mock.js"
+import { EmbeddingsAdapter, RerankAdapter } from "./retrieval.js"
 import { TypeSafeAdapter } from "./typesafe.js"
 import { ChatGLMAdapter, OpenAICompatibleAdapter, OpenAIImagesAdapter, QwenAdapter } from "./openai/chat/adapter.js"
 import { OpenAIResponsesAdapter } from "./openai/responses/adapter.js"
@@ -12,7 +13,7 @@ import { normalizeModelResponse } from "../protocol/normalize.js"
 import { modelLogStore } from "../../core/observability/model-log.js"
 import { createMediaThumbnail } from "../../core/media/media-cache.js"
 import { hostRuntime } from "../../core/runtime/host-runtime.js"
-import type { DecisionQuestion, DecisionResponse, EmbeddingRequest, ImageGenerationRequest, ImageGenerationResponse, ModelChannel, ModelListRequest, ModelMessage, ModelRequest, ModelResponse, ModelToolChoice } from "../protocol/types.js"
+import type { RerankRequest, RerankResponse, DecisionQuestion, DecisionResponse, EmbeddingRequest, ImageGenerationRequest, ImageGenerationResponse, ModelChannel, ModelListRequest, ModelMessage, ModelRequest, ModelResponse, ModelToolChoice } from "../protocol/types.js"
 import type { ListedModel } from "./base.js"
 import type { JsonValue } from "../../core/message-chain/types.js"
 import type { ToolDefinition } from "../../tools/support/tool-contract.js"
@@ -40,6 +41,8 @@ interface RuntimeAdapter {
   readonly supportsEmbeddings: boolean
   readonly supportsImageGeneration: boolean
   readonly supportsNativeToolSearch: boolean
+  readonly supportsRerank?: boolean
+  rerank?(request: RerankRequest): Promise<RerankResponse>
   readonly supportsDecision?: boolean
   sendMessage(request: RuntimeModelRequest): Promise<ModelResponse>
   embedTexts(request: RuntimeEmbeddingRequest): Promise<Awaited<ReturnType<import("../protocol/adapter.js").ModelAdapter["embedTexts"]>>>
@@ -117,8 +120,11 @@ interface DecisionSendOptions {
 
 interface ChannelTestResult {
   channel?: string
+  model: string
+  provider: string
+  protocol: string
   adapter: string
-  operation: "chat" | "embedding" | "image" | "decision"
+  operation: "chat" | "embedding" | "image" | "decision" | "rerank"
   text: string
   dimensions?: number
   vectorCount?: number
@@ -129,7 +135,7 @@ function record(value: unknown): Record<string, unknown> {
 }
 
 function isEmbeddingChannel(channel: ModelChannel): boolean {
-  return record(record(channel.modelConfig).capabilities).embedding === true
+  return String(record(channel.modelConfig).purpose || channel.purpose || "") === "embedding" || channel.type === "embeddings" || record(record(channel.modelConfig).capabilities).embedding === true
 }
 
 function isImageChannel(channel: ModelChannel): boolean {
@@ -164,6 +170,8 @@ export class AdapterRegistry {
     this.register(new ClaudeAdapter())
     this.register(new ChatGLMAdapter())
     this.register(new TypeSafeAdapter())
+    this.register(new EmbeddingsAdapter())
+    this.register(new RerankAdapter())
   }
 
   register(adapter: RuntimeAdapter): void {
@@ -174,7 +182,7 @@ export class AdapterRegistry {
     return this.adapters.get(type) || this.adapters.get("mock") as RuntimeAdapter
   }
 
-  listAdapters(): Array<Pick<RuntimeAdapter, "id" | "protocol" | "supportsTools" | "supportsVision" | "supportsStreaming" | "supportsEmbeddings" | "supportsImageGeneration" | "supportsNativeToolSearch" | "supportsDecision">> {
+  listAdapters(): Array<Pick<RuntimeAdapter, "id" | "protocol" | "supportsTools" | "supportsVision" | "supportsStreaming" | "supportsEmbeddings" | "supportsImageGeneration" | "supportsNativeToolSearch" | "supportsDecision" | "supportsRerank">> {
     return [...this.adapters.values()].map(adapter => ({
       id: adapter.id,
       protocol: adapter.protocol,
@@ -185,6 +193,7 @@ export class AdapterRegistry {
       supportsImageGeneration: adapter.supportsImageGeneration,
       supportsNativeToolSearch: adapter.supportsNativeToolSearch,
       supportsDecision: adapter.supportsDecision === true,
+      supportsRerank: adapter.supportsRerank === true,
     }))
   }
 
@@ -211,6 +220,20 @@ export class AdapterRegistry {
       const result = await adapter.embedTexts({ channel, texts, dimensions, signal, event, purpose, source, taskName, trace, parentToolId, metadata, onRequest: capture => modelLogStore.captureModelRequest(call, capture) })
       modelLogStore.completeModelCall(call, { response: result })
       return result
+    } catch (error) {
+      modelLogStore.completeModelCall(call, { error })
+      throw error
+    }
+  }
+
+  async rerank({ channel, query, documents, signal, event, source = "knowledge-rerank", purpose = "knowledge-rerank", taskName = "rerank" }: RerankRequest & { event?: unknown; source?: string; purpose?: string; taskName?: string }): Promise<RerankResponse> {
+    const adapter = this.get(channel.type)
+    if (!adapter.supportsRerank || !adapter.rerank) throw new Error(`${adapter.id} 不支持重排序`)
+    const call = modelLogStore.beginModelCall({ event, source, purpose, taskName, operation: "rerank", channel, texts: [query, ...documents], request: { protocol: "rerank", candidates: documents.length } })
+    try {
+      const response = await adapter.rerank({ channel, query, documents, signal, onRequest: capture => modelLogStore.captureModelRequest(call, capture) })
+      modelLogStore.completeModelCall(call, { response: { ...response, text: JSON.stringify(response.results) } })
+      return response
     } catch (error) {
       modelLogStore.completeModelCall(call, { error })
       throw error
@@ -307,20 +330,27 @@ export class AdapterRegistry {
 
   async testChannel(channel: ModelChannel): Promise<ChannelTestResult> {
     const adapter = channel.type === "openai-chat-completions" ? this.get("openai-images") : this.get(channel.type)
+    const identity = { channel: channel.id, model: String(channel.model || ""),
+      provider: String(record(channel.provider).name || record(channel.modelConfig).apiProvider || channel.apiProvider || ""),
+      adapter: adapter.id, protocol: adapter.protocol,
+    }
     if (isDecisionChannel(channel) || adapter.supportsDecision === true) {
       const result = await this.decide({ channel, state: "谢谢你帮我修好了这个问题！", questions: { thanks: { type: "noul", instructions: "这条消息是否在表达感谢？" } }, purpose: "model-test", source: "management", taskName: "channel-test" })
       const value = Number(result.answers.thanks?.noul)
       if (!Number.isFinite(value)) throw new Error("决策模型没有返回有效答案")
-      return { channel: channel.id, adapter: adapter.id, operation: "decision", text: `决策测试通过：${result.model}，感谢判断 ${value.toFixed(2)}` }
+      return { ...identity, operation: "decision", text: `决策测试通过：${result.model}，感谢判断 ${value.toFixed(2)}` }
     }
-    if (isImageChannel(channel)) return { channel: channel.id, adapter: adapter.id, operation: "image", text: "图片模型已配置，未发起生成请求" }
+    if (isImageChannel(channel)) return { ...identity, operation: "image", text: "图片模型已配置，未发起生成请求" }
+    if (String(record(channel.modelConfig).purpose || channel.purpose) === "rerank") {
+      const result = await this.rerank({ channel, query: "查看角色面板", documents: ["查询角色属性面板", "获取天气预报"], purpose: "model-test", source: "management", taskName: "channel-test" })
+      return { ...identity, operation: "rerank", text: JSON.stringify(result.results) }
+    }
     if (isEmbeddingChannel(channel)) {
       const result = await this.embedTexts({ channel, texts: ["embedding health check"], purpose: "model-test", source: "management", taskName: "channel-test" })
       const firstVector = result.vectors[0]
       if (!Array.isArray(firstVector) || !firstVector.length) throw new Error("embedding 未返回有效向量")
       return {
-        channel: channel.id,
-        adapter: adapter.id,
+        ...identity,
         operation: "embedding",
         text: `embedding 测试通过：${firstVector.length} 维`,
         dimensions: result.dimensions || firstVector.length,
@@ -331,7 +361,7 @@ export class AdapterRegistry {
       ? { ...channel, responsesRuntime: { toolSearchAllowed: false, webSearchAllowed: false, fileSearchAllowed: false } }
       : channel
     const result = await this.sendMessage({ channel: testChannel, messages: [{ role: "user", content: "health check" }], tools: [], purpose: "model-test", source: "management", taskName: "channel-test" })
-    return { channel: channel.id, adapter: adapter.id, operation: "chat", text: result.text }
+    return { ...identity, operation: "chat", text: result.text }
   }
 
   async listModels(channel: ModelChannel): Promise<{ channel?: string; adapter: string; models: ListedModel[] }> {

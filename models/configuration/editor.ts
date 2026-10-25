@@ -1,3 +1,5 @@
+import { specializedModelAdapter, specializedAdapterPurpose } from "../protocol/specialized-adapters.js"
+import { defaults } from "../../config/defaults.js"
 import { sanitizeIdentifier, shortHash } from "../../core/shared/identifiers.js"
 import { cloneJsonValue as clone } from "../../core/shared/json-values.js"
 import { getProviderTemplate, listProviderTemplates, type ProviderTemplate } from "./provider-templates.js"
@@ -43,8 +45,8 @@ function normalizeReasoningPatch(value: unknown, fallback: UnknownRecord | null 
   return isRecord(value) ? value : fallback
 }
 
-type ModelPurpose = "chat" | "image" | "embedding" | "decision"
-const modelPurposes: readonly ModelPurpose[] = ["chat", "image", "embedding", "decision"]
+type ModelPurpose = "chat" | "image" | "embedding" | "decision" | "rerank"
+const modelPurposes: readonly ModelPurpose[] = ["chat", "image", "embedding", "decision", "rerank"]
 
 function isModelPurpose(value: string): value is ModelPurpose {
   return (modelPurposes as readonly string[]).includes(value)
@@ -54,7 +56,8 @@ function modelPurpose(value: UnknownRecord = {}): ModelPurpose {
   const declared = text(value.purpose).trim().toLowerCase()
   if (isModelPurpose(declared)) return declared
   const adapter = text(value.adapter).trim().toLowerCase()
-  if (adapter === "typesafe") return "decision"
+  const specialized = specializedAdapterPurpose(adapter)
+  if (specialized) return specialized
   if (["openai-images", "openai-chat-completions", "gemini-images"].includes(adapter)) return "image"
   return record(value.capabilities).embedding === true && record(value.capabilities).chat === false ? "embedding" : "chat"
 }
@@ -64,6 +67,7 @@ function taskPurpose(taskName: string, task: UnknownRecord = {}): ModelPurpose {
   if (isModelPurpose(declared)) return declared
   if (taskName === "imageGeneration") return "image"
   if (taskName === "embedding") return "embedding"
+  if (taskName === "rerank") return "rerank"
   return "chat"
 }
 
@@ -123,8 +127,10 @@ export function resolveProviderDraft(body: UnknownRecord = {}, config: UnknownRe
     channel: {
       id: text(provider.name) || "provider-preview",
       name: text(provider.name) || "provider-preview",
-      type: requestedImageAdapter || text(provider.type) || "openai-compatible",
+      type: specializedModelAdapter(requestedPurpose, requestedImageAdapter || text(provider.type) || "openai-compatible"),
       enabled: true,
+      purpose: requestedPurpose,
+      modelConfig: requestedPurpose === "embedding" ? { embedding: { protocol: providerType === "gemini" ? "gemini" : "embeddings" } } : {},
       model: text(body.modelIdentifier || body.model || template.modelIdentifier).trim(),
       baseURL: provider.baseURL,
       apiKey: provider.apiKey,
@@ -167,7 +173,7 @@ export function setDefaultModelConfig(config: UnknownRecord, modelName = "", tas
   const tasks = configTasks(config)
   const current = tasks[taskId] || {}
   const purpose = modelPurpose(model)
-  const expectedPurpose = taskId === "imageGeneration" || text(current.purpose) === "image" ? "image" : taskId === "embedding" || text(current.purpose) === "embedding" ? "embedding" : "chat"
+  const expectedPurpose = taskId === "rerank" || text(current.purpose) === "rerank" ? "rerank" : taskId === "imageGeneration" || text(current.purpose) === "image" ? "image" : taskId === "embedding" || text(current.purpose) === "embedding" ? "embedding" : "chat"
   if (purpose !== expectedPurpose) throw new Error(`模型用途不匹配：任务 ${taskId} 需要 ${expectedPurpose} 模型`)
   const existingList = Array.isArray(current.modelList) ? current.modelList.map(text) : []
   const task = {
@@ -221,12 +227,12 @@ export function updateModelConfig(config: UnknownRecord, modelName = "", patch: 
   const requestedImageProtocol = purpose === "image"
     ? imageProtocol(record(patch.image).protocol || patch.adapter || record(current.image).protocol || currentAdapter, text(record(current.image).protocol) || (text(currentAdapter) === "gemini" ? "gemini-images" : "openai-images"))
     : ""
-  const adapter = purpose === "image"
+  const adapter = purpose === "rerank" ? "rerank" : purpose === "decision" ? "systemone" : purpose === "embedding" ? "embeddings" : purpose === "image"
     ? imageAdapter(requestedImageProtocol || currentAdapter, text(currentAdapter) === "gemini" ? "gemini-images" : "openai-images")
-    : purpose === "chat" && ["openai-images", "gemini-images"].includes(currentAdapter)
-      ? (currentAdapter === "gemini-images" ? "gemini" : "openai-compatible")
+    : purpose === "chat" && ["openai-images", "gemini-images", "rerank", "embeddings", "systemone", "typesafe"].includes(currentAdapter)
+      ? (currentAdapter === "gemini-images" ? "gemini" : text(configProviders(config).find(item => item.name === providerName)?.type) === "gemini" ? "gemini" : "openai-compatible")
       : currentAdapter
-  const capabilitiesValue = purpose === "image" || purpose === "decision"
+  const capabilitiesValue = purpose === "image" || purpose === "decision" || purpose === "rerank"
     ? { chat: false, embedding: false }
     : purpose === "embedding"
       ? { chat: false, embedding: true }
@@ -251,6 +257,7 @@ export function updateModelConfig(config: UnknownRecord, modelName = "", patch: 
       : undefined,
     reasoning: purpose === "chat" ? (patch.reasoning === undefined ? (current.reasoning || null) : normalizeReasoningPatch(patch.reasoning)) : undefined,
     capabilities: capabilitiesValue,
+    rerank: purpose === "rerank" ? cloneRecord(patch.rerank === undefined ? current.rerank : patch.rerank) : undefined,
     embedding: purpose === "embedding"
       ? (patch.embedding === undefined ? (current.embedding ? clone(current.embedding) : undefined) : (isRecord(patch.embedding) ? clone(patch.embedding) : undefined))
       : undefined,
@@ -267,10 +274,12 @@ export function updateModelConfig(config: UnknownRecord, modelName = "", patch: 
       ? (current.responses ? clone(current.responses) : undefined)
       : (isRecord(patch.responses) ? clone(patch.responses) : undefined)) : undefined,
   }
+  if (purpose === "embedding") nextModel.embedding = { ...record(nextModel.embedding), protocol: record(nextModel.embedding).protocol === "gemini" || currentAdapter === "gemini" ? "gemini" : "embeddings" }
   if (nextModel.timeoutMs === undefined) delete nextModel.timeoutMs
   if (nextModel.contextWindowTokens === undefined) delete nextModel.contextWindowTokens
   if (nextModel.stream === undefined) delete nextModel.stream
   if (!nextModel.reasoning) delete nextModel.reasoning
+  if (!nextModel.rerank) delete nextModel.rerank
   if (!nextModel.embedding) delete nextModel.embedding
   if (!nextModel.image) delete nextModel.image
   if (!nextModel.responses) delete nextModel.responses
@@ -414,13 +423,13 @@ export function addModelsToProvider(config: UnknownRecord, providerName = "", mo
   const usedNames = new Set(nextModels.map(item => text(item.name)).filter(Boolean))
   const fallbackForPurpose = (purpose: ModelPurpose): UnknownRecord | undefined => currentModels.find(item => text(item.apiProvider) === name && modelPurpose(item) === purpose)
   const addedNames: string[] = []
-  const addedByPurpose: Record<ModelPurpose, string[]> = { chat: [], image: [], embedding: [], decision: [] }
+  const addedByPurpose: Record<ModelPurpose, string[]> = { chat: [], image: [], embedding: [], decision: [], rerank: [] }
   for (const modelIdentifier of identifiers) {
     const existingIndex = nextModels.findIndex(item => text(item.apiProvider) === name && text(item.modelIdentifier) === modelIdentifier)
     const existing = existingIndex >= 0 ? nextModels[existingIndex] : {}
     const generatedName = generatedModelName(name, modelIdentifier, usedNames)
     const existingPurpose = modelPurpose(existing)
-    const purpose: ModelPurpose = options.purpose ? requestedPurpose : (existingIndex >= 0 ? existingPurpose : (text(provider.type) === "typesafe" ? "decision" : "chat"))
+    const purpose: ModelPurpose = options.purpose ? requestedPurpose : (existingIndex >= 0 ? existingPurpose : (["typesafe", "systemone"].includes(text(provider.type)) ? "decision" : "chat"))
     const fallbackModel = fallbackForPurpose(purpose)
     const fallbackChat = fallbackForPurpose("chat")
     const fallbackEmbedding = fallbackForPurpose("embedding")
@@ -433,7 +442,7 @@ export function addModelsToProvider(config: UnknownRecord, providerName = "", mo
       name: existingIndex >= 0 ? existing.name : generatedName,
       modelIdentifier,
       apiProvider: name,
-      adapter: purpose === "image" ? imageAdapter(requestedImageProtocol, text(provider.type) === "gemini" ? "gemini-images" : "openai-images") : (text(options.adapter) || text(provider.type) || text(fallbackChat?.adapter) || template?.adapter || "openai-compatible"),
+      adapter: purpose === "rerank" ? "rerank" : purpose === "decision" ? "systemone" : purpose === "embedding" ? "embeddings" : purpose === "image" ? imageAdapter(requestedImageProtocol, text(provider.type) === "gemini" ? "gemini-images" : "openai-images") : (text(options.adapter) || text(provider.type) || text(fallbackChat?.adapter) || template?.adapter || "openai-compatible"),
       purpose,
       visual: purpose === "chat" && (existingIndex >= 0 ? Boolean(existing.visual) : (fallbackChat?.visual ?? template?.visual ?? false)),
       toolUse: purpose === "chat" && (existingIndex >= 0 ? existing.toolUse !== false : (fallbackChat?.toolUse ?? template?.toolUse ?? true)),
@@ -442,12 +451,13 @@ export function addModelsToProvider(config: UnknownRecord, providerName = "", mo
           ? (existing.contextWindowTokens === undefined ? {} : { contextWindowTokens: existing.contextWindowTokens })
           : { contextWindowTokens: fallbackChat?.contextWindowTokens ?? 200000 })
         : {}),
-      capabilities: purpose === "image" || purpose === "decision"
+      capabilities: purpose === "image" || purpose === "decision" || purpose === "rerank"
         ? { chat: false, embedding: false }
         : purpose === "embedding"
           ? { chat: false, embedding: true }
           : { chat: true, embedding: false },
-      embedding: purpose === "embedding" ? (existingIndex >= 0 ? (existing.embedding ? clone(existing.embedding) : undefined) : (fallbackEmbedding?.embedding ? clone(fallbackEmbedding.embedding) : undefined)) : undefined,
+      rerank: purpose === "rerank" ? cloneRecord(existing.rerank) : undefined,
+      embedding: purpose === "embedding" ? (existingIndex >= 0 ? (existing.embedding ? clone(existing.embedding) : undefined) : clone(fallbackEmbedding?.embedding || defaults.models[0].embedding)) : undefined,
       ...(purpose === "image" ? { image: imageConfig || {} } : {}),
       responses: purpose === "chat"
         ? (existingIndex >= 0 ? (existing.responses ? clone(existing.responses) : undefined) : (template?.responses ? clone(template.responses) : undefined))
@@ -462,6 +472,7 @@ export function addModelsToProvider(config: UnknownRecord, providerName = "", mo
         ? (options.stream === undefined ? (existingIndex >= 0 ? existing.stream : undefined) : options.stream === true)
         : undefined,
     }
+    if (purpose === "embedding") nextModel.embedding = { ...record(nextModel.embedding), protocol: record(nextModel.embedding).protocol === "gemini" || provider.type === "gemini" ? "gemini" : "embeddings" }
     if (!nextModel.reasoning) delete nextModel.reasoning
     if (nextModel.stream === undefined) delete nextModel.stream
     if (!nextModel.responses) delete nextModel.responses
@@ -474,11 +485,11 @@ export function addModelsToProvider(config: UnknownRecord, providerName = "", mo
   const tasks = configTasks(config)
   const explicitTaskName = text(options.taskName).trim()
   // 向量与决策模型由引用方按名称选择，不自动加入任何回复任务。
-  const taskName = explicitTaskName || (options.purpose ? (requestedPurpose === "image" ? "imageGeneration" : requestedPurpose === "embedding" || requestedPurpose === "decision" ? "" : "replyer") : "")
+  const taskName = explicitTaskName || (options.purpose ? (requestedPurpose === "image" ? "imageGeneration" : requestedPurpose === "embedding" || requestedPurpose === "decision" || requestedPurpose === "rerank" ? "" : "replyer") : "")
   if (!taskName) {
     const nextTasks: Record<string, UnknownRecord> = { ...tasks }
     for (const [purpose, names] of Object.entries(addedByPurpose) as Array<[ModelPurpose, string[]]>) {
-      if (!names.length || purpose === "embedding" || purpose === "decision") continue
+      if (!names.length || purpose === "embedding" || purpose === "decision" || purpose === "rerank") continue
       const targetTaskName = purpose === "image" ? "imageGeneration" : "replyer"
       const currentTask = nextTasks[targetTaskName] || {}
       const currentList = Array.isArray(currentTask.modelList) ? currentTask.modelList.map(text) : []

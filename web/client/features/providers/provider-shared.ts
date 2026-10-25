@@ -1,3 +1,4 @@
+import { modelDisplayLabel } from "../../shared/model-display.js"
 import { request } from "../../app/store/store.js"
 
 type UnknownRecord = Record<string, unknown>
@@ -47,8 +48,9 @@ export function providerModelCounts(items: UnknownRecord[]) {
   const count = (test: (item: UnknownRecord) => boolean) => items.filter(test).length
   return {
     channelCount: items.length,
-    visualCount: count(item => Boolean(item.visual)),
-    toolCount: count(item => Boolean(item.toolUse)),
+    visualCount: count(item => item.purpose === "chat" && Boolean(item.visual)),
+    toolCount: count(item => item.purpose === "chat" && Boolean(item.toolUse)),
+    rerankCount: count(item => item.purpose === "rerank"),
     embeddingCount: count(item => Boolean(item.embedding)),
     imageCount: count(item => item.purpose === "image" || item.imageGeneration === true),
     decisionCount: count(item => item.purpose === "decision"),
@@ -82,7 +84,12 @@ export const ProviderFilterSearch = {
   `,
 }
 
-/** 展示上游模型名称；配置引用仍使用内部 name/id。 */
-export function modelDisplayName(model?: { modelIdentifier?: unknown; model?: unknown; name?: unknown; id?: unknown } | null): string {
-  return String(model?.modelIdentifier || model?.model || model?.name || model?.id || "")
+export { modelDisplayName } from "../../shared/model-display.js"
+
+/** 各类连接测试共用同一可读名称，不显示测试接口返回的内部关联键。 */
+export function modelTestMessage(result: UnknownRecord, fallback: UnknownRecord = {}): string {
+  const label = modelDisplayLabel({ model: result.model || fallback.modelIdentifier || fallback.model || fallback.name }, result.provider || fallback.provider || fallback.apiProvider) || "未知模型"
+  const protocol = String(result.protocol || result.adapter || fallback.type || "").trim()
+  const details = [protocol, result.operation === "embedding" && result.dimensions ? `${result.dimensions} 维` : ""].filter(Boolean).join("，")
+  return `${result.operation === "embedding" ? "嵌入测试通过" : "测试通过"}：${label}${details ? `（${details}）` : ""}`
 }

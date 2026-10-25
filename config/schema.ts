@@ -134,6 +134,7 @@ export const schema: SchemaGroup[] = [
       { path: "knowledge.enabled", label: "启用指令知识库", type: "boolean" },
       { path: "knowledge.commandPrefixes", label: "指令前缀列表", type: "json" },
       { path: "knowledge.retrieval.resultLimit", label: "全局召回数量上限", type: "number", description: "1–20 条，默认 5；所有知识库查询共用，调用方只能请求更少的结果。" },
+      { path: "knowledge.retrieval.rerankMinScore", label: "重排最低分（null 为不截断）", type: "json", advanced: true },
       { path: "knowledge.indexing.globalEmbeddingTokensPerDay", label: "知识库 embedding 每日 Token 预算", type: "number", advanced: true },
       { path: "knowledge.indexing", label: "知识索引与 embedding 预算", type: "json" },
       { path: "knowledge.retrieval", label: "知识检索、重排模型与预算", type: "json" },
