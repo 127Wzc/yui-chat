@@ -193,6 +193,8 @@ Custom 工具随扩展包启停：启用并成功加载后即可进入工具目�
 
 ## 管理台与安全
 
+管理台页面共用 `web/client/styles/tokens.css` 的颜色、圆角与动效，以及 `web/client/ui/` 的分段导航、搜索框和弹窗组件。简短设置使用居中对话框，正文详情使用侧栏；编辑草稿沿用统一 dirty scope 与 `confirmAction()` 关闭保护。动效遵循系统减少动态效果偏好，导航与弹窗支持键盘操作。
+
 管理台默认挂载 `/yui-chat`，API 和 WebSocket 自行鉴权。主人通过 `#yui面板` 获取一次性登录链接；浏览器使用 HttpOnly、SameSite=Strict 会话，修改请求校验同源。管理 Token 不进入 URL、浏览器存储或日志；一次性登录码与长期 Token 分开处理。
 
 用户 URL 和媒体读取统一经过安全网络边界，逐跳校验地址、DNS、超时及大小。私网访问和截图域名由 `security.linkSafety` 控制，截图保留全请求拦截。子代理、主动问候和 URL 截图各自受独立开关约束；HTML 与 Markdown 等内容渲染统一跟随 render_image 工具权限。

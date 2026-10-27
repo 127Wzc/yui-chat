@@ -4,9 +4,7 @@
 
 .ds-page { display: grid; gap: 12px; width: 100%; min-width: 0; }
 
-.ds-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .ds-header-title { display: flex; align-items: center; gap: 12px; }
-.ds-header h2 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -.01em; }
 .ds-header-actions { display: flex; align-items: center; gap: 10px; }
 
 .ds-card {

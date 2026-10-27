@@ -335,7 +335,7 @@ export const ProvidersTab = {
       </Dialog>
       <ProviderImportDialog :open="showImportDialog" :provider="selectedProvider" :existing-ids="currentProviderModelIds" @close="showImportDialog = false" />
 
-      <header class="pv-header">
+      <header class="ui-page-header">
         <h2>渠道与模型</h2>
         <button class="btn primary" type="button" @click="showAddDialog = true"><Icon name="plus" :size="14" />新增渠道</button>
       </header>

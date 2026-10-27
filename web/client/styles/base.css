@@ -1,6 +1,8 @@
 * { box-sizing: border-box; }
 
 html, body { height: 100%; }
+html { scrollbar-gutter: stable; }
+body:has(.drawer-layer), body:has(.confirm-layer) { overflow: hidden; }
 
 body {
   margin: 0;
@@ -14,10 +16,11 @@ body {
 }
 
 button, input, select, textarea { font: inherit; color: inherit; }
+button, summary, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
 
 /* 全局交互过渡与统一焦点环 */
 button, input, select, textarea, .section-nav-item, .pill {
-  transition: background-color .14s ease, border-color .14s ease, color .14s ease, box-shadow .14s ease;
+  transition: background-color var(--motion-fast) ease, border-color var(--motion-fast) ease, color var(--motion-fast) ease, box-shadow var(--motion-fast) ease;
 }
 :is(button, input, select, textarea, a, [tabindex]):focus-visible {
   outline: 2px solid var(--ring);
@@ -57,4 +60,13 @@ kbd { padding: 1px 5px; border: 1px solid var(--border); border-radius: 5px; bac
   fill: none;
 }
 .icon-spin { animation: cn-spin .9s linear infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
 

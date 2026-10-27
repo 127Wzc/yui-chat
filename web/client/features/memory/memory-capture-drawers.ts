@@ -28,8 +28,8 @@ export const MemoryCaptureDrawers = {
       subtitle="设置原始消息的保留与提炼。修改字段即可覆盖本群默认值。"
       icon="message"
       width="720px"
-      modal
-      @close="view.showCaptureSettings = false"
+      variant="dialog"
+      @close="view.closeCaptureSettings"
     >
       <div class="capture-settings-form">
         <section class="capture-global-defaults-entry">
@@ -65,7 +65,7 @@ export const MemoryCaptureDrawers = {
           </details>
         </section>
       </div>
-      <template #actions><span v-if="view.captureDraftDirty && view.captureDraftPolicy" class="muted tiny">有未保存的修改</span><button class="btn outline" type="button" @click="view.showCaptureSettings = false"><Icon name="x" :size="14" />取消</button><button class="btn primary" type="button" :disabled="view.captureBusy" @click="view.saveCapturePolicy"><Icon name="save" :size="14" />{{ view.captureBusy ? '保存中…' : '保存配置' }}</button></template>
+      <template #actions><span v-if="view.captureDraftDirty && view.captureDraftPolicy" class="muted tiny">有未保存的修改</span><button class="btn outline" type="button" @click="view.closeCaptureSettings"><Icon name="x" :size="14" />取消</button><button class="btn primary" type="button" :disabled="view.captureBusy" @click="view.saveCapturePolicy"><Icon name="save" :size="14" />{{ view.captureBusy ? '保存中…' : '保存配置' }}</button></template>
     </SideDrawer>
 
     <SideDrawer
@@ -74,7 +74,7 @@ export const MemoryCaptureDrawers = {
       subtitle="选择时间段后按自然日拆分；每一天会按 Token 上限自动划分模型子窗口。"
       icon="sparkles"
       width="680px"
-      modal
+      variant="dialog"
       @close="view.showReextractDialog = false"
     >
       <section class="reextract-dialog-body">
@@ -102,7 +102,7 @@ export const MemoryCaptureDrawers = {
       :subtitle="view.scopeLabel(view.draft)"
       icon="database"
       width="640px"
-      @close="view.showMemoryDrawer = false"
+      @close="view.closeMemoryEditor"
     >
       <section v-if="view.memoryDetail" class="memory-detail-overview" aria-label="记忆状态与衰减">
         <div class="memory-detail-heading"><span class="memory-lifecycle" :class="view.memoryLifecycle(view.memoryDetail).tone">{{ view.memoryLifecycle(view.memoryDetail).label }}</span><span class="muted small">{{ view.memorySourceLabel(view.memoryDetail) }}</span></div>
@@ -134,18 +134,19 @@ export const MemoryCaptureDrawers = {
         <button v-else-if="view.memorySources.items.length < view.memorySources.total" class="btn small outline memory-source-more" type="button" :disabled="view.memoryDetailLoading" @click="view.loadMemoryDetail(view.memorySources.page + 1)">加载更多来源（已显示 {{ view.memorySources.items.length }} / {{ view.memorySources.total }}）</button>
       </section>
       <template #actions>
-        <button class="btn outline" type="button" @click="view.showMemoryDrawer = false"><Icon name="x" :size="14" />取消</button>
+        <button class="btn outline" type="button" @click="view.closeMemoryEditor"><Icon name="x" :size="14" />取消</button>
         <button class="btn primary" type="button" :disabled="view.busy || view.memoryDetailLoading || Boolean(view.memoryDetailError)" @click="view.saveMemory"><Icon name="save" :size="14" />保存记忆</button>
       </template>
     </SideDrawer>
 
     <SideDrawer
       :open="view.showProfileDrawer"
+      variant="dialog"
       title="编辑用户画像"
       :subtitle="view.selectedMember ? '用户 ' + view.selectedMember.userId : ''"
       icon="bot"
       width="560px"
-      @close="view.showProfileDrawer = false"
+      @close="view.closeProfileEditor"
     >
       <div class="form-grid two">
         <Field label="称呼" v-model="view.draft.profileName" />
@@ -157,7 +158,7 @@ export const MemoryCaptureDrawers = {
       </div>
       <Field label="备注" type="textarea" :rows="4" v-model="view.draft.profileNotes" />
       <template #actions>
-        <button class="btn outline" type="button" @click="view.showProfileDrawer = false"><Icon name="x" :size="14" />取消</button>
+        <button class="btn outline" type="button" @click="view.closeProfileEditor"><Icon name="x" :size="14" />取消</button>
         <button class="btn primary" type="button" :disabled="view.busy" @click="view.saveProfile"><Icon name="save" :size="14" />保存画像</button>
       </template>
     </SideDrawer>

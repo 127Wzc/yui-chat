@@ -1105,6 +1105,18 @@ export const MemoryTab = {
       }
     }
 
+    async function closeCaptureSettings(): Promise<void> {
+      if (captureBusy.value) return
+      if (captureDraftGuard.value && !await confirmAction({ title: "放弃未保存的采集设置？", message: "关闭后将丢弃本次修改。", confirmText: "放弃修改" })) return
+      showCaptureSettings.value = false
+    }
+
+    async function closeMemoryEditor(): Promise<void> {
+      if (busy.value) return
+      if (JSON.stringify([draft.memoryText, draft.memoryTags]) !== memoryDraftBaseline.value && !await confirmAction({ title: "放弃未保存的记忆？", message: "关闭后将丢弃本次修改。", confirmText: "放弃修改" })) return
+      showMemoryDrawer.value = false
+    }
+
     function openCaptureSettings(policy: MemoryRecord | null = null): void {
       showGroupPicker.value = false
       captureDraftEditing.value = Boolean(policy)
@@ -1517,6 +1529,18 @@ export const MemoryTab = {
       }
     }
 
+    function profileSignature(): string {
+      return JSON.stringify([draft.profileName, draft.profilePronouns, draft.profileInterests, draft.profilePreferences, draft.profileDislikes, draft.profileStyle, draft.profileNotes])
+    }
+    const profileBaseline = ref(profileSignature())
+    watch(() => showProfileDrawer.value && profileSignature() !== profileBaseline.value,
+      dirty => setDirtyScope("memory:profile-draft", dirty))
+    async function closeProfileEditor(): Promise<void> {
+      if (busy.value) return
+      if (profileSignature() !== profileBaseline.value && !await confirmAction({ title: "放弃未保存的画像？", message: "关闭后将丢弃本次修改。", confirmText: "放弃修改" })) return
+      showProfileDrawer.value = false
+    }
+
     function openProfileEditor() {
       const profile = memberWorkspace.value?.profile || {}
       draft.profileName = profile.name || ""
@@ -1526,6 +1550,7 @@ export const MemoryTab = {
       draft.profileDislikes = (profile.dislikes || []).join(", ")
       draft.profileStyle = profile.communicationStyle || ""
       draft.profileNotes = profile.notes || ""
+      profileBaseline.value = profileSignature()
       showProfileDrawer.value = true
     }
 
@@ -1667,6 +1692,7 @@ export const MemoryTab = {
       window.removeEventListener("resize", handleCalendarViewportResize)
       setDirtyScope("memory:capture-draft", false)
       setDirtyScope("memory:fact-draft", false)
+      setDirtyScope("memory:profile-draft", false)
     })
 
     function setCalendarWeeksElement(element: HTMLElement | null): void {
@@ -1682,7 +1708,7 @@ export const MemoryTab = {
       selectedTimelineWindow, timelineWindowDetail, selectedWindowMessages, timelineWindows, reextractStart, reextractEnd, reextractPlan, reextractBusy, extractionCounts, runRecordWindows,
       calendarDays, calendarMeta, calendarRange, calendarMetric, calendarBusy, calendarWeeks, calendarMetricLabel, calendarSummary, calendarWeeksElement, timelineDetailLoading, timelineDetailError,
       windowSelectionMode, selectedWindowStarts, selectedWindowItems, selectedWindowSummary,
-      policyTitle, policyOverrideSummary, memberTitle, timeLabel, rangeLabel, scopeLabel, extractionScopeLabel, extractionResultLabel, backfillStatusLabel, windowStatusLabel, timelineStatus, calendarStatus, calendarDayClass, calendarDayTitle, calendarDayAriaLabel, dayNumber, segmentSummary, normalizationView, compactNumber, windowWorkload, memoryLifecycle, resultAction, taskResultSummary, runningWindowProgress, taskListSummary, batchProgressLabel, captureDefaultLabel, captureFieldHint, captureFieldSource, updateCaptureField, resetCaptureField, selectGroup, selectMember, switchWorkspace, refreshWorkspace, reviewDuplicateMemories, openCaptureSettings, saveCapturePolicy, openSystemSettings, backfillHistory, backfillFromMessage, queueExtraction,
+      policyTitle, policyOverrideSummary, memberTitle, timeLabel, rangeLabel, scopeLabel, extractionScopeLabel, extractionResultLabel, backfillStatusLabel, windowStatusLabel, timelineStatus, calendarStatus, calendarDayClass, calendarDayTitle, calendarDayAriaLabel, dayNumber, segmentSummary, normalizationView, compactNumber, windowWorkload, memoryLifecycle, resultAction, taskResultSummary, runningWindowProgress, taskListSummary, batchProgressLabel, captureDefaultLabel, captureFieldHint, captureFieldSource, updateCaptureField, resetCaptureField, selectGroup, selectMember, switchWorkspace, refreshWorkspace, reviewDuplicateMemories, openCaptureSettings, closeCaptureSettings, closeMemoryEditor, closeProfileEditor, saveCapturePolicy, openSystemSettings, backfillHistory, backfillFromMessage, queueExtraction,
       isWindowSelected, toggleWindowSelectionMode, toggleWindowSelection, openRunWindow, extractionWindowAction, runExtractionWindow, clearWindowSelection, selectVisibleWindows, confirmSelectedWindows, handleCalendarScroll,
       loadCaptureDetails, loadExtractionWorkspace, loadCalendar, previewReextraction, openReextractDialog, confirmReextraction, reextractSingleDay, selectTimelineWindow, changeCaptureMessagePage, jumpCaptureMessagePage, changeCaptureMessageOrder, changeCaptureWindowPage, targetForGroup, targetForMember, openMemoryEditor, saveMemory, deleteMemory, openProfileEditor, saveProfile, changeGroupPage, changeMemberPage,
       setCalendarWeeksElement,
@@ -1696,7 +1722,7 @@ export const MemoryTab = {
       selectedTimelineWindow, timelineWindowDetail, selectedWindowMessages, timelineWindows, reextractStart, reextractEnd, reextractPlan, reextractBusy, extractionCounts, runRecordWindows,
       calendarDays, calendarMeta, calendarRange, calendarMetric, calendarBusy, calendarWeeks, calendarMetricLabel, calendarSummary, calendarWeeksElement, timelineDetailLoading, timelineDetailError,
       windowSelectionMode, selectedWindowStarts, selectedWindowItems, selectedWindowSummary,
-      policyTitle, policyOverrideSummary, memberTitle, timeLabel, rangeLabel, scopeLabel, extractionScopeLabel, extractionResultLabel, backfillStatusLabel, windowStatusLabel, timelineStatus, calendarStatus, calendarDayClass, calendarDayTitle, calendarDayAriaLabel, dayNumber, segmentSummary, normalizationView, compactNumber, windowWorkload, memoryLifecycle, resultAction, taskResultSummary, runningWindowProgress, taskListSummary, batchProgressLabel, captureDefaultLabel, captureFieldHint, captureFieldSource, updateCaptureField, resetCaptureField, selectGroup, selectMember, switchWorkspace, refreshWorkspace, reviewDuplicateMemories, openCaptureSettings, saveCapturePolicy, openSystemSettings, backfillHistory, backfillFromMessage, queueExtraction,
+      policyTitle, policyOverrideSummary, memberTitle, timeLabel, rangeLabel, scopeLabel, extractionScopeLabel, extractionResultLabel, backfillStatusLabel, windowStatusLabel, timelineStatus, calendarStatus, calendarDayClass, calendarDayTitle, calendarDayAriaLabel, dayNumber, segmentSummary, normalizationView, compactNumber, windowWorkload, memoryLifecycle, resultAction, taskResultSummary, runningWindowProgress, taskListSummary, batchProgressLabel, captureDefaultLabel, captureFieldHint, captureFieldSource, updateCaptureField, resetCaptureField, selectGroup, selectMember, switchWorkspace, refreshWorkspace, reviewDuplicateMemories, openCaptureSettings, closeCaptureSettings, closeMemoryEditor, closeProfileEditor, saveCapturePolicy, openSystemSettings, backfillHistory, backfillFromMessage, queueExtraction,
       isWindowSelected, toggleWindowSelectionMode, toggleWindowSelection, openRunWindow, extractionWindowAction, runExtractionWindow, clearWindowSelection, selectVisibleWindows, confirmSelectedWindows, handleCalendarScroll,
       loadCaptureDetails, loadExtractionWorkspace, loadCalendar, previewReextraction, openReextractDialog, confirmReextraction, reextractSingleDay, selectTimelineWindow, changeCaptureMessagePage, jumpCaptureMessagePage, changeCaptureMessageOrder, changeCaptureWindowPage, targetForGroup, targetForMember, openMemoryEditor, saveMemory, deleteMemory, openProfileEditor, saveProfile, changeGroupPage, changeMemberPage,
     }
@@ -1705,20 +1731,20 @@ export const MemoryTab = {
   template: `
     <MemoryCaptureDrawers :view="memoryView" />
 
-    <Panel flush class="memory-hub-workspace">
-      <header class="memory-hub-tabs">
-        <div class="memory-workspace-switch" role="tablist" aria-label="记忆工作区">
-          <button type="button" :class="{ active: activeWorkspace === 'manage' }" @click="switchWorkspace('manage')"><Icon name="database" :size="15" /><span><b>记忆管理</b><small>维护记忆块与用户画像</small></span></button>
-          <button type="button" :class="{ active: activeWorkspace === 'extract' }" @click="switchWorkspace('extract')"><Icon name="sparkles" :size="15" /><span><b>记忆提炼</b><small>核对原始消息与时间窗</small></span></button>
-          <button type="button" :class="{ active: activeWorkspace === 'portrait-settings' }" @click="switchWorkspace('portrait-settings')"><Icon name="sliders" :size="15" /><span><b>画像设置</b><small>查看内置类型与生成默认值</small></span></button>
-        </div>
-        <div class="row memory-settings-actions">
-          <button class="btn small outline" type="button" @click="openCaptureSettings(selectedPolicy)"><Icon name="settings" :size="14" />采集设置</button>
+    <div class="memory-page">
+      <header class="ui-page-header">
+        <h2>记忆管理</h2>
+        <div class="row">
+          <button class="btn small outline" type="button" @click="openSystemSettings('memory-capture')"><Icon name="sliders" :size="14" />全局设置</button>
+          <button class="btn primary small" type="button" @click="openCaptureSettings(selectedPolicy)"><Icon name="settings" :size="14" />采集设置</button>
         </div>
       </header>
+      <SectionNav :model-value="activeWorkspace" @update:model-value="switchWorkspace" variant="tabs" label="记忆工作区" :items="[{ value: 'manage', label: '记忆', icon: 'database' }, { value: 'extract', label: '提炼', icon: 'sparkles' }, { value: 'portrait-settings', label: '画像设置', icon: 'sliders' }]" />
+      <Panel flush class="memory-hub-workspace">
       <MemoryManageWorkspace :view="memoryView" />
       <MemoryExtractionWorkspace :view="memoryView" />
       <MemoryPortraitSettings v-if="activeWorkspace === 'portrait-settings'" />
-    </Panel>
+      </Panel>
+    </div>
   `,
 }

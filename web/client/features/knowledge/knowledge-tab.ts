@@ -551,6 +551,15 @@ export const KnowledgeTab = {
 
     async function createBase() { openBaseEditor() }
 
+    const documentSignature = () => JSON.stringify([draft.sourceName, draft.sourceContent])
+    const documentBaseline = ref(documentSignature())
+    watch(() => showDocumentDrawer.value && documentSignature() !== documentBaseline.value,
+      dirty => setDirtyScope("knowledge-document-editor", dirty))
+    async function closeDocumentEditor(): Promise<void> {
+      if (documentSignature() !== documentBaseline.value && !await confirmAction({ title: "放弃未保存的知识内容？", message: "关闭后将丢弃本次修改。", confirmText: "放弃修改" })) return
+      showDocumentDrawer.value = false
+    }
+
     async function openDocumentEditor(item: KnowledgeDocument | null = null): Promise<void> {
       if (selectedBase.value?.protected) return
       draft.documentId = item?.id || ""
@@ -563,6 +572,7 @@ export const KnowledgeTab = {
           draft.sourceContent = result.document?.content || ""
         } catch (err) { return toast(errorMessage(err)) }
       }
+      documentBaseline.value = documentSignature()
       showDocumentDrawer.value = true
     }
 
@@ -638,11 +648,21 @@ export const KnowledgeTab = {
       } catch (err) { toast(errorMessage(err)) } finally { baseBusy.value = false }
     }
 
+    const grantSignature = () => JSON.stringify([draft.grantPrincipalType, draft.grantPrincipalId, draft.grantGroupId, draft.grantAccess])
+    const grantBaseline = ref(grantSignature())
+    watch(() => showGrantDrawer.value && grantSignature() !== grantBaseline.value,
+      dirty => setDirtyScope("knowledge-grant-editor", dirty))
+    async function closeGrantEditor(): Promise<void> {
+      if (grantSignature() !== grantBaseline.value && !await confirmAction({ title: "放弃未保存的授权规则？", message: "关闭后将丢弃本次修改。", confirmText: "放弃修改" })) return
+      showGrantDrawer.value = false
+    }
+
     function openGrantEditor() {
       draft.grantPrincipalType = "role"
       draft.grantPrincipalId = "user"
       draft.grantGroupId = ""
       draft.grantAccess = "allow"
+      grantBaseline.value = grantSignature()
       showGrantDrawer.value = true
     }
 
@@ -804,7 +824,7 @@ export const KnowledgeTab = {
         toast(`已删除知识条目：${candidate.label}`)
       } catch (err) { toast(errorMessage(err)) }
     }
-    onUnmounted(() => { stopIndexPolling(); setDirtyScope("knowledge-global-settings", false); setDirtyScope("knowledge-base-editor", false); setDirtyScope("knowledge-command-editor", false); setDirtyScope("knowledge-command-retrieval", false); setDirtyScope("knowledge-command-capture", false) })
+    onUnmounted(() => { stopIndexPolling(); setDirtyScope("knowledge-global-settings", false); setDirtyScope("knowledge-base-editor", false); setDirtyScope("knowledge-document-editor", false); setDirtyScope("knowledge-grant-editor", false); setDirtyScope("knowledge-command-editor", false); setDirtyScope("knowledge-command-retrieval", false); setDirtyScope("knowledge-command-capture", false) })
     loadBases()
 
     function recConfidenceTone(confidence: string): string {
@@ -819,7 +839,7 @@ export const KnowledgeTab = {
       digestMetrics, commandModelDimensions, currentCommandDimensions, selectCommandEmbeddingModel, syncCommandDimensions, refreshKnowledgeContent,
       documentOrigin, canEditBuiltinCommand, shortId, recConfidenceTone, baseHealth, jobLabel, jobProgress, jobProgressLabel, jobProgressTone,
       BOOL_OFF_OPTIONS,
-      search, openCommandMaintenance, loadBases, loadBaseDetails, selectBase, createBase, openBaseEditor, closeBaseEditor, saveBase, openDocumentEditor, ingestSource, deleteDocument,
+      search, openCommandMaintenance, loadBases, loadBaseDetails, selectBase, createBase, openBaseEditor, closeBaseEditor, closeDocumentEditor, closeGrantEditor, saveBase, openDocumentEditor, ingestSource, deleteDocument,
       testRetrieval, rebuildBase, checkIndexStatus, indexInspection, openGrantEditor, saveGrant, deleteGrant, retryJob, cancelIndexJob, deleteIndexJob, changeIndexJobPage, deleteBase, openManualEditor, openBuiltinCommandEditor, requestDeleteCommand, saveCommandRetrieval, closeCommandMaintenance,
     }
   },
@@ -827,6 +847,7 @@ export const KnowledgeTab = {
     <div class="stack">
       <SideDrawer
         :open="showBaseDrawer"
+        variant="dialog"
         :title="draft.baseId ? '编辑知识库' : '新建知识库'"
         subtitle="先建立清晰的库边界，再添加内容和授权。"
         icon="database"
@@ -855,24 +876,25 @@ export const KnowledgeTab = {
         subtitle="保存后会立即重建全文分块，并为已配置的语义索引排队。"
         icon="file"
         width="720px"
-        @close="showDocumentDrawer = false"
+        @close="closeDocumentEditor"
       >
         <Field label="内容标题" v-model="draft.sourceName" placeholder="给维护者看的清晰标题" />
         <Field label="原始内容" type="textarea" rows="18" v-model="draft.sourceContent" placeholder="粘贴文本或 Markdown；这里展示并保存完整原文" />
         <div class="hint-banner" :class="draft.sourceContent.trim() ? 'ok' : 'warn'"><Icon :name="draft.sourceContent.trim() ? 'check' : 'alert'" :size="14" /><span>{{ draft.sourceContent.trim() ? '保存后可立即全文检索。' : '内容不能为空。' }}</span></div>
         <template #actions>
-          <button class="btn outline" type="button" @click="showDocumentDrawer = false"><Icon name="x" :size="14" />取消</button>
+          <button class="btn outline" type="button" @click="closeDocumentEditor"><Icon name="x" :size="14" />取消</button>
           <button class="btn primary" type="button" @click="ingestSource"><Icon name="save" :size="14" />{{ draft.documentId ? '保存并重新分块' : '添加并建立索引' }}</button>
         </template>
       </SideDrawer>
 
       <SideDrawer
         :open="showGrantDrawer"
+        variant="dialog"
         title="添加授权规则"
         subtitle="可以按角色、单个用户、群或群内用户控制访问。"
         icon="key"
         width="540px"
-        @close="showGrantDrawer = false"
+        @close="closeGrantEditor"
       >
         <div class="form-grid">
           <Field label="主体类型" type="select" :options="[
@@ -885,7 +907,7 @@ export const KnowledgeTab = {
         </div>
         <div class="hint-banner warn"><Icon name="alert" :size="14" /><span>只要同一用户命中一条拒绝规则，该知识库就不会对其开放。</span></div>
         <template #actions>
-          <button class="btn outline" type="button" @click="showGrantDrawer = false"><Icon name="x" :size="14" />取消</button>
+          <button class="btn outline" type="button" @click="closeGrantEditor"><Icon name="x" :size="14" />取消</button>
           <button class="btn primary" type="button" @click="saveGrant"><Icon name="save" :size="14" />保存规则</button>
         </template>
       </SideDrawer>

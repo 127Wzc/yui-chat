@@ -31,7 +31,7 @@ export const IconButton = defineComponent({
   },
   emits: ["click"],
   template: `
-    <button type="button" class="icon-btn" :class="[tone, tipDir, { 'is-busy': busy }]" :data-tip="tip" :disabled="disabled || busy" @click="$emit('click', $event)">
+    <button type="button" class="icon-btn" :class="[tone, tipDir, { 'is-busy': busy }]" :aria-label="tip" :aria-busy="busy || undefined" :data-tip="tip" :disabled="disabled || busy" @click="$emit('click', $event)">
       <Icon :name="icon" :size="size" :class="{ 'icon-spin': busy }" />
     </button>
   `,
@@ -51,7 +51,7 @@ export const Switch = defineComponent({
   emits: ["update:modelValue"],
   template: `
     <label class="switch" :data-tip="tip">
-      <input type="checkbox" :checked="modelValue" @change="$emit('update:modelValue', $event.target.checked)" />
+      <input type="checkbox" :aria-label="tip" :checked="modelValue" @change="$emit('update:modelValue', $event.target.checked)" />
       <span class="track"></span>
     </label>
   `,
@@ -416,8 +416,20 @@ export const SectionNav = defineComponent({
     variant: { type: String, default: "cards" },
   },
   emits: ["update:modelValue"],
+  methods: {
+    onTabKeydown(event: KeyboardEvent) {
+      if (this.variant !== "tabs" || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return
+      const tabs = Array.from((this.$el as HTMLElement).querySelectorAll<HTMLButtonElement>('[role="tab"]:not(:disabled)'))
+      const index = tabs.indexOf(event.target as HTMLButtonElement)
+      if (index < 0 || !tabs.length) return
+      event.preventDefault()
+      const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length
+      // 手动激活保留调用方的未保存确认；方向键仅移动焦点，Enter / 空格切换。
+      tabs[next]?.focus()
+    },
+  },
   template: `
-    <nav class="section-nav" :class="{ 'section-nav-tabs': variant === 'tabs' }" :aria-label="label" :role="variant === 'tabs' ? 'tablist' : undefined">
+    <nav class="section-nav" :class="{ 'section-nav-tabs': variant === 'tabs' }" :aria-label="label" :role="variant === 'tabs' ? 'tablist' : undefined" @keydown="onTabKeydown">
       <button
         v-for="item in items"
         :key="item.value"
@@ -427,9 +439,10 @@ export const SectionNav = defineComponent({
         :role="variant === 'tabs' ? 'tab' : undefined"
         :aria-selected="variant === 'tabs' ? modelValue === item.value : undefined"
         :aria-current="variant === 'tabs' ? undefined : (modelValue === item.value ? 'page' : undefined)"
+        :tabindex="variant === 'tabs' && modelValue !== item.value ? -1 : 0"
         @click="$emit('update:modelValue', item.value)"
       >
-        <span class="section-nav-icon"><Icon :name="item.icon || 'chevron-right'" :size="16" /></span>
+        <span v-if="item.icon || variant !== 'tabs'" class="section-nav-icon"><Icon :name="item.icon || 'chevron-right'" :size="16" /></span>
         <span class="section-nav-copy"><strong>{{ item.label }}</strong><small v-if="item.description">{{ item.description }}</small></span>
         <span v-if="item.badge !== undefined && item.badge !== ''" class="section-nav-badge" :class="item.tone">{{ item.badge }}</span>
         <Icon name="chevron-right" :size="14" class="section-nav-arrow" />
@@ -555,7 +568,7 @@ export const SideDrawer = defineComponent({
       this.lastFocused = null
     },
     onKeydown(event: KeyboardEvent) {
-      if (!this.open || openDrawerStack.at(-1) !== this) return
+      if (!this.open || openDrawerStack.at(-1) !== this || confirmState.open) return
       if (event.key === "Escape") {
         event.preventDefault()
         this.$emit("close")
@@ -592,20 +605,22 @@ export const SideDrawer = defineComponent({
   },
   template: `
     <Teleport to="body">
+      <Transition name="drawer">
       <div v-if="open" class="drawer-layer" :class="{ 'drawer-modal': modal || variant === 'dialog' }" :style="{ zIndex: layerZIndex }" role="dialog" aria-modal="true" :aria-labelledby="drawerUid + '-title'">
-        <button class="drawer-scrim" type="button" aria-label="关闭抽屉" @click="$emit('close')"></button>
+        <button class="drawer-scrim" type="button" tabindex="-1" aria-label="关闭对话框" @click="$emit('close')"></button>
         <aside ref="panel" class="side-drawer" :class="{ 'modal-dialog': modal, 'ui-dialog': variant === 'dialog' }" :style="{ width }" tabindex="-1">
           <header class="drawer-head">
             <div class="drawer-title">
               <span class="drawer-icon"><Icon :name="icon" :size="16" /></span>
               <div><h2 :id="drawerUid + '-title'">{{ title }}</h2><p v-if="subtitle">{{ subtitle }}</p></div>
             </div>
-            <button class="icon-btn" type="button" data-tip="关闭" @click="$emit('close')"><Icon name="x" :size="16" /></button>
+            <button class="icon-btn" type="button" aria-label="关闭" data-tip="关闭" @click="$emit('close')"><Icon name="x" :size="16" /></button>
           </header>
           <div class="drawer-body"><slot /></div>
           <footer v-if="$slots.actions" class="drawer-actions"><slot name="actions" /></footer>
         </aside>
       </div>
+      </Transition>
     </Teleport>
   `,
 })
@@ -623,14 +638,31 @@ export const Toast = defineComponent({
 export const ConfirmDialog = defineComponent({
   name: "ConfirmDialog",
   setup() {
+    let returnFocus: HTMLElement | null = null
     const focusDialog = () => nextTick(() => {
       const dialog = document.querySelector(".confirm-dialog")
       if (dialog instanceof HTMLElement) dialog.focus()
     })
-    watch(() => confirmState.open, (open: boolean) => { if (open) focusDialog() })
+    watch(() => confirmState.open, (open: boolean) => {
+      if (open) {
+        returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+        focusDialog()
+      } else {
+        const target = returnFocus
+        returnFocus = null
+        nextTick(() => {
+          if (target?.isConnected && !target.closest(".drawer-leave-active")) target.focus()
+        })
+      }
+    })
     function onKeydown(event: KeyboardEvent) {
-      if (event.key === "Escape") return settleConfirm(false)
+      if (event.key === "Escape") {
+        event.preventDefault()
+        event.stopPropagation()
+        return settleConfirm(false)
+      }
       if (event.key !== "Tab") return
+      event.stopPropagation()
       const host = event.currentTarget instanceof Element ? event.currentTarget : null
       const dialog = host?.querySelector?.(".confirm-dialog")
       const focusable = Array.from(dialog?.querySelectorAll?.('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])') || [])

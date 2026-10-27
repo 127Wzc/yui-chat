@@ -1,7 +1,6 @@
 import { defineComponent } from "vue"
 
-// shadcn 风格的基础表单与展示组件。样式见 styles/primitives.css，类名统一 ui- 前缀；
-// 新页面优先使用这些组件，旧页面后续逐步迁移。
+// 共用表单与展示组件。样式见 styles/primitives.css，类名统一 ui- 前缀。
 
 let radioSequence = 0
 

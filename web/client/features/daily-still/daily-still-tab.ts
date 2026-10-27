@@ -163,7 +163,7 @@ export const DailyStillTab = {
   },
   template: `
     <div class="ds-page">
-      <header class="ds-header">
+      <header class="ui-page-header">
         <div class="ds-header-title">
           <h2>日常定格</h2>
           <Switch :model-value="draft.enabled" tip="总开关" @update:model-value="draft.enabled = $event" />

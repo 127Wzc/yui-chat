@@ -1,26 +1,21 @@
+import { MemoryGroupPicker } from "./memory-group-picker.js"
 // 记忆提炼工作区：按日状态、原始消息和运行记录共用父组件的加载与操作状态。
 export const MemoryExtractionWorkspace = {
   name: "MemoryExtractionWorkspace",
+  components: { MemoryGroupPicker },
   props: {
     view: { type: Object, required: true },
   },
   template: `
     <template v-if="view.activeWorkspace === 'extract'">
       <header class="group-memory-toolbar extraction-toolbar">
-        <div class="group-picker">
-          <span class="group-picker-label">当前群聊</span>
-          <button class="group-picker-trigger" type="button" :aria-expanded="view.showGroupPicker" @click="view.showGroupPicker = !view.showGroupPicker"><span class="truncate">{{ view.selectedPolicy ? view.policyTitle(view.selectedPolicy) : '选择已采集的群' }}</span><span v-if="view.selectedPolicy" class="status-dot" :class="{ paused: !view.selectedPolicy.enabled }"></span><Icon name="chevron-down" :size="16" /></button>
-          <div v-if="view.showGroupPicker" class="group-picker-menu">
-            <label class="memory-search"><Icon name="search" :size="14" /><input v-model="view.groupPickerQuery" type="search" placeholder="搜索群号" autofocus /></label>
-            <div v-for="policy in view.filteredPolicies" :key="policy.scopeId" class="group-picker-item" :class="[{ active: policy.scopeId === view.selectedGroupId }, policy.enabled ? 'is-running' : 'is-paused']"><button class="group-picker-option" type="button" @click="view.selectGroup(policy)"><span class="status-dot" :class="{ paused: !policy.enabled }"></span><span class="truncate">{{ view.policyTitle(policy) }}</span><small class="group-picker-state">{{ policy.enabled ? '采集中' : '已暂停' }}</small></button><button class="icon-btn sm group-picker-edit" type="button" data-tip="编辑采集设置" @click.stop="view.openCaptureSettings(policy)"><Icon name="pencil" :size="14" /></button></div>
-          </div>
-        </div>
+        <MemoryGroupPicker :view="view" />
         <span v-if="view.selectedPolicy" class="extraction-policy-summary">{{ view.selectedPolicy.retentionDays ? view.selectedPolicy.retentionDays + ' 天保留' : '永久保留' }} · 每日提炼 · {{ view.compactNumber(view.selectedPolicy.tokenLimit) }} Token/子窗口 · {{ view.selectedPolicy.modelName || '默认对话模型' }} · {{ view.policyOverrideSummary(view.selectedPolicy) }}</span>
         <button class="icon-btn" type="button" :disabled="view.captureBusy" data-tip="刷新消息和提炼任务" @click="view.loadExtractionWorkspace()"><Icon name="refresh" :size="16" :class="{ 'icon-spin': view.captureBusy }" /></button>
       </header>
 
       <div v-if="view.selectedPolicy" class="extraction-workspace">
-        <nav class="extraction-subtabs" aria-label="提炼数据视图"><button type="button" :class="{ active: view.extractionPane === 'timeline' }" @click="view.extractionPane = 'timeline'">按日提炼 <span>{{ view.timelineWindows.length }}</span></button><button type="button" :class="{ active: view.extractionPane === 'messages' }" @click="view.extractionPane = 'messages'">原始消息 <span>{{ view.captureMessages.total }}</span></button><button type="button" :class="{ active: view.extractionPane === 'tasks' }" @click="view.extractionPane = 'tasks'">运行记录 <span>{{ view.extractionCounts.windows }}</span></button></nav>
+        <SectionNav class="extraction-subtabs" v-model="view.extractionPane" variant="tabs" label="提炼数据视图" :items="[{ value: 'timeline', label: '按日提炼' }, { value: 'messages', label: '原始消息', badge: view.captureMessages.total }, { value: 'tasks', label: '运行记录', badge: view.extractionCounts.windows }]" />
         <p class="extraction-boundary-note"><Icon name="info" :size="14" />原始消息用于核对与提炼；只有提炼结果会进入记忆管理和正常召回。</p>
         <div v-if="view.extractionPane !== 'messages'" class="window-selection-toolbar" :class="{ active: view.windowSelectionMode }">
           <button class="btn small outline" type="button" @click="view.toggleWindowSelectionMode"><Icon :name="view.windowSelectionMode ? 'x' : 'check'" :size="14" />{{ view.windowSelectionMode ? '退出选择' : '选择窗口' }}</button>
@@ -82,14 +77,20 @@ export const MemoryExtractionWorkspace = {
 
         <section v-else-if="view.extractionPane === 'messages'" class="extraction-list-pane">
           <header class="extraction-pane-toolbar">
-            <div><h2>原始消息</h2><p>实时采集与历史补录都进入同一份原始记录，并按群号和消息 ID 去重。</p></div>
-            <div class="extraction-inline-operation">
-              <label class="compact-number-field"><span>补录最近</span><input class="input" type="number" min="1" :max="view.backfillLimitMax" step="10" v-model="view.historyBackfillLimit" /><span>条</span></label>
-              <label class="compact-number-field"><span>起始消息 ID</span><input class="input" type="text" placeholder="可选，从该消息向前" v-model="view.historyBackfillFrom" /></label>
-              <button class="btn small outline" type="button" :disabled="view.captureAction === 'backfill' || view.captureBusy || !view.selectedPolicy.enabled" @click="view.backfillHistory()"><Icon name="download" :size="14" />{{ view.captureAction === 'backfill' ? '补录中…' : '补录历史' }}</button>
-              <button v-if="(view.selectedPolicy.messageCount || 0) > 0" class="btn small outline" type="button" :disabled="view.captureAction === 'backfill' || view.captureBusy || !view.selectedPolicy.enabled" title="从本群已保存的最早一条消息继续向前拉取更早历史" @click="view.backfillHistory({ continueFromOldest: true })"><Icon name="history" :size="14" />继续向前补录</button>
-            </div>
+            <div><h2>原始消息</h2><p>实时采集与历史补录合并展示，重复消息自动去重。</p></div>
           </header>
+          <details class="extraction-backfill">
+            <summary><Icon name="download" :size="14" /><span>补录历史</span><Icon name="chevron-down" :size="14" /></summary>
+            <form class="extraction-backfill-form" @submit.prevent="view.backfillHistory()">
+              <label class="field backfill-count"><span class="field-label">补录条数</span><input type="number" required min="1" :max="view.backfillLimitMax" step="1" v-model="view.historyBackfillLimit" /></label>
+              <label class="field backfill-message-id"><span class="field-label">起始消息 ID <small class="field-hint">可选</small></span><input type="text" placeholder="留空从最近消息开始" v-model="view.historyBackfillFrom" /></label>
+              <div class="row backfill-actions">
+                <button class="btn primary small" type="submit" :disabled="view.captureAction === 'backfill' || view.captureBusy || !view.selectedPolicy.enabled">{{ view.captureAction === 'backfill' ? '补录中…' : '开始补录' }}</button>
+                <button v-if="(view.selectedPolicy.messageCount || 0) > 0" class="btn small outline" type="button" :disabled="view.captureAction === 'backfill' || view.captureBusy || !view.selectedPolicy.enabled" title="从已保存的最早一条消息继续向前拉取" @click="view.backfillHistory({ continueFromOldest: true })">继续向前补录</button>
+              </div>
+              <p class="field-description">填写消息 ID 后，从该消息向前补录；已保存的消息会自动跳过。</p>
+            </form>
+          </details>
           <div v-if="view.captureAction === 'backfill' || view.selectedPolicy.backfill?.status" class="extraction-operation-status" :class="{ 'is-error': view.selectedPolicy.backfill?.status === 'failed' }">
             <span class="badge" :class="view.selectedPolicy.backfill?.status === 'completed' ? 'on' : (view.selectedPolicy.backfill?.status === 'failed' ? 'risk-high' : 'risk-medium')">{{ view.captureAction === 'backfill' ? '补录中' : view.backfillStatusLabel(view.selectedPolicy.backfill?.status) }}</span>
             <p v-if="view.captureAction === 'backfill'">正在从宿主读取近期群历史并保存，完成后会自动刷新列表。</p>

@@ -5,15 +5,6 @@
 
 .pv-page { display: grid; gap: 14px; min-width: 0; }
 
-.pv-header {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
-}
-.pv-header h2 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -.01em; }
-.pv-header p { margin: 4px 0 0; color: var(--muted-foreground); font-size: 12.5px; }
-
 /* 全局回复设置条：与页面卡片统一为无阴影的细边框 */
 .pv-page .provider-routing-compact { box-shadow: none; padding: 10px 14px; }
 
@@ -200,7 +191,6 @@
   .pv-nav-list { grid-auto-flow: column; grid-auto-columns: minmax(180px, 1fr); overflow-x: auto; }
 }
 @media (max-width: 640px) {
-  .pv-header { align-items: flex-start; flex-direction: column; }
   .pv-detail-head { flex-direction: column; padding: 14px 16px; }
   .pv-models-bar { flex-direction: column; align-items: stretch; padding: 12px 16px; }
   .pv-models-tools .ui-search { width: auto; flex: 1 1 auto; }

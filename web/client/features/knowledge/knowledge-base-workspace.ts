@@ -71,10 +71,10 @@ export const KnowledgeBaseWorkspace = {
   ],
   template: `
     <div class="section-stage knowledge-stage">
-      <div class="section-intro">
-        <div><h2>知识库工作区</h2><p>先选库，再集中处理内容、召回、授权与索引异常。</p></div>
+      <header class="ui-page-header">
+        <h2>知识库</h2>
         <div class="row"><button class="btn small outline" type="button" aria-haspopup="dialog" :aria-expanded="globalSettingsOpen" @click="$emit('open-global-settings')"><Icon name="sliders" :size="14" />全局配置</button><button class="btn small outline" type="button" @click="$emit('refresh-bases')"><Icon name="refresh" :size="14" />刷新</button><button class="btn primary small" type="button" @click="$emit('create-base')"><Icon name="plus" :size="14" />新建知识库</button></div>
-      </div>
+      </header>
       <Dialog :open="globalSettingsOpen" title="知识库全局配置" description="所有知识库、帮助指令、AI 工具和自动召回共用。保存立即生效，无需重建索引。" size="lg" @close="$emit('close-global-settings')">
         <div class="form-grid dense knowledge-global-settings-fields">
           <Field label="每次召回上限" type="number" hint="1–20 条 · 默认 5" v-model="draft.retrievalResultLimit" :disabled="globalSettingsBusy" description="控制最终返回总数；调用方可请求更少，相关性不足时不凑满。" />
@@ -92,20 +92,16 @@ export const KnowledgeBaseWorkspace = {
         <div class="knowledge-console">
           <aside class="knowledge-sidebar">
             <div class="provider-sidebar-head">
-              <div><div class="section-title"><Icon name="database" :size="13" />知识库</div><p class="muted tiny">状态异常的库会优先显示明确提示。</p></div>
+              <div class="section-title">全部知识库</div>
               <span class="filter-count">{{ filteredBases.length }} / {{ bases.length }}</span>
             </div>
-            <div class="list-filter">
-              <label class="filter-search"><Icon name="search" :size="14" /><input :value="baseQuery" type="text" placeholder="搜索名称、描述或 ID" @input="$emit('update-base-query', $event.target.value)" /></label>
-            </div>
+            <SearchInput :model-value="baseQuery" placeholder="搜索知识库" @update:model-value="$emit('update-base-query', $event)" />
             <div v-if="filteredBases.length" class="knowledge-base-list">
               <div v-for="base in filteredBases" :key="base.id" class="knowledge-base-card-shell" :class="{ active: selectedBaseId === base.id }">
-                <button type="button" class="knowledge-base-card" :class="{ active: selectedBaseId === base.id, 'has-maintenance': base.id === 'builtin-commands' }" @click="$emit('select-base', base.id)">
+                <button type="button" class="knowledge-base-card" :class="{ active: selectedBaseId === base.id }" :aria-current="selectedBaseId === base.id ? 'true' : undefined" @click="$emit('select-base', base.id)">
                   <div class="knowledge-base-card-head"><div class="knowledge-base-name truncate">{{ base.name }}</div><StatusDot :state="baseHealth(base).state" :label="baseHealth(base).label" :tip="base.index?.error" /></div>
-                  <p class="knowledge-base-description">{{ base.description || '暂无描述' }}</p>
-                  <div class="provider-source-meta"><span class="badge">{{ base.stats?.documents || 0 }} 篇</span><span class="badge">{{ base.stats?.chunks || 0 }} 块</span><span v-if="base.id === 'builtin-commands'" class="badge on">可检索 {{ base.stats?.searchableDocuments || 0 }} 篇</span><span v-if="base.protected" class="badge on">内置</span><span v-else-if="base.config?.embeddingModel" class="badge accent">语义</span><span v-else class="badge">全文</span></div>
+                  <div class="knowledge-base-meta"><span>{{ base.stats?.documents || 0 }} 篇内容</span><span>{{ base.protected ? '内置' : base.config?.embeddingModel ? '语义检索' : '全文检索' }}</span></div>
                 </button>
-                <button v-if="base.id === 'builtin-commands'" class="btn small outline knowledge-base-maintain" type="button" @click.stop="$emit('open-command-maintenance', base)"><Icon name="sliders" :size="13" />维护</button>
               </div>
             </div>
             <div v-else class="provider-empty-state"><Icon name="database" :size="24" /><strong>没有匹配的知识库</strong><p>清空搜索或新建一个知识库。</p></div>
@@ -116,26 +112,26 @@ export const KnowledgeBaseWorkspace = {
               <div class="knowledge-hero-head">
                 <div><div class="knowledge-hero-title">{{ selectedBase.name }}</div><p class="muted small">{{ selectedBase.description || '暂无描述；可补充收录范围和维护说明。' }}</p></div>
                 <div class="row-actions">
+                  <button v-if="selectedBase.id === 'builtin-commands'" class="btn small outline" type="button" @click="$emit('open-command-maintenance', selectedBase)"><Icon name="sliders" :size="14" />维护指令</button>
                   <button v-if="!selectedBase.protected" class="btn small outline" type="button" @click="$emit('open-base-editor', selectedBase)"><Icon name="pencil" :size="14" />设置</button>
-                  <button class="btn small outline" type="button" :disabled="baseBusy || activeIndexJob" @click="$emit('rebuild-base')"><Icon name="refresh" :size="14" :class="{ 'icon-spin': baseBusy }" />{{ activeIndexJob ? '构建中…' : '重建索引' }}</button>
                   <IconButton v-if="!selectedBase.protected" icon="trash" tone="danger" tip="删除知识库" @click="$emit('delete-base', selectedBase)" />
                 </div>
               </div>
               <div class="knowledge-health-row">
                 <StatusDot :state="baseHealth(selectedBase).state" :label="baseHealth(selectedBase).label" :tip="selectedBase.index?.error" />
-                <span class="badge">{{ selectedBase.stats?.documents || 0 }} 篇内容</span>
+                <span>{{ selectedBase.stats?.documents || 0 }} 篇内容</span>
+                <details class="knowledge-index-summary"><summary>索引详情<Icon name="chevron-down" :size="12" /></summary><div class="knowledge-index-facts">
                 <span class="badge">{{ selectedBase.stats?.chunks || 0 }} 个分块</span>
                 <span v-if="selectedBase.id === 'builtin-commands'" class="badge on">可检索 {{ selectedBase.stats?.searchableDocuments || 0 }} 篇 / {{ selectedBase.stats?.searchableChunks || 0 }} 块</span>
                 <span v-else class="badge">{{ selectedBase.stats?.characters || 0 }} 字符</span>
                 <span class="badge accent">{{ selectedBase.config?.embeddingModel || 'FTS5 全文检索' }}</span>
                 <span v-if="selectedBase.config?.embeddingModel" class="badge">Cosine（余弦）</span>
+                </div></details>
               </div>
               <div v-if="selectedBase.index?.error" class="hint-banner warn"><Icon name="alert" :size="14" /><span>{{ selectedBase.index.error }}</span></div>
             </div>
 
-            <div class="segmented knowledge-pane-switch" aria-label="当前知识库操作">
-              <button v-for="item in basePaneItems" :key="item.value" type="button" :class="{ active: activeBasePane === item.value }" @click="$emit('set-base-pane', item.value)"><Icon :name="item.icon" :size="13" />{{ item.label }}<span v-if="item.badge" class="badge">{{ item.badge }}</span></button>
-            </div>
+            <SectionNav class="knowledge-pane-switch" :model-value="activeBasePane" :items="basePaneItems" variant="tabs" label="当前知识库操作" @update:model-value="$emit('set-base-pane', $event)" />
 
             <section v-if="activeBasePane === 'documents'" class="knowledge-pane">
               <div class="knowledge-pane-head"><div><div class="section-title"><Icon name="file" :size="13" />内容列表</div><p class="muted tiny">指令下方显示插件、来源和方法；可按资料完整度排序，点击卡片编辑说明。</p></div><button v-if="!selectedBase.protected" class="btn primary small" type="button" @click="$emit('open-document-editor')"><Icon name="plus" :size="14" />添加内容</button></div>

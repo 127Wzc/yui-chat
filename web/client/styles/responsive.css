@@ -10,7 +10,6 @@
   .knowledge-main { padding-top: 0; }
   .knowledge-hero-head, .knowledge-pane-head { flex-direction: column; }
   .section-nav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .knowledge-main > .section-nav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .message-rule-basics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .message-rule-basics .field:last-child { grid-column: auto; }
   .group-member-area { grid-template-columns: 1fr; }
@@ -46,9 +45,11 @@
   .message-processing-hero-actions { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; width: 100%; }
   .message-rule-card { grid-template-columns: 28px 34px minmax(0, 1fr); }
   .message-rule-card-actions { grid-column: 3; justify-content: flex-end; }
-  .topbar h1 { flex: 1 1 120px; }
+  .page-title { flex: 1 1 auto; }
+  .topbar h1 { flex: 0 1 auto; }
+  .top-diagnostic-button { flex-shrink: 0; white-space: nowrap; }
   .page-load-line { top: 0; }
-  .top-actions { flex: 1 1 100%; }
+  .top-actions { flex: 0 0 auto; }
   .token-field { flex: 1 1 180px; max-width: none; }
   .form-grid, .form-grid.dense, .form-grid.three, .command-retrieval-controls.form-grid, .metric-grid { grid-template-columns: 1fr; }
   .settings-toggle-grid { grid-template-columns: 1fr; }
@@ -62,9 +63,6 @@
   .group-picker { flex: 1 1 min(100%, 360px); }
   .group-picker-trigger { flex: 1; width: auto; }
   .group-picker-menu { left: 0; width: 100%; }
-  .memory-hub-tabs { align-items: flex-start; flex-wrap: wrap; }
-  .memory-workspace-switch { flex: 1 1 100%; }
-  .memory-workspace-switch > button { flex: 1; min-width: 0; }
   .calendar-head { align-items: flex-start; }
   .calendar-head-actions { justify-content: flex-start; }
   .calendar-meta-row { align-items: flex-start; flex-direction: column; gap: 10px; }
@@ -134,7 +132,7 @@
   .account-trigger > span:not(.account-avatar) { display: none; }
   .slice-error-banner { align-items: flex-start; flex-wrap: wrap; }
   .slice-error-banner .btn { margin-left: 28px; }
-  .top-actions { width: 100%; }
+  .top-actions { width: auto; }
   .top-actions .token-field { flex: 1 1 auto; }
   .wizard-more-settings, .chat-test-hero, .chat-window-head { align-items: stretch; flex-direction: column; }
   .home-hero { padding: 20px 16px; border-radius: 13px; }
@@ -175,18 +173,12 @@
   .memory-summary-row { grid-template-columns: auto minmax(0, 1fr) auto auto; padding-left: 6px; }
   .memory-summary-row .tiny { display: none; }
   .memory-list-tools, .member-memory-head { align-items: stretch; flex-direction: column; }
-  .memory-list-tools .memory-search { width: 100%; }
+  .memory-list-tools :is(.memory-search, .ui-search) { width: 100%; }
   .member-memory-head > .btn { align-self: flex-start; }
   .member-memory-tabs { overflow-x: auto; }
   .capture-progress-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .memory-hub-tabs { padding-right: 10px; padding-left: 10px; }
-  .memory-workspace-switch > button { min-width: 142px; padding-right: 8px; padding-left: 8px; }
-  .memory-workspace-switch small { display: none; }
-  .extraction-subtabs { overflow-x: auto; padding: 0 8px; }
-  .extraction-subtabs button { flex: 0 0 auto; min-width: 120px; }
   .timeline-workbench, .extraction-list-pane { padding: 12px; }
   .extraction-pane-toolbar { align-items: stretch; flex-direction: column; gap: 9px; }
-  .extraction-inline-operation { align-self: flex-start; }
   .timeline-head { align-items: stretch; flex-direction: column; }
   .timeline-head .btn { align-self: flex-start; }
   .window-selection-toolbar { align-items: stretch; flex-direction: column; }
@@ -341,4 +333,17 @@
 }
 @media (max-width:390px) {
   .home-dashboard-metrics { grid-template-columns:1fr; }
+}
+
+@media (max-width: 900px) {
+  .extraction-backfill-form { grid-template-columns: 110px minmax(0, 1fr); }
+  .backfill-actions { grid-column: 1 / -1; }
+}
+@media (max-width: 560px) {
+  .ui-page-header { align-items: flex-start; }
+  .knowledge-main { padding: 16px 12px; }
+  .extraction-backfill-form { grid-template-columns: minmax(0, 1fr); }
+  .extraction-subtabs { margin: 12px 12px 0; max-width: calc(100% - 24px); }
+  .group-picker { max-width: 100%; }
+  .group-picker-trigger { width: auto; }
 }
