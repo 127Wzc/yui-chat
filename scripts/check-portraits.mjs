@@ -68,7 +68,8 @@ try {
   const { requireWebAuth } = await import("../output/runtime/web/http/auth.js")
   const { validateConfig } = await import("../output/runtime/config/validator.js")
   const { estimateTokens } = await import("../output/runtime/core/chat/token-budget.js")
-  assert.equal(defaults.memory.portrait.inputTokenLimit, 100000)
+  assert.equal(defaults.memory.portrait.inputTokenLimit, 300000)
+  assert.equal(defaults.memory.portrait.historyCount, 200)
   assert.equal(defaults.memory.portrait.maxTokens, 10000)
   assert.equal(defaults.memory.portrait.defaultType, "positive")
   const upstreamPrompts = parseYaml(await fs.readFile(new URL("../resources/portrait/builtin_prompts.yaml", import.meta.url), "utf8"))
@@ -101,8 +102,7 @@ try {
     if (mode === "fail") throw new Error("provider failed Authorization: should-never-leak")
     if (mode === "pause") await new Promise(resolve => { release = resolve })
     const input = JSON.parse(options.prompt)
-    const ids = [...input.memories.map(m => m.evidenceId), ...input.messages.map(m => m.evidenceId)]
-    return { text: JSON.stringify({ ...(input.task.id === "clone" ? { personaPrompt: "你正在模拟一位喜欢科幻阅读的虚构群聊角色。使用简洁直接的句子，面对不同意见先询问理由。不要声称自己是真实用户，不编造身份资料。" } : {}), title: "把兴趣说清楚", summary: mode === "process" ? "<think>先检查聊天资料</think>" : "持续关注科幻话题，表达自己的阅读偏好。", keywords: ["科幻"], sections: [{ heading: "兴趣与表达", text: "喜欢科幻小说，谈起阅读偏好时表达直接。", kind: "self_report", evidenceIds: [ids[0]] }], uncertainties: "样本有限，尚不足以判断其他场景的表现。" }) }
+    return { text: JSON.stringify({ ...(input.task.id === "clone" ? { personaPrompt: "你正在模拟一位喜欢科幻阅读的虚构群聊角色。使用简洁直接的句子，面对不同意见先询问理由。不要声称自己是真实用户，不编造身份资料。" } : {}), title: "把兴趣说清楚", summary: mode === "process" ? "<think>先检查聊天资料</think>" : "持续关注科幻话题，表达自己的阅读偏好。", keywords: ["科幻"], sections: [{ heading: "兴趣与表达", text: "喜欢科幻小说，可能会乐于分享阅读感受。" }], uncertainties: "样本有限，尚不足以判断其他场景的表现。" }) }
   }
   const service = new PortraitStore(model, () => now)
   assert.equal(portraitMonth(Date.parse("2026-10-31T15:59:59Z")).month, "2026-10")
@@ -128,10 +128,18 @@ try {
   const input = JSON.parse(inputs[0].prompt)
   assert(!inputs[0].prompt.includes("其他群的秘密") && !inputs[0].prompt.includes("私人记忆") && !inputs[0].prompt.includes("13812345678"))
   assert.equal(input.contextMessages[0].contextOnly, true)
-  assert.equal(input.messages[0].replyTo, "context")
+  assert.equal(input.contextMessages[0].author, "其他成员")
+  assert.equal(input.messages[0].replyTo, input.contextMessages[0].id)
+  assert(!Object.hasOwn(input, "targetUserId") && !Object.hasOwn(input, "groupId") && !Object.hasOwn(input, "manualProfile"))
+  assert(!inputs[0].prompt.includes("evidenceId") && !inputs[0].prompt.includes("messageId") && !inputs[0].prompt.includes("user-a"))
   assert(estimateTokens(inputs[0].prompt) + estimateTokens(PORTRAIT_SYSTEM_PROMPT) <= configStore.get().memory.portrait.inputTokenLimit)
   assert.equal(one.report.messageCount, 1)
+  assert.deepEqual(one.report.sections, [{ heading: "兴趣与表达", text: "喜欢科幻小说，可能会乐于分享阅读感受。" }])
   assert.equal(inputs[0].maxTokens, 10000, "portrait output defaults to the 10000-token ceiling")
+  // 已保存的旧结构保留原样，读取与重提炼都不能要求重新生成或迁移。
+  const legacyReport = { ...one.report, sections: one.report.sections.map(section => ({ ...section, kind: "self_report", evidenceIds: ["s:a1"] })) }
+  await sqliteClient.run("UPDATE portrait_reports SET report_json=? WHERE id=?", [JSON.stringify(legacyReport), one.report.id])
+  assert.deepEqual((await service.view("group-a", "user-a", actor)).report.sections, legacyReport.sections)
   const cached = await service.generate("group-a", "user-a", { actor, historyCount: 500 })
   assert(cached.cached); assert.equal(calls, 1)
   assert.equal((await service.view("group-a", "user-a", actor)).used, true)
@@ -146,7 +154,7 @@ try {
   const forced = await service.generate("group-a", "user-a", { actor: admin, force: true, supplement: false })
   assert.equal(forced.report.typeId, "positive"); assert.equal(forced.report.version, 2)
   const previousInput = JSON.parse(inputs.at(-1).prompt).previous
-  assert.deepEqual(previousInput.sections, one.report.sections.map(({ heading, text, kind }) => ({ heading, text, kind })))
+  assert.deepEqual(previousInput.sections, one.report.sections)
   assert.equal(previousInput.referenceOnly, true)
   assert(!JSON.stringify(previousInput).includes("evidenceIds"), "old evidence identifiers must not become new evidence")
   assert.equal((await service.view("group-a", "user-a", admin)).reports.length, 2)
@@ -156,6 +164,33 @@ try {
   await assert.rejects(service.setDefaultType("group-a", "user-a", "missing"), /内置/)
   await service.generate("group-b", "user-a", { actor, supplement: false })
   assert.equal(calls, 3, "quota is per group and user")
+
+  // 回复链接只在本次输入使用短编号；重复回复共享上下文，本人发言不重复发送。
+  await capture.setPolicy("group", "group-replies", { enabled: true })
+  const replyTime = Date.now() - 10000
+  await message("group-replies", "own-quote", "user-a", "我想配一台电脑。", [], replyTime)
+  await message("group-replies", "own-reply", "user-a", "预算再加一些。", [{ type: "reply", messageId: "own-quote" }], replyTime + 1000)
+  await message("group-replies", "other-quote", "user-other", "主要用来做什么？", [], replyTime + 2000)
+  await message("group-replies", "reply-one", "user-a", "主要是工作。", [{ type: "reply", messageId: "other-quote" }], replyTime + 3000)
+  await message("group-replies", "reply-two", "user-a", "主要是工作，也会玩游戏。", [{ type: "reply", messageId: "other-quote" }], replyTime + 4000)
+  await message("group-replies", "reply-missing", "user-a", "这条回复的原文已经不可用。", [{ type: "reply", messageId: "missing" }], replyTime + 5000)
+  await message("group-replies", "private-quote", "user-other", "手机号是 13812345678", [], replyTime + 6000)
+  await message("group-replies", "reply-private", "user-a", "好的，知道了。", [{ type: "reply", messageId: "private-quote" }], replyTime + 7000)
+  const linked = await service.generate("group-replies", "user-a", { actor, supplement: false })
+  const linkedInput = JSON.parse(inputs.at(-1).prompt)
+  const byText = text => linkedInput.messages.find(item => item.text === text)
+  assert.equal(linkedInput.messages.length, 6)
+  assert.equal(linkedInput.contextMessages.length, 1)
+  assert.equal(byText("预算再加一些。").replyTo, byText("我想配一台电脑。").id)
+  assert.equal(byText("主要是工作。").replyTo, linkedInput.contextMessages[0].id)
+  assert.equal(byText("主要是工作，也会玩游戏。").replyTo, linkedInput.contextMessages[0].id)
+  assert(!Object.hasOwn(byText("这条回复的原文已经不可用。"), "replyTo"))
+  assert(!Object.hasOwn(byText("好的，知道了。"), "replyTo"))
+  assert(!inputs.at(-1).prompt.includes("13812345678"))
+  assert(!inputs.at(-1).prompt.includes("other-quote") && !inputs.at(-1).prompt.includes("user-other"))
+  assert.equal((await service.evidence("group-replies", "user-a", linked.report.id, admin)).filter(item => item.type === "context").length, 1)
+  await sqliteClient.run("DELETE FROM group_memory_messages WHERE id='other-quote'")
+  assert.equal((await service.view("group-replies", "user-a", actor)).report, null, "撤回未逐段引用的回复上下文仍停用画像")
   await capture.setPolicy("group", "group-a", { enabled: false })
   await assert.rejects(service.view("group-a", "user-a", admin), /未开启/)
   await assert.rejects(service.generate("group-a", "user-a", { actor: admin, force: true }), /未开启/)
@@ -200,6 +235,21 @@ try {
   assert.equal((await sqliteClient.get("SELECT COUNT(*) AS n FROM portrait_monthly_usage WHERE group_id='group-race'")).n, 0)
   mode = "normal"
 
+  // 模型不返回来源编号时，生成期间资料被修改仍必须拒绝保存且不占额度。
+  await capture.setPolicy("group", "group-source-race", { enabled: true })
+  await message("group-source-race", "race-source", "user-race", "我喜欢读小说。")
+  const raceActor = { userId: "user-race", admin: false }
+  mode = "pause"; release = null
+  const sourceRace = service.generate("group-source-race", "user-race", { actor: raceActor, supplement: false })
+  for (let i = 0; !release && i < 100; i++) await new Promise(resolve => setTimeout(resolve, 5))
+  assert(release)
+  await sqliteClient.run("UPDATE group_memory_messages SET text_content=? WHERE id='race-source'", ["我的兴趣已经改变。"])
+  release(); mode = "normal"
+  await assert.rejects(sourceRace, /生成期间资料已修改/)
+  const afterSourceRace = await service.view("group-source-race", "user-race", raceActor)
+  assert.equal(afterSourceRace.report, null)
+  assert.equal(afterSourceRace.used, false)
+
   // 原生接口补录：只保存期限内消息，不新增历史提炼任务。
   let pages = 0
   global.Bot.pickGroup = async () => ({ getChatHistory: async () => { pages++; return [
@@ -243,14 +293,14 @@ try {
   assert.equal(next.cached, false); assert.equal(calls, beforeMonthCalls + 1)
   assert.equal(next.report.month, portraitMonth(now).month)
 
-  // 超过旧 30000 Token 上限的原文能在 100000 预算内完整进入模型，不截断消息。
+  // 超过旧 30000 Token 上限的原文能在默认预算内完整进入模型，不截断消息。
   now = Date.now()
   await capture.setPolicy("group", "group-large", { enabled: true })
   const longText = "星".repeat(1000)
   for (let i = 0; i < 70; i++) await message("group-large", `large-${i}`, "user-a", `${longText}，第${i}次分享。`)
   const large = await service.generate("group-large", "user-a", { actor, historyCount: 100, supplement: false })
   const largeTokens = estimateTokens(inputs.at(-1).prompt) + estimateTokens(PORTRAIT_SYSTEM_PROMPT)
-  assert(largeTokens > 30000 && largeTokens <= 100000)
+  assert(largeTokens > 30000 && largeTokens <= 300000)
   assert.equal(large.report.messageCount, 70)
   assert.equal(inputs.at(-1).maxTokens, 10000)
 
@@ -259,7 +309,50 @@ try {
   assert(small.report.messageCount < 70)
   assert(estimateTokens(inputs.at(-1).prompt) + estimateTokens(PORTRAIT_SYSTEM_PROMPT) <= 3000)
   assert(JSON.parse(inputs.at(-1).prompt).messages.every(m => m.text.includes(longText)), "individual messages remain complete")
-  await configStore.update(c => { c.memory.portrait.inputTokenLimit = 100000 })
+
+  // 预算不足以装入回复上下文时，不能留下指向缺失内容的编号。
+  await capture.setPolicy("group", "group-context-budget", { enabled: true })
+  await message("group-context-budget", "large-context", "user-other", "背景".repeat(10000), [], Date.now() - 1000)
+  await message("group-context-budget", "budget-reply", "user-a", "好的。", [{ type: "reply", messageId: "large-context" }])
+  const budgetResult = await service.generate("group-context-budget", "user-a", { actor, supplement: false })
+  const budgetInput = JSON.parse(inputs.at(-1).prompt)
+  assert.equal(budgetInput.contextMessages.length, 0)
+  assert(!Object.hasOwn(budgetInput.messages[0], "replyTo"))
+  assert(estimateTokens(inputs.at(-1).prompt) + estimateTokens(PORTRAIT_SYSTEM_PROMPT) <= 3000)
+  assert(!(await service.evidence("group-context-budget", "user-a", budgetResult.report.id, admin)).some(item => item.type === "context"))
+  await configStore.update(c => { c.memory.portrait.inputTokenLimit = 300000 })
+
+  // 大批量既验证 2000 条与 30 万预算，也验证不限、较高预算和分批来源核验。
+  await capture.setPolicy("group", "group-2000", { enabled: true })
+  const largeUser = "user-2000", largeActor = { userId: largeUser, admin: false }, largeText = "星".repeat(300)
+  const largeNow = Date.now()
+  await sqliteClient.transaction(Array.from({ length: 2000 }, (_, i) => {
+    const id = `batch-${i}`
+    return { sql: `INSERT INTO group_memory_messages(id,group_id,message_id,sender_id,sender_name,sender_role,sent_at,text_content,segments_json,content_hash,is_command,expires_at)
+      VALUES(?,?,?,?,?,'member',?,?,?,?,0,?)`, params: [id, "group-2000", id, largeUser, "示例成员", largeNow + i, `${largeText}第${i}条`, "[]", id, largeNow + 86400000] }
+  }))
+  const defaultBudget = await service.generate("group-2000", largeUser, { actor: largeActor, historyCount: 2000, supplement: false })
+  const defaultPromptTokens = estimateTokens(inputs.at(-1).prompt) + estimateTokens(PORTRAIT_SYSTEM_PROMPT)
+  assert(defaultBudget.report.messageCount > 500 && defaultBudget.report.messageCount < 2000)
+  assert(defaultPromptTokens <= 300000)
+  await configStore.update(c => { c.memory.portrait.inputTokenLimit = 500000; c.memory.portrait.historyCount = 2000 })
+  const raisedBudget = await service.generate("group-2000", largeUser, { actor: admin, force: true, supplement: false })
+  assert.equal(raisedBudget.report.requestedCount, 2000)
+  assert.equal(raisedBudget.report.messageCount, 2000)
+  assert(estimateTokens(inputs.at(-1).prompt) + estimateTokens(PORTRAIT_SYSTEM_PROMPT) > 300000)
+  await configStore.update(c => { c.memory.portrait.inputTokenLimit = 0; c.memory.portrait.maxTokens = 65536 })
+  assert.equal((await configStore.load()).memory.portrait.inputTokenLimit, 0, "不限值必须在配置持久化后保留")
+  const storedConfig = await sqliteClient.get("SELECT overrides_json FROM runtime_config WHERE id=1")
+  assert.equal(JSON.parse(storedConfig.overrides_json).memory.portrait.inputTokenLimit, 0)
+  const unlimited = await service.generate("group-2000", largeUser, { actor: admin, force: true, supplement: false })
+  assert.equal(unlimited.report.messageCount, 2000)
+  assert(estimateTokens(inputs.at(-1).prompt) + estimateTokens(PORTRAIT_SYSTEM_PROMPT) > 300000)
+  assert.equal(inputs.at(-1).maxTokens, 65536)
+  assert.equal((await service.view("group-2000", largeUser, largeActor)).report.id, unlimited.report.id)
+  await assert.rejects(service.generate("group-2000", largeUser, { actor: admin, force: true, historyCount: 2001, supplement: false }), /50–2000/)
+  await sqliteClient.run("UPDATE group_memory_messages SET text_content=? WHERE id='batch-0'", ["这条资料已改变。"])
+  assert.equal((await service.view("group-2000", largeUser, largeActor)).report, null, "2000 条输入中的任意来源修改仍会停用画像")
+  await configStore.update(c => { c.memory.portrait.inputTokenLimit = 300000; c.memory.portrait.historyCount = 200; c.memory.portrait.maxTokens = 10000 })
 
   // 同一成员五种报告独立生成、缓存和保留，默认打开正画像。
   await capture.setPolicy("group", "group-types", { enabled: true })
@@ -308,22 +401,26 @@ try {
   const parallelReports = await Promise.all(pending)
   assert.deepEqual(parallelReports.map(r => r.report.version), [1, 1])
 
-  const invalid = { title: "合法标题", summary: "合法摘要", sections: [{ heading: "兴趣", text: "合法正文", kind: "observation", evidenceIds: ["fake"] }] }
-  assert.throws(() => validatePortraitContent(invalid, new Set(["real"])), /来源/)
-  assert.throws(() => validatePortraitContent({ ...invalid, sections: [{ ...invalid.sections[0], evidenceIds: ["real"] }] }, new Set(["real"]), "clone"), /格式/)
-  assert.throws(() => validatePortraitContent({ ...invalid, summary: "手机号 13812345678" }, new Set(["fake"])), /隐私/)
-  for (const summary of ["<think>先检查资料</think>", "思考过程：先分析用户", "## 推理过程：逐条判断"]) assert.throws(() => validatePortraitContent({ ...invalid, summary }, new Set(["fake"])), /过程文本/)
+  const valid = { title: "合法标题", summary: "合法摘要", sections: [{ heading: "兴趣", text: "合法正文" }] }
+  assert.deepEqual(validatePortraitContent(valid, new Set()).sections, valid.sections)
+  assert.deepEqual(validatePortraitContent({ ...valid, sections: [{ ...valid.sections[0], kind: "inference", evidenceIds: Array.from({ length: 13 }, (_, i) => `fake-${i}`) }] }, new Set()).sections, valid.sections, "额外编号和分类不影响保存，也不作为依赖")
+  assert.throws(() => validatePortraitContent(valid, new Set(), "clone"), /格式/)
+  assert.throws(() => validatePortraitContent({ ...valid, summary: "手机号 13812345678" }, new Set()), /隐私/)
+  for (const summary of ["<think>先检查资料</think>", "思考过程：先分析用户", "## 推理过程：逐条判断"]) assert.throws(() => validatePortraitContent({ ...valid, summary }, new Set()), /过程文本/)
   const cloneOnly = validatePortraitContent({ personaPrompt: "你正在模拟一个喜欢阅读的虚构角色。用简洁自然的语言回应。" }, new Set(), "clone")
   assert.equal(cloneOnly.sections.length, 0)
   assert.equal(cloneOnly.summary, "")
   assert.equal(cloneOnly.title, "")
   assert(cloneOnly.personaPrompt)
   assert.throws(() => validatePortraitContent({ personaPrompt: "手机号 13812345678" }, new Set(), "clone"), /隐私/)
-  assert.throws(() => validatePortraitContent({ ...invalid, personaPrompt: cloneOnly.personaPrompt }, new Set(["real"]), "clone"), /来源/)
+  assert.equal(validatePortraitContent({ ...valid, personaPrompt: cloneOnly.personaPrompt }, new Set(), "clone").sections.length, 1)
   const cleanReport = { ...next.report, name: "示例成员", title: "一份谨慎的正向印象", uncertainties: "样本有限，无法判断。", backfillNote: "平台历史补录说明，仅供管理端核对。" }
   const html = buildPortraitHtml({ ...cleanReport, summary: '<img src=x onerror="bad()">' })
   assert(!html.includes('<img src=x')); assert(html.includes('&lt;img'))
-  assert(html.includes(`<h1>示例成员 · ${cleanReport.type.name}</h1>`))
+  assert(!html.includes("YUI CHAT / PORTRAIT"), "正文不再显示多余的英文标题")
+  assert(html.includes(`<h1>示例成员 · ${cleanReport.type.name}</h1>`), "正文顶部显示昵称和画像类型")
+  const taggedHtml = buildPortraitHtml({ ...cleanReport, keywords: ["自然亲切", "<表达简洁>"] })
+  assert(taggedHtml.includes('<div class="keywords"><span>自然亲切</span><span>&lt;表达简洁&gt;</span></div>'), "标签分别呈现并转义")
   for (const hidden of [cleanReport.title, cleanReport.uncertainties, cleanReport.backfillNote, "项依据", "本人自述 / 已存事实", "本群行为观察", "原文范围", "不代表完整人格"]) assert(!html.includes(hidden), `finished portrait must omit metadata: ${hidden}`)
   assert(html.includes(cleanReport.sections[0].text))
   const cloneReport = { ...typedReports.get("clone"), summary: "内部摘要不进入克隆成品", keywords: ["内部标签"], sections: [{ heading: "内部说明", text: "内部依据解释", kind: "observation", evidenceIds: ["private-id"] }] }
@@ -332,15 +429,23 @@ try {
   for (const hidden of [cloneReport.summary, "内部标签", "内部说明", "内部依据解释"]) assert(!cloneHtml.includes(hidden))
   const preview = buildPortraitPreviewDocument(cleanReport)
   assert(preview.includes("window-buttons"))
+  const reportDate = new Date(cleanReport.createdAt).toLocaleDateString("zh-CN", { timeZone: "Asia/Shanghai" })
+  assert(preview.includes('<div class="window-title"></div><div class="window-tag"></div>'), "顶部工具栏不显示文字")
+  assert(preview.includes(`<header class="portrait-header"><h1>示例成员 · ${cleanReport.type.name}</h1><span class="portrait-date">${reportDate}</span></header>`))
+  const escapedPreview = buildPortraitPreviewDocument({ ...cleanReport, name: '<img src=x onerror="bad()">' })
+  assert(!escapedPreview.includes('<img src=x') && escapedPreview.includes('&lt;img src=x'))
   assert(!preview.includes(cleanReport.title) && !preview.includes(cleanReport.uncertainties), "preview and PNG share the same finished content")
   assert(PORTRAIT_SYSTEM_PROMPT.includes("资料不足就少写") && PORTRAIT_SYSTEM_PROMPT.includes("不展示得出结论的过程"))
   const badConfig = structuredClone(await configStore.load())
-  assert.equal(validateConfig(badConfig).ok, true, "100000 input and 10000 output are valid")
-  badConfig.memory.portrait.inputTokenLimit = 100001
-  assert.equal(validateConfig(badConfig).ok, false)
-  badConfig.memory.portrait.inputTokenLimit = 100000
-  badConfig.memory.portrait.maxTokens = 10001
-  assert.equal(validateConfig(badConfig).ok, false)
+  assert.equal(validateConfig(badConfig).ok, true)
+  for (const limit of [0, 3000, 300000, 1000000]) { badConfig.memory.portrait.inputTokenLimit = limit; assert.equal(validateConfig(badConfig).ok, true) }
+  for (const limit of [-1, 1, 2999, "", null]) { badConfig.memory.portrait.inputTokenLimit = limit; assert.equal(validateConfig(badConfig).ok, false) }
+  badConfig.memory.portrait.inputTokenLimit = 300000
+  for (const count of [50, 200, 2000]) { badConfig.memory.portrait.historyCount = count; assert.equal(validateConfig(badConfig).ok, true) }
+  for (const count of [49, 2001]) { badConfig.memory.portrait.historyCount = count; assert.equal(validateConfig(badConfig).ok, false) }
+  badConfig.memory.portrait.historyCount = 200
+  for (const limit of [1024, 10000, 65536]) { badConfig.memory.portrait.maxTokens = limit; assert.equal(validateConfig(badConfig).ok, true) }
+  for (const limit of [1023, 65537]) { badConfig.memory.portrait.maxTokens = limit; assert.equal(validateConfig(badConfig).ok, false) }
   badConfig.memory.portrait.maxTokens = 10000
   badConfig.memory.portrait.defaultType = "missing"
   assert.equal(validateConfig(badConfig).ok, false)
@@ -368,6 +473,12 @@ try {
     assert.equal(parsedCommands.at(-1).options.typeId, "matchmaking")
     assert.equal(parsedCommands.at(-1).options.force, true)
     assert.equal(parsedCommands.at(-1).options.historyCount, 300)
+    assert.equal(await runPortraitCommand({ isGroup: true, group_id: "group-a", user_id: "user-a", msg: "#yui我的画像 2000" }), "解析完成")
+    assert.equal(parsedCommands.at(-1).options.historyCount, 2000)
+    assert.equal(await runPortraitCommand({ isGroup: true, group_id: "group-a", user_id: "owner", isMaster: true, msg: "#yui重提炼画像 123456 正画像 2000" }, true), "解析完成")
+    assert.equal(parsedCommands.at(-1).user, "123456")
+    assert.equal(parsedCommands.at(-1).options.historyCount, 2000)
+    assert.match(await runPortraitCommand({ isGroup: true, group_id: "group-a", user_id: "user-a", msg: "#yui我的画像 2001" }), /50–2000/)
   } finally { portraitStore.generate = originalGenerate }
 
   const routes = []
@@ -382,6 +493,26 @@ try {
   await getRoute.handlers.at(-1)({ params: { groupId: "group-types", userId: "user-a" }, query: { typeId: "clone" }, body: {} }, typedResponse)
   assert.equal(typedResponse.value.report.typeId, "clone")
   assert(typedResponse.value.used)
+  // Web 手动生成和主人对其他成员重提炼均可保存无编号段落，并从同一成员视图读取。
+  await capture.setPolicy("group", "group-web-portrait", { enabled: true })
+  await message("group-web-portrait", "web-target-message", "123456", "我喜欢阅读。")
+  const postRoute = routes.find(r => r.method === "post" && r.url.endsWith("/members/:userId"))
+  const modelBeforeApi = portraitStore.model
+  portraitStore.model = model
+  try {
+    const created = apiResponse()
+    await postRoute.handlers.at(-1)({ params: { groupId: "group-web-portrait", userId: "123456" }, query: {}, body: { typeId: "positive", historyCount: 2000, supplement: false } }, created)
+    assert.equal(created.value.ok, true)
+    assert.equal(created.value.report.userId, "123456")
+    assert.equal(created.value.report.requestedCount, 2000)
+    assert(!Object.hasOwn(created.value.report.sections[0], "evidenceIds"))
+    const managed = await service.generate("group-web-portrait", "123456", { actor: admin, force: true, typeId: "positive", supplement: false })
+    const viewed = apiResponse()
+    await getRoute.handlers.at(-1)({ params: { groupId: "group-web-portrait", userId: "123456" }, query: { typeId: "positive" }, body: {} }, viewed)
+    assert.equal(viewed.value.report.id, managed.report.id)
+    assert.equal(viewed.value.report.version, 2)
+    assert.equal(inputs.at(-1).event.user_id, "123456")
+  } finally { portraitStore.model = modelBeforeApi }
   const settingsResponse = apiResponse()
   await settingsRoute.handlers.at(-1)({}, settingsResponse)
   assert.equal(settingsResponse.value.types.length, 5)
@@ -417,8 +548,8 @@ try {
   const { createSSRApp } = require("vue")
   const { renderToString } = await import("vue/server-renderer")
   const { components } = await import("../output/runtime/web/client/ui/components.js")
-  async function renderWorkspace(report, showEvidence = false) {
-    const state = { enabled: true, data: { types: [], type: report.type, used: false }, report, name: report.name, selectedType: report.typeId, busy: false, loading: false, error: "", showDefaults: false, showGenerate: false, showReport: false, showEvidence, showVersions: false, evidence: [], previewHtml: "", imageUrl: "", historyCount: 200, supplement: false, stamp: () => "日期" }
+  async function renderWorkspace(report, showEvidence = false, overrides = {}) {
+    const state = { enabled: true, data: { types: [], type: report.type, used: false }, report, name: report.name, selectedType: report.typeId, busy: false, loading: false, error: "", showDefaults: false, showGenerate: false, showReport: false, showEvidence, showVersions: false, evidence: [], previewHtml: "", imageUrl: "", historyCount: 200, supplement: false, stamp: () => "日期", ...overrides }
     for (const method of ["openGenerate", "selectType", "load", "copyPersona", "openEvidence", "openReport", "closeDefaults", "generate"]) state[method] = () => {}
     const app = createSSRApp({ template: templates[1], setup: () => state })
     for (const [name, component] of Object.entries(components)) app.component(name, component)
@@ -432,6 +563,14 @@ try {
   for (const hidden of [cleanReport.title, cleanReport.uncertainties, cleanReport.backfillNote, "本群观察 / 建议"]) assert(!card.includes(hidden))
   const evidenceView = await renderWorkspace(cleanReport, true)
   assert(evidenceView.includes(cleanReport.uncertainties) && evidenceView.includes(cleanReport.backfillNote), "management evidence view retains missing-data notes")
+  const generateView = await renderWorkspace(cleanReport, false, { showGenerate: true, historyCount: 2000 })
+  assert(generateView.includes("50–2000 条") && generateView.includes('value="2000"'))
+  assert(!/<button[^>]+disabled[^>]*>[^<]*生成画像/.test(generateView), "2000 条必须能够在管理端提交")
+  const settingsApp = createSSRApp({ template: templates[2], setup: () => ({ settings: { ...defaults.memory.portrait, inputTokenLimit: 0 }, types: [], dirty: false, busy: false, error: "", typeOptions: [], modelOptions: [], fixedPrompt: "", save() {} }) })
+  for (const [name, component] of Object.entries(components)) settingsApp.component(name, component)
+  const settingsHtml = await renderToString(settingsApp)
+  assert(settingsHtml.includes("默认 300000") && settingsHtml.includes("填 0 不限制本地预算") && settingsHtml.includes("1024–65536"))
+  assert(settingsHtml.includes('value="0"'), "不限值必须在设置页正确显示")
   const cloneCard = await renderWorkspace(cloneReport)
   assert(cloneCard.includes(cloneReport.personaPrompt))
   assert(!cloneCard.includes(cloneReport.summary) && !cloneCard.includes("内部依据解释"))

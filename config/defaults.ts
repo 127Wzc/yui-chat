@@ -487,7 +487,7 @@ export const defaults = {
     portrait: {
       defaultType: "positive",
       historyCount: 200,
-      inputTokenLimit: 100000,
+      inputTokenLimit: 300000,
       maxTokens: 10000,
       modelName: "",
     },

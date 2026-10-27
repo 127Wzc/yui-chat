@@ -492,7 +492,7 @@
 .portrait-summary h3 { margin: 14px 0 10px; color: var(--foreground); font-size: 20px; font-weight: 600; line-height: 1.5; }
 .portrait-lead { margin: 0; font-size: 13px; line-height: 1.9; color: var(--foreground); white-space: pre-wrap; }
 .portrait-keywords { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 16px; }
-.portrait-keywords span { padding: 3px 8px; background: var(--muted); border-radius: 5px; color: var(--muted-foreground); font-size: 11.5px; }
+.portrait-keywords span { padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--c-pink-bg); color: var(--c-pink); font-size: 12px; font-weight: 600; }
 .portrait-type-badge { color: var(--c-pink); background: var(--c-pink-bg); }
 .portrait-section { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
 .portrait-section h4 { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 0 0 8px; font-size: 13px; font-weight: 600; }

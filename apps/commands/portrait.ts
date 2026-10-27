@@ -18,7 +18,7 @@ export async function runPortraitCommand(e: UnknownRecord, master = false): Prom
   const segments = Array.isArray(e.message) ? e.message : []
   const context = extractMessageContext(segments.length ? { ...e, msg: "", raw_message: "" } : e)
   const match = matchPluginCommand(context.text.trim(), "(我的画像|查看画像|重提炼画像|画像|正画像|负画像|找对象|克隆人格)(?:\\s+([\\s\\S]*))?")
-  if (!match) return `用法：${pluginCommand(master ? "重提炼画像 @成员或QQ号 [类型] [50–500]" : "我的画像 [类型] [50–500]")}`
+  if (!match) return `用法：${pluginCommand(master ? "重提炼画像 @成员或QQ号 [类型] [50–2000]" : "我的画像 [类型] [50–2000]")}`
   let userId = String(e.user_id || "")
   const words = (match[2] || "").trim().split(/\s+/).filter(Boolean)
   let typeId = findPortraitType(match[1])?.id
@@ -37,7 +37,7 @@ export async function runPortraitCommand(e: UnknownRecord, master = false): Prom
   } else if (managing && /^\d{5,20}$/.test(words[0] || "")) userId = words.shift()!
   if (!master && match[1] === "重提炼画像") return "重提炼仅允许主人或 Web 管理员。"
   const body = words[0] || ""
-  if (words.length > 1 || body && (!/^\d{2,3}$/.test(body) || Number(body) < 50 || Number(body) > 500)) return "类型可选：综合画像、正画像、负画像、找对象、克隆人格；发言数量为 50–500。"
+  if (words.length > 1 || body && (!/^\d{2,4}$/.test(body) || Number(body) < 50 || Number(body) > 2000)) return "类型可选：综合画像、正画像、负画像、找对象、克隆人格；发言数量为 50–2000。"
   const actor = { userId: String(e.user_id || ""), admin: master && e.isMaster === true }
   try {
     let report: PortraitReport

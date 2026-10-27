@@ -33,6 +33,7 @@ interface RenderInput extends UnknownRecord {
   name?: unknown
   title?: unknown
   subtitle?: unknown
+  headerTag?: unknown
   markdown?: unknown
   content?: unknown
   footer?: unknown
@@ -215,7 +216,8 @@ export function buildThemedHtml(html: string, input: RenderInput = {}): string {
     ? html.replace(/<head\b[^>]*>/i, match => `${match}${contentStyles}`)
     : `<!doctype html><html><head>${contentStyles}</head><body>${html}</body></html>`
   const content = `<iframe name="yui-html-content" id="html-content-frame" sandbox="allow-scripts" srcdoc="${escapeHtml(contentDocument)}" style="display:block;width:100%;height:1px;border:0;margin:0"></iframe>`
-  const frame = buildDocumentFrame(compactText(input.title || "HTML 渲染", 100), compactText(input.subtitle, 160), content)
+  const headerTag = input.headerTag === undefined ? "HTML" : compactText(input.headerTag, 40)
+  const frame = buildDocumentFrame(compactText(input.title || "HTML 渲染", 100), compactText(input.subtitle, 160), content, renderFooter("html"), headerTag)
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><style>${htmlRenderBaseCss}\n${htmlRenderDocumentCss}</style></head><body>${frame}</body></html>`
 }
 

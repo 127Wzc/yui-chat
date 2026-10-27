@@ -1014,10 +1014,13 @@ function validateRuntimeNumbers(config: ConfigRecord, issues: ValidationIssue[])
     if (!portrait.defaultType || findPortraitType(portrait.defaultType)?.id !== portrait.defaultType) add(issues, "error", "memory.portrait.defaultType", "默认画像类型必须为内置类型")
     if (portrait.modelName && !(Array.isArray(config.models) && config.models.some(value => section(value).name === portrait.modelName && section(section(value).capabilities).chat !== false))) add(issues, "error", "memory.portrait.modelName", "画像模型必须指向对话模型")
   }
+  positiveNumber(issues, "memory.portrait.historyCount", portrait.historyCount, { min: 50, max: 2000 })
+  positiveNumber(issues, "memory.portrait.maxTokens", portrait.maxTokens, { min: 1024, max: 65536 })
+  const portraitInputLimit = portrait.inputTokenLimit == null || typeof portrait.inputTokenLimit === "string" && !portrait.inputTokenLimit.trim() ? NaN : Number(portrait.inputTokenLimit)
+  if (!Number.isFinite(portraitInputLimit) || (portraitInputLimit !== 0 && portraitInputLimit < 3000)) {
+    add(issues, "error", "memory.portrait.inputTokenLimit", "画像输入 Token 上限须为 0（不限制）或至少 3000")
+  }
   const numericRanges: Array<[string, unknown, number, number]> = [
-    ["memory.portrait.historyCount", portrait?.historyCount, 50, 500],
-    ["memory.portrait.inputTokenLimit", portrait?.inputTokenLimit, 3000, 100000],
-    ["memory.portrait.maxTokens", portrait?.maxTokens, 1024, 10000],
     ["memory.retention.shortTermHours", config.memory?.retention?.shortTermHours, 1, 8760],
     ["memory.retention.episodeDays", config.memory?.retention?.episodeDays, 1, 3650],
     ["memory.retention.expiredGraceDays", config.memory?.retention?.expiredGraceDays, 0, 3650],
