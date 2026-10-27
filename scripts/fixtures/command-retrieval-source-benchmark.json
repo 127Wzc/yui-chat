@@ -194,13 +194,13 @@
     },
     {
       "file": "plugins/yui-chat/apps/chat.ts",
-      "sha256": "cbd5df11c95ddf6d1bf460e305e0e0b77336686a71524c9fdd5f46d7805bf488",
-      "lines": 539
+      "sha256": "267dfa3c96282c1dbefdac27ca7d2675691e745968418a84875167ec80db3512",
+      "lines": 543
     },
     {
       "file": "plugins/yui-chat/apps/master.ts",
-      "sha256": "fbd0d4b4496f1a276c3e71ed291c83fef01b97ae1726cf8fe6c13d1b1ad0f3e9",
-      "lines": 105
+      "sha256": "17df88c92f3450af5d6988e974243bae515abbd24f92430ba6e293bcddd693b6",
+      "lines": 106
     },
     {
       "file": "plugins/yui-chat/apps/commands/memory.ts",
@@ -1369,14 +1369,14 @@
       "evidence": [
         {
           "file": "plugins/yui-chat/apps/chat.ts",
-          "startLine": 532,
-          "endLine": 532,
+          "startLine": 536,
+          "endLine": 536,
           "claim": "注册规则、处理入口及声明权限"
         },
         {
           "file": "plugins/yui-chat/apps/chat.ts",
-          "startLine": 198,
-          "endLine": 203,
+          "startLine": 201,
+          "endLine": 206,
           "claim": "结束个人当前对话，重新开始会话。"
         }
       ]
@@ -1400,14 +1400,14 @@
       "evidence": [
         {
           "file": "plugins/yui-chat/apps/master.ts",
-          "startLine": 80,
-          "endLine": 80,
+          "startLine": 81,
+          "endLine": 81,
           "claim": "注册规则、处理入口及声明权限"
         },
         {
           "file": "plugins/yui-chat/apps/chat.ts",
-          "startLine": 245,
-          "endLine": 253,
+          "startLine": 248,
+          "endLine": 256,
           "claim": "主人结束全部 Yui 对话并清理相关会话运行状态。"
         }
       ]
@@ -1431,14 +1431,14 @@
       "evidence": [
         {
           "file": "plugins/yui-chat/apps/master.ts",
-          "startLine": 81,
-          "endLine": 81,
+          "startLine": 82,
+          "endLine": 82,
           "claim": "注册规则、处理入口及声明权限"
         },
         {
           "file": "plugins/yui-chat/apps/chat.ts",
-          "startLine": 484,
-          "endLine": 509,
+          "startLine": 487,
+          "endLine": 512,
           "claim": "向主人提供一次性 Yui 管理面板登录入口。"
         }
       ]
@@ -1462,14 +1462,14 @@
       "evidence": [
         {
           "file": "plugins/yui-chat/apps/master.ts",
-          "startLine": 82,
-          "endLine": 82,
+          "startLine": 83,
+          "endLine": 83,
           "claim": "注册规则、处理入口及声明权限"
         },
         {
           "file": "plugins/yui-chat/apps/chat.ts",
-          "startLine": 272,
-          "endLine": 296,
+          "startLine": 275,
+          "endLine": 299,
           "claim": "查看 Yui 配置、模型与运行诊断摘要。"
         }
       ]
@@ -1493,14 +1493,14 @@
       "evidence": [
         {
           "file": "plugins/yui-chat/apps/chat.ts",
-          "startLine": 533,
-          "endLine": 533,
+          "startLine": 537,
+          "endLine": 537,
           "claim": "注册规则、处理入口及声明权限"
         },
         {
           "file": "plugins/yui-chat/apps/chat.ts",
-          "startLine": 255,
-          "endLine": 261,
+          "startLine": 258,
+          "endLine": 264,
           "claim": "为当前用户切换文本、图片或语音回复模式。"
         }
       ]
@@ -1524,8 +1524,8 @@
       "evidence": [
         {
           "file": "plugins/yui-chat/apps/chat.ts",
-          "startLine": 526,
-          "endLine": 526,
+          "startLine": 529,
+          "endLine": 529,
           "claim": "注册规则、处理入口及声明权限"
         },
         {
@@ -1617,14 +1617,14 @@
       "evidence": [
         {
           "file": "plugins/yui-chat/apps/chat.ts",
-          "startLine": 531,
-          "endLine": 531,
+          "startLine": 535,
+          "endLine": 535,
           "claim": "注册规则、处理入口及声明权限"
         },
         {
           "file": "plugins/yui-chat/apps/chat.ts",
-          "startLine": 230,
-          "endLine": 233,
+          "startLine": 233,
+          "endLine": 236,
           "claim": "列出当前用户的定时任务。"
         }
       ]
@@ -1648,14 +1648,14 @@
       "evidence": [
         {
           "file": "plugins/yui-chat/apps/master.ts",
-          "startLine": 78,
-          "endLine": 78,
+          "startLine": 79,
+          "endLine": 79,
           "claim": "注册规则、处理入口及声明权限"
         },
         {
           "file": "plugins/yui-chat/apps/chat.ts",
-          "startLine": 235,
-          "endLine": 243,
+          "startLine": 238,
+          "endLine": 246,
           "claim": "主人查看所有人的定时任务及所有者。"
         }
       ]
@@ -1679,14 +1679,14 @@
       "evidence": [
         {
           "file": "plugins/yui-chat/apps/master.ts",
-          "startLine": 92,
-          "endLine": 92,
+          "startLine": 93,
+          "endLine": 93,
           "claim": "注册规则、处理入口及声明权限"
         },
         {
           "file": "plugins/yui-chat/apps/chat.ts",
-          "startLine": 321,
-          "endLine": 333,
+          "startLine": 324,
+          "endLine": 336,
           "claim": "控制 Yui 在本群或指定作用域停止回应。"
         }
       ]

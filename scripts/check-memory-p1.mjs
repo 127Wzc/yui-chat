@@ -553,8 +553,8 @@ try {
   const memberWorkspace = await sqliteMemoryStore.getGroupWorkspace("member-list-group")
   assert.deepEqual(
     memberWorkspace.members.map(member => ({ userId: member.userId, memoryCount: member.memoryCount })),
-    [{ userId: "member-list-a", memoryCount: 2 }, { userId: "member-list-b", memoryCount: 1 }],
-    "group member workspace should hide members without memory blocks and order by memory count descending",
+    [{ userId: "member-list-a", memoryCount: 2 }, { userId: "member-list-b", memoryCount: 1 }, { userId: "member-list-c", memoryCount: 0 }],
+    "group member workspace includes captured speakers for portrait generation and orders by memory count descending",
   )
 
   await configStore.update(config => { config.memory.groupCapture.consolidation.enabled = true })
@@ -624,6 +624,25 @@ try {
   const { MemoryTab } = await import("../output/runtime/web/client/features/memory/memory-tab.js")
   let clientView
   await renderToString(createSSRApp({ setup() { clientView = MemoryTab.setup().memoryView; return () => null } }))
+  const { components } = await import("../output/runtime/web/client/ui/components.js")
+  const { CaptureSettingField, MemoryCaptureDrawers } = await import("../output/runtime/web/client/features/memory/memory-capture-drawers.js")
+  const { compile } = await import("vue")
+  for (const component of [CaptureSettingField, MemoryCaptureDrawers]) {
+    const errors = []
+    compile(component.template, { onError: error => errors.push(error.message), onWarn() {} })
+    assert.deepEqual(errors, [], "memory settings templates must compile")
+  }
+  // 统一字段仍绑定实际采集草稿，编辑与恢复保留覆盖语义。
+  clientView.updateCaptureField("tokenLimit", 45000)
+  assert.equal(clientView.captureDraft.useDefault.tokenLimit, false)
+  const fieldApp = createSSRApp({ components: { CaptureSettingField }, setup: () => ({ view: clientView }), template: '<CaptureSettingField :view="view" field-name="tokenLimit" label="输入 Token 上限" />' })
+  for (const [name, component] of Object.entries(components)) fieldApp.component(name, component)
+  const customFieldHtml = await renderToString(fieldApp)
+  assert(customFieldHtml.includes('value="45000"') && customFieldHtml.includes('将输入 Token 上限恢复为系统默认'), "custom values and their specific reset action must render together")
+  clientView.resetCaptureField("tokenLimit")
+  assert.equal(clientView.captureDraft.useDefault.tokenLimit, true)
+  assert.equal(clientView.captureDraft.tokenLimit, clientView.captureDefaults.tokenLimit)
+
   const originalClientFetch = global.fetch
   const pendingDetails = []
   global.fetch = () => new Promise(resolve => pendingDetails.push(payload => resolve({ ok: true, json: async () => payload })))

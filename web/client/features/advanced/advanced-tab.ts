@@ -1,5 +1,5 @@
-import { computed, reactive, ref, watch } from "vue"
-import { confirmAction, refreshSlices, request, saveConfigPatch, setDeveloperMode, setTab, store, toast } from "../../app/store/store.js"
+import { computed, onBeforeUnmount, reactive, ref, watch } from "vue"
+import { confirmAction, refreshSlices, request, saveConfigPatch, setDeveloperMode, setDirtyScope, setTab, store, toast } from "../../app/store/store.js"
 import { toJson } from "../../shared/format.js"
 import { asRecord, asRecords, errorMessage, type UnknownRecord } from "../../shared/data.js"
 import { SystemRenderStrategyPanel } from "../tools/system-render-strategy-panel.js"
@@ -29,7 +29,7 @@ interface SchemaManifest extends UnknownRecord {
   summary?: { tabs?: number; sections?: number; fields?: number; sensitiveFields?: number; advancedFields?: number }
 }
 interface ManifestTab { sections?: string[] }
-interface ModelConfig { name?: string; modelIdentifier?: string; capabilities?: { chat?: boolean; embedding?: boolean } }
+interface ModelConfig { purpose?: string; adapter?: string; name?: string; modelIdentifier?: string; capabilities?: { chat?: boolean; embedding?: boolean } }
 interface ConsolidationConfig { modelName?: string; maxTokens?: number; minConfidence?: number; maxWindowsPerScan?: number; schedule?: { mode?: string; time?: string; cron?: string } }
 interface GroupCaptureConfig {
   defaultRetentionDays?: number
@@ -42,7 +42,7 @@ interface AdvancedConfig extends UnknownRecord {
   logging?: { level?: string; history?: UnknownRecord }
   system?: { backups?: { maxFiles?: number; maxAgeDays?: number } }
   security?: { linkSafety?: { allowPrivateHosts?: boolean; trustedPrivateDnsBypass?: boolean; screenshotAllowedHosts?: string[] } }
-  memory?: { retrieval?: { embeddingTokensPerDay?: number; resultLimit?: number; promptTokenBudget?: number; embeddingModel?: string; adaptiveVector?: boolean }; groupCapture?: GroupCaptureConfig }
+  memory?: { retrieval?: { embeddingTokensPerDay?: number; resultLimit?: number; promptTokenBudget?: number; embeddingModel?: string; rerankEnabled?: boolean; rerankModel?: string; rerankMaxCandidates?: number; rerankInputTokenBudget?: number; rerankTimeoutMs?: number; rerankCacheTtlMs?: number; rerankMinScore?: number | null }; groupCapture?: GroupCaptureConfig }
   knowledge?: { indexing?: { globalEmbeddingTokensPerDay?: number } }
   modelTasks?: { replyer?: { modelList?: string[] } }
   models?: ModelConfig[]
@@ -94,9 +94,19 @@ export const AdvancedTab = {
       captureRetrievalResultLimit: config.value.memory?.retrieval?.resultLimit ?? 3,
       capturePromptTokenBudget: config.value.memory?.retrieval?.promptTokenBudget ?? 2000,
       captureEmbeddingModel: config.value.memory?.retrieval?.embeddingModel || "",
-      captureAdaptiveVector: config.value.memory?.retrieval?.adaptiveVector !== false,
+      memoryRerankEnabled: config.value.memory?.retrieval?.rerankEnabled === true,
+      memoryRerankModel: config.value.memory?.retrieval?.rerankModel || "",
+      memoryRerankCandidates: config.value.memory?.retrieval?.rerankMaxCandidates ?? 20,
+      memoryRerankTokenBudget: config.value.memory?.retrieval?.rerankInputTokenBudget ?? 6000,
+      memoryRerankTimeout: config.value.memory?.retrieval?.rerankTimeoutMs ?? 10000,
+      memoryRerankCache: config.value.memory?.retrieval?.rerankCacheTtlMs ?? 300000,
+      memoryRerankMinScore: config.value.memory?.retrieval?.rerankMinScore ?? "",
     })
     const activeSection = ref(store.systemSettingsSection || "status")
+    const captureState = () => JSON.stringify(Object.entries(draft).filter(([key]) => key.startsWith("capture") || key.startsWith("memoryRerank")))
+    const captureBaseline = ref(captureState())
+    watch(captureState, value => setDirtyScope("system:memory-capture", value !== captureBaseline.value), { flush: "sync" })
+    onBeforeUnmount(() => setDirtyScope("system:memory-capture", false))
     const showJsonDrawer = ref(false)
     const webTokenVisible = ref(false)
     const webTokenLoaded = ref(false)
@@ -195,6 +205,12 @@ export const AdvancedTab = {
         .map(model => ({ value: model.name, label: model.modelIdentifier && model.modelIdentifier !== model.name ? `${model.name} · ${model.modelIdentifier}` : model.name })),
     ])
 
+    const memoryRerankModelOptions = computed(() => [
+      { value: "", label: "单独选择记忆重排模型" },
+      ...(config.value.models || []).filter(model => model.name && (model.purpose === "rerank" || model.adapter === "rerank"))
+        .map(model => ({ value: model.name, label: model.modelIdentifier && model.modelIdentifier !== model.name ? `${model.name} · ${model.modelIdentifier}` : model.name })),
+    ])
+
     const manifestMetrics = computed(() => {
       const s = manifest.value.summary || {}
       return [
@@ -235,7 +251,15 @@ export const AdvancedTab = {
       draft.captureRetrievalResultLimit = Number(config.value.memory?.retrieval?.resultLimit) || 3
       draft.capturePromptTokenBudget = Number(config.value.memory?.retrieval?.promptTokenBudget) || 2000
       draft.captureEmbeddingModel = String(config.value.memory?.retrieval?.embeddingModel || "")
-      draft.captureAdaptiveVector = config.value.memory?.retrieval?.adaptiveVector !== false
+      draft.memoryRerankEnabled = config.value.memory?.retrieval?.rerankEnabled === true
+      draft.memoryRerankModel = config.value.memory?.retrieval?.rerankModel || ""
+      draft.memoryRerankCandidates = config.value.memory?.retrieval?.rerankMaxCandidates ?? 20
+      draft.memoryRerankTokenBudget = config.value.memory?.retrieval?.rerankInputTokenBudget ?? 6000
+      draft.memoryRerankTimeout = config.value.memory?.retrieval?.rerankTimeoutMs ?? 10000
+      draft.memoryRerankCache = config.value.memory?.retrieval?.rerankCacheTtlMs ?? 300000
+      draft.memoryRerankMinScore = config.value.memory?.retrieval?.rerankMinScore ?? ""
+      captureBaseline.value = captureState()
+      setDirtyScope("system:memory-capture", false)
     }
     async function saveDeveloperSettings() {
       try {
@@ -407,7 +431,13 @@ export const AdvancedTab = {
           "memory.retrieval.resultLimit": retrievalResultLimit,
           "memory.retrieval.promptTokenBudget": promptTokenBudget,
           "memory.retrieval.embeddingModel": draft.captureEmbeddingModel || "",
-          "memory.retrieval.adaptiveVector": draft.captureAdaptiveVector,
+          "memory.retrieval.rerankEnabled": draft.memoryRerankEnabled,
+          "memory.retrieval.rerankModel": draft.memoryRerankModel,
+          "memory.retrieval.rerankMaxCandidates": Number(draft.memoryRerankCandidates),
+          "memory.retrieval.rerankInputTokenBudget": Number(draft.memoryRerankTokenBudget),
+          "memory.retrieval.rerankTimeoutMs": Number(draft.memoryRerankTimeout),
+          "memory.retrieval.rerankCacheTtlMs": Number(draft.memoryRerankCache),
+          "memory.retrieval.rerankMinScore": draft.memoryRerankMinScore === "" ? null : Number(draft.memoryRerankMinScore),
         })
         await syncDraft()
         toast("群记忆系统默认已保存；继承默认的群会自动同步", "success")
@@ -539,7 +569,7 @@ export const AdvancedTab = {
     return {
       draft, showJsonDrawer, webTokenVisible, webTokenLoaded, webTokenBusy, systemRenderPanel, webAddressPreview, configMeta, backups, manifest, activeSection, systemSectionItems,
       systemState, systemTitle, systemDescription, systemMetrics, diagnosticRows, manifestMetrics,
-      captureDefaults, captureModelOptions, memoryEmbeddingModelOptions, defaultReplyModelName,
+      captureDefaults, captureModelOptions, memoryEmbeddingModelOptions, memoryRerankModelOptions, defaultReplyModelName,
       sectionPills, saveJson, saveDeveloperSettings, loadWebAuthToken, saveWebAddress, saveWebAuthToken, copyWebAuthToken, saveLinkSafety, saveBackupPolicy, createBackup, loadBackupDetails, saveCaptureDefaults, requestRestore, requestDeleteBackup,
       toggleDeveloperMode, applyDiagnosticAction, shortTime, formatBytes, backupContents, store,
     }
@@ -673,13 +703,22 @@ export const AdvancedTab = {
           </div>
 
           <div class="form-section">
-            <div class="developer-section-head"><div><b>对话记忆召回</b><span>全文命中少于此数量时，才会补一次向量召回；单群可单独覆盖。</span></div></div>
+            <div class="developer-section-head"><div><b>对话记忆召回</b><span>需要记忆时进行全文与向量双召回，融合后选出默认条数；模型配置独立于知识库 RAG。</span></div></div>
             <div class="form-grid capture-token-limits">
-              <Field label="记忆召回条数（向量触发阈值）" type="number" v-model="draft.captureRetrievalResultLimit" hint="1–20；默认 3，同时决定自动注入的记忆条数" />
-              <Field label="记忆提示 Token 预算" type="number" v-model="draft.capturePromptTokenBudget" hint="30–10,000；默认 2,000，限制每轮注入模型的记忆长度" />
+              <Field label="自动注入记忆条数" type="number" v-model="draft.captureRetrievalResultLimit" description="1–20；默认 3，单群可覆盖。" />
+              <Field label="记忆提示 Token 预算" type="number" v-model="draft.capturePromptTokenBudget" description="30–10,000；默认 2,000，仅限制日常自动注入。" />
             </div>
-            <Field label="记忆向量模型" type="select" :options="memoryEmbeddingModelOptions" v-model="draft.captureEmbeddingModel" tip="不选模型时只使用本地全文检索，不产生记忆召回 embedding 调用。" />
-            <label class="settings-toggle-item"><div><strong>自适应向量补召回</strong><small>开启后仅在问题可能需要个人记忆且全文命中不足时调用向量模型。</small></div><Switch v-model="draft.captureAdaptiveVector" /></label>
+            <Field label="记忆向量模型" type="select" :options="memoryEmbeddingModelOptions" v-model="draft.captureEmbeddingModel" description="独立选择，与知识库向量模型互不联动；留空只进行本地全文检索。" />
+            <Field label="启用记忆重排" type="switch" v-model="draft.memoryRerankEnabled" description="对少量融合候选重新评估相关性；关闭、超时或失败时使用 RRF 融合排名。" />
+            <Field label="记忆重排模型" type="select" :options="memoryRerankModelOptions" v-model="draft.memoryRerankModel" :disabled="!draft.memoryRerankEnabled" description="单独选择专用重排模型，不继承知识库 RAG 或全局重排任务。" />
+            <details v-if="draft.memoryRerankEnabled" class="capture-default-prompt"><summary>重排候选、预算与缓存</summary><div class="form-grid" style="padding:12px">
+              <Field label="重排候选上限" type="number" v-model="draft.memoryRerankCandidates" description="1–30；默认 20。" />
+              <Field label="重排输入 Token 预算" type="number" v-model="draft.memoryRerankTokenBudget" description="200–30000；默认 6000。" />
+              <Field label="重排超时（毫秒）" type="number" v-model="draft.memoryRerankTimeout" description="1000–60000；默认 10000。" />
+              <Field label="重排缓存（毫秒）" type="number" v-model="draft.memoryRerankCache" description="0–86400000；默认 300000，0 为关闭。" />
+              <Field label="重排最低分" type="number" v-model="draft.memoryRerankMinScore" description="留空不额外过滤；不同模型的分数含义可能不同。" />
+            </div></details>
+            <p class="muted small">明确要求“查询我的全部记忆并总结”时，会独立读取本人全局和本群个人的有效记忆，包含低活跃记忆，不受默认条数限制；内容过大时分页并标明剩余，不会自动扩大日常注入。</p>
           </div>
         </div>
       </Panel>

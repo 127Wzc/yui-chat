@@ -4,6 +4,7 @@ import { memoryRepository } from "./repository.js"
 import { hasMemoryRecallIntent, hasSpeakerComparisonIntent, mentionedUserIds, recallScopesFor, scopesFor } from "./scopes.js"
 import type { MemoryScope } from "./scopes.js"
 import { statusFor } from "./decay.js"
+import { rerankCandidates } from "../models/retrieval-rerank.js"
 import { vectorRecall } from "./vector-recall.js"
 
 type UnknownRecord = Record<string, unknown>
@@ -87,11 +88,31 @@ export async function resolveMemoryRecallPlan(event: UnknownRecord = {}, query: 
   }
 }
 
-function score(item: UnknownRecord, index = 0): number {
-  const status = statusFor(item)
-  const statusScore = ({ active: 3, warm: 2, cold: 1 } as Record<string, number>)[status] || 0
-  const scopeScore = ({ user: 4, user_group: 3, group: 2 } as Record<string, number>)[String(item.scope_type)] || 0
-  return Number(item.score || 0) + Number(item.importance || 0) * 3 + Number(item.confidence || 0) * 2 + statusScore + scopeScore - index * 0.001
+function secondaryScore(item: UnknownRecord): number {
+  const activity = ({ active: 3, warm: 2, cold: 1 } as Record<string, number>)[statusFor(item)] || 0
+  return Number(item.importance || 0) + Number(item.confidence || 0) + activity * 0.1
+}
+
+/** 排名融合，避免将 BM25 与余弦分数直接相加；业务权重仅在融合分相同时微调。 */
+export function fuseMemoryCandidates(lexical: UnknownRecord[], semantic: UnknownRecord[], scopes: MemoryScope[]): UnknownRecord[] {
+  const allowed = new Set(scopes.map(s => JSON.stringify([s.scopeType, s.ownerId, s.groupId || ""])))
+  const valid = (item: UnknownRecord) => allowed.has(JSON.stringify([item.scope_type, item.owner_id, item.group_id || ""]))
+    && ["active", "warm", "cold"].includes(statusFor(item)) && item.type !== "profile" && item.type !== "short"
+    && !(item.type === "episode" && item.source === "interaction")
+  const fused = new Map<string, UnknownRecord>()
+  for (const [method, items] of [["fts", lexical], ["vector", semantic]] as const) {
+    const seen = new Set<string>()
+    for (const [rank, item] of items.entries()) {
+      const id = String(item.id || "")
+      if (!id || seen.has(id) || !valid(item)) continue
+      seen.add(id)
+      const current = fused.get(id) || { ...item, fusionScore: 0, retrievalMethods: [] }
+      current.fusionScore = Number(current.fusionScore) + 1 / (60 + rank + 1)
+      ;(current.retrievalMethods as string[]).push(method)
+      fused.set(id, current)
+    }
+  }
+  return [...fused.values()].sort((a, b) => Number(b.fusionScore) - Number(a.fusionScore) || secondaryScore(b) - secondaryScore(a) || String(a.id).localeCompare(String(b.id)))
 }
 
 function boundedRetrievalLimit(value: unknown, fallback = 3): number {
@@ -128,28 +149,25 @@ export async function retrieveMemory(e: UnknownRecord = {}, query: unknown, opti
   const scopes: MemoryScope[] = configuredScopes || plan?.scopes || scopesFor(e)
   const allowVector = options.allowVector === true || (options.allowVector !== false && (plan?.allowVector || options.limit !== undefined))
   const limit = await resolveMemoryRetrievalLimit(e, options.limit)
-  const rows = query
-    ? await memoryRepository.search(scopes, query, { limit: options.candidateLimit || 20 })
-    : await memoryRepository.list(scopes, { limit, includeCold: false })
-  let candidates = rows
-  if (query && allowVector && vectorRecall.enabled()) {
-    // adaptiveVector=true 时只在 FTS 命中不足目标条数才补语义候选（节约 API）；false 则每次都补。
-    const root = record(configStore.get())
-    const memory = record(root.memory)
-    const retrieval = record(memory.retrieval)
-    const adaptive = retrieval.adaptiveVector !== false
-    if ((!adaptive || rows.length < limit) && await vectorRecall.hasAnyMemory(scopes)) {
-      const vectorRows = await vectorRecall.queryMemoryVectors(scopes, query, { event: e })
-      // 按 id 去重合并：同一条记忆保留 FTS 行（bm25 分数），向量行只补 FTS 没召回的部分；
-      // 向量层失败会返回空数组，不影响 FTS 结果。
-      const seen = new Set(rows.map(row => String(row.id || "")))
-      candidates = [...rows, ...vectorRows.filter(row => !seen.has(String(row.id || "")))]
-    }
+  const root = record(configStore.get()), memory = record(root.memory), retrieval = record(memory.retrieval)
+  if (!query) return fuseMemoryCandidates(await memoryRepository.list(scopes, { limit, includeCold: false }), [], scopes).slice(0, limit)
+  // 仅在本轮需要记忆时运行语义路；一旦运行，不再按 FTS 命中数量跳过。
+  const lexicalTask = memoryRepository.search(scopes, query, { limit: options.candidateLimit || retrieval.ftsCandidateLimit || 20 })
+  const semanticTask = allowVector && Number(retrieval.vectorCandidateLimit) !== 0 && vectorRecall.enabled()
+    ? vectorRecall.queryMemoryVectors(scopes, query, { event: e })
+    : Promise.resolve([])
+  const [lexical, semantic] = await Promise.allSettled([lexicalTask, semanticTask])
+  if (lexical.status === "rejected" && semantic.status === "rejected") throw lexical.reason
+  const candidates = fuseMemoryCandidates(lexical.status === "fulfilled" ? lexical.value : [], semantic.status === "fulfilled" ? semantic.value : [], scopes)
+  let ranked = candidates
+  if (allowVector && retrieval.rerankEnabled === true && String(retrieval.rerankModel || "").trim() && candidates.length > 1) {
+    const result = await rerankCandidates(e, String(query), candidates.map(item => ({ ...item, id: String(item.id), title: "记忆", content: String(item.text || ""), score: Number(item.fusionScore) })), { ...retrieval, rerankTask: "rerank" }, options.signal as AbortSignal | undefined, false, "memory")
+    ranked = result.results
   }
-  return candidates
-    .map((item, index) => ({ ...item, computedStatus: statusFor(item), _score: score(item, index) }))
-    .filter(item => ["active", "warm", "cold"].includes(item.computedStatus) && item.type !== "profile" && item.type !== "short" && !(item.type === "episode" && item.source === "interaction"))
-    .sort((a, b) => b._score - a._score)
-    .slice(0, limit)
-    .map(({ _score, ...item }) => item)
+  // 来源在外部调用期间可能撤回、改写或过期；投给模型前重新检查。
+  const current = new Map((await memoryRepository.getMany(ranked.map(item => String(item.id)))).map(item => [String(item.id), item]))
+  return ranked.filter(item => {
+    const latest = current.get(String(item.id))
+    return latest && latest.text === item.text && fuseMemoryCandidates([latest], [], scopes).length > 0
+  }).slice(0, limit)
 }

@@ -172,6 +172,10 @@ flowchart LR
 | state | `runtime_config` | 单行运行配置覆盖 | `id=1`, `schema_version`, `revision`, `overrides_json` |
 | state | `conversations` | 临时对话历史 | `conversation_key`, `history_json`, `expires_at` |
 | state | `memory_items` | 长期事实、画像、群提炼结果 | 作用域、正文、事实键值、状态、过期时间 |
+| state | `portrait_type_defaults` | 本群/本群成员的默认画像类型 | 群、可空用户、内置类型 ID |
+| state | `portrait_reports` | 各类型月度画像及最近三版本 | 群、用户、类型、版本、任务快照、结构化报告、来源哈希、失效状态 |
+| state | `portrait_monthly_usage` | 独立月度成功额度 | 群、用户、类型、北京时间月份、报告 ID；与版本清理解耦 |
+| state | `portrait_jobs` | 按需画像任务及管理员操作记录 | 操作者、强制重提炼、运行状态、通用错误；同群同用户同类型仅一条运行任务 |
 | state | `memory_evidence` | 记忆的最小证据引用 | `memory_id`, `source_event_id`, `source_type`, `message_id` |
 | state | `memory_fts` | 记忆 FTS5 投影 | `memory_id`, `text` |
 | state | `knowledge_bases` | 知识库设置与当前向量空间 | 模型、维度、检索设置、`active_vector_space_id` |

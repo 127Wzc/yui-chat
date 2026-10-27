@@ -62,6 +62,7 @@ interface GroupPolicy extends UnknownRecord {
 }
 
 interface NormalizedEvent extends UnknownRecord {
+  historical?: boolean
   id: string
   scopeType: string
   scopeId: string
@@ -915,7 +916,7 @@ export class GroupCaptureStore {
     return [...this.policies.values()]
   }
 
-  record(e: GroupEvent = {}): boolean {
+  record(e: GroupEvent = {}, options: { historical?: boolean } = {}): boolean {
     const config = groupConfig()
     if (!sqliteClient.status.available || config.enabled === false || !isGroupEvent(e) || isSelfMessage(e)) return false
     const scopeId = String(e.group_id || "").trim()
@@ -923,6 +924,7 @@ export class GroupCaptureStore {
     const policy = this.policies.get(this.key("group", scopeId))
     if (!scopeId || !policy?.enabled) return false
     const event = normalizeEvent(e, { retention_days: policy.retentionDays })
+    event.historical = options.historical === true
     if (!event.messageId || !event.senderId) return false
     const cap = number(config.maxPendingMessages, 2000, 100, 50000)
     if (this.queue.length >= cap) {
@@ -978,7 +980,7 @@ export class GroupCaptureStore {
         return { written: 0 }
       }
       try {
-        await this.syncSenderIdentities(batch)
+        await this.syncSenderIdentities(batch.filter(item => !item.historical))
       } catch (error) {
         // 称呼记忆只是元数据镜像，失败不影响已落盘的原文批次，下一批消息会再次触发。
         this.noteError(error)
@@ -1577,7 +1579,7 @@ export class GroupCaptureStore {
     const policy = this.policies.get(this.key(type, idValue))
     if (!policy?.enabled) throw new Error("请先保存并开启这个群的消息采集。")
     const maxMessages = integer(groupConfig().historyBackfillMaxMessages, 500, 1, 5000)
-    const sinceAt = parseMoment(options.sinceAt)
+    const sinceAt = Math.max(parseMoment(options.sinceAt), options.respectRetention === true && Number(policy.retentionDays) > 0 ? now() - Number(policy.retentionDays) * DAY : 0)
     // 按日期补录默认拉到单次上限；按数量补录保持旧默认 100 条。
     const limit = integer(options.limit, sinceAt ? maxMessages : 100, 1, maxMessages)
     // 起点游标：指定消息 ID 从该消息继续向前，或一键从本群已存最旧一条继续；
@@ -1588,6 +1590,7 @@ export class GroupCaptureStore {
       startCursor = String(oldestStored?.message_id || "")
     }
     const started = now()
+    const backfillEpoch = this.clearEpoch(this.key(type, idValue))
     await sqliteClient.run(
       "UPDATE group_memory_policies SET last_backfill_at=?, last_backfill_status='running', last_backfill_requested=?, last_backfill_received=0, last_backfill_saved=0, last_backfill_error='' WHERE group_id=?",
       [started, limit, idValue],
@@ -1616,14 +1619,35 @@ export class GroupCaptureStore {
       let cursor = startCursor
       const seenCursors = new Set(startCursor ? [startCursor] : [])
       while (received < limit) {
+        if (options.queueExtraction === false) {
+          const current = await sqliteClient.get("SELECT enabled FROM group_memory_policies WHERE group_id=?", [idValue])
+          if (!current?.enabled || groupConfig().enabled === false) throw new Error("本群消息采集已暂停。")
+        }
         const pageSize = Math.min(200, limit - received)
         let response
         try {
-          response = await chatHistory.call(group, cursor || 0, pageSize)
+          const signal = options.signal instanceof AbortSignal ? options.signal : undefined
+          signal?.throwIfAborted()
+          // 历史读取本身可能不可取消；超时后不再消费或持久化迟到的结果。
+          let timer: ReturnType<typeof setTimeout> | undefined
+          let abort: (() => void) | undefined
+          try {
+            response = await new Promise<unknown>((resolve, reject) => {
+              abort = () => reject(signal?.reason || new Error("历史读取已取消"))
+              timer = setTimeout(() => reject(new Error("历史读取超时")), 15000)
+              signal?.addEventListener("abort", abort, { once: true })
+              Promise.resolve().then(() => chatHistory.call(group, cursor || 0, pageSize)).then(resolve, reject)
+            })
+          } finally {
+            if (timer) clearTimeout(timer)
+            if (abort) signal?.removeEventListener("abort", abort)
+          }
+          signal?.throwIfAborted()
         } catch (err) {
           throw new Error(`读取群历史消息失败：${safeError(err)}`)
         }
-        const rows = historyRows(response)
+        if (backfillEpoch !== this.clearEpoch(this.key(type, idValue))) throw new Error("补录期间本群资料已清理，未写入迟到的历史消息。")
+        const rows = historyRows(response).slice(0, pageSize)
         if (!rows.length) {
           exhausted = true
           break
@@ -1637,7 +1661,7 @@ export class GroupCaptureStore {
           if (!oldest || rowTime < oldest.time) oldest = { time: rowTime, messageId }
           if (!senderId || !messageId) continue
           if (sinceAt && rowTime < sinceAt) continue
-          if (this.record({ ...row, isGroup: true, message_type: "group", group_id: idValue, user_id: senderId, message_id: messageId })) {
+          if (this.record({ ...row, isGroup: true, message_type: "group", group_id: idValue, user_id: senderId, message_id: messageId }, { historical: true })) {
             queued += 1
             capturedTimes.push(rowTime)
           }
@@ -1664,8 +1688,8 @@ export class GroupCaptureStore {
       await this.drain()
       const after = Number((await sqliteClient.get("SELECT COUNT(*) AS total FROM group_memory_messages WHERE group_id=?", [idValue]))?.total || 0)
       const saved = Math.max(0, after - before)
-      await this.markChangedDailyWindows(type, idValue, capturedTimes)
-      const windowsQueued = await this.queueBackfillWindows(type, idValue, capturedTimes)
+      if (options.queueExtraction !== false) await this.markChangedDailyWindows(type, idValue, capturedTimes)
+      const windowsQueued = options.queueExtraction === false ? 0 : await this.queueBackfillWindows(type, idValue, capturedTimes)
       await sqliteClient.run(
         "UPDATE group_memory_policies SET last_backfill_at=?, last_backfill_status='completed', last_backfill_received=?, last_backfill_saved=?, last_backfill_error='' WHERE group_id=?",
         [now(), received, saved, idValue],
@@ -1961,6 +1985,7 @@ export class GroupCaptureStore {
             { sql: "DELETE FROM group_memory_messages WHERE group_id=?", params: [idValue] },
             { sql: "DELETE FROM group_memory_extraction_jobs WHERE group_id=?", params: [idValue] },
             { sql: "UPDATE group_memory_policies SET last_daily_end=0, updated_at=? WHERE group_id=?", params: [now(), idValue] },
+            { sql: "UPDATE portrait_reports SET status='invalid' WHERE group_id=?", params: [idValue] },
           ])
           result.raw = Number(record(raw).changes || 0)
           result.windows = Number(record(windows).changes || 0)

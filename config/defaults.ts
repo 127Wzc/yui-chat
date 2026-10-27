@@ -9,6 +9,7 @@ export const defaultPersonaRuntimePrompt = [
   "找图用 image_media，绘画或修图用 generate_image，排版用 render_image，不互相替代。公式、计算推导优先用 render_image 的 markdown 辅助展示；需要展示 HTML 效果时用 html 渲染，单纯询问语法无需出图。渲染通常一次发送；生图后台受理只确认开始，不提前声称完成。",
   "用户说‘发歌’‘来首xx歌’‘播放某首歌’等时调用 music_play；未指定歌曲按场景选一首，成功后不重复投递。",
   "定时任务相关意图先用 schedule_task 查看当前用户任务，再按需创建或取消，使用真实任务 ID；时间不明确先问，正文只写提醒事项。memory_manage 只记稳定、确认的信息，删除须用户请求并使用查询所得 ID。",
+  "用户明确要求查询、列出或总结自己的全部记忆时，使用 memory_manage 的 list、all=true；将 nextCursor 原样传入 cursor 继续读取；若 restartRequired=true，说明资料变化，本轮未读完，未读完不得声称已全面总结。日常问题仍只使用默认相关记忆。",
   "结合当前消息、引用和最近上下文判断指代；只声称看到了本轮实际提供给模型的图片。群聊区分发言人，不泄露无关用户信息；仅在问题涉及成员个人信息时使用相关记忆，点名或打招呼不引用。",
   "本人禁言、屏蔽须明确自助请求；人物自主处罚仅用已启用且获授权的 persona_punish，先提醒，仅针对当前普通发言者持续骚扰、辱骂等行为。时长按严重程度选择，不超过配置上限（默认30天），不机械取最大值；不得因异议、拒绝或引用处罚，不得踢人、跨群或叠加延长，不借普通管理工具绕过限制。成功后说明原因、时长和到期恢复，提前解除须管理员或主人请求。",
   "仅在第一人称互动中被顺带提及且确实无需回应时输出 <EMPTY>；普通提问应回复，工具后的收束遵循运行时要求，不重复回复。操作信息不足先问；信息明确且本轮有相应能力时必须调用，不得只口头答应。不要无理由重复有副作用的操作，也不要把无法确认的结果说成成功。",
@@ -483,6 +484,13 @@ export const defaults = {
   },
   memory: {
     enabled: true,
+    portrait: {
+      defaultType: "positive",
+      historyCount: 200,
+      inputTokenLimit: 100000,
+      maxTokens: 10000,
+      modelName: "",
+    },
     injectProfile: true,
     injectRelevantFacts: true,
     maxFactsPerUser: 30,
@@ -501,8 +509,7 @@ export const defaults = {
       expiredGraceDays: 30,
     },
     retrieval: {
-      // 对话注入的记忆条数，同时作为 adaptiveVector 的 FTS 触发阈值。
-      // 当前默认 3 条，避免小规模记忆库在每轮对话都补一次向量召回。
+      // 普通对话融合、重排后的注入条数；显式读取全部个人记忆走独立列表。
       resultLimit: 3,
       promptTokenBudget: 2000,
       ftsCandidateLimit: 20,
@@ -513,8 +520,14 @@ export const defaults = {
       // 0 表示使用模型默认维度。
       embeddingDimensions: 0,
       embeddingTokensPerDay: 200000,
-      // true：FTS 命中不足时才调向量（节约 API）；false：配置模型后每次召回都调。
-      adaptiveVector: true,
+      // 记忆独立配置重排模型；不继承知识库模型或全局重排任务。
+      rerankEnabled: false,
+      rerankModel: "",
+      rerankMaxCandidates: 20,
+      rerankInputTokenBudget: 6000,
+      rerankTimeoutMs: 10000,
+      rerankCacheTtlMs: 300000,
+      rerankMinScore: null,
     },
     groupCapture: {
       // 是否启用群消息归档子系统；实际采集仍须由主人逐群开启策略。

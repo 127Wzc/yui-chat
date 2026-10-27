@@ -1,4 +1,5 @@
 import { runMemoryCommand, runMentionMemoryCommand } from "./commands/memory.js"
+import { runPortraitCommand } from "./commands/portrait.js"
 import { actionHelp } from "./actions.js"
 import { chatService } from "../core/chat/chat-service.js"
 import { commandObserver } from "../knowledge/command-observer.js"
@@ -166,6 +167,8 @@ export class YuiChatCommandHandlers extends hostRuntime.Plugin {
   async mentionMemoryCommand() { const message = await runMentionMemoryCommand(this.e); return message === false ? false : message ? this.reply(message, true) : true }
 
   async memoryCommand() { const message = await runMemoryCommand(this.e); return message ? this.reply(message, true) : true }
+  async portraitCommand() { const message = await runPortraitCommand(this.e, this.e.isMaster === true); return message ? this.reply(message, true) : true }
+  async masterPortraitCommand() { const message = await runPortraitCommand(this.e, true); return message ? this.reply(message, true) : true }
 
   async manageMemoryCommand() { const message = await runMemoryCommand(this.e, true); return message ? this.reply(message, true) : true }
 
@@ -524,6 +527,7 @@ export class YuiChat extends YuiChatCommandHandlers {
       priority: 1139,
       rule: [
         { reg: pluginCommandRule("我的记忆(?:\\s+[\\s\\S]*)?"), fnc: "memoryCommand" },
+        { reg: pluginCommandRule("(?:我的画像|查看画像|画像|正画像|负画像|找对象|克隆人格)(?:\\s+[\\s\\S]*)?"), fnc: "portraitCommand" },
         { reg: pluginCommandRule("帮助"), fnc: "pluginHelp" },
         { reg: pluginCommandRule("(?:快捷指令|指令说明)(?:\\s+[\\s\\S]*)?"), fnc: "actionsHelp" },
         { reg: pluginCommandRule("chat([\\s\\S]*)"), fnc: "chat" },

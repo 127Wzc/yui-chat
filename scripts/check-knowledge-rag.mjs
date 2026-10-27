@@ -155,7 +155,7 @@ try {
   // Exercise real rerank packing and cache logic with an isolated model fixture.
   const rerankExports={},rerankPrompts=[]
   const rerankRoot={models:[{name:"rank"}],modelTasks:{},apiProviders:[]}
-  vm.runInNewContext(ts.transpileModule(await fs.readFile(new URL("../knowledge/retrieval-rerank.ts",import.meta.url),"utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{
+  vm.runInNewContext(ts.transpileModule(await fs.readFile(new URL("../models/retrieval-rerank.ts",import.meta.url),"utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{
     exports:rerankExports,require:spec=>{
       if(spec==="node:crypto")return {default:crypto}
       if(spec.includes("config/store"))return {configStore:{get:()=>rerankRoot},dataDir:root}
@@ -168,20 +168,20 @@ try {
   })
   const rankConfig={rerankEnabled:true,rerankModel:"rank",rerankInputTokenBudget:1000,rerankCacheTtlMs:60000}
   const rankCandidates=[{id:"a",title:"指令一",content:"指令一的用途",score:1,knowledgeBaseId:base,fieldDescription:guide,metadata:{implementation:"must not reach model"}},{id:"b",title:"指令二",content:"指令二的用途",score:1,knowledgeBaseId:base,fieldDescription:guide},{id:"c",title:"其他文档",content:"其他资料",score:1,knowledgeBaseId:"other",fieldDescription:"独立说明"}]
-  assert.equal((await rerankExports.rerankKnowledge({},"用途",rankCandidates,rankConfig)).state,"applied")
+  assert.equal((await rerankExports.rerankCandidates({},"用途",rankCandidates,rankConfig)).state,"applied")
   const rankedInput=JSON.parse(rerankPrompts[0].prompt)
   assert.deepEqual(rankedInput.fieldDescriptions,{[base]:guide,other:"独立说明"})
   assert.equal(rerankPrompts[0].prompt.split(guide).length-1,1)
   assert(!rerankPrompts[0].prompt.includes("must not reach model"),"reranker receives retrieval text without implementation/metadata")
   assert(rankedInput.candidates.every(row=>Object.keys(row).sort().join(",")==="content,id,knowledgeBaseId,title"))
-  assert.equal((await rerankExports.rerankKnowledge({},"用途",rankCandidates,rankConfig)).state,"cached")
+  assert.equal((await rerankExports.rerankCandidates({},"用途",rankCandidates,rankConfig)).state,"cached")
   assert.equal(rerankPrompts.length,1)
-  await rerankExports.rerankKnowledge({},"用途",rankCandidates.map(row=>({...row,fieldDescription:"修改后的说明"})),rankConfig)
+  await rerankExports.rerankCandidates({},"用途",rankCandidates.map(row=>({...row,fieldDescription:"修改后的说明"})),rankConfig)
   assert.equal(rerankPrompts.length,2,"guide changes invalidate rerank cache without vector rebuilding")
-  assert.equal((await rerankExports.rerankKnowledge({},"短问题",rankCandidates.map(row=>({...row,content:'"\\'.repeat(6000),fieldDescription:"长说明".repeat(600)})),{...rankConfig,rerankInputTokenBudget:400})).state,"applied")
+  assert.equal((await rerankExports.rerankCandidates({},"短问题",rankCandidates.map(row=>({...row,content:'"\\'.repeat(6000),fieldDescription:"长说明".repeat(600)})),{...rankConfig,rerankInputTokenBudget:400})).state,"applied")
   assert.equal(rerankPrompts.length,3)
   assert(estimateTokens(rerankPrompts[2].prompt)<=400,"serialized rerank input stays within budget including escaping")
-  assert.equal((await rerankExports.rerankKnowledge({},"长".repeat(5000),rankCandidates,rankConfig)).state,"input_budget")
+  assert.equal((await rerankExports.rerankCandidates({},"长".repeat(5000),rankCandidates,rankConfig)).state,"input_budget")
   // Unequal semantic scores must retain multiple candidates before the global final cap.
   const queryRuntime=await import("../output/runtime/knowledge/command-query-service.js")
   const documentRuntime=await import("../output/runtime/knowledge/document-retrieval.js")

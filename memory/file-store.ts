@@ -1,3 +1,5 @@
+import { FULL_MEMORY_READ_HINT, isFullOwnMemoryRequest } from "./full-read.js"
+import { truncateTextToTokens } from "../core/chat/token-budget.js"
 import fs from "node:fs/promises"
 import path from "node:path"
 import crypto from "node:crypto"
@@ -259,7 +261,7 @@ async function appendLines(file: string, lines: readonly string[]): Promise<void
   await fs.appendFile(file, lines.join(""), { encoding: "utf8", mode: 0o600 })
 }
 
-async function readJsonl<T extends UnknownRecord = UnknownRecord>(file: string, limit = 0): Promise<T[]> {
+async function readJsonl<T extends UnknownRecord = UnknownRecord>(file: string, limit = 0, state?: { complete: boolean }): Promise<T[]> {
   let handle: Awaited<ReturnType<typeof fs.open>> | undefined
   try {
     handle = await fs.open(file, "r")
@@ -274,6 +276,7 @@ async function readJsonl<T extends UnknownRecord = UnknownRecord>(file: string, 
     if (start > 0) lines.shift()
     const completeLines = lines.filter(Boolean)
     const selected = limit > 0 ? completeLines.slice(-limit) : completeLines
+    if (state && (start > 0 || selected.length < completeLines.length)) state.complete = false
     const rows: T[] = []
     let invalidLines = 0
     for (const line of selected) {
@@ -283,10 +286,16 @@ async function readJsonl<T extends UnknownRecord = UnknownRecord>(file: string, 
         invalidLines++
       }
     }
-    if (invalidLines) hostRuntime.logger?.warn?.(`[Yui-Chat][Memory] ${path.basename(file)} 跳过 ${invalidLines} 行无效 JSONL`)
+    if (invalidLines) {
+      if (state) state.complete = false
+      hostRuntime.logger?.warn?.(`[Yui-Chat][Memory] ${path.basename(file)} 跳过 ${invalidLines} 行无效 JSONL`)
+    }
     return rows
   } catch (err: unknown) {
-    if (record(err).code !== "ENOENT") hostRuntime.logger?.warn?.(`[Yui-Chat][Memory] 读取 ${path.basename(file)} 失败`, err)
+    if (record(err).code !== "ENOENT") {
+      if (state) state.complete = false
+      hostRuntime.logger?.warn?.(`[Yui-Chat][Memory] 读取 ${path.basename(file)} 失败`, err)
+    }
     return []
   } finally {
     await handle?.close().catch(() => {})
@@ -838,6 +847,28 @@ class MemoryStore {
     return this.getProfile(e)
   }
 
+  async listOwnMemories(e: MemoryEvent): Promise<{ items: UnknownRecord[]; complete: boolean; warning?: string }> {
+    await this.load()
+    const user = userKey(e)
+    if (!user || user === "unknown") throw new Error("无法识别当前用户，未读取记忆")
+    if (memoryConfig().enabled === false) throw new Error("记忆功能未启用")
+    const owners = [memoryOwner(e, "user"), ...(e.isGroup ? [memoryOwner(e, "scope")] : [])]
+    const items = new Map<string, MemoryRow>()
+    let complete = true
+    const limit = Math.max(50, Math.min(10000, Number(memoryConfig().maxMemoriesPerOwner) || 500))
+    for (const owner of owners) {
+      const file = this.ownerPath(owner, "memory")
+      const state = { complete: true }
+      const rows = await readJsonl<MemoryRow>(file, limit, state)
+      complete &&= state.complete
+      const cached = this.memoryCache.get(owner.key)?.value || []
+      // 新增、修订等尚未 flush 的内容优先于磁盘，不清除任何写入缓冲。
+      for (const row of [...rows, ...cached]) items.set(row.id, { ...row, ownerType: owner.type, ownerId: owner.id, status: rollingStatus(row) })
+    }
+    return { items: [...items.values()].filter(row => row.text && !["deleted", "archived"].includes(row.status)).sort((a,b) => a.id.localeCompare(b.id)), complete,
+      ...(complete ? {} : { warning: "文件后端读取不完整（超出窗口或存在不可读记录），当前结果不能保证全量；请在管理端核对，不得声称已读完。" }) }
+  }
+
   async listMemories(e: MemoryEvent, opts: UnknownRecord = {}): Promise<MemoryRow[]> {
     const configuredOwners = Array.isArray(opts.owners) ? opts.owners.filter(isMemoryOwner) : []
     const owners: MemoryOwner[] = configuredOwners.length ? configuredOwners : [memoryOwner(e, ownerType(opts.owner))]
@@ -921,16 +952,15 @@ class MemoryStore {
   async buildPrompt(e: MemoryEvent, query: unknown): Promise<string> {
     const config = memoryConfig()
     if (config.enabled !== true) return ""
+    if (isFullOwnMemoryRequest(query)) return FULL_MEMORY_READ_HINT
     const parts: string[] = []
     if (config.injectProfile !== false) {
       const userProfile = await this.getProfile(e)
       const profile = profileLines(userProfile.profile)
-      const facts = await this.listMemories(e, { limit: Math.max(3, Number(config.profileFactLimit) || 5) })
       if (profile.length) parts.push(`用户画像：\n${profile.map(item => `- ${item}`).join("\n")}`)
-      if (facts.length) parts.push(`用户长期记忆：\n${facts.map(item => `- ${item.text}`).join("\n")}`)
     }
     if (config.injectRelevantFacts !== false) {
-      const relevant = await this.search(e, query, Number(config.relevantLimit) || 5)
+      const relevant = await this.search(e, query, Math.min(20, Math.max(1, Number(record(config.retrieval).resultLimit) || 3)))
       if (relevant.length) {
         const currentTime = nowIso()
         const memoryHits = relevant.filter(item => item.resultType === "memory")
@@ -951,8 +981,7 @@ class MemoryStore {
         parts.push(`与本轮相关的记忆：\n${relevant.map(item => `- ${recallMemoryLabel(item)}：${item.text}`).join("\n")}`)
       }
     }
-    const budget = Math.max(300, Number(config.promptBudgetChars) || 2200)
-    return parts.join("\n\n").slice(0, budget)
+    return truncateTextToTokens(parts.join("\n\n"), Math.max(30, Number(record(config.retrieval).promptTokenBudget) || 2000))
   }
 
   stats() {

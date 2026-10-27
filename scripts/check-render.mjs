@@ -82,7 +82,7 @@ try {
   }
   const { defaults } = await import('../output/runtime/config/defaults.js')
   const { resolveRenderRequest } = await import('../output/runtime/core/rendering/image-renderer-registry.js')
-  const { renderImageByConfiguredEngine } = await import('../output/runtime/core/rendering/render-service.js')
+  const { renderImageByConfiguredEngine, renderPortraitReport } = await import('../output/runtime/core/rendering/render-service.js')
   const { renderPreview } = await import('../output/runtime/core/rendering/render-api-service.js')
   const { toolRegistry } = await import('../output/runtime/tools/support/registry.js')
   const { createRenderTools } = await import('../output/runtime/tools/builtins/render.js')
@@ -194,6 +194,14 @@ try {
   await call({ format: 'markdown', data: { content: '$$\\frac{1}{2}$$' } })
   if (realBrowser) assert(captures.at(-1).dom.katex > 0)
   await call({ format: 'mindmap', data: { content: '# 根节点\n## 子节点' } })
+  const portrait = { id:'portrait-qa', name:'示例成员', title:'有依据的聊天画像', summary:'长期阅读科幻，愿意交流具体作品。', keywords:['阅读'], sections:[{ heading:'相处建议',text:'先了解最近关注的作品，再继续讨论。',kind:'observation',evidenceIds:['sample-message'] }], uncertainties:'样本有限。', backfillNote:'', type:{name:'正画像'},typeId:'positive', version:1, createdAt:Date.now(), messageCount:20,requestedCount:200,memoryCount:3,from:Date.now(),to:Date.now() }
+  const portraitImage = await renderPortraitReport(portrait, config)
+  assert(Buffer.isBuffer(portraitImage.buffer), 'portrait uses the shared HTML render service')
+  assert.equal(portraitImage.meta.engine, 'html')
+  assert(captures.at(-1).html.includes('portrait-document') && captures.at(-1).html.includes('window-buttons'), 'portrait keeps the shared document window frame')
+  assert(captures.at(-1).html.includes('长期阅读科幻') && captures.at(-1).html.includes('先了解最近关注的作品'))
+  for (const hidden of [portrait.title, portrait.uncertainties, '项依据', '不代表完整人格']) assert(!captures.at(-1).html.includes(hidden), 'image contains only the finished portrait')
+  await assert.rejects(() => renderPortraitReport(portrait, {response:{render:{enabled:false}}}), /未启用/)
   await call({ format: 'text', data: { title: '文本', content: '保留卡片' } }, { ...master, config: { ...config, response: { ...config.response, render: { ...config.response.render, engine: 'svg' } } } })
   await checkAutomaticReplyRendering(config)
   for (const capture of captures) {

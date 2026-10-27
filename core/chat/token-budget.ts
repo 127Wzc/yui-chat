@@ -1,3 +1,4 @@
+import { fitFullMemoryRead } from "../../memory/full-read.js"
 import { getToolCommon } from "../../tools/support/contract.js"
 
 type UnknownRecord = Record<string, unknown>
@@ -100,7 +101,7 @@ function compressToolPayloads<T>(unit: readonly T[], limit: number): T[] {
   return unit.map(message => {
     const source = record(message)
     if (messageRole(message) === "tool") {
-      return { ...source, content: truncateTextToTokens(source.content, limit) } as T
+      return { ...source, content: fitFullMemoryRead(source.content, limit, estimateTokens) ?? truncateTextToTokens(source.content, limit) } as T
     }
     const calls = source.tool_calls
     if (!Array.isArray(calls) || !calls.length) return message
@@ -164,7 +165,7 @@ function scoreTool(tool: unknown, prompt = ""): number {
       if (promptText.includes(phrase)) score += 3
     }
   }
-  if (source.name === "memory_manage" && /记住|记下|忘记|称呼|偏好|喜欢|讨厌|上次|之前|还记得/.test(promptText)) score += 100
+  if (source.name === "memory_manage" && /记忆|记住|记下|忘记|称呼|偏好|喜欢|讨厌|上次|之前|还记得/.test(promptText)) score += 100
   if (source.name === "knowledge_manage" && (isBotCommandQuery(promptText) || /帮助|help|文档/.test(promptText))) score += 100
   if (/图片|图像|照片|视频|语音/.test(promptText) && (tags.includes("media") || /图片|图像|照片|图床|表情包/.test(haystack))) score += 50
   // 图片搜索和图片生成都带有“图片”字样，单靠通用媒体分数会让两者

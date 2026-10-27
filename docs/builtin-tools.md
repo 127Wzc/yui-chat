@@ -38,6 +38,8 @@
 
 Responses 的 `file_search` 是供应商托管能力，需配置 Vector Store；托管搜索与本地搜索的选择见 [Responses 协议](responses-api.md)。
 
+明确要求读取本人全部记忆时，`memory_manage` 使用 `action=list, all=true`，默认返回本人全局及本群的全部有效个人记忆，包含低活跃记录。普通 search 和不带 all 的 list 不会自动升级。可通过 `cursor/pageSize` 续读，原样传入 `nextCursor`；资料变化时 `restartRequired=true`，应从头读取或明确说明未完成。检查 `complete/sourceComplete/nextCursor`，未读完不能声称已完成全量总结。`all=true` 需本轮用户明确请求，模型参数不能自行扩大读取量。日常自动注入仍遵守配置的默认条数，详见[记忆与知识](architecture.md#记忆与知识)。
+
 ## 知识库查询
 
 `knowledge_manage` 支持 `list / search / recommend`。模型可在工具说明中查看当前调用者已授权库的简要用途，优先选择相关库；目录较大时用 list 发现其余库，指定 ID 的 list 查看完整用途与字段说明。`scope` 默认 `authorized`：省略 `knowledgeBaseIds` 时查询全部授权库；精确选择时传 `scope: "selected"` 和非空 ID 数组。传入 ID 后只查这些库，不自动扩展；未授权 ID 拒绝整次请求。多个选定库并发召回，汇总后统一执行可选重排。推荐发送命令时明确选择内置指令库；查询改写、分层披露和全局设置见[查询策略与设置](command-knowledge.md#查询策略与设置)。

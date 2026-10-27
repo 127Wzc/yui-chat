@@ -1,3 +1,4 @@
+import { statusFor } from "./decay.js"
 import crypto from "node:crypto"
 import { sqliteClient } from "../core/storage/sqlite/client.js"
 import type { SqliteOperation } from "../core/storage/types.js"
@@ -239,6 +240,21 @@ export class MemoryRepository {
     return ids.length
   }
 
+  async getMany(ids: string[]): Promise<MemoryItem[]> {
+    if (!ids.length) return []
+    const rows = await sqliteClient.all<MemoryItem>(`SELECT * FROM memory_items WHERE id IN (${ids.map(() => "?").join(",")})`, ids)
+    return rows.map(row => ({ ...row, tags: parse(row.tags_json) }))
+  }
+
+  /** 本人的全部有效记忆；不经过相关性排序、默认召回条数或 200 条目录上限。 */
+  async listOwnMemories(userId: string, groupId = ""): Promise<MemoryItem[]> {
+    const rows = await sqliteClient.all<MemoryItem>(`SELECT * FROM memory_items WHERE owner_id=?
+      AND ((scope_type='user' AND group_id='') OR (scope_type='user_group' AND group_id=? AND ?<>''))
+      AND type IN ('fact','episode') AND NOT (type='episode' AND source='interaction')
+      AND status IN ('active','warm','cold') AND (expires_at=0 OR expires_at>?) ORDER BY id`, [userId, groupId, groupId, Date.now()])
+    return rows.filter(row => ["active", "warm", "cold"].includes(statusFor(row))).map(row => ({ ...row, tags: parse(row.tags_json) }))
+  }
+
   async list(scopes: MemoryScope[] = [], options: RepositoryOptions = {}): Promise<MemoryItem[]> {
     if (!scopes.length) return []
     const conditions = scopes.map(() => "(scope_type=? AND owner_id=? AND group_id=?)").join(" OR ")
@@ -306,7 +322,6 @@ export class MemoryRepository {
        )
        WHERE member_id<>''${filter}
        GROUP BY member_id
-       HAVING COUNT(DISTINCT NULLIF(memory_id, '')) > 0
        ORDER BY memory_count DESC, last_seen_at DESC, member_id ASC
        LIMIT ?`,
       params,

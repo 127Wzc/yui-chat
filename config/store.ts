@@ -422,6 +422,12 @@ function normalizeModelToolPolicies(config: Config): void {
 function normalizeConfig(config: Config): Config {
   normalizeMessageFilters(config)
   normalizeModelToolPolicies(config)
+  if (isObject(config.memory) && isObject(config.memory.retrieval)) delete config.memory.retrieval.adaptiveVector
+  // 旧言语风格配置退役；用户仍可选择每次生成的任务类型。
+  if (isObject(config.memory) && isObject(config.memory.portrait)) {
+    delete config.memory.portrait.styles
+    delete config.memory.portrait.defaultStyle
+  }
   const mcp = isObject(config.mcp) ? config.mcp : null
   if (mcp && isObject(mcp.servers)) {
     const removedToolExecutionFields = ["repeatable", "repeatableByAction", "idempotencyKeyFields", "idempotencyKeyFieldsByAction"]

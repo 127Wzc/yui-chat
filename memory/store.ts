@@ -21,6 +21,7 @@ export interface MemoryStoreContract extends MemoryBackend {
   updateMemory(userId: unknown, memoryId: unknown, patch: UnknownRecord): Promise<UnknownRecord>
   addFact(event: unknown, text: unknown, options?: UnknownRecord): Promise<UnknownRecord>
   search(event: unknown, query: unknown, limit?: unknown): Promise<UnknownRecord[]>
+  listOwnMemories(event: unknown): Promise<{ items: UnknownRecord[]; complete: boolean; warning?: string }>
   listMemories(event: unknown, options?: UnknownRecord): Promise<UnknownRecord[]>
   getProfile(event: unknown): Promise<{ userId: string; profile: UnknownRecord; facts: UnknownRecord[]; updatedAt?: unknown }>
   updateProfile(event: unknown, patch: UnknownRecord): Promise<{ userId: string; profile: UnknownRecord; facts?: UnknownRecord[]; updatedAt?: unknown }>

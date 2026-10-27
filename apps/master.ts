@@ -75,6 +75,7 @@ export class YuiChatMaster extends YuiChatCommandHandlers {
         masterCommand("扩展(?:安装|进度|取消)\\s+[\\s\\S]+", "extensionInstallationCommand"),
         masterCommand("(?:他的|她的|TA的|ta的)记忆(?:\\s+[\\s\\S]*)?", "mentionMemoryCommand"),
         masterCommand("管理记忆(?:\\s+[\\s\\S]*)?", "manageMemoryCommand"),
+        masterCommand("(?:重提炼画像|查看画像)(?:\\s+[\\s\\S]*)?", "masterPortraitCommand"),
         masterCommand("(?:全部|所有)定时任务(?:列表)?", "allScheduleTaskList"),
         masterCommand("对话列表", "conversationList"),
         masterCommand("(结束|新开|摧毁|毁灭|完结)全部(模式|模型)?对话", "endAllConversations"),

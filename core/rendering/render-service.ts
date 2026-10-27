@@ -99,9 +99,9 @@ function renderConfig(config: unknown = {}): RenderConfig {
     ...record(response.render),
   }
 }
-export { resolveRenderEngine, withRenderEngine, withRenderScope }
-export { normalizeConfiguredEngine }
+export { resolveRenderEngine, withRenderEngine, withRenderScope, normalizeConfiguredEngine }
 export type { ImageRenderEngine } from "./render-engine.js"
+export { renderPortraitReport } from "./portrait-template.js"
 function escapeHtml(value: unknown = ""): string {
   return text(value)
     .replace(/&/g, "&amp;")

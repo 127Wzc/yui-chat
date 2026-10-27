@@ -115,7 +115,7 @@ try {
   // Use the real rerank orchestrator with isolated configuration; no paid requests.
   const exports={}
   let calls=0,fail=false,legacy=false
-  vm.runInNewContext(ts.transpileModule(await fs.readFile(new URL("../knowledge/retrieval-rerank.ts",import.meta.url),"utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{
+  vm.runInNewContext(ts.transpileModule(await fs.readFile(new URL("../models/retrieval-rerank.ts",import.meta.url),"utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{
     exports,AbortController,setTimeout,clearTimeout,require:specifier=>{
       if(specifier==="node:crypto")return {default:crypto}
       if(specifier.includes("config/store"))return {configStore:{get:()=>cfg},dataDir:root}
@@ -130,40 +130,40 @@ try {
   const settings={...cfg.knowledge.retrieval,rerankMinScore:null}
   assert.equal(defaults.knowledge.retrieval.rerankMinScore,0.3)
   assert.equal(defaults.knowledge.retrieval.rerankResultLimit,5)
-  const disabled=await exports.rerankKnowledge({},"原图",rows,{...settings,rerankEnabled:false})
+  const disabled=await exports.rerankCandidates({},"原图",rows,{...settings,rerankEnabled:false})
   assert.equal(disabled.state,"disabled");assert.equal(calls,0)
-  const ranked=await exports.rerankKnowledge({},"原图",rows,settings)
+  const ranked=await exports.rerankCandidates({},"原图",rows,settings)
   assert.equal(ranked.state,"applied");assert.deepEqual(Array.from(ranked.results,row=>row.id),["image","weather"])
   assert.equal(calls,1)
-  const filtered=await exports.rerankKnowledge({},"原图",rows,{...settings,rerankMinScore:0})
+  const filtered=await exports.rerankCandidates({},"原图",rows,{...settings,rerankMinScore:0})
   assert.equal(filtered.state,"cached");assert.deepEqual(Array.from(filtered.results,row=>row.id),["image"])
   assert.equal(calls,1,"threshold edits reuse scores without extra requests")
-  const defaultFiltered=await exports.rerankKnowledge({},"原图",rows,{...settings,rerankMinScore:defaults.knowledge.retrieval.rerankMinScore})
+  const defaultFiltered=await exports.rerankCandidates({},"原图",rows,{...settings,rerankMinScore:defaults.knowledge.retrieval.rerankMinScore})
   assert.deepEqual(Array.from(defaultFiltered.results,row=>row.id),["image"],"the default cutoff also accepts provider scores above one")
-  const traced=await exports.rerankKnowledge({},"原图",rows,{...settings,rerankMinScore:0},undefined,true)
+  const traced=await exports.rerankCandidates({},"原图",rows,{...settings,rerankMinScore:0},undefined,true)
   assert.equal(traced.state,"cached");assert.equal(calls,1)
   assert.equal(traced.trace.scores.length,2,"the trace retains scores below the cutoff")
   assert.equal(traced.trace.scores.find(row=>row.id==="weather").score,-1)
   assert.equal(traced.trace.model,channel.model,"cache preserves the actual model even when the original call did not request a trace")
   assert.equal(ranked.trace,undefined)
   fail=true
-  const fallback=await exports.rerankKnowledge({},"另一个问题",rows,settings,undefined,true)
+  const fallback=await exports.rerankCandidates({},"另一个问题",rows,settings,undefined,true)
   assert.equal(fallback.state,"failed_fallback");assert.deepEqual(fallback.results,rows)
   assert.equal(fallback.trace.scores.length,0)
   fail=false
   const beforeRepeated=calls
   const event={user_id:"reader",sessionId:"same-session"}
   for(let i=0;i<105;i++){
-    const result=await exports.rerankKnowledge(event,`连续重排 ${i}`,rows,settings,undefined,true)
+    const result=await exports.rerankCandidates(event,`连续重排 ${i}`,rows,settings,undefined,true)
     assert.equal(result.state,"applied");assert.equal(result.results[0].rerankScore,2.5)
     assert(!Object.hasOwn(result.trace,"budget"));assert(!Object.hasOwn(result.trace,"budgetMode"))
   }
   assert.equal(calls,beforeRepeated+105,"one conversation can run more than the former daily call ceiling")
   const beforeOff=calls
-  assert.equal((await exports.rerankKnowledge(event,"关闭重排",rows,{...settings,rerankEnabled:false})).state,"disabled")
+  assert.equal((await exports.rerankCandidates(event,"关闭重排",rows,{...settings,rerankEnabled:false})).state,"disabled")
   assert.equal(calls,beforeOff)
   legacy=true;rank.purpose="chat";cfg.models.push({name:"legacy-fallback",purpose:"chat",modelIdentifier:"actual-chat-ranker"})
-  const legacyResult=await exports.rerankKnowledge({},"对话模型重排",rows,settings,undefined,true)
+  const legacyResult=await exports.rerankCandidates({},"对话模型重排",rows,settings,undefined,true)
   assert.equal(legacyResult.state,"applied");assert.equal(legacyResult.trace.model,"actual-chat-ranker","legacy task fallback reports the model actually used")
   console.log("ok command hybrid: real /rerank HTTP, score/index validation, cancellation, purpose routing, clean text, Chinese terms, prefix distinction, conflict-only sorting, disabled/cache/failure and repeated calls")
 } finally {

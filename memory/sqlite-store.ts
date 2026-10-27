@@ -1,3 +1,4 @@
+import { FULL_MEMORY_READ_HINT, isFullOwnMemoryRequest } from "./full-read.js"
 import { configStore } from "../config/store.js"
 import { sqliteClient } from "../core/storage/sqlite/client.js"
 import { memoryRepository } from "./repository.js"
@@ -363,6 +364,14 @@ export class SqliteMemoryStore {
     return this.getProfile(key)
   }
 
+  async listOwnMemories(e: UnknownRecord): Promise<{ items: UnknownRecord[]; complete: boolean }> {
+    await this.load()
+    const user = userKey(e)
+    if (!user || user === "unknown") throw new Error("无法识别当前用户，未读取记忆")
+    if (record(configStore.get().memory).enabled === false) throw new Error("记忆功能未启用")
+    return { items: (await memoryRepository.listOwnMemories(user, groupKey(e))).map(toLegacy), complete: true }
+  }
+
   async listMemories(e: UnknownRecord, opts: StoreOptions = {}): Promise<UnknownRecord[]> {
     await this.load()
     const scopes = opts.owner === "user" ? [{ scopeType: "user", ownerId: userKey(e), groupId: "" }] : scopesFor(e)
@@ -399,6 +408,7 @@ export class SqliteMemoryStore {
     const memory = record(record(configStore.get()).memory)
     const retrieval = record(memory.retrieval)
     if (memory.enabled === false) return ""
+    if (isFullOwnMemoryRequest(query)) return FULL_MEMORY_READ_HINT
     const plan = await resolveMemoryRecallPlan(e, query)
     // 明确询问其他成员时不混入提问者画像；比较双方时仍保留提问者画像。
     const profile = memory.injectProfile === false || plan.mode === "target" ? {} : (await this.getProfile(e)).profile

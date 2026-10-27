@@ -5,6 +5,7 @@ import { splitTokens } from "../../shared/format.js"
 import { MemoryCaptureDrawers } from "./memory-capture-drawers.js"
 import { MemoryExtractionWorkspace } from "./memory-extraction-workspace.js"
 import { MemoryManageWorkspace } from "./memory-manage-workspace.js"
+import { MemoryPortraitSettings } from "./memory-portrait.js"
 
 const PAGE_SIZE = 20
 const RAW_PAGE_SIZE = 50
@@ -390,16 +391,20 @@ export const MemoryTab = {
     }
 
     function captureFieldHint(field: PolicyOverrideField): string {
-      const label = captureDefaultLabel(field)
-      const suffix = field === "tokenLimit" ? "；范围 3,000–60,000，仅估算群聊消息 Token，不含记忆提炼系统提示词" : ""
-      return (captureDraft.useDefault[field]
-        ? `跟随系统默认：${label}。直接编辑会自动变为本群自定义。`
-        : `当前为本群自定义；系统默认：${label}`) + suffix
+      const descriptions: Record<PolicyOverrideField, string> = {
+        retentionDays: "0 表示永久保留。",
+        tokenLimit: "每个自然日子窗口 3,000–60,000 Token，仅计算消息正文。",
+        modelName: "留空时使用默认对话模型。",
+        promptTemplate: "直接编辑会创建本群覆盖，恢复默认后继续跟随系统。",
+        maxTokens: "推理模型的思考也计入输出上限。",
+        minConfidence: "范围 0–1，低于该值的候选记忆不会写入。",
+        retrievalResultLimit: "范围 1–20；全文命中不足时补充向量召回。",
+      }
+      return descriptions[field]
     }
 
     function captureFieldSource(field: PolicyOverrideField): string {
-      const label = captureDefaultLabel(field)
-      return captureDraft.useDefault[field] ? `跟随系统默认 · ${label}` : `本群自定义 · 系统为 ${label}`
+      return captureDraft.useDefault[field] ? "跟随系统默认" : "本群自定义"
     }
 
     function policyOverrideSummary(policy: MemoryRecord = {}): string {
@@ -1053,6 +1058,9 @@ export const MemoryTab = {
     }
 
     async function switchWorkspace(value: string): Promise<void> {
+      if (value !== activeWorkspace.value && Object.entries(store.dirtyScopes).some(([key, dirty]) => key.startsWith("portrait:") && dirty)) {
+        if (!await confirmAction({ title: "离开画像设置？", message: "有未保存的画像设置，离开后将放弃修改。", confirmText: "放弃并离开", tone: "warn" })) return
+      }
       activeWorkspace.value = value
       showGroupPicker.value = false
       if (value !== "extract") {
@@ -1693,7 +1701,7 @@ export const MemoryTab = {
       loadCaptureDetails, loadExtractionWorkspace, loadCalendar, previewReextraction, openReextractDialog, confirmReextraction, reextractSingleDay, selectTimelineWindow, changeCaptureMessagePage, jumpCaptureMessagePage, changeCaptureMessageOrder, changeCaptureWindowPage, targetForGroup, targetForMember, openMemoryEditor, saveMemory, deleteMemory, openProfileEditor, saveProfile, changeGroupPage, changeMemberPage,
     }
   },
-  components: { MemoryCaptureDrawers, MemoryExtractionWorkspace, MemoryManageWorkspace },
+  components: { MemoryCaptureDrawers, MemoryExtractionWorkspace, MemoryManageWorkspace, MemoryPortraitSettings },
   template: `
     <MemoryCaptureDrawers :view="memoryView" />
 
@@ -1702,6 +1710,7 @@ export const MemoryTab = {
         <div class="memory-workspace-switch" role="tablist" aria-label="记忆工作区">
           <button type="button" :class="{ active: activeWorkspace === 'manage' }" @click="switchWorkspace('manage')"><Icon name="database" :size="15" /><span><b>记忆管理</b><small>维护记忆块与用户画像</small></span></button>
           <button type="button" :class="{ active: activeWorkspace === 'extract' }" @click="switchWorkspace('extract')"><Icon name="sparkles" :size="15" /><span><b>记忆提炼</b><small>核对原始消息与时间窗</small></span></button>
+          <button type="button" :class="{ active: activeWorkspace === 'portrait-settings' }" @click="switchWorkspace('portrait-settings')"><Icon name="sliders" :size="15" /><span><b>画像设置</b><small>查看内置类型与生成默认值</small></span></button>
         </div>
         <div class="row memory-settings-actions">
           <button class="btn small outline" type="button" @click="openCaptureSettings(selectedPolicy)"><Icon name="settings" :size="14" />采集设置</button>
@@ -1709,6 +1718,7 @@ export const MemoryTab = {
       </header>
       <MemoryManageWorkspace :view="memoryView" />
       <MemoryExtractionWorkspace :view="memoryView" />
+      <MemoryPortraitSettings v-if="activeWorkspace === 'portrait-settings'" />
     </Panel>
   `,
 }

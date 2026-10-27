@@ -5,7 +5,7 @@
   "description": "Yui Chat AI plugin for TRSS-Yunzai",
   "scripts": {
     "postinstall": "node scripts/postinstall.mjs",
-    "check": "npm run check:types && npm run check:types-client && npm run check:types-runtime && npm run check:runtime-build && npm run check:structure && npm run check:sqlite-baseline && npm run check:sqlite-integration && npm run check:memory-p1 && npm run check:memory-vectors && npm run check:knowledge-p1 && npm run check:knowledge-rag && npm run check:command-benchmark && npm run check:runtime-p1 && npm run check:actions && npm run check:silent-tools && npm run check:mcp-selection && npm run check:capability-permissions && npm run check:sticker-expression && npm run check:daily-still && npm run check:code-editor && npm run check:reasoning && npm run check:render && npm run check:extension-installation && npm run smoke",
+    "check": "npm run check:types && npm run check:types-client && npm run check:types-runtime && npm run check:runtime-build && npm run check:structure && npm run check:sqlite-baseline && npm run check:sqlite-integration && npm run check:memory-p1 && npm run check:portraits && npm run check:memory-vectors && npm run check:memory-retrieval && npm run check:knowledge-p1 && npm run check:knowledge-rag && npm run check:command-benchmark && npm run check:runtime-p1 && npm run check:actions && npm run check:silent-tools && npm run check:mcp-selection && npm run check:capability-permissions && npm run check:sticker-expression && npm run check:daily-still && npm run check:code-editor && npm run check:reasoning && npm run check:render && npm run check:extension-installation && npm run smoke",
     "check:types": "tsc -p tsconfig.json --noEmit",
     "check:types-client": "tsc -p tsconfig.client.json --noEmit",
     "build:types": "tsc -p tsconfig.build.json",
@@ -17,6 +17,7 @@
     "check:sqlite-baseline": "node scripts/check-sqlite-baseline.mjs",
     "check:sqlite-integration": "node scripts/check-sqlite-integration.mjs",
     "check:memory-p1": "node scripts/check-memory-p1.mjs",
+    "check:portraits": "node scripts/check-portraits.mjs",
     "check:memory-vectors": "node scripts/check-memory-vectors.mjs",
     "check:knowledge-p1": "node scripts/check-knowledge-p1.mjs",
     "check:runtime-p1": "node scripts/check-runtime-p1.mjs",
@@ -32,7 +33,8 @@
     "check:render": "node scripts/check-render.mjs",
     "check:extension-installation": "node scripts/check-extension-installation.mjs",
     "check:knowledge-rag": "node scripts/check-command-regexp-examples.mjs && node scripts/check-command-completeness.mjs && node scripts/check-knowledge-rag.mjs && node scripts/check-command-hybrid.mjs && node scripts/check-knowledge-selection.mjs && node scripts/check-knowledge-comparison.mjs && node scripts/check-model-protocols.mjs",
-    "check:command-benchmark": "node scripts/check-command-benchmark.mjs"
+    "check:command-benchmark": "node scripts/check-command-benchmark.mjs",
+    "check:memory-retrieval": "node scripts/check-memory-retrieval.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.24.0",

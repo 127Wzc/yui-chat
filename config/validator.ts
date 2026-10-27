@@ -1,3 +1,4 @@
+import { findPortraitType } from "../memory/portrait-types.js"
 import { specializedModelAdapter, specializedAdapterPurpose } from "../models/protocol/specialized-adapters.js"
 import { COMMON_REASONING_TARGETS, getReasoningOptions } from "../models/configuration/reasoning.js"
 import { parseActions } from "../core/actions/contract.js"
@@ -574,6 +575,16 @@ function validateProviders(config: ConfigRecord, issues: ValidationIssue[]): voi
     if (!model) add(issues, "error", "memory.retrieval.embeddingModel", `记忆召回 embedding 模型不存在：${memoryEmbeddingModel}`)
     else if (section(model.capabilities).embedding !== true) add(issues, "error", "memory.retrieval.embeddingModel", `记忆召回模型未开启 embedding 能力：${memoryEmbeddingModel}`)
   }
+  const memoryRetrieval = section(memory.retrieval)
+  if (memoryRetrieval.rerankEnabled !== undefined && typeof memoryRetrieval.rerankEnabled !== "boolean") add(issues, "error", "memory.retrieval.rerankEnabled", "必须是布尔值")
+  const memoryRerankModel = String(memoryRetrieval.rerankModel || "").trim()
+  if (memoryRetrieval.rerankEnabled === true && !memoryRerankModel) add(issues, "error", "memory.retrieval.rerankModel", "请单独选择记忆重排模型，不继承知识库或全局任务")
+  if (memoryRerankModel) {
+    const model = asArray(config.models).map(section).find(item => item.name === memoryRerankModel)
+    if (!model || modelPurpose(model) !== "rerank") add(issues, "error", "memory.retrieval.rerankModel", "请选择已配置的专用重排模型")
+  }
+  if (memoryRetrieval.rerankMinScore != null && (typeof memoryRetrieval.rerankMinScore !== "number" || !Number.isFinite(memoryRetrieval.rerankMinScore))) add(issues, "error", "memory.retrieval.rerankMinScore", "重排最低分必须是有限数值或 null")
+  for (const [key, min, max] of [["rerankMaxCandidates", 1, 30], ["rerankInputTokenBudget", 200, 30000], ["rerankTimeoutMs", 1000, 60000], ["rerankCacheTtlMs", 0, 86400000]] as const) positiveNumber(issues, `memory.retrieval.${key}`, memoryRetrieval[key], { min, max, integer: true })
   const consolidationModel = String(section(section(memory.groupCapture).consolidation).modelName || "").trim()
   if (consolidationModel) {
     const model = asArray(config.models).map(section).find(item => String(item.name || "") === consolidationModel)
@@ -998,7 +1009,15 @@ function validateRuntimeNumbers(config: ConfigRecord, issues: ValidationIssue[])
   positiveNumber(issues, "memory.flushDelayMs", config.memory?.flushDelayMs, { min: 500, max: 300000 })
   positiveNumber(issues, "memory.promptBudgetChars", config.memory?.promptBudgetChars, { min: 300, max: 20000 })
   positiveNumber(issues, "memory.profileFactLimit", config.memory?.profileFactLimit, { min: 0 })
+  const portrait = section(config.memory?.portrait)
+  if (config.memory?.portrait) {
+    if (!portrait.defaultType || findPortraitType(portrait.defaultType)?.id !== portrait.defaultType) add(issues, "error", "memory.portrait.defaultType", "默认画像类型必须为内置类型")
+    if (portrait.modelName && !(Array.isArray(config.models) && config.models.some(value => section(value).name === portrait.modelName && section(section(value).capabilities).chat !== false))) add(issues, "error", "memory.portrait.modelName", "画像模型必须指向对话模型")
+  }
   const numericRanges: Array<[string, unknown, number, number]> = [
+    ["memory.portrait.historyCount", portrait?.historyCount, 50, 500],
+    ["memory.portrait.inputTokenLimit", portrait?.inputTokenLimit, 3000, 100000],
+    ["memory.portrait.maxTokens", portrait?.maxTokens, 1024, 10000],
     ["memory.retention.shortTermHours", config.memory?.retention?.shortTermHours, 1, 8760],
     ["memory.retention.episodeDays", config.memory?.retention?.episodeDays, 1, 3650],
     ["memory.retention.expiredGraceDays", config.memory?.retention?.expiredGraceDays, 0, 3650],
