@@ -4109,6 +4109,7 @@ async function checkPersonaTrigger() {
   const defaultPersonaMessages = await buildPersonaMessages({ isGroup: false, user_id: "default-user", sender: { nickname: "Default" } }, "你好", defaultConfig)
   const defaultPersonaPrompt = defaultPersonaMessages[0]?.content || ""
   assert(defaultPersonaPrompt.includes("可靠、自然、简洁") && defaultPersonaPrompt.includes("不编造") && defaultPersonaPrompt.includes("使用工具搜索") && defaultPersonaPrompt.includes("<EMPTY>"), "default composed prompt should include the character setting and default runtime rules")
+  assert(defaultPersonaPrompt.includes("区分已知事实与待核实内容") && defaultPersonaPrompt.includes("不因细节不确定直接拒答") && defaultPersonaPrompt.includes("不编造事实、工具结果"), "default prompt should encourage helpful uncertain answers without inventing outcomes")
   assert(defaultPersonaPrompt.includes("使用可用的消息投递能力") && defaultPersonaPrompt.includes("只声称看到了本轮实际提供给模型的图片") && !defaultPersonaPrompt.includes("[CQ:at"), "default system prompt should match current delivery and intent-driven image context behavior")
   const timedPersona = await buildPersonaMessagesWithContext({ isGroup: false, user_id: "time-user", sender: { nickname: "Time" } }, "现在几点", defaultConfig)
   assert(!timedPersona.sections.some(item => item.source === "runtime-time") && !defaultPersonaMessages[0]?.content.includes("当前北京时间："), "dynamic time must not change the system prefix")

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { createHash } from "node:crypto"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -102,7 +103,7 @@ try {
     if (mode === "fail") throw new Error("provider failed Authorization: should-never-leak")
     if (mode === "pause") await new Promise(resolve => { release = resolve })
     const input = JSON.parse(options.prompt)
-    return { text: JSON.stringify({ ...(input.task.id === "clone" ? { personaPrompt: "你正在模拟一位喜欢科幻阅读的虚构群聊角色。使用简洁直接的句子，面对不同意见先询问理由。不要声称自己是真实用户，不编造身份资料。" } : {}), title: "把兴趣说清楚", summary: mode === "process" ? "<think>先检查聊天资料</think>" : "持续关注科幻话题，表达自己的阅读偏好。", keywords: ["科幻"], sections: [{ heading: "兴趣与表达", text: "喜欢科幻小说，可能会乐于分享阅读感受。" }], uncertainties: "样本有限，尚不足以判断其他场景的表现。" }) }
+    return { text: JSON.stringify({ ...(input.task.id === "clone" ? { personaPrompt: "你正在模拟一位喜欢科幻阅读的虚构群聊角色。使用简洁直接的句子，面对不同意见先询问理由。不要声称自己是真实用户，不编造身份资料。" } : {}), title: "把兴趣说清楚", summary: mode === "process" ? "<think>先检查聊天资料</think>" : mode === "sensitive" ? "喜欢讨论 Token 消耗和密码安全。" : "持续关注科幻话题，表达自己的阅读偏好。", keywords: ["科幻"], sections: [{ heading: "兴趣与表达", text: "喜欢科幻小说，可能会乐于分享阅读感受。" }], uncertainties: "样本有限，尚不足以判断其他场景的表现。" }) }
   }
   const service = new PortraitStore(model, () => now)
   assert.equal(portraitMonth(Date.parse("2026-10-31T15:59:59Z")).month, "2026-10")
@@ -126,14 +127,16 @@ try {
   assert.equal(one.report.id, two.report.id)
   assert.equal(calls, 1)
   const input = JSON.parse(inputs[0].prompt)
-  assert(!inputs[0].prompt.includes("其他群的秘密") && !inputs[0].prompt.includes("私人记忆") && !inputs[0].prompt.includes("13812345678"))
+  assert(inputs[0].systemPrompt.includes("段落数量和维度随资料决定") && inputs[0].systemPrompt.includes("不编造具体经历"), "portrait generation receives natural, evidence-aware style guidance")
+  assert(!inputs[0].prompt.includes("其他群的秘密") && !inputs[0].prompt.includes("私人记忆"), "其他成员和群的记忆仍然隔离")
+  assert(input.messages.some(item => item.text === "手机号是 13812345678"), "画像输入不再按隐私关键词过滤目标发言")
   assert.equal(input.contextMessages[0].contextOnly, true)
   assert.equal(input.contextMessages[0].author, "其他成员")
-  assert.equal(input.messages[0].replyTo, input.contextMessages[0].id)
+  assert.equal(input.messages.find(item => item.text === "我最近在看科幻小说。").replyTo, input.contextMessages[0].id)
   assert(!Object.hasOwn(input, "targetUserId") && !Object.hasOwn(input, "groupId") && !Object.hasOwn(input, "manualProfile"))
   assert(!inputs[0].prompt.includes("evidenceId") && !inputs[0].prompt.includes("messageId") && !inputs[0].prompt.includes("user-a"))
   assert(estimateTokens(inputs[0].prompt) + estimateTokens(PORTRAIT_SYSTEM_PROMPT) <= configStore.get().memory.portrait.inputTokenLimit)
-  assert.equal(one.report.messageCount, 1)
+  assert.equal(one.report.messageCount, 2)
   assert.deepEqual(one.report.sections, [{ heading: "兴趣与表达", text: "喜欢科幻小说，可能会乐于分享阅读感受。" }])
   assert.equal(inputs[0].maxTokens, 10000, "portrait output defaults to the 10000-token ceiling")
   // 已保存的旧结构保留原样，读取与重提炼都不能要求重新生成或迁移。
@@ -180,17 +183,50 @@ try {
   const linkedInput = JSON.parse(inputs.at(-1).prompt)
   const byText = text => linkedInput.messages.find(item => item.text === text)
   assert.equal(linkedInput.messages.length, 6)
-  assert.equal(linkedInput.contextMessages.length, 1)
+  assert.equal(linkedInput.contextMessages.length, 2)
+  const otherContext = linkedInput.contextMessages.find(item => item.text === "主要用来做什么？")
+  const privateContext = linkedInput.contextMessages.find(item => item.text === "手机号是 13812345678")
   assert.equal(byText("预算再加一些。").replyTo, byText("我想配一台电脑。").id)
-  assert.equal(byText("主要是工作。").replyTo, linkedInput.contextMessages[0].id)
-  assert.equal(byText("主要是工作，也会玩游戏。").replyTo, linkedInput.contextMessages[0].id)
+  assert.equal(byText("主要是工作。").replyTo, otherContext.id)
+  assert.equal(byText("主要是工作，也会玩游戏。").replyTo, otherContext.id)
   assert(!Object.hasOwn(byText("这条回复的原文已经不可用。"), "replyTo"))
-  assert(!Object.hasOwn(byText("好的，知道了。"), "replyTo"))
-  assert(!inputs.at(-1).prompt.includes("13812345678"))
+  assert.equal(byText("好的，知道了。").replyTo, privateContext.id)
   assert(!inputs.at(-1).prompt.includes("other-quote") && !inputs.at(-1).prompt.includes("user-other"))
-  assert.equal((await service.evidence("group-replies", "user-a", linked.report.id, admin)).filter(item => item.type === "context").length, 1)
+  assert.equal((await service.evidence("group-replies", "user-a", linked.report.id, admin)).filter(item => item.type === "context").length, 2)
   await sqliteClient.run("DELETE FROM group_memory_messages WHERE id='other-quote'")
   assert.equal((await service.view("group-replies", "user-a", actor)).report, null, "撤回未逐段引用的回复上下文仍停用画像")
+
+  // 画像不再按内容筛选，但完整人工资料变化必须使生成中的结果失效。
+  await capture.setPolicy("group", "group-portrait-profile", { enabled: true })
+  const profileOwner = "portrait-profile-user"
+  const profileFields = { name: "示例成员", notes: "讨论 Token 消耗" }
+  const profileRow = await memoryRepository.insert({ scopeType: "user", ownerId: profileOwner, type: "profile", text: JSON.stringify(profileFields), normalized: `profile:${profileOwner}` })
+  await memoryRepository.insert({ scopeType: "user", ownerId: profileOwner, type: "fact", text: "喜欢讨论密码安全。" })
+  await message("group-portrait-profile", "profile-message", profileOwner, "最近在研究 Token 预算。")
+  const profileActor = { userId: profileOwner, admin: false }
+  mode = "sensitive"
+  const profilePortrait = await service.generate("group-portrait-profile", profileOwner, { actor: profileActor, supplement: false })
+  mode = "normal"
+  const profileInput = JSON.parse(inputs.at(-1).prompt)
+  assert.equal(profileInput.manualProfile.notes, profileFields.notes)
+  assert(profileInput.memories.some(item => item.text === "喜欢讨论密码安全。"))
+  assert(profileInput.messages.some(item => item.text === "最近在研究 Token 预算。"))
+  assert.equal((await service.view("group-portrait-profile", profileOwner, profileActor)).report.summary, "喜欢讨论 Token 消耗和密码安全。")
+  const storedProfileReport = await sqliteClient.get("SELECT sources_json FROM portrait_reports WHERE id=?", [profilePortrait.report.id])
+  const currentSources = JSON.parse(storedProfileReport.sources_json)
+  assert(currentSources.profileHash.startsWith("v2:"))
+  const legacyHash = createHash("sha256").update(JSON.stringify({ name: profileFields.name, notes: "" })).digest("hex")
+  await sqliteClient.run("UPDATE portrait_reports SET sources_json=? WHERE id=?", [JSON.stringify({ ...currentSources, profileHash: legacyHash }), profilePortrait.report.id])
+  assert.equal((await service.view("group-portrait-profile", profileOwner, profileActor)).report.id, profilePortrait.report.id, "旧画像仍按原来的指纹规则读取")
+  await sqliteClient.run("UPDATE portrait_reports SET sources_json=? WHERE id=?", [storedProfileReport.sources_json, profilePortrait.report.id])
+  mode = "pause"; release = null
+  const profileRace = service.generate("group-portrait-profile", profileOwner, { actor: admin, force: true, supplement: false })
+  for (let i = 0; !release && i < 100; i++) await new Promise(resolve => setTimeout(resolve, 5))
+  assert(release)
+  await memoryRepository.update(profileRow.id, { text: JSON.stringify({ ...profileFields, notes: "讨论密码安全" }) })
+  release(); mode = "normal"
+  await assert.rejects(profileRace, /生成期间资料已修改/)
+
   await capture.setPolicy("group", "group-a", { enabled: false })
   await assert.rejects(service.view("group-a", "user-a", admin), /未开启/)
   await assert.rejects(service.generate("group-a", "user-a", { actor: admin, force: true }), /未开启/)
@@ -405,14 +441,17 @@ try {
   assert.deepEqual(validatePortraitContent(valid, new Set()).sections, valid.sections)
   assert.deepEqual(validatePortraitContent({ ...valid, sections: [{ ...valid.sections[0], kind: "inference", evidenceIds: Array.from({ length: 13 }, (_, i) => `fake-${i}`) }] }, new Set()).sections, valid.sections, "额外编号和分类不影响保存，也不作为依赖")
   assert.throws(() => validatePortraitContent(valid, new Set(), "clone"), /格式/)
-  assert.throws(() => validatePortraitContent({ ...valid, summary: "手机号 13812345678" }, new Set()), /隐私/)
+  assert.equal(validatePortraitContent({ ...valid, summary: "手机号 13812345678" }, new Set()).summary, "手机号 13812345678")
+  assert.equal(validatePortraitContent({ ...valid, summary: "喜欢讨论 Token 消耗和密码安全。" }, new Set()).summary, "喜欢讨论 Token 消耗和密码安全。")
+  assert.throws(() => validatePortraitContent({ ...valid, summary: "" }, new Set()), /摘要.*非空/)
+  assert.throws(() => validatePortraitContent({ ...valid, sections: [{ heading: "字".repeat(41), text: "正文" }] }, new Set()), /第 1 段标题.*40/)
   for (const summary of ["<think>先检查资料</think>", "思考过程：先分析用户", "## 推理过程：逐条判断"]) assert.throws(() => validatePortraitContent({ ...valid, summary }, new Set()), /过程文本/)
   const cloneOnly = validatePortraitContent({ personaPrompt: "你正在模拟一个喜欢阅读的虚构角色。用简洁自然的语言回应。" }, new Set(), "clone")
   assert.equal(cloneOnly.sections.length, 0)
   assert.equal(cloneOnly.summary, "")
   assert.equal(cloneOnly.title, "")
   assert(cloneOnly.personaPrompt)
-  assert.throws(() => validatePortraitContent({ personaPrompt: "手机号 13812345678" }, new Set(), "clone"), /隐私/)
+  assert.equal(validatePortraitContent({ personaPrompt: "手机号 13812345678" }, new Set(), "clone").personaPrompt, "手机号 13812345678")
   assert.equal(validatePortraitContent({ ...valid, personaPrompt: cloneOnly.personaPrompt }, new Set(), "clone").sections.length, 1)
   const cleanReport = { ...next.report, name: "示例成员", title: "一份谨慎的正向印象", uncertainties: "样本有限，无法判断。", backfillNote: "平台历史补录说明，仅供管理端核对。" }
   const html = buildPortraitHtml({ ...cleanReport, summary: '<img src=x onerror="bad()">' })
