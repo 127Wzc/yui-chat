@@ -6,6 +6,7 @@ export async function checkGroupContext(image) {
   const { chatService } = await import("../output/runtime/core/chat/chat-service.js")
   const { recentContextStore } = await import("../output/runtime/core/chat/recent-context.js")
   const { contentToText } = await import("../output/runtime/core/message/message-context.js")
+  const { buildUserMessage } = await import("../output/runtime/core/persona/persona-chain.js")
   const { messagesForResponses } = await import("../output/runtime/models/adapters/openai/responses/request-adapter.js")
   const config = await configStore.load()
   const next = structuredClone(config)
@@ -23,6 +24,16 @@ export async function checkGroupContext(image) {
   const base = { isGroup:true, group_id:"group-relations", self_id:"bot-relations" }
   const a = {...base, user_id:"user-a", sender:{nickname:"小呆毛"}}
   const b = {...base, user_id:"user-b", sender:{nickname:"玖弦"}}
+  for (const [event, role] of [
+    [{ ...a, sender: { ...a.sender, role: "member" } }, "普通用户"],
+    [{ ...a, sender: { ...a.sender, role: "admin" } }, "管理员"],
+    [{ ...a, sender: { ...a.sender, role: "owner" } }, "群主"],
+    [{ ...a, isMaster: true }, "主人"],
+  ]) {
+    const content = contentToText(buildUserMessage(event, "帮我处理群管理", config).content)
+    const identity = JSON.parse(content.match(/^【本轮身份】\n([^\n]+)/)[1])
+    assert.equal(identity.requester.role, role, "当前身份应与工具权限使用的宿主角色一致")
+  }
   const send = (event, prompt) => chatService.send({...event,msg:prompt},prompt,{disableTools:true,persistMemory:false})
   const current = () => requests.at(-1).messages.findLast(item => item.role === "user")
   try {

@@ -63,7 +63,7 @@ export class MuteUserTool {
   source = "builtin"
   execution = { effect: "non_idempotent", repeatPolicy: "dedupe", targetFields: ["qq", "groupId"], operationFields: ["qq", "groupId", "seconds"], retryPolicy: "no_ambiguous_retry", maxAttempts: 1 }
   policy = { highRisk: true, requiresGroup: true, memberOperation: "mute" }
-  description = "群成员禁言：处理用户明确的自助请求，如‘禁言我一分钟’‘把我禁言’，或管理员的成员禁言/解除禁言请求。人物自主处罚应使用独立工具。Managing others or unmuting requires group admin or master permission."
+  description = "群成员禁言（关小黑屋）：处理用户明确的自助请求，如‘禁言我一分钟’‘把我关小黑屋’，或主人、群主及管理员的成员禁言/解除禁言请求。目标须使用明确的 QQ；昵称不唯一时先询问。人物自主处罚应使用独立工具。Managing others or unmuting requires group admin or master permission."
   parameters = {
     type: "object",
     properties: {

@@ -272,6 +272,11 @@ try {
   calls.length = 0
   await run('mute_user',{seconds:60},{...self,msg:'禁言我一分钟'})
   assert.deepEqual(calls[0],[10001,60])
+  await run('mute_user',{seconds:60},{...self,raw_message:'[CQ:at,qq=99999] 埋埋把我关小黑屋一分钟'})
+  assert.deepEqual(calls.at(-1),[10001,60], '自助请求可包含机器人 @ 和小黑屋说法')
+  await run('mute_user',{seconds:2592000},{...self,raw_message:'[CQ:at,qq=99999] #yuichat 关我进小黑屋一个月'})
+  assert.deepEqual(calls.at(-1),[10001,2592000])
+  await assert.rejects(()=>run('mute_user',{seconds:60},{...self,msg:'把小王关小黑屋一分钟'}),/自助请求/)
   await run('edit_card',{card:'new name'})
   await assert.rejects(()=>run('mute_user',{seconds:60,qq:'10002'}),/管理他人/)
   await assert.rejects(()=>run('mute_user',{seconds:0}),/解除禁言/)
@@ -286,6 +291,8 @@ try {
   selfConfig.actions = {enabled:true,items:{selfMute:{enabled:true,tool:'mute_user',minRole:'user',scope:'group'}}}
   await assert.rejects(()=>run('mute_user',{seconds:60,qq:'10002'},self,{actionId:'selfMute'}),/管理他人/)
   await run('mute_user',{seconds:60,qq:'10001'},admin)
+  await run('mute_user',{seconds:60,qq:'10001'},{...self,user_id:'10002',sender:{role:'owner'}})
+  await run('mute_user',{seconds:60,qq:'10001'},{...self,user_id:'10002',isMaster:true})
   await run('block_user',{action:'block'},{...self,msg:'屏蔽我'})
   await run('block_user',{action:'block',userId:'10001'},admin)
   assert.equal(listBlockedUsers().length,2,'self and management restrictions coexist')
@@ -320,8 +327,14 @@ try {
   selfConfig.tools.boundaryAccess.roles.user.allowedTools.push('persona_punish')
   const punishmentArgs = {kind:'ignore',seconds:60,reason:'持续辱骂，提醒后仍继续'}
   await assert.rejects(()=>run('persona_punish',punishmentArgs),/未开启/)
+  assert(!(await registry.getAllowedTools({config:selfConfig,e:self})).some(item=>item.name==='persona_punish'))
   const punishmentCfg = selfConfig.tools.runtimeVariables.persona_punish
   punishmentCfg.enabled = true
+  const activeTools = await registry.getAllowedTools({config:selfConfig,e:self})
+  const { selectPromptTools } = await import('../output/runtime/core/chat/token-budget.js')
+  assert(activeTools.some(item=>item.name==='persona_punish'), '开启并授权后可在对话中提供自主处罚工具')
+  assert.equal(selectPromptTools(activeTools, '持续骚扰恶意刷屏', {maxTools:1,maxDefinitionTokens:1200})[0]?.name,'persona_punish')
+  assert.equal(selectPromptTools(activeTools, '把我关小黑屋一分钟', {maxTools:1,maxDefinitionTokens:1200})[0]?.name,'mute_user', '只有一个工具位时保留明确的自助禁言工具')
   const members = new Map([[99999,{role:'admin'}],[10001,{role:'member',shutup_time:0}]])
   let muteMode = 'ok'
   const punishmentEvent = {...self,msg:'你真讨厌',group:{
@@ -338,6 +351,8 @@ try {
   await assert.rejects(()=>run('persona_punish',{...punishmentArgs,kind:'kick'},punishmentEvent),/参数无效|只允许/)
   await assert.rejects(()=>run('persona_punish',{...punishmentArgs,userId:'10002'},punishmentEvent),/参数无效|其他目标/)
   await assert.rejects(()=>run('persona_punish',{...punishmentArgs,seconds:2592001},punishmentEvent),/参数无效|最多/)
+  await assert.rejects(()=>run('persona_punish',punishmentArgs,punishmentEvent,{observability:{source:'initiativeGreeting'}}),/用户参与的对话/)
+  await assert.rejects(()=>run('persona_punish',punishmentArgs,{...punishmentEvent,notice_type:'poke'},{observability:{source:'firstPerson'}}),/用户参与的对话/)
   for(const protectedEvent of [{...punishmentEvent,isMaster:true},{...punishmentEvent,sender:{role:'admin'}},{...punishmentEvent,sender:{role:'owner'}}]) {
     await assert.rejects(()=>run('persona_punish',punishmentArgs,protectedEvent),/受保护/)
   }

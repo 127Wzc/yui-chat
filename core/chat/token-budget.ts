@@ -167,6 +167,7 @@ function scoreTool(tool: unknown, prompt = ""): number {
   }
   if (source.name === "memory_manage" && /记忆|记住|记下|忘记|称呼|偏好|喜欢|讨厌|上次|之前|还记得/.test(promptText)) score += 100
   if (source.name === "knowledge_manage" && (isBotCommandQuery(promptText) || /帮助|help|文档/.test(promptText))) score += 100
+  if (source.name === "mute_user" && /禁言|解禁|小黑屋/.test(promptText)) score += 100
   if (/图片|图像|照片|视频|语音/.test(promptText) && (tags.includes("media") || /图片|图像|照片|图床|表情包/.test(haystack))) score += 50
   // 图片搜索和图片生成都带有“图片”字样，单靠通用媒体分数会让两者
   // 发生词义抢占。按动作词给出一个明确的首选，避免“搜一张”误触发生成。

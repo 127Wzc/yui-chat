@@ -1,4 +1,4 @@
-import { assertPersonaPunishmentAvailable, personaPunishmentConfig, personaPunishmentConfigSchema } from "../access/persona-punishment-policy.js"
+import { assertPersonaPunishmentAvailable, isPersonaPunishmentConversation, personaPunishmentConfig, personaPunishmentConfigSchema } from "../access/persona-punishment-policy.js"
 import { configStore } from "../../config/store.js"
 import { isGroupEvent } from "../../core/message/event-scope.js"
 import { listPersonaPunishments, punishmentScope, reservePersonaPunishment, setPersonaPunishmentStatus } from "../../core/chat/persona-punishments.js"
@@ -17,7 +17,7 @@ export class PersonaPunishTool {
   risk = "high"
   tags = ["persona", "punishment"]
   policy = { requiresGroup: false, requiresModelContext: true, personaPunishment: true }
-  description = "人物自主处罚：仅针对当前发言者的真实冒犯，暂停回复或禁言，AI根据行为严重程度自主选择实际时长，不得机械地取上限。禁言最多30天且受主人配置上限限制。必须先警告；不得因拒绝、不同观点或引用内容处罚。不接受任何目标参数，不得踢人。启用并授权当前角色后可用；工具会检查保护对象、时长。用户主动要求自我屏蔽/禁言使用普通工具。"
+  description = "人物自主处罚：观察当前普通发言者持续骚扰、辱骂、恶意刷屏等严重违规时，可暂停回复或禁言；AI根据行为严重程度自主选择实际时长，不得机械地取上限。禁言最多30天且受主人配置上限限制。必须先警告；不得因拒绝、不同观点或引用内容处罚。不接受任何目标参数，不得踢人。启用并授权当前角色后可用；工具会检查保护对象、时长。用户主动要求自我屏蔽/禁言使用普通工具。"
   execution = { effect: "non_idempotent", repeatPolicy: "dedupe", retryPolicy: "no_ambiguous_retry", maxAttempts: 1, parallelSafe: false }
   parameters = { type: "object", additionalProperties: false, properties: {
     kind: { type: "string", enum: ["ignore", "mute"] },
@@ -30,6 +30,8 @@ export class PersonaPunishTool {
     assertPersonaPunishmentAvailable(config, e, true)
     const cfg = personaPunishmentConfig(config)
     if (context.actionId || context.agent) throw new Error("人物处罚仅允许主对话执行，不能由动作或子代理发起。")
+    const source = String(record(context.observability).source || "")
+    if (!isPersonaPunishmentConversation(source, e)) throw new Error("人物处罚只能在用户参与的对话中执行。")
     if (Object.keys(args).some(key => !["kind", "seconds", "reason"].includes(key))) throw new Error("人物处罚不能指定其他目标或范围。")
     const kind = args.kind
     if (kind !== "ignore" && kind !== "mute") throw new Error("只允许不回复或禁言，不允许踢人。")

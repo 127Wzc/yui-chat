@@ -5,6 +5,10 @@ import { punishmentScope } from "../../core/chat/persona-punishments.js"
 import { resolveBoundaryRole } from "./roles.js"
 import type { UnknownRecord } from "../../core/message/types.js"
 function record(value: unknown): UnknownRecord { return value && typeof value === "object" ? value as UnknownRecord : {} }
+/** 自主处罚只随用户对话发生，不在后台问候、子代理或戳一戳等通知中发起。 */
+export function isPersonaPunishmentConversation(source: unknown, event: unknown): boolean {
+  return ["", "chat", "firstPerson", "firstPersonContinuation", "web-test"].includes(String(source || "")) && !record(event).notice_type
+}
 export const personaPunishmentConfigSchema = {
   type: "object",
   properties: {

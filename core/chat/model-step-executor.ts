@@ -8,6 +8,7 @@ import { explainToolPolicy } from "../../tools/access/policy.js"
 import type { ToolDefinition } from "../../tools/support/tool-contract.js"
 import { getToolCommon, isToolEnabledByConfig, resolveToolExecutionPolicy } from "../../tools/support/contract.js"
 import { toolRegistry, type RegistryExecutionContext } from "../../tools/support/registry.js"
+import { isPersonaPunishmentConversation } from "../../tools/access/persona-punishment-policy.js"
 import { createExecutionRuntime } from "../../tools/support/execution-runtime.js"
 import { buildPersonaMessagesWithContext, buildUserMessage, type PersonaContextSection } from "../persona/persona-chain.js"
 import { findUnsupportedMediaCQCodes } from "../message/cq-code.js"
@@ -651,7 +652,9 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
   const localWebSearchEnabled = webSearchSource === "local" || aggregatedHostedWebSearch || (webSearchSource === "auto" && !nativeWebSearchEnabled)
   const localToolSearchAvailable = record(record(toolsConfig.builtin).toolSearch).localEnabled !== false
   const localToolSearchEnabled = localToolSearchAvailable && (toolSearchSource === "local" || (toolSearchSource === "auto" && !nativeToolSearchEnabled))
+  const canUsePersonaPunishment = isInteractiveConversation && isPersonaPunishmentConversation(source, options.e)
   const filterModelLocalTools = <T extends { name?: unknown }>(tools: readonly T[]): T[] => filterToolsForModel(tools, modelConfig).filter(tool => {
+    if (tool.name === "persona_punish" && !canUsePersonaPunishment) return false
     if (tool.name === "web_search") return localWebSearchEnabled
     if (tool.name === "tool_search") return localToolSearchEnabled && !imageGenerationRequest
     return true
@@ -731,6 +734,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
   // 类请求里把发送工具挤掉，导致模型拿到了资源却无工具可用。
   const pinnedToolNames = new Set([
     "message_send",
+    ...(canUsePersonaPunishment ? ["persona_punish"] : []),
     ...(isBotCommandQuery(text(prompt)) ? ["knowledge_manage"] : []),
     ...(imageGenerationRequest ? ["generate_image"] : []),
     ...(preferLocalImageMedia ? ["image_media"] : []),

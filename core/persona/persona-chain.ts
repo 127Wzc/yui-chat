@@ -2,6 +2,7 @@ import { commandObserver } from "../../knowledge/command-observer.js"
 import { knowledgeStore } from "../../knowledge/store.js"
 import { memoryStore } from "../../memory/store.js"
 import { skillManager } from "../../skills/index.js"
+import { boundaryRoleLabels, resolveBoundaryRole } from "../../tools/access/roles.js"
 import { resolvePersonaRuntimePrompt } from "./prompt-composer.js"
 import { buildMediaUserContent, summarizeMediaContext } from "../message/media-context.js"
 import { buildOpenAiUserContent, extractMessageContext, mentionsBot, summarizeMessageContext } from "../message/message-context.js"
@@ -182,7 +183,7 @@ export function buildUserMessage(event: unknown, prompt: unknown, _config: unkno
   const prefix = isGroupEvent(e)
     ? `群聊「${groupName(event)}」中，${userName(event)}(${text(e.user_id)}) 说：`
     : `${userName(event)}(${text(e.user_id)}) 说：`
-  const identity = JSON.stringify({ requester: { userId: text(e.user_id), name: userName(event) }, assistant: { userId: text(e.self_id), name: botName(event, record(_config)) }, groupId: isGroupEvent(e) ? text(e.group_id) : "", historyOwner: text(e.user_id) })
+  const identity = JSON.stringify({ requester: { userId: text(e.user_id), name: userName(event), role: boundaryRoleLabels[resolveBoundaryRole(event)] }, assistant: { userId: text(e.self_id), name: botName(event, record(_config)) }, groupId: isGroupEvent(e) ? text(e.group_id) : "", historyOwner: text(e.user_id) })
   const reference = text(options.groupReference)
   const attachmentSummary = options.history === true ? "" : media ? summarizeMediaContext(media) : summarizeMessageContext(context)
   const currentValue = [

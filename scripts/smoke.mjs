@@ -919,6 +919,7 @@ async function checkToolPolicy() {
   assert(String(messageManageMeta?.common?.description || "").includes("recall") && String(messageManageMeta?.common?.description || "").includes("essence"), "message_manage should clearly describe recall and essence operations")
   assert(selectPromptTools(listedTools, "玉玉撤回这条消息", { enabled: true, maxTools: 1, maxDefinitionTokens: 1200 })[0]?.name === "message_manage", "Chinese recall intent should select message_manage from its localized parameter semantics")
   assert(selectPromptTools(listedTools, "玉玉禁言我1分钟", { enabled: true, maxTools: 1, maxDefinitionTokens: 1200 })[0]?.name === "mute_user", "Chinese mute intent should select mute_user from its localized display name")
+  assert(selectPromptTools(listedTools, "玉玉把小呆毛和猪头关小黑屋一个月", { enabled: true, maxTools: 1, maxDefinitionTokens: 1200 })[0]?.name === "mute_user", "小黑屋禁言请求应优先提供禁言工具")
   assert(selectPromptTools(listedTools, "联网查一下今天最新的 AI 新闻", { enabled: true, maxTools: 1, maxDefinitionTokens: 1200 })[0]?.name === "web_search", "explicit real-time web intent should inject web_search in the first model round")
   assert(selectPromptTools(listedTools, "帮我搜索一下 TypeScript 最近的新特性", { enabled: true, maxTools: 1, maxDefinitionTokens: 1200 })[0]?.name === "web_search", "generic non-specialized search intent should inject web_search in the first model round")
   assert(selectPromptTools(listedTools, "搜一张生气的猫咪图片", { enabled: true, maxTools: 1, maxDefinitionTokens: 1200 })[0]?.name === "image_media", "media search intent should still prefer image_media over web_search")
@@ -4368,6 +4369,41 @@ async function checkConversations() {
     mockConfig.mediaRecognition.recognitionModel = "mock"
     mockConfig.mediaRecognition.remoteFetch.enabled = true
     await configStore.save(mockConfig)
+    const observedToolSets = []
+    const moderationAdapter = {
+      id: "smoke-moderation-availability",
+      supportsTools: true, supportsVision: false, supportsStreaming: false, supportsEmbeddings: false,
+      async sendMessage({ tools = [] }) {
+        observedToolSets.push(tools.map(tool => tool.name))
+        return { id: "smoke-moderation", text: "请保持友善。", usage: { input: 1, output: 1, total: 2, source: "reported" }, toolCalls: [] }
+      },
+    }
+    const moderationConfig = JSON.parse(JSON.stringify(mockConfig))
+    moderationConfig.tools.enabledTools.push("persona_punish")
+    moderationConfig.tools.boundaryAccess.roles.user.allowedTools.push("persona_punish")
+    moderationConfig.tools.runtimeVariables.persona_punish.enabled = true
+    moderationConfig.tools.runtimeVariables.persona_punish.allowMute = true
+    moderationConfig.tools.promptSelection.maxTools = 1
+    adapterRegistry.register(moderationAdapter)
+    try {
+      const stepOptions = {
+        e: { isGroup: true, group_id: "20001", user_id: "10001", self_id: "99999", sender: { role: "member" }, msg: "滚出去你这垃圾" },
+        prompt: "滚出去你这垃圾", config: moderationConfig, history: [],
+        step: { id: "reply", task: "replyer", mode: "final" },
+        channel: { id: moderationAdapter.id, type: moderationAdapter.id, model: "smoke", modelConfig: { toolUse: true }, timeoutMs: 1000 },
+      }
+      await chatService.runModelStepWithChannel({ ...stepOptions, source: "chat" })
+      assert(observedToolSets.at(-1).includes("persona_punish"), "enabled and authorized moderation must be visible during a user conversation without requiring a keyword")
+      await chatService.runModelStepWithChannel({ ...stepOptions, source: "firstPersonContinuation" })
+      assert(observedToolSets.at(-1).includes("persona_punish"), "a continuing user conversation retains autonomous moderation")
+      await chatService.runModelStepWithChannel({ ...stepOptions, source: "initiativeGreeting" })
+      assert(!observedToolSets.at(-1).includes("persona_punish"), "background greetings must not offer autonomous punishment")
+      await chatService.runModelStepWithChannel({ ...stepOptions, source: "firstPerson", e: { ...stepOptions.e, notice_type: "poke" } })
+      assert(!observedToolSets.at(-1).includes("persona_punish"), "a poke notification is not a user conversation")
+      moderationConfig.tools.runtimeVariables.persona_punish.enabled = false
+      await chatService.runModelStepWithChannel({ ...stepOptions, source: "chat" })
+      assert(!observedToolSets.at(-1).includes("persona_punish"), "disabled punishment must not be made visible by pinning")
+    } finally { adapterRegistry.adapters.delete(moderationAdapter.id) }
     const { checkQuotedContext } = await import("./check-quoted-context.mjs")
     await checkQuotedContext(tinyPngDataUrl)
     const { checkGroupContext } = await import("./check-group-context.mjs")

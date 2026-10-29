@@ -1,4 +1,5 @@
 import { stripPluginCommand } from "../../core/message/command-prefixes.js"
+import { stripMessageCodes } from "../../core/message/message-context.js"
 import { groupIdFromEvent, isGroupEvent } from "../../core/message/event-scope.js"
 import { resolveBoundaryRole } from "./roles.js"
 
@@ -48,13 +49,13 @@ export function assertMemberOperation(operation: string, args: RecordValue, even
 
 /** 只认当前消息中直接、肯定的自助请求；不让模型用“目标是自己”冒充用户同意。 */
 export function assertSelfRestrictionRequest(operation: "mute" | "block", event: RecordValue, config: unknown = {}): void {
-  let message = stripPluginCommand(event.raw_message || event.msg || "").replace(/^chat\s+/, "").trim()
+  let message = stripPluginCommand(stripMessageCodes(event.raw_message || event.msg || "")).replace(/^chat\s+/, "").trim()
   const persona = (config as RecordValue)?.persona as RecordValue | undefined
   const names = [persona?.firstPerson, ...(Array.isArray(persona?.aliases) ? persona.aliases : [])].filter(value => typeof value === "string" && value.length).map(String).sort((a, b) => b.length - a.length)
   const name = names.find(value => message.startsWith(value))
   if (name) message = message.slice(name.length).replace(/^[，,\s]+/, "")
-  const request = operation === "mute" ? /^(?:请|麻烦|帮我)?(?:把我禁言|禁言我|我要禁言|给我禁言)/ : /^(?:请|麻烦|帮我)?(?:屏蔽我|把我屏蔽|拉黑我|把我拉黑|暂时别回复我|别回复我|不要回复我)/
+  const request = operation === "mute" ? /^(?:请|麻烦|帮我)?(?:把我禁言|禁言我|我要禁言|给我禁言|把我关(?:进|入|到)?小黑屋|关我(?:进|入|到)?小黑屋|让我(?:进|进入|去|待在)小黑屋|(?:我要|我想)(?:进|进入|去)小黑屋|给我关(?:进|入|到)?小黑屋)/ : /^(?:请|麻烦|帮我)?(?:屏蔽我|把我屏蔽|拉黑我|把我拉黑|暂时别回复我|别回复我|不要回复我)/
   const duration = message.replace(request, "")
-  const validTail = /^(?:\s*(?:\d+(?:\.\d+)?|[一二两三四五六七八九十百半]+)\s*(?:秒钟?|分钟?|小时|天))?[吧呀啊。！!~～\s]*$/.test(duration)
+  const validTail = /^(?:\s*(?:\d+(?:\.\d+)?|[一二两三四五六七八九十百半]+)\s*(?:秒钟?|分钟?|小时|天|个?月))?[吧呀啊。！!~～\s]*$/.test(duration)
   if (!request.test(message) || !validTail || /(?:不要禁言|别禁言|不要屏蔽|别屏蔽|不想|取消)/.test(message)) throw new Error("需要用户在当前消息中明确提出自助请求；人物自主处罚必须使用独立的人物处罚工具。")
 }
