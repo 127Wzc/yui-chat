@@ -5,6 +5,7 @@ import { splitTokens } from "../../shared/format.js"
 import { MemoryCaptureDrawers } from "./memory-capture-drawers.js"
 import { MemoryExtractionWorkspace } from "./memory-extraction-workspace.js"
 import { MemoryManageWorkspace } from "./memory-manage-workspace.js"
+import { MemoryMaintenanceWorkspace } from "./memory-maintenance-workspace.js"
 import { MemoryPortraitSettings } from "./memory-portrait.js"
 
 const PAGE_SIZE = 20
@@ -170,6 +171,7 @@ export const MemoryTab = {
   name: "MemoryTab",
   setup() {
     const activeWorkspace = ref("manage")
+    const maintenanceSubmission = ref<MemoryRecord>({})
     const extractionPane = ref("timeline")
     const busy = ref(false)
     const captureBusy = ref(false)
@@ -180,8 +182,6 @@ export const MemoryTab = {
     const groupWorkspace = ref<MemoryRecord | null>(null)
     const groupMemoryQuery = ref("")
     const groupMemoryPage = ref(1)
-    const duplicatePlan = ref<MemoryRecord | null>(null)
-    const duplicatePlanBusy = ref(false)
     const memberQuery = ref("")
     const selectedMember = ref<MemoryRecord | null>(null)
     const memberWorkspace = ref<MemoryRecord | null>(null)
@@ -229,7 +229,7 @@ export const MemoryTab = {
     const captureDraft = reactive<MemoryRecord>({
       scopeId: "", enabled: true,
       useDefault: { retentionDays: true, tokenLimit: true, modelName: true, promptTemplate: true, maxTokens: true, minConfidence: true, retrievalResultLimit: true },
-      retentionDays: 30, tokenLimit: 30000, modelName: "", promptTemplate: "", maxTokens: 4096, minConfidence: 0.7, retrievalResultLimit: 3,
+      retentionDays: 30, tokenLimit: 200000, modelName: "", promptTemplate: "", maxTokens: 100000, minConfidence: 0.7, retrievalResultLimit: 3,
     })
     // 从既有配置进入为编辑模式，锁定群号；新增模式下命中已有群号时阻止保存以免覆盖。
     const captureDraftEditing = ref(false)
@@ -250,10 +250,10 @@ export const MemoryTab = {
       const retrieval = record(memoryConfig.retrieval)
       return capture.value.defaultPolicy || {
         retentionDays: Number(groupCapture.defaultRetentionDays) || 30,
-        tokenLimit: Number(groupCapture.defaultTokenLimit) || 30000,
+        tokenLimit: Number(groupCapture.defaultTokenLimit) || 200000,
         promptTemplate: String(groupCapture.promptTemplate || "").trim() || capture.value.defaultPromptTemplate || "",
         modelName: String(consolidation.modelName || ""),
-        maxTokens: Number(consolidation.maxTokens) || 4096,
+        maxTokens: Number(consolidation.maxTokens) || 100000,
         minConfidence: Number(consolidation.minConfidence ?? 0.7),
         retrievalResultLimit: Number(retrieval.resultLimit) || 3,
       }
@@ -392,11 +392,11 @@ export const MemoryTab = {
 
     function captureFieldHint(field: PolicyOverrideField): string {
       const descriptions: Record<PolicyOverrideField, string> = {
-        retentionDays: "0 表示永久保留。",
-        tokenLimit: "每个自然日子窗口 3,000–60,000 Token，仅计算消息正文。",
+        retentionDays: "0 表示永久保留。被记忆引用的原文到期后继续保留，未引用的到期消息才自动清理。",
+        tokenLimit: "默认 200,000，可设 3,000–1,000,000 Token；每日提炼按消息正文估算，AI 整理包含系统提示与完整资料。",
         modelName: "留空时使用默认对话模型。",
         promptTemplate: "直接编辑会创建本群覆盖，恢复默认后继续跟随系统。",
-        maxTokens: "推理模型的思考也计入输出上限。",
+        maxTokens: "默认 100,000，可设 256–100,000；推理模型的思考也计入输出上限，实际受模型能力限制。",
         minConfidence: "范围 0–1，低于该值的候选记忆不会写入。",
         retrievalResultLimit: "范围 1–20；全文命中不足时补充向量召回。",
       }
@@ -765,6 +765,8 @@ export const MemoryTab = {
 
     function memorySourceLabel(item: MemoryRecord = {}): string {
       const source = String(item.source || "")
+      if (Array.isArray(item.tags) && item.tags.includes("manual-revision")) return "人工修订 · 来源仅供参考"
+      if (source.startsWith("maintenance:")) return "AI 整理"
       if (source.startsWith("group-window")) return "群聊提炼"
       return ({ manual: "手动维护", "manual-edit": "人工修订", "explicit-user": "用户明确记忆", "platform-metadata": "平台资料同步", superseded: "已被修正", "duplicate-merged": "重复记忆已合并" } as Record<string, string>)[source] || "已有记忆"
     }
@@ -977,35 +979,6 @@ export const MemoryTab = {
       }
     }
 
-    async function reviewDuplicateMemories() {
-      if (!selectedGroupId.value) return
-      duplicatePlanBusy.value = true
-      try {
-        const result = await request(`/api/memory/captures/group/${encodeURIComponent(selectedGroupId.value)}/memories/duplicates`)
-        const plan = record(result.plan || { entries: [], archiveCount: 0 })
-        duplicatePlan.value = plan
-        if (!plan.archiveCount) return toast("没有发现可自动合并的重复记忆", "success")
-        const detail = records(plan.entries).slice(0, 4).map((item: MemoryRecord) => `保留：${record(item.keep).text}\n归档：${records(item.archive).map((row: MemoryRecord) => row.text).join('；')}`).join("\n\n")
-        const accepted = await confirmAction({
-          title: `整理 ${plan.archiveCount} 条重复记忆？`,
-          message: "只会归档同一事实键和值的自动提炼结果，不会删除原始记录，也不会调用模型。",
-          detail: records(plan.entries).length > 4 ? `${detail}\n\n其余 ${records(plan.entries).length - 4} 组重复项未展开。` : detail,
-          confirmText: "确认整理", tone: "warn", icon: "database",
-        })
-        if (!accepted) return
-        const ids = records(plan.entries).flatMap((item: MemoryRecord) => records(item.archive).map((row: MemoryRecord) => row.id))
-        const merged = await request(`/api/memory/captures/group/${encodeURIComponent(selectedGroupId.value)}/memories/duplicates/merge`, { method: "POST", body: JSON.stringify({ ids }) })
-        store.memory = { ...store.memory, stats: merged.stats }
-        await loadGroupWorkspace()
-        if (selectedMember.value) await loadMemberWorkspace({ silent: true })
-        toast(`已归档 ${merged.result?.archived || 0} 条重复记忆`, "success")
-      } catch (err) {
-        toast(errorMessage(err))
-      } finally {
-        duplicatePlanBusy.value = false
-      }
-    }
-
     async function loadGroupWorkspace(options: { silent?: boolean } = {}): Promise<void> {
       const groupId = selectedGroupId.value
       if (!groupId) {
@@ -1031,6 +1004,9 @@ export const MemoryTab = {
     }
 
     async function selectGroup(policy: MemoryRecord): Promise<void> {
+      if (policy.scopeId !== selectedGroupId.value && Object.entries(store.dirtyScopes).some(([key, dirty]) => key.startsWith("memory-maintenance:") && dirty)) {
+        if (!await confirmAction({ title: "切换群聊？", message: "有未提交的整理编辑，切换后将放弃本次草稿。分析建议仍会保留。", confirmText: "放弃并切换", tone: "warn" })) return
+      }
       selectedGroupId.value = policy.scopeId
       windowSelectionMode.value = false
       clearWindowSelection()
@@ -1058,8 +1034,8 @@ export const MemoryTab = {
     }
 
     async function switchWorkspace(value: string): Promise<void> {
-      if (value !== activeWorkspace.value && Object.entries(store.dirtyScopes).some(([key, dirty]) => key.startsWith("portrait:") && dirty)) {
-        if (!await confirmAction({ title: "离开画像设置？", message: "有未保存的画像设置，离开后将放弃修改。", confirmText: "放弃并离开", tone: "warn" })) return
+      if (value !== activeWorkspace.value && Object.entries(store.dirtyScopes).some(([key, dirty]) => (key.startsWith("portrait:") || key.startsWith("memory-maintenance:")) && dirty)) {
+        if (!await confirmAction({ title: "离开当前工作区？", message: "有未提交的编辑，离开后将放弃本次修改。", confirmText: "放弃并离开", tone: "warn" })) return
       }
       activeWorkspace.value = value
       showGroupPicker.value = false
@@ -1069,6 +1045,12 @@ export const MemoryTab = {
         timelineDetailError.value = ""
       }
       if (value === "extract") await loadExtractionWorkspace({ resetRange: !reextractPlan.value })
+    }
+
+    function openMaintenanceTasks(submission: MemoryRecord): void {
+      maintenanceSubmission.value = submission
+      activeWorkspace.value = "maintenance"
+      showGroupPicker.value = false
     }
 
     async function selectMember(member: MemoryRecord): Promise<void> {
@@ -1701,14 +1683,15 @@ export const MemoryTab = {
 
     // 子工作区只接收这个响应式视图对象，所有 API 请求、确认和刷新仍由父组件统一编排。
     const memoryView = reactive({
+      openMaintenanceTasks,
       memoryDetail, memorySources, memoryDetailLoading, memoryDetailError, loadMemoryDetail, memoryPercent, memoryTimeLabel, memorySourceLabel,
-      activeWorkspace, extractionPane, busy, captureBusy, captureAction, showGroupPicker, groupPickerQuery, selectedGroupId, selectedPolicy, capturePolicies, filteredPolicies, captureDefaults, captureDraftPolicy, captureDraftDirty, captureDraftEditing, historyBackfillLimit, historyBackfillFrom, backfillLimitMax, extractionModelOptions, groupWorkspace, groupMemory, groupMemoryQuery, groupMemoryPage, duplicatePlan, duplicatePlanBusy,
+      activeWorkspace, extractionPane, busy, captureBusy, captureAction, showGroupPicker, groupPickerQuery, selectedGroupId, selectedPolicy, capturePolicies, filteredPolicies, captureDefaults, captureDraftPolicy, captureDraftDirty, captureDraftEditing, historyBackfillLimit, historyBackfillFrom, backfillLimitMax, extractionModelOptions, groupWorkspace, groupMemory, groupMemoryQuery, groupMemoryPage,
       members, memberQuery, selectedMember, selectedMemberName, memberWorkspace, memberScope, memberMemoryQuery, memberMemoryPage, currentMemberMemory,
       showMemoryDrawer, showProfileDrawer, showCaptureSettings, showReextractDialog, selectedCapture, captureMessages, captureWindows, captureWindowPage, captureMessageQuery, captureMessagePage, captureMessagePageJump, captureMessageOrder, captureMessagePageCount, captureDraft, draft, windowDetails, windowDetailLoading,
       selectedTimelineWindow, timelineWindowDetail, selectedWindowMessages, timelineWindows, reextractStart, reextractEnd, reextractPlan, reextractBusy, extractionCounts, runRecordWindows,
       calendarDays, calendarMeta, calendarRange, calendarMetric, calendarBusy, calendarWeeks, calendarMetricLabel, calendarSummary, calendarWeeksElement, timelineDetailLoading, timelineDetailError,
       windowSelectionMode, selectedWindowStarts, selectedWindowItems, selectedWindowSummary,
-      policyTitle, policyOverrideSummary, memberTitle, timeLabel, rangeLabel, scopeLabel, extractionScopeLabel, extractionResultLabel, backfillStatusLabel, windowStatusLabel, timelineStatus, calendarStatus, calendarDayClass, calendarDayTitle, calendarDayAriaLabel, dayNumber, segmentSummary, normalizationView, compactNumber, windowWorkload, memoryLifecycle, resultAction, taskResultSummary, runningWindowProgress, taskListSummary, batchProgressLabel, captureDefaultLabel, captureFieldHint, captureFieldSource, updateCaptureField, resetCaptureField, selectGroup, selectMember, switchWorkspace, refreshWorkspace, reviewDuplicateMemories, openCaptureSettings, closeCaptureSettings, closeMemoryEditor, closeProfileEditor, saveCapturePolicy, openSystemSettings, backfillHistory, backfillFromMessage, queueExtraction,
+      policyTitle, policyOverrideSummary, memberTitle, timeLabel, rangeLabel, scopeLabel, extractionScopeLabel, extractionResultLabel, backfillStatusLabel, windowStatusLabel, timelineStatus, calendarStatus, calendarDayClass, calendarDayTitle, calendarDayAriaLabel, dayNumber, segmentSummary, normalizationView, compactNumber, windowWorkload, memoryLifecycle, resultAction, taskResultSummary, runningWindowProgress, taskListSummary, batchProgressLabel, captureDefaultLabel, captureFieldHint, captureFieldSource, updateCaptureField, resetCaptureField, selectGroup, selectMember, switchWorkspace, refreshWorkspace, openCaptureSettings, closeCaptureSettings, closeMemoryEditor, closeProfileEditor, saveCapturePolicy, openSystemSettings, backfillHistory, backfillFromMessage, queueExtraction,
       isWindowSelected, toggleWindowSelectionMode, toggleWindowSelection, openRunWindow, extractionWindowAction, runExtractionWindow, clearWindowSelection, selectVisibleWindows, confirmSelectedWindows, handleCalendarScroll,
       loadCaptureDetails, loadExtractionWorkspace, loadCalendar, previewReextraction, openReextractDialog, confirmReextraction, reextractSingleDay, selectTimelineWindow, changeCaptureMessagePage, jumpCaptureMessagePage, changeCaptureMessageOrder, changeCaptureWindowPage, targetForGroup, targetForMember, openMemoryEditor, saveMemory, deleteMemory, openProfileEditor, saveProfile, changeGroupPage, changeMemberPage,
       setCalendarWeeksElement,
@@ -1716,18 +1699,19 @@ export const MemoryTab = {
 
     return {
       memoryView,
-      activeWorkspace, extractionPane, busy, captureBusy, captureAction, showGroupPicker, groupPickerQuery, selectedGroupId, selectedPolicy, capturePolicies, filteredPolicies, captureDefaults, captureDraftPolicy, captureDraftDirty, captureDraftEditing, historyBackfillLimit, historyBackfillFrom, backfillLimitMax, defaultReplyModelName, extractionModelOptions, groupWorkspace, groupMemory, groupMemoryQuery, groupMemoryPage, duplicatePlan, duplicatePlanBusy,
+      maintenanceSubmission,
+      activeWorkspace, extractionPane, busy, captureBusy, captureAction, showGroupPicker, groupPickerQuery, selectedGroupId, selectedPolicy, capturePolicies, filteredPolicies, captureDefaults, captureDraftPolicy, captureDraftDirty, captureDraftEditing, historyBackfillLimit, historyBackfillFrom, backfillLimitMax, defaultReplyModelName, extractionModelOptions, groupWorkspace, groupMemory, groupMemoryQuery, groupMemoryPage,
       members, memberQuery, selectedMember, selectedMemberName, memberWorkspace, memberScope, memberMemoryQuery, memberMemoryPage, currentMemberMemory,
       showMemoryDrawer, showProfileDrawer, showCaptureSettings, showReextractDialog, selectedCapture, captureMessages, captureWindows, captureWindowPage, captureMessageQuery, captureMessagePage, captureMessagePageJump, captureMessageOrder, captureMessagePageCount, captureDraft, draft, windowDetails, windowDetailLoading,
       selectedTimelineWindow, timelineWindowDetail, selectedWindowMessages, timelineWindows, reextractStart, reextractEnd, reextractPlan, reextractBusy, extractionCounts, runRecordWindows,
       calendarDays, calendarMeta, calendarRange, calendarMetric, calendarBusy, calendarWeeks, calendarMetricLabel, calendarSummary, calendarWeeksElement, timelineDetailLoading, timelineDetailError,
       windowSelectionMode, selectedWindowStarts, selectedWindowItems, selectedWindowSummary,
-      policyTitle, policyOverrideSummary, memberTitle, timeLabel, rangeLabel, scopeLabel, extractionScopeLabel, extractionResultLabel, backfillStatusLabel, windowStatusLabel, timelineStatus, calendarStatus, calendarDayClass, calendarDayTitle, calendarDayAriaLabel, dayNumber, segmentSummary, normalizationView, compactNumber, windowWorkload, memoryLifecycle, resultAction, taskResultSummary, runningWindowProgress, taskListSummary, batchProgressLabel, captureDefaultLabel, captureFieldHint, captureFieldSource, updateCaptureField, resetCaptureField, selectGroup, selectMember, switchWorkspace, refreshWorkspace, reviewDuplicateMemories, openCaptureSettings, closeCaptureSettings, closeMemoryEditor, closeProfileEditor, saveCapturePolicy, openSystemSettings, backfillHistory, backfillFromMessage, queueExtraction,
+      policyTitle, policyOverrideSummary, memberTitle, timeLabel, rangeLabel, scopeLabel, extractionScopeLabel, extractionResultLabel, backfillStatusLabel, windowStatusLabel, timelineStatus, calendarStatus, calendarDayClass, calendarDayTitle, calendarDayAriaLabel, dayNumber, segmentSummary, normalizationView, compactNumber, windowWorkload, memoryLifecycle, resultAction, taskResultSummary, runningWindowProgress, taskListSummary, batchProgressLabel, captureDefaultLabel, captureFieldHint, captureFieldSource, updateCaptureField, resetCaptureField, selectGroup, selectMember, switchWorkspace, refreshWorkspace, openCaptureSettings, closeCaptureSettings, closeMemoryEditor, closeProfileEditor, saveCapturePolicy, openSystemSettings, backfillHistory, backfillFromMessage, queueExtraction,
       isWindowSelected, toggleWindowSelectionMode, toggleWindowSelection, openRunWindow, extractionWindowAction, runExtractionWindow, clearWindowSelection, selectVisibleWindows, confirmSelectedWindows, handleCalendarScroll,
       loadCaptureDetails, loadExtractionWorkspace, loadCalendar, previewReextraction, openReextractDialog, confirmReextraction, reextractSingleDay, selectTimelineWindow, changeCaptureMessagePage, jumpCaptureMessagePage, changeCaptureMessageOrder, changeCaptureWindowPage, targetForGroup, targetForMember, openMemoryEditor, saveMemory, deleteMemory, openProfileEditor, saveProfile, changeGroupPage, changeMemberPage,
     }
   },
-  components: { MemoryCaptureDrawers, MemoryExtractionWorkspace, MemoryManageWorkspace, MemoryPortraitSettings },
+  components: { MemoryCaptureDrawers, MemoryExtractionWorkspace, MemoryManageWorkspace, MemoryPortraitSettings, MemoryMaintenanceWorkspace },
   template: `
     <MemoryCaptureDrawers :view="memoryView" />
 
@@ -1739,10 +1723,11 @@ export const MemoryTab = {
           <button class="btn primary small" type="button" @click="openCaptureSettings(selectedPolicy)"><Icon name="settings" :size="14" />采集设置</button>
         </div>
       </header>
-      <SectionNav :model-value="activeWorkspace" @update:model-value="switchWorkspace" variant="tabs" label="记忆工作区" :items="[{ value: 'manage', label: '记忆', icon: 'database' }, { value: 'extract', label: '提炼', icon: 'sparkles' }, { value: 'portrait-settings', label: '画像设置', icon: 'sliders' }]" />
+      <SectionNav :model-value="activeWorkspace" @update:model-value="switchWorkspace" variant="tabs" label="记忆工作区" :items="[{ value: 'manage', label: '记忆', icon: 'database' }, { value: 'maintenance', label: '整理任务', icon: 'list' }, { value: 'extract', label: '提炼', icon: 'sparkles' }, { value: 'portrait-settings', label: '画像设置', icon: 'sliders' }]" />
       <Panel flush class="memory-hub-workspace">
       <MemoryManageWorkspace :view="memoryView" />
       <MemoryExtractionWorkspace :view="memoryView" />
+      <MemoryMaintenanceWorkspace v-if="activeWorkspace === 'maintenance'" :view="memoryView" :seed="maintenanceSubmission" @changed="refreshWorkspace" />
       <MemoryPortraitSettings v-if="activeWorkspace === 'portrait-settings'" />
       </Panel>
     </div>

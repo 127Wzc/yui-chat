@@ -81,11 +81,11 @@ export const AdvancedTab = {
       memoryEmbeddingTokensPerDay: config.value.memory?.retrieval?.embeddingTokensPerDay ?? 200000,
       knowledgeEmbeddingTokensPerDay: config.value.knowledge?.indexing?.globalEmbeddingTokensPerDay ?? 2000000,
       captureRetentionDays: config.value.memory?.groupCapture?.defaultRetentionDays ?? 30,
-      captureTokenLimit: config.value.memory?.groupCapture?.defaultTokenLimit ?? 30000,
+      captureTokenLimit: config.value.memory?.groupCapture?.defaultTokenLimit ?? 200000,
       captureModelName: config.value.memory?.groupCapture?.consolidation?.modelName || "",
       captureUseBuiltInPrompt: !String(config.value.memory?.groupCapture?.promptTemplate || "").trim(),
       capturePromptTemplate: String(config.value.memory?.groupCapture?.promptTemplate || "").trim(),
-      captureMaxTokens: config.value.memory?.groupCapture?.consolidation?.maxTokens ?? 4096,
+      captureMaxTokens: config.value.memory?.groupCapture?.consolidation?.maxTokens ?? 100000,
       captureMinConfidence: config.value.memory?.groupCapture?.consolidation?.minConfidence ?? 0.7,
       captureMaxWindowsPerScan: config.value.memory?.groupCapture?.consolidation?.maxWindowsPerScan ?? 2,
       captureScheduleMode: config.value.memory?.groupCapture?.consolidation?.schedule?.mode || "interval",
@@ -176,18 +176,18 @@ export const AdvancedTab = {
     const captureSummary = computed(() => asRecord<MemorySummary>(store.memory).capture || {})
     const captureDefaults = computed<CaptureDefaults>(() => captureSummary.value.defaultPolicy ? {
       retentionDays: Number(captureSummary.value.defaultPolicy.retentionDays) || 30,
-      tokenLimit: Number(captureSummary.value.defaultPolicy.tokenLimit) || 30000,
+      tokenLimit: Number(captureSummary.value.defaultPolicy.tokenLimit) || 200000,
       promptTemplate: String(captureSummary.value.defaultPolicy.promptTemplate || ""),
       modelName: String(captureSummary.value.defaultPolicy.modelName || ""),
-      maxTokens: Number(captureSummary.value.defaultPolicy.maxTokens) || 4096,
+      maxTokens: Number(captureSummary.value.defaultPolicy.maxTokens) || 100000,
       minConfidence: Number(captureSummary.value.defaultPolicy.minConfidence ?? 0.7),
       retrievalResultLimit: Number(captureSummary.value.defaultPolicy.retrievalResultLimit) || 3,
     } : {
       retentionDays: Number(config.value.memory?.groupCapture?.defaultRetentionDays) || 30,
-      tokenLimit: Number(config.value.memory?.groupCapture?.defaultTokenLimit) || 30000,
+      tokenLimit: Number(config.value.memory?.groupCapture?.defaultTokenLimit) || 200000,
       promptTemplate: String(config.value.memory?.groupCapture?.promptTemplate || "").trim() || captureSummary.value.defaultPromptTemplate || "",
       modelName: String(config.value.memory?.groupCapture?.consolidation?.modelName || ""),
-      maxTokens: Number(config.value.memory?.groupCapture?.consolidation?.maxTokens) || 4096,
+      maxTokens: Number(config.value.memory?.groupCapture?.consolidation?.maxTokens) || 100000,
       minConfidence: Number(config.value.memory?.groupCapture?.consolidation?.minConfidence ?? 0.7),
       retrievalResultLimit: Number(config.value.memory?.retrieval?.resultLimit) || 3,
     })
@@ -237,11 +237,11 @@ export const AdvancedTab = {
       const consolidation = capture.consolidation || {}
       const configuredPrompt = String(capture.promptTemplate || "").trim()
       draft.captureRetentionDays = Number(capture.defaultRetentionDays) || 30
-      draft.captureTokenLimit = Number(capture.defaultTokenLimit) || 30000
+      draft.captureTokenLimit = Number(capture.defaultTokenLimit) || 200000
       draft.captureModelName = consolidation.modelName || ""
       draft.captureUseBuiltInPrompt = !configuredPrompt
       draft.capturePromptTemplate = configuredPrompt || captureDefaults.value.promptTemplate || ""
-      draft.captureMaxTokens = Number(consolidation.maxTokens) || 4096
+      draft.captureMaxTokens = Number(consolidation.maxTokens) || 100000
       const confidence = Number(consolidation.minConfidence)
       draft.captureMinConfidence = Number.isFinite(confidence) ? confidence : 0.7
       draft.captureMaxWindowsPerScan = Number(consolidation.maxWindowsPerScan) || 2
@@ -403,8 +403,8 @@ export const AdvancedTab = {
     async function saveCaptureDefaults() {
       try {
         const retentionDays = Math.round(Math.min(100000000, Math.max(0, Number(draft.captureRetentionDays) || 0)))
-        const tokenLimit = Math.round(Math.min(60000, Math.max(3000, Number(draft.captureTokenLimit) || 30000)))
-        const maxTokens = Math.round(Math.min(65536, Math.max(256, Number(draft.captureMaxTokens) || 4096)))
+        const tokenLimit = Math.round(Math.min(1000000, Math.max(3000, Number(draft.captureTokenLimit) || 200000)))
+        const maxTokens = Math.round(Math.min(100000, Math.max(256, Number(draft.captureMaxTokens) || 100000)))
         const confidence = Number(draft.captureMinConfidence)
         const minConfidence = Number.isFinite(confidence) ? Math.min(1, Math.max(0, confidence)) : 0.7
         const maxWindowsPerScan = Math.round(Math.min(64, Math.max(1, Number(draft.captureMaxWindowsPerScan) || 2)))
@@ -676,7 +676,7 @@ export const AdvancedTab = {
             <div class="developer-section-head"><div><b>原始消息与输入切分</b><span>保留期更新后，继承默认的群会按消息发送时间重新计算到期时间。</span></div></div>
             <div class="form-grid capture-token-limits">
               <Field label="原始消息保留天数" type="number" v-model="draft.captureRetentionDays" hint="0 表示永久保留；有限保留最少 1 天" />
-              <Field label="输入 Token 上限（单日子窗口）" type="number" v-model="draft.captureTokenLimit" hint="3,000–60,000；仅估算群聊消息 Token，不含记忆提炼系统提示词；超限消息不会被截断" />
+              <Field label="输入 Token 上限（单日子窗口）" type="number" v-model="draft.captureTokenLimit" hint="默认 200,000，可设 3,000–1,000,000；每日提炼按消息正文估算，AI 整理包含系统提示与完整资料" />
             </div>
           </div>
 
@@ -684,7 +684,7 @@ export const AdvancedTab = {
             <div class="developer-section-head"><div><b>提炼默认</b><span>留空模型时跟随当前默认对话模型；这些值可由单群覆盖。</span></div></div>
             <Field label="提炼模型" type="select" :options="captureModelOptions" v-model="draft.captureModelName" :hint="defaultReplyModelName ? '留空时使用默认对话模型：' + defaultReplyModelName : '留空时使用当前默认对话模型'" />
             <div class="form-grid capture-token-limits">
-              <Field label="输出 Token 上限（单次提炼）" type="number" v-model="draft.captureMaxTokens" hint="256–65,536；推理型模型的思考 Token 也计入" />
+              <Field label="输出 Token 上限（单次提炼）" type="number" v-model="draft.captureMaxTokens" hint="默认 100,000，可设 256–100,000；思考 Token 也计入，实际受模型能力限制" />
               <Field label="候选置信度阈值" type="number" v-model="draft.captureMinConfidence" hint="0–1；低于此值的候选不会写入记忆" />
             </div>
             <label class="field"><span class="field-label">提炼提示词</span><span class="row"><Switch v-model="draft.captureUseBuiltInPrompt" /><small>{{ draft.captureUseBuiltInPrompt ? '使用内置默认提示词' : '使用下方自定义提示词' }}</small></span></label>

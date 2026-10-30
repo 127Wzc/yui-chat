@@ -171,7 +171,7 @@ function scoreTool(tool: unknown, prompt = ""): number {
   if (/图片|图像|照片|视频|语音/.test(promptText) && (tags.includes("media") || /图片|图像|照片|图床|表情包/.test(haystack))) score += 50
   // 图片搜索和图片生成都带有“图片”字样，单靠通用媒体分数会让两者
   // 发生词义抢占。按动作词给出一个明确的首选，避免“搜一张”误触发生成。
-  const imageCreationIntent = /(?:画(?!面|风|质)|绘(?:制|画)|生成|创作|制作|设计|改图|修图|生图|draw|generate|create|edit)/i.test(promptText)
+  const imageCreationIntent = /(?:作图|画(?!面|风|质)|绘(?:制|画)|生成|创作|制作|设计|改图|修图|生图|draw|generate|create|edit)/i.test(promptText)
   const imageSearchIntent = /(?:搜(?:图|一张|图片|图像|照片)|搜索(?:图片|图像|照片|表情包)|找(?:一张|图片|图像|照片)|图库|图片搜索|image\s*search|find (?:an? )?(?:image|picture|photo))/i.test(promptText)
   // 文档转图与 AI 绘画分开选择：“生成 Markdown 图片”不是生图模型任务。
   const documentRenderIntent = /html|markdown|mermaid|katex|latex|数学公式|公式|思维导图|流程图|文本卡片|排版|文档转图|表格/i.test(promptText)

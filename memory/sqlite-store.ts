@@ -1,4 +1,6 @@
 import { FULL_MEMORY_READ_HINT, isFullOwnMemoryRequest } from "./full-read.js"
+import { assertMemoryImageSelection, isMemoryImageRequest, MEMORY_IMAGE_HINT } from "./image-request.js"
+import type { MemoryImageRead, MemoryImageSelection } from "./image-request.js"
 import { configStore } from "../config/store.js"
 import { sqliteClient } from "../core/storage/sqlite/client.js"
 import { memoryRepository } from "./repository.js"
@@ -372,6 +374,13 @@ export class SqliteMemoryStore {
     return { items: (await memoryRepository.listOwnMemories(user, groupKey(e))).map(toLegacy), complete: true }
   }
 
+  async listImageMemories(e: UnknownRecord, selection: MemoryImageSelection): Promise<MemoryImageRead> {
+    assertMemoryImageSelection(e, selection)
+    if (record(configStore.get().memory).enabled === false) throw new Error("记忆功能未启用")
+    await this.load()
+    return { items: (await memoryRepository.listImageMemories(selection, userKey(e), groupKey(e))).map(toLegacy), complete: true }
+  }
+
   async listMemories(e: UnknownRecord, opts: StoreOptions = {}): Promise<UnknownRecord[]> {
     await this.load()
     const scopes = opts.owner === "user" ? [{ scopeType: "user", ownerId: userKey(e), groupId: "" }] : scopesFor(e)
@@ -408,6 +417,7 @@ export class SqliteMemoryStore {
     const memory = record(record(configStore.get()).memory)
     const retrieval = record(memory.retrieval)
     if (memory.enabled === false) return ""
+    if (isMemoryImageRequest(query)) return MEMORY_IMAGE_HINT
     if (isFullOwnMemoryRequest(query)) return FULL_MEMORY_READ_HINT
     const plan = await resolveMemoryRecallPlan(e, query)
     // 明确询问其他成员时不混入提问者画像；比较双方时仍保留提问者画像。

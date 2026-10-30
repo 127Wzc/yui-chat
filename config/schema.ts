@@ -242,7 +242,7 @@ export const schema: SchemaGroup[] = [
       { path: "memory.retrieval.rerankEnabled", label: "记忆重排开关", type: "boolean" },
       { path: "memory.retrieval.rerankModel", label: "记忆重排模型", type: "string", description: "独立选择专用重排模型，不继承知识库或全局任务。" },
       { path: "memory.retrieval", label: "记忆检索与 Token 预算", type: "json" },
-      { path: "memory.groupCapture.consolidation.maxTokens", label: "群提炼单次输出 Token 上限", type: "number", advanced: true },
+      { path: "memory.groupCapture.consolidation.maxTokens", label: "群提炼单次输出 Token 上限", type: "number", advanced: true, description: "256–100000，默认 100000；AI 整理共用，推理思考计入输出，实际受模型能力限制。" },
       { path: "memory.groupCapture.consolidation.schedule.mode", label: "群记忆提炼调度模式", type: "string", advanced: true, description: "interval 保持扫描间隔；time 每天在固定时间运行；cron 按五段本地 Cron 运行。" },
       { path: "memory.groupCapture.consolidation.schedule.time", label: "群记忆提炼固定时间", type: "string", advanced: true, description: "本地时间 HH:mm，仅在 time 模式生效。" },
       { path: "memory.groupCapture.consolidation.schedule.cron", label: "群记忆提炼 Cron", type: "string", advanced: true, description: "五段本地 Cron：分 时 日 月 周，仅在 cron 模式生效。" },

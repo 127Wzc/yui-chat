@@ -1,4 +1,5 @@
 import fs from "node:fs/promises"
+import { rejects } from "node:assert/strict"
 import os from "node:os"
 import path from "node:path"
 import { spawn } from "node:child_process"
@@ -390,7 +391,7 @@ async function checkConfigSafety() {
   assert(config.persona?.initiativeGreeting?.scheduledEnabled === false, "scheduled initiative greeting must default disabled")
   assert(Number(config.persona?.initiativeGreeting?.probabilityPercent) >= 0, "initiative greeting probability should be configured")
   assert(config.context?.recentMessageCount === 20 && config.context.recentMessageCount === defaults.context?.recentMessageCount, "context should default to twenty recent messages for capture and injection")
-  assert(config.memory?.groupCapture?.defaultTokenLimit === 30000 && config.memory.groupCapture.defaultTokenLimit === defaults.memory?.groupCapture?.defaultTokenLimit, "group memory input windows should default to thirty thousand tokens")
+  assert(config.memory?.groupCapture?.defaultTokenLimit === 200000 && config.memory.groupCapture.defaultTokenLimit === defaults.memory?.groupCapture?.defaultTokenLimit, "group memory input windows should default to two hundred thousand tokens")
   assert(config.memory?.groupCapture?.consolidation?.schedule?.mode === "interval" && config.memory.groupCapture.consolidation.schedule.time === "03:00" && config.memory.groupCapture.consolidation.schedule.cron === "0 3 * * *", "group memory consolidation should expose a compatible interval default and friendly time/Cron options")
   assert(retiredContextConfigKeys.every(key => !Object.hasOwn(config.context || {}, key)), "retired context switches and split counts must not remain in defaults")
   assert(retiredSegmentationConfigKeys.every(key => !Object.hasOwn(config.response?.segmentation || {}, key)), "segmentation should not expose a configurable LLM-only switch")
@@ -2800,6 +2801,16 @@ async function checkModelRoutingPreview() {
     }
     const isolatedResult = await runIsolatedModelTask({ config: isolatedConfig, taskName: "replyer", prompt: "isolated timeout smoke" })
     assert(isolatedResult.channel === "smoke-isolated-fallback" && isolatedChannels.join(",") === "smoke-isolated-primary,smoke-isolated-fallback" && isolatedTimeouts.join(",") === "120000,600000", "isolated fallback candidates should each use their own resolved timeout")
+    isolatedChannels.length = 0
+    await rejects(runIsolatedModelTask({ config: isolatedConfig, taskName: "replyer", prompt: "single attempt", singleAttempt: true }), /smoke primary isolated failure/)
+    assert(isolatedChannels.join(",") === "smoke-isolated-primary", "single-attempt isolated tasks must not dispatch fallback models")
+    let isolatedOutputLimit = 0
+    adapterRegistry.sendMessage = async ({ maxTokens }) => {
+      isolatedOutputLimit = maxTokens
+      return { id: "large-output-limit", text: "{}", usage: {} }
+    }
+    await runIsolatedModelTask({ config: isolatedConfig, taskName: "replyer", maxTokens: 100000, singleAttempt: true, prompt: "large output limit" })
+    assert(isolatedOutputLimit === 100000, "memory tasks must pass the 100000-token output limit to the adapter without the previous 65536 clamp")
   } finally {
     providerResolver.resolveCandidateChannels = originalResolveIsolatedChannels
     adapterRegistry.sendMessage = originalIsolatedSendMessage
@@ -2923,7 +2934,7 @@ async function checkSqliteStorage() {
   try {
     assert(sqliteClient.status.available, "SQLite state database should initialize in worker")
     assert(sqliteClient.status.integrity === "ok", "SQLite state database should pass quick_check")
-    assert((sqliteClient.status.migrations || []).map(row => row.id).join(",") === "001-baseline.sql,002-tool-call-events.sql,003-model-call-snapshots.sql,004-conversation-state.sql,005-log-session.sql,006-extension-installations.sql,007-cosine-retrieval.sql,008-command-import.sql,009-command-availability.sql,010-memory-portraits.sql", "SQLite state database should apply the baseline, combined tool/runtime, model snapshot, conversation state, and extension installation schema")
+    assert((sqliteClient.status.migrations || []).map(row => row.id).join(",") === "001-baseline.sql,002-tool-call-events.sql,003-model-call-snapshots.sql,004-conversation-state.sql,005-log-session.sql,006-extension-installations.sql,007-cosine-retrieval.sql,008-command-import.sql,009-command-availability.sql,010-memory-portraits.sql,011-memory-maintenance.sql,012-memory-maintenance-single-pass.sql,013-memory-token-limits.sql,014-memory-maintenance-review.sql", "SQLite state database should apply the baseline, combined tool/runtime, model snapshot, conversation state, and extension installation schema")
     const removed = await sqliteClient.get("SELECT name FROM sqlite_master WHERE type='table' AND name='knowledge_sources'")
     assert(!removed, "baseline state database should not recreate removed transitional tables")
   } finally {
@@ -6429,6 +6440,9 @@ async function checkWebAndBoot() {
     await readSource("web/client/features/memory/memory-extraction-workspace.ts"),
     await readSource("web/client/features/memory/memory-capture-drawers.ts"),
     await readSource("web/client/features/memory/memory-manage-workspace.ts"),
+    await readSource("web/client/features/memory/memory-maintenance.ts"),
+    await readSource("web/client/features/memory/memory-maintenance-workspace.ts"),
+    await readSource("web/client/features/memory/memory-maintenance-review.ts"),
   ].join("\n")
   const memoryViewMatch = webMemorySource.match(/const memoryView = reactive\(\{([\s\S]*?)\n    \}\)/u)
   assert(memoryViewMatch?.[1].includes("taskListSummary"), "memory extraction workspace view should expose taskListSummary")
@@ -6561,7 +6575,7 @@ async function checkWebAndBoot() {
     "memory page should render the five-state daily extraction calendar from its lightweight summary API",
   )
   assert(!webMemorySource.includes("补录并保存原始记录") && !webMemorySource.includes("goToExtractionMessages") && webMemorySource.indexOf("补录历史") > webMemorySource.indexOf("extractionPane === 'messages'") && webMemorySource.indexOf("扫描昨日及历史") > webMemorySource.indexOf("提炼运行记录"), "operational capture actions must stay in their respective extraction panes; field inheritance is covered by the rendered memory-p1 checks")
-  assert(webMemorySource.includes("memory-summary-row") && webMemorySource.includes("memoryLifecycle") && webMemorySource.includes("resultAction") && webMemorySource.includes("taskResultSummary") && webMemorySource.includes("extractionResultLabel") && webMemorySource.includes("reviewDuplicateMemories") && webMemorySource.includes("openMemoryEditor") && webMemorySource.includes("confirmAction") && webMemorySource.includes("编辑用户画像") && webMemorySource.includes("删除这条记忆"), "memory page should truncate long list entries, show lifecycle and extraction actions, identify the target member for personal extraction results, review duplicates, open them for editing, retain profile editing, and confirm deletion")
+  assert(webMemorySource.includes("memory-summary-row") && webMemorySource.includes("memoryLifecycle") && webMemorySource.includes("resultAction") && webMemorySource.includes("taskResultSummary") && webMemorySource.includes("extractionResultLabel") && webMemorySource.includes("MemoryMaintenanceDialog") && webMemorySource.includes("/api/memory/maintenance") && webMemorySource.includes("openMemoryEditor") && webMemorySource.includes("confirmAction") && webMemorySource.includes("编辑用户画像") && webMemorySource.includes("删除这条记忆"), "memory page should truncate long list entries, show lifecycle and extraction actions, identify the target member for personal extraction results, review AI maintenance, open them for editing, retain profile editing, and confirm deletion")
   assert(webChatSource.includes("/api/chat/test/sessions") && webChatSource.includes("历史对话") && webChatSource.includes("删除这段测试对话") && !webChatSource.includes("persistMessages"), "chat page should use SQLite-backed test history without browser-local transcripts")
   assert(webAdvancedSource.includes("开发者模式") && webAdvancedSource.includes("developer-gate") && webAdvancedSource.includes("SystemRenderStrategyPanel") && webAdvancedSource.includes("confirmAction") && webAdvancedSource.includes("确认回滚") && !webAdvancedSource.includes("window.confirm"), "system page should expose hot-updatable system rendering strategy and gate advanced configuration")
   assert(webAdvancedSource.includes("backupMaxFiles") && webAdvancedSource.includes("backupMaxAgeDays") && webAdvancedSource.includes("saveBackupPolicy") && webAdvancedSource.includes("同时超过保留天数") && webAdvancedSource.includes("SQLite 中的能力权限") && webAdvancedSource.includes("运行日志、用量流水") && webAdvancedSource.includes("configBackupDir") && webAdvancedSource.includes("backupContents"), "system backup page should explain the package directory, contents, SQLite whitelist, and excluded detail data")

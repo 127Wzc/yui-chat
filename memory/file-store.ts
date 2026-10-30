@@ -1,4 +1,6 @@
 import { FULL_MEMORY_READ_HINT, isFullOwnMemoryRequest } from "./full-read.js"
+import { assertMemoryImageSelection, isMemoryImageRequest, MEMORY_IMAGE_HINT } from "./image-request.js"
+import type { MemoryImageRead, MemoryImageSelection } from "./image-request.js"
 import { truncateTextToTokens } from "../core/chat/token-budget.js"
 import fs from "node:fs/promises"
 import path from "node:path"
@@ -869,6 +871,58 @@ class MemoryStore {
       ...(complete ? {} : { warning: "文件后端读取不完整（超出窗口或存在不可读记录），当前结果不能保证全量；请在管理端核对，不得声称已读完。" }) }
   }
 
+  async listImageMemories(e: MemoryEvent, selection: MemoryImageSelection): Promise<MemoryImageRead> {
+    assertMemoryImageSelection(e, selection)
+    if (memoryConfig().enabled === false) throw new Error("记忆功能未启用")
+    await this.load()
+    const owners = new Map<string, MemoryOwner>()
+    const add = (owner: MemoryOwner): void => { owners.set(owner.key, owner) }
+    const target = { ...e, user_id: selection.userId || userKey(e) }
+    if (selection.scope === "self" || selection.scope === "user") {
+      add(memoryOwner(target, "user"))
+      if (e.isGroup) add(memoryOwner(target, "scope"))
+    } else {
+      // 文件后端没有群原文成员目录，用已保存的个人本群记忆确定本群成员。
+      const scopeFiles = await fs.readdir(path.join(this.rootDir, "memories", "scopes"), { withFileTypes: true })
+      const scopeIds = new Set(scopeFiles.filter(file => file.isFile() && file.name.endsWith(".jsonl")).map(file => file.name.slice(0, -6)))
+      for (const key of this.memoryCache.keys()) if (key.startsWith("scope:")) scopeIds.add(key.slice(6))
+      for (const id of scopeIds) {
+        const match = id.match(/^group_(.+)_user_(.+)$/u)
+        if (!match) continue // private_* 是历史私聊范围，不作为群个人记忆。
+        if (selection.scope === "group" && match[1] !== safePart(e.group_id)) continue
+        add({ type: "scope", id, key: `scope:${id}`, dir: "scopes", file: id })
+        add(memoryOwner({ user_id: match[2] }, "user"))
+      }
+      if (selection.scope === "group") {
+        add(memoryOwner(e, "user"))
+        add(memoryOwner(e, "scope"))
+      } else {
+        const userFiles = await fs.readdir(path.join(this.rootDir, "memories", "users"), { withFileTypes: true })
+        for (const file of userFiles) if (file.isFile() && file.name.endsWith(".jsonl")) add(memoryOwner({ user_id: file.name.slice(0, -6) }, "user"))
+        for (const key of this.memoryCache.keys()) if (key.startsWith("user:")) add(memoryOwner({ user_id: key.slice(5) }, "user"))
+      }
+    }
+    const items: UnknownRecord[] = []
+    let complete = true
+    const limit = Math.max(50, Math.min(10000, Number(memoryConfig().maxMemoriesPerOwner) || 500))
+    for (const owner of owners.values()) {
+      const state = { complete: true }
+      const disk = await readJsonl<MemoryRow>(this.ownerPath(owner, "memory"), limit, state)
+      complete &&= state.complete
+      const rows = new Map<string, MemoryRow>()
+      for (const row of [...disk, ...(this.memoryCache.get(owner.key)?.value || [])]) rows.set(row.id, row)
+      const local = owner.type === "scope" ? owner.id.match(/^group_(.+)_user_(.+)$/u) : null
+      for (const row of rows.values()) {
+        const status = rollingStatus(row)
+        const expiry = Number(row.expiresAt || row.expires_at || 0) || Date.parse(String(row.expiresAt || ""))
+        if (!row.text || ["deleted", "archived", "expired"].includes(String(row.status)) || (expiry > 0 && expiry <= Date.now()) || ["short", "profile"].includes(String(row.type)) || row.source === "interaction") continue
+        items.push({ ...row, ownerType: local ? "user_group" : "user", ownerId: local?.[2] || owner.id, groupId: local?.[1] || "", status })
+      }
+    }
+    items.sort((a, b) => JSON.stringify([a.ownerId, a.ownerType, a.groupId, a.id]).localeCompare(JSON.stringify([b.ownerId, b.ownerType, b.groupId, b.id])))
+    return { items, complete, ...(complete ? {} : { warning: "文件后端读取不完整（超出窗口或存在不可读记录），未提交图片生成；不能将部分记忆当作全文。" }) }
+  }
+
   async listMemories(e: MemoryEvent, opts: UnknownRecord = {}): Promise<MemoryRow[]> {
     const configuredOwners = Array.isArray(opts.owners) ? opts.owners.filter(isMemoryOwner) : []
     const owners: MemoryOwner[] = configuredOwners.length ? configuredOwners : [memoryOwner(e, ownerType(opts.owner))]
@@ -951,6 +1005,7 @@ class MemoryStore {
 
   async buildPrompt(e: MemoryEvent, query: unknown): Promise<string> {
     const config = memoryConfig()
+    if (config.enabled !== false && isMemoryImageRequest(query)) return MEMORY_IMAGE_HINT
     if (config.enabled !== true) return ""
     if (isFullOwnMemoryRequest(query)) return FULL_MEMORY_READ_HINT
     const parts: string[] = []

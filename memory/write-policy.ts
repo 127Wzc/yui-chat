@@ -39,6 +39,7 @@ function isPaymentCard(value: unknown = ""): boolean {
   return sum > 0 && sum % 10 === 0
 }
 
+/** 仅保留旧画像的资料指纹算法；当前记忆写入不使用敏感内容筛查。 */
 export function containsSensitiveMemoryData(value: unknown = ""): boolean {
   const text = String(value || "")
   if (sensitiveKeyword.test(text) || containsMobileNumber(text) || oneTimeCode.test(text) || identityNumber.test(text) || preciseAddress.test(text)) return true
@@ -47,10 +48,13 @@ export function containsSensitiveMemoryData(value: unknown = ""): boolean {
 }
 
 export function isExplicitMemoryIntent(value: unknown = ""): boolean { return explicit.test(String(value || "")) }
+/** 当前状态使用单值槽位；偏好等事实允许同时保留多个值。 */
+export function isSingleValueFact(factKey: unknown = ""): boolean {
+  return factKey === "communication.style" || /^(?:identity|profile|group_role|plan)\./.test(String(factKey))
+}
 export function validateMemoryWrite(value: unknown = "", { explicitRequired = false, source = "" }: MemoryWriteOptions = {}): string {
   const text = String(value || "").replace(/\s+/g, " ").trim()
   if (!text) throw new Error("记忆内容不能为空。")
-  if (containsSensitiveMemoryData(text)) throw new Error("为保护隐私，密码、验证码、完整联系方式、精确住址、支付或证件信息不能保存为记忆。")
   if (explicitRequired && source !== "manual" && !isExplicitMemoryIntent(text)) throw new Error("长期记忆只能由用户明确提出“记住/记下”等意图后写入。")
   return text.slice(0, 500)
 }

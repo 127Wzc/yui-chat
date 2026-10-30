@@ -123,8 +123,14 @@ async function handle(rawMessage: unknown): Promise<unknown> {
         const statement = db.prepare(text(operation.sql))
         const params = normalizeParams(operation.params)
         if (operation.mode === "all") return statement.all(...params)
-        if (operation.mode === "get") return statement.get(...params)
-        return statement.run(...params)
+        if (operation.mode === "get") {
+          const result = statement.get(...params) as Record<string, unknown> | undefined
+          if (operation.expect && Object.entries(operation.expect).some(([key, value]) => !result || result[key] !== value)) throw new Error("资料版本已变化，本次事务未提交，请刷新后重试。")
+          return result
+        }
+        const result = statement.run(...params)
+        if (operation.expectChanges !== undefined && result.changes !== operation.expectChanges) throw new Error("条件写入未命中，本次事务未提交，请刷新后重试。")
+        return result
       }))()
     }
     case "status": return { vector: vectorStatus, integrity: db.prepare("PRAGMA quick_check").pluck().get() }

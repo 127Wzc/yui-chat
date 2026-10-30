@@ -13,6 +13,8 @@ erDiagram
   EXTENSION_INSTALLATIONS ||--o{ EXTENSION_INSTALLATION_EVENTS : "operation_id"
   EXTENSION_INSTALLATIONS |o..o| EXTENSION_INSTALLATION_RECEIPTS : "installation_id (logical)"
   MEMORY_ITEMS ||--o{ MEMORY_EVIDENCE : "memory_id"
+  MEMORY_MAINTENANCE_JOBS ||--o{ MEMORY_MAINTENANCE_SOURCES : "job_id"
+  MEMORY_ITEMS |o..o{ MEMORY_MAINTENANCE_SOURCES : "memory_id (logical)"
   KNOWLEDGE_BASES ||--o{ KNOWLEDGE_DOCUMENTS : "knowledge_base_id"
   KNOWLEDGE_DOCUMENTS ||--o{ KNOWLEDGE_CHUNKS : "(id, knowledge_base_id)"
   KNOWLEDGE_BASES ||--o{ KNOWLEDGE_INDEX_JOBS : "knowledge_base_id"
@@ -38,6 +40,31 @@ erDiagram
     text source_event_id PK
     text source_type
     text message_id
+  }
+  MEMORY_MAINTENANCE_JOBS {
+    text id PK
+    text group_id
+    text user_id
+    text actor_id
+    text status
+    integer use_history
+    text snapshot_json
+    text plan_json
+    text receipt_json
+    text apply_hash
+    integer expires_at
+    integer undo_until
+  }
+  MEMORY_MAINTENANCE_SOURCES {
+    text job_id FK
+    text memory_id
+    text group_id
+  }
+  MEMORY_MAINTENANCE_VERSIONS {
+    text scope_type PK
+    text owner_id PK
+    text group_id PK
+    integer revision
   }
   KNOWLEDGE_BASES {
     text id PK
@@ -164,6 +191,8 @@ flowchart LR
   CHUNKS -. owner_type/owner_id .-> RECORDS
 ```
 
+群策略的输入 Token 允许 3000–1000000，输出允许 256–100000；`013-memory-token-limits.sql` 扩大约束并保留原有策略字段、继承状态和采集游标。
+
 ## 全表清单
 
 | 数据库 | 表 | 职责 | 关键列 |
@@ -172,6 +201,9 @@ flowchart LR
 | state | `runtime_config` | 单行运行配置覆盖 | `id=1`, `schema_version`, `revision`, `overrides_json` |
 | state | `conversations` | 临时对话历史 | `conversation_key`, `history_json`, `expires_at` |
 | state | `memory_items` | 长期事实、画像、群提炼结果 | 作用域、正文、事实键值、状态、过期时间 |
+| state | `memory_maintenance_jobs` | AI 整理分析、预览及有条件撤销 | 操作者、用户/群、历史开关、快照、单次建议、`reviewed_at` 结束审阅时间、提交回执与期限；同一用户跨群仅一条运行任务 |
+| state | `memory_maintenance_sources` | 整理快照和结果的清理关联 | 任务外键、原件/结果记忆 ID、来源群；清理资料时移除恢复副本 |
+| state | `memory_maintenance_versions` | 所有记忆/证据写入共用的版本 | 作用域/用户/群复合键及递增版本，供预览应用与撤销事务校验 |
 | state | `portrait_type_defaults` | 本群/本群成员的默认画像类型 | 群、可空用户、内置类型 ID |
 | state | `portrait_reports` | 各类型月度画像及最近三版本 | 群、用户、类型、版本、任务快照、结构化报告、来源哈希、失效状态 |
 | state | `portrait_monthly_usage` | 独立月度成功额度 | 群、用户、类型、北京时间月份、报告 ID；与版本清理解耦 |

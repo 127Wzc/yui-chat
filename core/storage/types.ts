@@ -29,6 +29,9 @@ export interface SqliteOperation {
   params?: unknown[]
   target?: SqliteTarget
   mode?: "all" | "get" | "run"
+  /** 条件写入或版本查询必须命中预期结果，否则整个事务回滚。 */
+  expectChanges?: number
+  expect?: Record<string, unknown>
 }
 
 /** Worker 支持的请求种类；status 用于只读诊断，不修改数据库。 */

@@ -10,7 +10,7 @@ import { runIsolatedModelTask } from "../models/isolated-task.js"
 import { expiryFor } from "./decay.js"
 import { memoryRepository } from "./repository.js"
 import { sqliteMemoryStore } from "./sqlite-store.js"
-import { validateMemoryWrite } from "./write-policy.js"
+import { isSingleValueFact, validateMemoryWrite } from "./write-policy.js"
 import { errorSummary } from "../core/shared/error-details.js"
 
 const DAY = 24 * 60 * 60 * 1000
@@ -99,7 +99,6 @@ interface Candidate extends UnknownRecord {
   text?: string
   subjectId?: string
   speakerId?: string
-  sensitivity?: string
   factKey?: string
   factValue?: string
   confidence?: unknown
@@ -171,7 +170,7 @@ export const DEFAULT_GROUP_MEMORY_PROMPT = [
   "键值规则：factKey 表示稳定的事实槽位，factValue 表示用于去重和修订的简短规范值。优先使用 identity.name、identity.nickname、identity.gender、identity.pronouns、identity.birth_date、identity.age、profile.occupation、profile.education、preference.<topic>、communication.style、group_role.<role>、relationship.<person_or_role>、plan.<topic>、group.rule.<topic>、group.event.<topic>。factKey 必须使用小写英文、数字、点或下划线，不得包含具体取值、中文或整句话。",
   "称呼规则：text 一律用“用户”指代本人，不要把昵称或群名片写死在事实文本里；平台昵称与群名片由系统自动维护（identity.qq_nickname、identity.group_card），不要为它们输出候选。只有用户明确表达的称呼偏好（如“以后叫我小玉”）才输出 identity.nickname。",
   "时间规则：年龄写成‘用户于 YYYY-MM-DD 自述为 N 岁’，validTo 不晚于证据日期一年后。计划、临时状态、阶段性任务和事件必须填写合理的 validTo；生日、姓名、性别、长期偏好等稳定事实没有明确失效时间时可留空。",
-  "普通个人资料可以记录：姓名、昵称、性别、称谓、年龄、生日、爱好、喜欢与不喜欢、职业、学习方向和一般关系。只忽略可直接造成风险的高度敏感信息：密码、验证码、Token/API Key、Cookie、登录凭证、银行卡或支付信息、身份证件号、完整手机号和精确住址。若消息同时含有普通事实与高度敏感字段，只丢弃敏感字段。",
+  "用户本人明确自述的个人资料按证据与作用域规则提取，不按敏感关键词或号码格式过滤内容。",
   "置信度建议：本人清晰自述或管理员明确公告为 0.85–0.98；上下文明确但表述较弱为 0.70–0.84；低于 0.70、存在歧义或需要推断时不要输出。importance 只表示未来对话价值，不表示置信度。",
   "示例 A：[m1] 10001：我叫玉玉，我是男的，今年25岁，平时喜欢手冲咖啡。输出 4 条 user：identity.nickname=玉玉、identity.gender=male、identity.age=25、preference.coffee=hand_brew；年龄带证据日期和 validTo。",
   "示例 B：[m2] 10001：我在这个群负责每周发布版本。输出 user_group：group_role.release=weekly_release；不要提升为 user，也不要写成 group。",
@@ -266,10 +265,10 @@ function policyDefaults(config: UnknownRecord = groupConfig()): {
   const retrieval = record(record(record(configStore.get()).memory).retrieval)
   return {
     retentionDays: integer(config.defaultRetentionDays, 30, 0, 100000000),
-    tokenLimit: integer(config.defaultTokenLimit, 30000, 3000, 60000),
+    tokenLimit: integer(config.defaultTokenLimit, 200000, 3000, 1000000),
     promptTemplate: policyPrompt(config.promptTemplate || ""),
     modelName: cleanText(consolidation.modelName || "", 120),
-    maxTokens: integer(consolidation.maxTokens, 4096, 256, 65536),
+    maxTokens: integer(consolidation.maxTokens, 100000, 256, 100000),
     minConfidence: number(consolidation.minConfidence, 0.7, 0, 1),
     retrievalResultLimit: integer(retrieval.resultLimit, 3, 1, 20),
   }
@@ -399,14 +398,14 @@ function rowPolicy(row: UnknownRecord = {}): GroupPolicy {
     defaults,
     overrides,
     retentionDays: overrides.retentionDays ? integer(row.retention_days, defaults.retentionDays, 0, 100000000) : defaults.retentionDays,
-    tokenLimit: overrides.tokenLimit ? integer(row.token_limit, defaults.tokenLimit, 3000, 60000) : defaults.tokenLimit,
+    tokenLimit: overrides.tokenLimit ? integer(row.token_limit, defaults.tokenLimit, 3000, 1000000) : defaults.tokenLimit,
     promptTemplate: prompt,
     // 原始覆盖文本（未解析为内置词），供编辑器回显与保存回填，避免把内置提示词物化成本群快照。
     promptTemplateOverride: overrides.promptTemplate ? String(row.prompt_template || "") : "",
     usesDefaultPrompt: !overrides.promptTemplate,
     usesBuiltInPrompt: prompt === DEFAULT_GROUP_MEMORY_PROMPT,
     modelName: overrides.modelName ? cleanText(row.model_name || "", 120) : defaults.modelName,
-    maxTokens: overrides.maxTokens ? integer(row.max_tokens, defaults.maxTokens, 256, 65536) : defaults.maxTokens,
+    maxTokens: overrides.maxTokens ? integer(row.max_tokens, defaults.maxTokens, 256, 100000) : defaults.maxTokens,
     minConfidence: overrides.minConfidence ? number(row.min_confidence, defaults.minConfidence, 0, 1) : defaults.minConfidence,
     retrievalResultLimit: overrides.retrievalResultLimit ? integer(row.retrieval_result_limit, defaults.retrievalResultLimit, 1, 20) : defaults.retrievalResultLimit,
     lastDailyEnd: Number(row.last_daily_end || 0),
@@ -531,7 +530,7 @@ function resultItemsWithTargetNames(items: UnknownRecord[] = [], targetNames: Ma
 }
 
 function tokenLimit(value: unknown = policyDefaults().tokenLimit): number {
-  return integer(value, policyDefaults().tokenLimit, 3000, 60000)
+  return integer(value, policyDefaults().tokenLimit, 3000, 1000000)
 }
 
 function rowTokenCount(row: UnknownRecord = {}): number {
@@ -545,7 +544,7 @@ function rowTokenCount(row: UnknownRecord = {}): number {
 // chunk 的已用额度。重叠会让同一消息进入两个子窗口并产生重复候选，由 applyCandidates
 // 的 merged map（factKeyToken 合并）与 evidence 的 (memory_id, source_event_id)
 // 幂等约束吸收。预览与实际处理共用本函数，预估和实际切分天然一致。
-function partitionRowsByTokens(rows: UnknownRecord[] = [], limit = 30000): PartitionResult {
+function partitionRowsByTokens(rows: UnknownRecord[] = [], limit = 200000): PartitionResult {
   const overlapLimit = Math.min(400, Math.floor(limit * 0.1))
   const chunks: UnknownRecord[][] = []
   const skipped: UnknownRecord[] = []
@@ -676,12 +675,8 @@ function rowFacts(row: UnknownRecord = {}): FactClaim[] {
 // 单值槽位描述“当前状态”：身份、个人资料、群内角色、进行中的计划和交流风格在同一
 // 槽位上随时间只有一个现值，新值直接替换（supersede）旧值；preference.* 保持多值，
 // 一个人可同时保有多种喜好，取消或矛盾由 retract 候选显式表达而不是互相覆盖。
-function isSingleValueFact(factKey: unknown = ""): boolean {
-  return factKey === "communication.style" || /^(?:identity|profile|group_role|plan)\./.test(String(factKey))
-}
-
 function isDerivedMemory(row: UnknownRecord = {}): boolean {
-  return String(row.source || "").startsWith("group-window") || String(row.source || "") === "superseded"
+  return String(row.source || "").startsWith("group-window") || String(row.source || "").startsWith("maintenance:") || String(row.source || "") === "superseded"
 }
 
 function preferredCanonical(rows: UnknownRecord[] = [], candidate: UnknownRecord = {}): UnknownRecord | null {
@@ -712,7 +707,7 @@ function extractionPrompt(scopeId: unknown, window: UnknownRecord = {}, rows: Un
     `时间窗：${new Date(Number(window.window_start || 0)).toISOString()} 至 ${new Date(Number(window.window_end || 0)).toISOString()}`,
     policyPrompt(template),
     "消息行内的 [回复 消息ID] 表示该消息回复哪条消息，[@QQ号] 表示提及了哪些成员；可据此判断答复指向、本人确认和多人支持等证据关系。",
-    "只返回 JSON：{\"candidates\":[{\"operation\":\"add|retract\",\"scope\":\"user|user_group|group\",\"subjectId\":\"个人记忆对应的用户QQ；group 留空\",\"speakerId\":\"作出直接陈述的原始说话人QQ\",\"factKey\":\"identity.gender\",\"factValue\":\"male\",\"text\":\"第三人称原子事实\",\"kind\":\"identity|preference|relationship|plan|group_rule|experience|episode\",\"confidence\":0.0,\"importance\":0.0,\"sensitivity\":\"normal|sensitive\",\"validTo\":\"ISO 可选\",\"evidenceMessageIds\":[\"消息ID\"]}]}",
+    "只返回 JSON：{\"candidates\":[{\"operation\":\"add|retract\",\"scope\":\"user|user_group|group\",\"subjectId\":\"个人记忆对应的用户QQ；group 留空\",\"speakerId\":\"作出直接陈述的原始说话人QQ\",\"factKey\":\"identity.gender\",\"factValue\":\"male\",\"text\":\"第三人称原子事实\",\"kind\":\"identity|preference|relationship|plan|group_rule|experience|episode\",\"confidence\":0.0,\"importance\":0.0,\"validTo\":\"ISO 可选\",\"evidenceMessageIds\":[\"消息ID\"]}]}",
     "消息：",
     messages,
   ].join("\n")
@@ -721,7 +716,7 @@ function extractionPrompt(scopeId: unknown, window: UnknownRecord = {}, rows: Un
 const EXTRACTOR_SYSTEM = [
   "你是群聊事实记忆提炼器。严格区分三种记忆作用域：user 是跨群可用的个人全局记忆，user_group 是仅当前群可用的个人记忆，group 是当前群的公共记忆；episode 只能作为 kind，不能作为作用域。",
   "产物必须是有证据、可独立理解、可去重更新的原子事实，不是聊天记录或聊天摘要。只可使用输入中的原始消息 ID、用户 ID 和文字；证据不足时返回空 candidates。",
-  "用户本人明确自述的名字、昵称、性别、称谓、年龄、兴趣、偏好等普通资料应正常提取。只排除密码、验证码、Token/API Key、Cookie、登录凭证、银行卡或支付信息、身份证件号、完整手机号和精确住址。",
+  "用户本人明确自述的资料应正常提取，不按敏感关键词或号码格式过滤内容。",
   "个人事实不接受他人转述；不要把玩笑、推测、角色扮演、机器人回复、纯指令或来源不明的转发当作事实。用户本人明确否定或撤回既有事实时，用 operation 为 retract 的候选表达撤回，不要写成新事实。",
   "输出必须是严格 JSON，不要使用 Markdown。",
 ].join("\n")
@@ -1084,10 +1079,10 @@ export class GroupCaptureStore {
     const requestedOverrides = record(patch.overrides)
     const inherit = (key: string): boolean => Object.hasOwn(requestedOverrides, key) ? requestedOverrides[key] !== true : !current?.overrides?.[key]
     const retention = inherit("retentionDays") ? null : integer(patch.retentionDays ?? current?.retentionDays, defaults.retentionDays, 0, 100000000)
-    const inputTokenLimit = inherit("tokenLimit") ? null : integer(patch.tokenLimit ?? current?.tokenLimit, defaults.tokenLimit, 3000, 60000)
+    const inputTokenLimit = inherit("tokenLimit") ? null : integer(patch.tokenLimit ?? current?.tokenLimit, defaults.tokenLimit, 3000, 1000000)
     const promptTemplate = inherit("promptTemplate") ? null : cleanPrompt(patch.promptTemplate ?? current?.promptTemplateOverride ?? "")
     const modelName = inherit("modelName") ? null : cleanText(patch.modelName ?? current?.modelName ?? "", 120)
-    const maxTokens = inherit("maxTokens") ? null : integer(patch.maxTokens ?? current?.maxTokens, defaults.maxTokens, 256, 65536)
+    const maxTokens = inherit("maxTokens") ? null : integer(patch.maxTokens ?? current?.maxTokens, defaults.maxTokens, 256, 100000)
     const minConfidence = inherit("minConfidence") ? null : number(patch.minConfidence ?? current?.minConfidence, defaults.minConfidence, 0, 1)
     const retrievalResultLimit = inherit("retrievalResultLimit")
       ? null
@@ -1578,7 +1573,7 @@ export class GroupCaptureStore {
     if (type !== "group" || !idValue) throw new Error("第一版仅支持补录指定群的历史消息。")
     const policy = this.policies.get(this.key(type, idValue))
     if (!policy?.enabled) throw new Error("请先保存并开启这个群的消息采集。")
-    const maxMessages = integer(groupConfig().historyBackfillMaxMessages, 500, 1, 5000)
+    const maxMessages = integer(options.maxMessages, integer(groupConfig().historyBackfillMaxMessages, 500, 1, 5000), 1, 5000)
     const sinceAt = Math.max(parseMoment(options.sinceAt), options.respectRetention === true && Number(policy.retentionDays) > 0 ? now() - Number(policy.retentionDays) * DAY : 0)
     // 按日期补录默认拉到单次上限；按数量补录保持旧默认 100 条。
     const limit = integer(options.limit, sinceAt ? maxMessages : 100, 1, maxMessages)
@@ -1655,6 +1650,8 @@ export class GroupCaptureStore {
         received += rows.length
         let oldest: { time: number; messageId: string } | null = null
         for (const row of rows) {
+          // 适配器若显式返回其他群的消息，不能用本次目标群 ID 覆盖后存入。
+          if (row.group_id !== undefined && row.group_id !== null && String(row.group_id) !== idValue) continue
           const senderId = String(row?.user_id || record(row?.sender).user_id || "").trim()
           const messageId = String(row?.message_id || row?.messageId || row?.id || row?.seq || "").trim()
           const rowTime = sentAt(row)
@@ -1669,6 +1666,13 @@ export class GroupCaptureStore {
         if (oldest && (!oldestSeen || oldest.time < oldestSeen.time)) oldestSeen = oldest
         // 每页落盘一次：大批量补录不会把内存队列顶到 maxPendingMessages 而丢消息。
         await this.drain()
+        if (options.targetCount) {
+          const targetId = String(options.targetUserId || "")
+          const available = await sqliteClient.get(`SELECT COUNT(*) AS total FROM group_memory_messages WHERE group_id=?
+            ${targetId ? "AND sender_id=?" : ""} AND is_command=0 AND text_content<>'' AND (expires_at=0 OR expires_at>?)
+            AND NOT EXISTS (SELECT 1 FROM json_each(segments_json) WHERE json_extract(value,'$.type') IN ('forward','node'))`, [idValue,...(targetId?[targetId]:[]),now()])
+          if (Number(available?.total || 0) >= Number(options.targetCount)) break
+        }
         if (sinceAt && oldest && oldest.time < sinceAt) {
           reachedSince = true
           break
@@ -1811,7 +1815,7 @@ export class GroupCaptureStore {
     `, [idValue, EXTRACTOR_VERSION, pageSize, (page - 1) * pageSize])
     const items = rows.map(row => ({
       ...windowView(row),
-      chunkCount: Number(windowView(row).modelCallCount || Math.max(0, Math.ceil(Number(row.estimated_input_tokens || 0) / Math.max(1, Number(row.token_limit || 30000))))),
+      chunkCount: Number(windowView(row).modelCallCount || Math.max(0, Math.ceil(Number(row.estimated_input_tokens || 0) / Math.max(1, Number(row.token_limit || 200000))))),
     }))
     return { items, total, page, pageSize }
   }
@@ -1959,7 +1963,12 @@ export class GroupCaptureStore {
 
   async cleanupExpired(): Promise<UnknownRecord> {
     if (!sqliteClient.status.available) return { messages: 0 }
-    const result = await sqliteClient.run("DELETE FROM group_memory_messages WHERE expires_at > 0 AND expires_at <= ?", [now()])
+    await sqliteClient.run("DELETE FROM memory_maintenance_jobs WHERE (status='applied' AND undo_until<?) OR (status<>'applied' AND expires_at<?)",[now(),now()])
+    // 仍被记忆引用的原文保留供溯源；只回收无人引用的到期消息。
+    const result = await sqliteClient.run(`DELETE FROM group_memory_messages WHERE expires_at > 0 AND expires_at <= ?
+      AND NOT EXISTS (SELECT 1 FROM memory_evidence e JOIN memory_items m ON m.id=e.memory_id
+        WHERE e.source_event_id=group_memory_messages.id AND e.source_type='group-message:'||group_memory_messages.group_id
+          AND (e.message_id='' OR e.message_id=group_memory_messages.message_id) AND m.status<>'deleted')`, [now()])
     return { messages: Number(result?.changes || 0) }
   }
 
@@ -1980,6 +1989,8 @@ export class GroupCaptureStore {
       }
       this.queue = this.queue.filter(item => this.key(item.scopeType, item.scopeId) !== scopeKey)
       await this.withScopeLock(scopeKey, async () => {
+        // 任务快照和撤销记录同样包含记忆正文，清理来源时不能留下恢复副本。
+        await sqliteClient.run("DELETE FROM memory_maintenance_jobs WHERE group_id=? OR id IN (SELECT job_id FROM memory_maintenance_sources WHERE group_id=?)",[idValue,idValue])
         if (["raw", "all"].includes(mode)) {
           const [raw, windows] = await sqliteClient.transaction([
             { sql: "DELETE FROM group_memory_messages WHERE group_id=?", params: [idValue] },
@@ -2338,7 +2349,7 @@ export class GroupCaptureStore {
         return
       }
       const candidates: UnknownRecord[] = []
-      const consolidationMaxTokens = integer(policy?.maxTokens, integer(consolidation.maxTokens, 4096, 256, 65536), 256, 65536)
+      const consolidationMaxTokens = integer(policy?.maxTokens, integer(consolidation.maxTokens, 100000, 256, 100000), 256, 100000)
       for (let index = 0; index < chunks.length; index += 1) {
         if (clearEpoch !== this.clearEpoch(scopeKey)) return
         const chunk = chunks[index]
@@ -2422,8 +2433,7 @@ export class GroupCaptureStore {
       if (["user", "user_group"].includes(scope) && (!subjectId || !evidence.some(row => String(row.sender_id) === subjectId) || (speakerId && speakerId !== subjectId))) continue
       const groupEvidenceIsAuthoritative = evidence.some(row => ["owner", "admin"].includes(String(row.sender_role || "").toLowerCase()))
       if (scope === "group" && new Set(evidence.map(row => String(row.sender_id))).size < 2 && !groupEvidenceIsAuthoritative) continue
-      if (String(raw?.sensitivity || "normal") === "sensitive") continue
-      // sensitivity 是不可信的模型输出；候选正文和值都必须再次经过服务端策略。
+      // 这里只校验基本写入格式，内容不做敏感字段筛查。
       try { validateMemoryWrite(`${text} ${cleanText(raw?.factValue || "", 500)}`, { source: "group-window" }) } catch { continue }
       // 缺省 confidence 按 0.7 计并用严格小于比较：默认阈值 0.7 下不影响未自报置信度的候选。
       if (number(raw?.confidence, 0.7, 0, 1) < minConfidence) continue

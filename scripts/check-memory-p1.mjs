@@ -41,7 +41,7 @@ try {
     "请记住身份证号 110105491231002",
     "请记住银行卡 4539 1488 0343 6467",
   ]) {
-    assert.throws(() => validateMemoryWrite(value), /保护隐私/, `must reject sensitive memory: ${value}`)
+    assert.equal(validateMemoryWrite(value), value, "memory content must not be filtered by sensitive words or number patterns")
   }
   assert.equal(validateMemoryWrite("请记住我喜欢手冲咖啡"), "请记住我喜欢手冲咖啡")
   // 15 位数字仅在形如旧证件号（第 9-12 位是合法月日）时拦截，任意 15 位编号不误伤。
@@ -492,7 +492,7 @@ try {
 
   await sqliteClient.transaction([
     { id: "retry-event", group: "retry-group", message: "retry-message", expires: 0, text: "我喜欢手冲咖啡 <script>不能作为脚本执行</script>" },
-    { id: "visibility-expired", group: "retry-group", message: "expired-message", expires: Date.now() - 1, text: "不应返回的过期原文" },
+    { id: "visibility-expired", group: "retry-group", message: "expired-message", expires: Date.now() - 1, text: "仍被记忆引用的到期原文" },
     { id: "visibility-cross", group: "other-group", message: "cross-message", expires: 0, text: "不应返回的其他群原文" },
     { id: "visibility-mismatch", group: "retry-group", message: "actual-message", expires: 0, text: "不应返回的错配消息" },
   ].map(row => ({
@@ -507,8 +507,8 @@ try {
   assert.equal(visibilityDetail.item.confidence, 0.9)
   assert.equal(visibilityDetail.item.lifecycle.halfLifeDays, 180)
   assert.equal(visibilityDetail.evidence.total, 4)
-  assert.equal(visibilityDetail.evidence.items.filter(item => item.available).length, 1, "expired, other-group and mismatched sources must not expose original content")
-  assert(visibilityDetail.evidence.items.find(item => item.available).text.includes("手冲咖啡"))
+  assert.equal(visibilityDetail.evidence.items.filter(item => item.available).length, 2, "retained expired evidence stays readable; other-group and mismatched sources remain isolated")
+  assert(visibilityDetail.evidence.items.some(item => item.available && item.text.includes("手冲咖啡")))
   assert(visibilityDetail.evidence.items.filter(item => !item.available).every(item => item.text === "" && item.senderId === ""))
   const visibilityWorkspace = await sqliteMemoryStore.getGroupMemberWorkspace("retry-group", "retry-user")
   assert.equal(visibilityWorkspace.globalMemory.items.find(item => item.id === first.id).evidenceCount, 4)
@@ -517,7 +517,7 @@ try {
   await sqliteClient.run("DELETE FROM group_memory_messages WHERE id='retry-event'")
   const removedSourceDetail = await sqliteMemoryStore.getMemoryDetail(detailInput)
   assert.equal(removedSourceDetail.evidence.total, 4, "raw-message cleanup must retain evidence identities")
-  assert(removedSourceDetail.evidence.items.every(item => !item.available))
+  assert.equal(removedSourceDetail.evidence.items.filter(item => item.available).length, 1, "the retained expired source remains available")
   const pagedEvidenceMemory = await memoryRepository.insert({ scopeType: "group", ownerId: "visibility-group", groupId: "visibility-group", type: "fact", text: "带分页来源的测试记忆" }, {
     evidence: Array.from({ length: 25 }, (_, index) => ({ sourceEventId: `visibility-page-${index}`, messageId: String(index), sourceType: "group-message:visibility-group" })),
   })
@@ -599,10 +599,7 @@ try {
     await configStore.update(config => { config.memory.groupCapture.consolidation.enabled = false })
   }
 
-  await assert.rejects(
-    sqliteMemoryStore.addFact({ user_id: "explicit-sensitive", isGroup: false }, "请记住手机号 13812345678", { source: "explicit-user" }),
-    /保护隐私/,
-  )
+  assert(await sqliteMemoryStore.addFact({ user_id: "explicit-sensitive", isGroup: false }, "请记住手机号 13812345678", { source: "explicit-user" }))
   const sensitiveRows = [
     { id: "sensitive-phone", message_id: "sensitive-phone", sender_id: "sensitive-user", sender_role: "member", sent_at: Date.now() },
     { id: "sensitive-otp", message_id: "sensitive-otp", sender_id: "sensitive-user", sender_role: "member", sent_at: Date.now() },
@@ -613,8 +610,8 @@ try {
     { scope: "user", subjectId: "sensitive-user", speakerId: "sensitive-user", factKey: "profile.otp", factValue: "731926", text: "用户验证码是 731926", confidence: 0.99, evidenceMessageIds: ["sensitive-otp"] },
     { scope: "user", subjectId: "sensitive-user", speakerId: "sensitive-user", factKey: "profile.address", factValue: "北京市朝阳区建国路88号", text: "用户住在北京市朝阳区建国路88号", confidence: 0.99, evidenceMessageIds: ["sensitive-address"] },
   ]
-  assert.deepEqual(await groupCaptureStore.applyCandidates({ id: "sensitive-window", group_id: "retry-group" }, sensitiveRows, sensitiveCandidates), [])
-  assert.equal(Number((await sqliteClient.get("SELECT COUNT(*) AS count FROM memory_items WHERE owner_id='sensitive-user'"))?.count), 0)
+  assert.equal((await groupCaptureStore.applyCandidates({ id: "sensitive-window", group_id: "retry-group" }, sensitiveRows, sensitiveCandidates)).length, 3)
+  assert.equal(Number((await sqliteClient.get("SELECT COUNT(*) AS count FROM memory_items WHERE owner_id='sensitive-user'"))?.count), 3)
 
   // 提炼摘要缺少标签：详情补齐字段，同时保护加载期间的编辑和快速切换后的目标。
   global.location = { hash: "", pathname: "/yui-chat", search: "" }

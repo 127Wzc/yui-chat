@@ -12,6 +12,8 @@ interface IsolatedTaskOptions {
   taskName?: string
   channelId?: string
   timeoutMs?: number
+  /** 只发送一次模型请求，不执行渠道 fallback。 */
+  singleAttempt?: boolean
   maxTokens?: number
   systemPrompt?: string
   prompt?: string
@@ -75,7 +77,7 @@ export async function runIsolatedModelTask(options: IsolatedTaskOptions = {}): P
   const task = record(tasks[taskName])
   const taskMaxTokens = Number(task.maxTokens) || 4096
   // 推理型模型的思考 token 也计入上限，调用方可以显式调大但不能越过统一边界。
-  const maxTokens = Math.max(1, Math.min(65536, Number(options.maxTokens) || taskMaxTokens))
+  const maxTokens = Math.max(1, Math.min(100000, Number(options.maxTokens) || taskMaxTokens))
   const attempts: Attempt[] = []
   // 每次 fallback 都重新创建 controller/timer，让每个候选模型拥有自己的请求期限。
   for (const channel of channels) {
@@ -121,7 +123,7 @@ export async function runIsolatedModelTask(options: IsolatedTaskOptions = {}): P
       const failure = controller.signal.aborted && controller.signal.reason instanceof Error ? controller.signal.reason : error
       if (options.signal?.aborted) throw failure
       attempts.push(attemptError(channel, failure))
-      if (text(task.selectionStrategy) !== "fallback") break
+      if (options.singleAttempt || text(task.selectionStrategy) !== "fallback") break
     } finally {
       clearTimeout(timer)
       options.signal?.removeEventListener("abort", abort)

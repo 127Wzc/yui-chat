@@ -3,6 +3,7 @@ import crypto from "node:crypto"
 import { sqliteClient } from "../core/storage/sqlite/client.js"
 import type { SqliteOperation } from "../core/storage/types.js"
 import { vectorRecall } from "./vector-recall.js"
+import type { MemoryImageSelection } from "./image-request.js"
 
 type UnknownRecord = Record<string, unknown>
 
@@ -143,9 +144,8 @@ export class MemoryRepository {
        FROM memory_evidence e LEFT JOIN group_memory_messages m
          ON m.id=e.source_event_id AND e.source_type='group-message:' || m.group_id
          AND (e.message_id='' OR e.message_id=m.message_id)
-         AND (m.expires_at=0 OR m.expires_at>?)
        WHERE e.memory_id=? ORDER BY m.sent_at DESC, e.source_event_id ASC LIMIT ? OFFSET ?`,
-      [Date.now(), memoryId, pageSize, (currentPage - 1) * pageSize],
+      [memoryId, pageSize, (currentPage - 1) * pageSize],
     )
     return {
       total, page: currentPage, pageSize,
@@ -216,7 +216,7 @@ export class MemoryRepository {
        FROM memory_items m
        JOIN memory_evidence e ON e.memory_id = m.id
        WHERE m.scope_type = 'user'
-         AND (m.source LIKE 'group-window%' OR m.source IN ('superseded', 'duplicate-merged'))
+         AND (m.source LIKE 'group-window%' OR m.source LIKE 'maintenance:%' OR m.source IN ('superseded', 'duplicate-merged'))
          AND e.source_type LIKE 'group-message:%'
        GROUP BY m.id
        HAVING current_evidence > 0`,
@@ -252,6 +252,27 @@ export class MemoryRepository {
       AND ((scope_type='user' AND group_id='') OR (scope_type='user_group' AND group_id=? AND ?<>''))
       AND type IN ('fact','episode') AND NOT (type='episode' AND source='interaction')
       AND status IN ('active','warm','cold') AND (expires_at=0 OR expires_at>?) ORDER BY id`, [userId, groupId, groupId, Date.now()])
+    return rows.filter(row => ["active", "warm", "cold"].includes(statusFor(row))).map(row => ({ ...row, tags: parse(row.tags_json) }))
+  }
+
+  /** 绘图附件只读有效个人事实与提炼经历，跨用户授权由门面按真实事件校验。 */
+  async listImageMemories(selection: MemoryImageSelection, caller: string, groupId: string): Promise<MemoryItem[]> {
+    if (selection.scope === "self" || selection.scope === "user") return this.listOwnMemories(selection.userId || caller, groupId)
+    const params: unknown[] = []
+    let scope = "scope_type IN ('user','user_group')"
+    if (selection.scope === "group") {
+      // 与管理端成员目录相同：本群有已采集发言或个人本群记忆的成员；不扫描其他群。
+      scope = `((scope_type='user' AND group_id='' AND owner_id IN (
+        SELECT sender_id FROM group_memory_messages WHERE group_id=?
+        UNION SELECT owner_id FROM memory_items WHERE scope_type='user_group' AND group_id=?
+        UNION SELECT ?
+      )) OR (scope_type='user_group' AND group_id=?))`
+      params.push(groupId, groupId, caller, groupId)
+    }
+    const rows = await sqliteClient.all<MemoryItem>(`SELECT * FROM memory_items WHERE ${scope}
+      AND type IN ('fact','episode') AND NOT (type='episode' AND source='interaction')
+      AND status IN ('active','warm','cold') AND (expires_at=0 OR expires_at>?)
+      ORDER BY owner_id, scope_type, group_id, id`, [...params, Date.now()])
     return rows.filter(row => ["active", "warm", "cold"].includes(statusFor(row))).map(row => ({ ...row, tags: parse(row.tags_json) }))
   }
 

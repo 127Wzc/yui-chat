@@ -1,10 +1,11 @@
 import { MemoryGroupPicker } from "./memory-group-picker.js"
 import { MemoryPortraitWorkspace } from "./memory-portrait.js"
+import { MemoryMaintenanceDialog } from "./memory-maintenance.js"
 
 // 记忆管理工作区：群公共记忆、群成员与成员记忆列表。
 export const MemoryManageWorkspace = {
   name: "MemoryManageWorkspace",
-  components: { MemoryPortraitWorkspace, MemoryGroupPicker },
+  components: { MemoryPortraitWorkspace, MemoryGroupPicker, MemoryMaintenanceDialog },
   props: {
     view: { type: Object, required: true },
   },
@@ -20,7 +21,7 @@ export const MemoryManageWorkspace = {
         <section class="group-memory-section">
           <div class="memory-section-head group-memory-section-head">
             <div><h2>群公共记忆</h2><p>对全体成员生效，只在当前群中召回；卡片会标出当前生命周期。</p></div>
-            <div class="row"><button class="btn small outline" type="button" :disabled="view.duplicatePlanBusy" @click="view.reviewDuplicateMemories"><Icon name="refresh" :size="14" />{{ view.duplicatePlanBusy ? '正在检查…' : '整理重复记忆' }}</button><button class="btn primary small" type="button" @click="view.openMemoryEditor(null, view.targetForGroup())"><Icon name="plus" :size="14" />添加群记忆</button></div>
+            <div class="row"><MemoryMaintenanceDialog :group-id="view.selectedGroupId" name="本群公共记忆" @submitted="view.openMaintenanceTasks" /><MemoryMaintenanceDialog :group-id="view.selectedGroupId" :batch="true" name="本群已记录成员及公共记忆" @submitted="view.openMaintenanceTasks" /><button class="btn primary small" type="button" @click="view.openMemoryEditor(null, view.targetForGroup())"><Icon name="plus" :size="14" />添加群记忆</button></div>
           </div>
           <div class="memory-list-tools">
             <SearchInput v-model="view.groupMemoryQuery" placeholder="搜索群公共记忆" />
@@ -47,7 +48,7 @@ export const MemoryManageWorkspace = {
           </aside>
 
           <section v-if="view.selectedMember && view.memberWorkspace" class="member-memory-panel">
-            <header class="member-memory-head"><div><h2>{{ view.selectedMemberName }}</h2><p>{{ view.memberScope === 'portrait' ? '结合本群发言和有效记忆生成，各类型每人每群每月一次。' : (view.memberScope === 'user_group' ? '仅显示可复用事实，仅在当前群中召回' : '仅显示可复用事实，所有对话可用') + '；活跃度随时间衰减，再次确认后重新计时。' }}</p></div><div v-if="view.memberScope !== 'portrait'" class="row"><button class="btn small outline" type="button" @click="view.openProfileEditor"><Icon name="bot" :size="14" />编辑画像</button><button class="btn primary small" type="button" @click="view.openMemoryEditor(null, view.targetForMember())"><Icon name="plus" :size="14" />添加记忆</button></div></header>
+            <header class="member-memory-head"><div><h2>{{ view.selectedMemberName }}</h2><p>{{ view.memberScope === 'portrait' ? '结合本群发言和有效记忆生成，各类型每人每群每月一次。' : (view.memberScope === 'user_group' ? '仅显示可复用事实，仅在当前群中召回' : '仅显示可复用事实，所有对话可用') + '；活跃度随时间衰减，再次确认后重新计时。' }}</p></div><div v-if="view.memberScope !== 'portrait'" class="row"><MemoryMaintenanceDialog :group-id="view.selectedGroupId" :user-id="view.selectedMember.userId" :name="view.selectedMemberName" @submitted="view.openMaintenanceTasks" /><button class="btn small outline" type="button" @click="view.openProfileEditor"><Icon name="bot" :size="14" />编辑画像</button><button class="btn primary small" type="button" @click="view.openMemoryEditor(null, view.targetForMember())"><Icon name="plus" :size="14" />添加记忆</button></div></header>
             <div class="segmented member-memory-tabs" aria-label="成员记忆范围"><button type="button" :class="{ active: view.memberScope === 'user_group' }" @click="view.memberScope = 'user_group'">本群记忆 <span>{{ view.memberWorkspace.groupMemory.total }}</span></button><button type="button" :class="{ active: view.memberScope === 'user' }" @click="view.memberScope = 'user'">全局记忆 <span>{{ view.memberWorkspace.globalMemory.total }}</span></button><button type="button" :class="{ active: view.memberScope === 'portrait' }" @click="view.memberScope = 'portrait'">聊天画像</button></div>
             <MemoryPortraitWorkspace v-if="view.memberScope === 'portrait'" :group-id="view.selectedGroupId" :user-id="view.selectedMember.userId" :name="view.selectedMemberName" :enabled="Boolean(view.selectedPolicy?.enabled)" />
             <template v-else>

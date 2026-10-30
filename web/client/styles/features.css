@@ -1918,3 +1918,78 @@
 .knowledge-index-summary[open] { flex-basis: 100%; }
 .knowledge-index-summary[open] > summary .icon { transform: rotate(180deg); }
 .knowledge-index-facts { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 10px; }
+
+/* AI记忆维护：沿用记忆页和统一抽屉，建议组保持完整前后对比。 */
+.maintenance-options { display: grid; gap: 14px; margin-bottom: 20px; }
+.maintenance-preview { display: grid; gap: 12px; margin-top: 18px; }
+.maintenance-change { display: grid; gap: 10px; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); }
+.maintenance-original { padding: 10px 12px; background: var(--muted); border-radius: var(--radius-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
+.maintenance-output { display: grid; gap: 10px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+.maintenance-evidence { padding-top: 8px; border-top: 1px solid var(--border); }
+.maintenance-evidence summary { color: var(--primary); }
+.maintenance-evidence p { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 8px; }
+.maintenance-result { padding: 16px; background: var(--muted); border-radius: var(--radius); }
+.maintenance-workspace { min-width: 0; }
+.maintenance-create-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+.maintenance-task-body { display: grid; gap: 20px; padding: 24px; }
+.maintenance-task-heading, .maintenance-task-tools, .maintenance-section-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.maintenance-task-heading h2 { font-size: 18px; }
+.maintenance-task-heading p { margin-top: 6px; font-size: 13px; color: var(--muted-foreground); }
+.maintenance-task-tools > .ui-search { width: 240px; max-width: 100%; }
+.maintenance-task-list { display: grid; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.maintenance-task-row { display: grid; grid-template-columns: minmax(170px, 1.1fr) minmax(150px, 1fr) minmax(145px, .9fr) auto; gap: 20px; align-items: center; padding: 18px 20px; background: var(--card); }
+.maintenance-task-row + .maintenance-task-row { border-top: 1px solid var(--border); }
+.maintenance-task-identity { min-width: 0; display: flex; align-items: center; gap: 12px; }
+.maintenance-task-identity > div { min-width: 0; }
+.maintenance-task-identity h3 { font-size: 14px; overflow-wrap: anywhere; }
+.maintenance-task-identity p { margin-top: 4px; overflow-wrap: anywhere; }
+.maintenance-task-icon { flex-shrink: 0; width: 36px; height: 36px; display: grid; place-items: center; border-radius: var(--radius-sm); background: var(--muted); color: var(--muted-foreground); }
+.maintenance-task-meta, .maintenance-task-status { min-width: 0; display: grid; justify-items: start; gap: 5px; font-size: 12px; color: var(--muted-foreground); }
+.maintenance-task-meta time { color: var(--foreground); font-variant-numeric: tabular-nums; }
+.maintenance-task-id { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
+.maintenance-task-status small { font-size: 11px; line-height: 1.5; }
+.maintenance-status.warn { background: var(--warn-weak); color: var(--warn); border-color: transparent; }
+.maintenance-status.bad { background: var(--bad-weak); color: var(--bad); border-color: transparent; }
+.maintenance-task-footnote { line-height: 1.6; }
+.maintenance-failures { padding: 12px 16px; border-radius: var(--radius-sm); background: var(--warn-weak); color: var(--warn); font-size: 13px; }
+.maintenance-failures p { margin-top: 5px; }
+.maintenance-intro { display: flex; gap: 12px; align-items: flex-start; padding: 16px; background: var(--primary-weak); border-radius: var(--radius); margin-bottom: 20px; }
+.maintenance-intro > svg { flex-shrink: 0; color: var(--primary); }
+.maintenance-intro p { color: var(--muted-foreground); margin-top: 6px; font-size: 13px; line-height: 1.7; }
+.maintenance-review-heading { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.maintenance-materials { display: flex; flex-wrap: wrap; gap: 8px 20px; color: var(--muted-foreground); font-size: 13px; margin-bottom: 12px; }
+.maintenance-materials strong { color: var(--foreground); font-weight: 500; }
+.maintenance-material-detail { color: var(--muted-foreground); font-size: 12px; margin-bottom: 16px; }
+.maintenance-material-detail p { margin-top: 6px; }
+.maintenance-outcome { display: grid; justify-items: center; gap: 10px; padding: 28px 18px; margin: 20px 0; text-align: center; background: var(--muted); border-radius: var(--radius); }
+.maintenance-outcome > svg { color: var(--primary); }
+.maintenance-outcome h3 { font-size: 16px; }
+.maintenance-outcome p { color: var(--muted-foreground); font-size: 13px; line-height: 1.7; }
+.maintenance-section-heading h3 { font-size: 14px; }
+.maintenance-proposed { padding: 10px 12px; border-left: 2px solid var(--primary); background: var(--primary-weak); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+.maintenance-proposed p { margin-top: 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.maintenance-notes { margin-top: 24px; border-top: 1px solid var(--border); padding-top: 18px; }
+.maintenance-notes > summary { font-weight: 600; font-size: 14px; }
+.maintenance-notes > summary span { margin-left: 6px; color: var(--muted-foreground); font-weight: 400; }
+.maintenance-notes > summary small { margin-left: 12px; color: var(--muted-foreground); font-size: 12px; font-weight: 400; }
+.maintenance-note-list { display: grid; margin-top: 14px; border: 1px solid var(--border); border-radius: var(--radius); }
+.maintenance-note { min-width: 0; display: grid; gap: 10px; padding: 16px; }
+.maintenance-note + .maintenance-note { border-top: 1px solid var(--border); }
+.maintenance-note p { overflow-wrap: anywhere; line-height: 1.7; }
+@media (max-width: 1050px) {
+  .maintenance-task-row { grid-template-columns: minmax(160px, 1fr) minmax(135px, 1fr) auto; gap: 14px; }
+  .maintenance-task-status { grid-column: 1 / 3; grid-row: 2; display: flex; align-items: center; gap: 10px; }
+  .maintenance-task-row > .btn { grid-column: 3; grid-row: 1 / 3; }
+}
+@media (max-width: 600px) {
+  .maintenance-task-body { padding: 16px; gap: 16px; }
+  .maintenance-create-actions { flex-basis: 100%; margin-left: 0; }
+  .maintenance-task-tools { align-items: stretch; }
+  .maintenance-task-tools > .ui-search { width: 100%; }
+  .maintenance-task-row { grid-template-columns: minmax(0, 1fr) auto; padding: 16px; }
+  .maintenance-task-identity { grid-column: 1 / -1; }
+  .maintenance-task-meta { grid-column: 1; grid-row: 2; }
+  .maintenance-task-status { grid-column: 1 / -1; grid-row: 3; flex-wrap: wrap; }
+  .maintenance-task-row > .btn { grid-column: 2; grid-row: 2; }
+  .maintenance-notes > summary small { display: block; margin: 6px 0 0 16px; }
+}

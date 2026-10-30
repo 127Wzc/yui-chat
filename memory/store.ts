@@ -1,5 +1,6 @@
 import { sqliteClient } from "../core/storage/sqlite/client.js"
 import type { UnknownRecord } from "../core/message/types.js"
+import type { MemoryImageRead, MemoryImageSelection } from "./image-request.js"
 
 type MemoryMethod = (...args: unknown[]) => unknown
 type MemoryBackend = Record<string, unknown>
@@ -22,6 +23,7 @@ export interface MemoryStoreContract extends MemoryBackend {
   addFact(event: unknown, text: unknown, options?: UnknownRecord): Promise<UnknownRecord>
   search(event: unknown, query: unknown, limit?: unknown): Promise<UnknownRecord[]>
   listOwnMemories(event: unknown): Promise<{ items: UnknownRecord[]; complete: boolean; warning?: string }>
+  listImageMemories(event: unknown, selection: MemoryImageSelection): Promise<MemoryImageRead>
   listMemories(event: unknown, options?: UnknownRecord): Promise<UnknownRecord[]>
   getProfile(event: unknown): Promise<{ userId: string; profile: UnknownRecord; facts: UnknownRecord[]; updatedAt?: unknown }>
   updateProfile(event: unknown, patch: UnknownRecord): Promise<{ userId: string; profile: UnknownRecord; facts?: UnknownRecord[]; updatedAt?: unknown }>

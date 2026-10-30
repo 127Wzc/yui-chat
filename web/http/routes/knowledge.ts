@@ -13,6 +13,7 @@ import { registerKnowledgeBaseRoutes } from "./knowledge/bases.js"
 import { registerKnowledgeIndexRoutes } from "./knowledge/indexing.js"
 import { registerKnowledgeAccessRoutes } from "./knowledge/access.js"
 import { registerPortraitRoutes } from "./knowledge/portraits.js"
+import { registerMemoryMaintenanceRoutes } from "./knowledge/memory-maintenance.js"
 
 function record(value: unknown): UnknownRecord {
   return value && typeof value === "object" && !Array.isArray(value) ? value as UnknownRecord : {}
@@ -24,6 +25,7 @@ function arrayValue(value: unknown): unknown[] {
 
 /** 注册知识库、群记忆、输出状态与主动问候管理接口。 */
 export function registerKnowledgeRoutes(app: RouteApp): void {
+  registerMemoryMaintenanceRoutes(app)
   registerPortraitRoutes(app)
   registerCommandKnowledgeRoutes(app)
   registerKnowledgeBaseRoutes(app)

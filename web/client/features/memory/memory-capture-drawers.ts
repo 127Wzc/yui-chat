@@ -121,7 +121,7 @@ export const MemoryCaptureDrawers = {
       <Field label="标签" v-model="view.draft.memoryTags" placeholder="偏好, 沟通方式（可选）" />
       <section v-if="view.draft.memoryId" class="memory-source-section" aria-label="关联的来源消息">
         <div class="memory-detail-heading"><h3><Icon name="message" :size="16" />来源消息 <span v-if="view.memoryDetail?.evidenceCount != null" class="badge">{{ view.memoryDetail.evidenceCount }}</span></h3><span v-if="view.memoryDetailLoading" class="muted small" role="status">正在加载…</span></div>
-        <p class="memory-detail-note">这些消息为提炼或强化记忆提供依据。原文按采集保留期限清理，关联标识会保留；人工修订后的内容可能与原始证据不同。</p>
+        <p class="memory-detail-note">被记忆引用的原文到期后继续保留，未被引用的到期消息自动清理；明确清空群资料仍会删除原文。人工修订后的内容可能与原始证据不同。</p>
         <div v-if="view.memorySources.items.length" class="memory-source-list">
           <article v-for="source in view.memorySources.items" :key="source.id" class="memory-source-card" :class="{ 'is-unavailable': !source.available }">
             <header><span class="memory-source-avatar"><template v-if="source.available">{{ (source.senderName || source.senderId || '群').slice(0, 1) }}</template><Icon v-else name="message" :size="17" /></span><div><strong>{{ source.available ? (source.senderName || source.senderId || '群成员') : '来源原文不可用' }}</strong><small>{{ source.available ? view.memoryTimeLabel(source.sentAt) : '原文已清理、已过期或未保存在本地' }}</small></div><span v-if="source.groupId" class="memory-source-group">群 {{ source.groupId }}</span></header>

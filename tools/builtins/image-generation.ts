@@ -13,6 +13,8 @@ import { hostRuntime } from "../../core/runtime/host-runtime.js"
 import { resolveBoundaryRole } from "../access/roles.js"
 import { resolveToolRuntimeConfig } from "../../extensions/runtime-config.js"
 import { redactErrorText } from "../../core/shared/error-details.js"
+import { appendMemoryImageReference } from "../../memory/image-reference.js"
+import { extractMessageContext } from "../../core/message/message-context.js"
 
 type ToolArgs = UnknownRecord
 
@@ -256,12 +258,12 @@ export class GenerateImageTool {
       },
     }
   }
-  descriptionZh = "AI 画图与图片编辑：根据描述创作人物、角色立绘、插画、风景，或编辑参考图片。用户说画图、画一个、画一张、生图时使用本工具；完成前不要声称已经画好。内容排版使用 render_image。"
-  description = "Use when the user asks to draw, paint, create artwork, generate a character/illustration/scene, or edit an image (画图、画一个、画一张、绘画、生图、修图). Generate or edit actual visual images with the configured image model. Do not substitute a text card, HTML mockup or written description for requested artwork; render_image only typesets content. If generation is unavailable or fails, report that limitation instead of claiming a rendered card is the drawing. Omit referenceImages for text-to-image; include one or more image URLs/data URLs to edit them. When size, aspectRatio, or imageSize is omitted, the tool applies its configured defaults before the model settings. Generation runs in the background and sends all returned images to the current chat when ready. You may include startMessage for a brief natural acknowledgement that drawing has started; do not claim completion before the images arrive."
+  descriptionZh = "AI 画图与图片编辑：根据描述创作人物、角色立绘、插画、风景，或编辑参考图片。依据记忆作图时，按真实请求和权限自动附上全部有效个人记忆全文，不提炼、不截断；普通成员限本人，主人可指定成员、本群成员或全部用户。完成前不要声称已经画好。内容排版使用 render_image。"
+  description = "Use when the user asks to draw, paint, create artwork, generate a character/illustration/scene, or edit an image (画图、画一个、画一张、绘画、生图、修图). Generate or edit actual visual images with the configured image model. For memory-based drawings, call this directly: full valid personal memory text is attached automatically from the real request and identity, without summarizing or truncating. Ordinary members can use their own memories; only the bot master can select another user, recorded members of the current group, or all users. Do not copy memory into prompt or use memory_manage to summarize it first. Do not substitute a text card, HTML mockup or written description for requested artwork; render_image only typesets content. If generation is unavailable or fails, report that limitation. Omit referenceImages for text-to-image; include image URLs/data URLs to edit them. Omitted size, aspectRatio and imageSize use configured defaults. Generation runs in the background and sends returned images to the current chat. You may include startMessage for a brief acknowledgement; do not claim completion before images arrive."
   parameters = {
     type: "object",
     properties: {
-      prompt: { type: "string", minLength: 1, maxLength: 4000, description: "What to generate or how to edit the reference image." },
+      prompt: { type: "string", minLength: 1, maxLength: 4000, description: "Drawing or editing instructions. For memory-based drawings, do not copy or summarize memories here: full text is attached by the tool outside this field's length limit." },
       referenceImages: { type: "array", maxItems: 3, description: "Optional image URLs or data URLs. Omit to use an image attached to the current message; use [] to force text-to-image.", items: { type: "string" } },
       count: { type: "integer", minimum: 1, description: "Optional target image count. It is honored only for the bot owner or configured allowlisted users; other users are always limited to one image." },
       size: { type: "string", description: "OpenAI image size such as 1024x1024, 1024x1536, or 1536x1024." },
@@ -281,7 +283,7 @@ export class GenerateImageTool {
     let stage = "校验生图配置"
     try {
       if (imageRuntime.enabled === false) throw new Error("图片生成未启用")
-      const prompt = text(args.prompt).trim()
+      let prompt = text(args.prompt).trim()
       if (!prompt) throw new Error("请提供图片描述")
       const taskName = "imageGeneration"
       const channel = resolveImageChannel(config, text(context.backgroundChannelId).trim())
@@ -311,6 +313,9 @@ export class GenerateImageTool {
         : 1
       stage = "准备参考图"
       const references = await prepareReferenceImages(args, context, config, imageRuntime.maxReferences === undefined ? 3 : Number(imageRuntime.maxReferences))
+      stage = "读取记忆全文"
+      const memoryReference = await appendMemoryImageReference(context.e || {}, context.prompt ?? extractMessageContext(context.e || {}).text, prompt, context.agent?.signal || context.signal)
+      prompt = memoryReference.prompt
       const generationStartedAt = Date.now()
       stage = "请求图片模型"
       const result = await adapterRegistry.generateImages({
@@ -334,6 +339,7 @@ export class GenerateImageTool {
         parentToolId: text(context.observability?.toolCallId),
         metadata: {
           referenceCount: references.length,
+          ...(memoryReference.metadata ? { memoryReference: memoryReference.metadata } : {}),
           multiImageAllowed,
           ...(requestedCount === undefined ? {} : { requestedCount }),
           ...(size ? { size } : {}),
@@ -379,6 +385,7 @@ export class GenerateImageTool {
           upstreamImageCount: result.images.length,
           durationMs: generationDurationMs,
           referenceCount: references.length,
+          ...(memoryReference.metadata ? { memoryReference: memoryReference.metadata } : {}),
           model: channel.model,
           adapter: channel.type,
           deliveryStatus: delivery.status,

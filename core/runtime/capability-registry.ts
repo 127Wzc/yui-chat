@@ -105,8 +105,8 @@ const capabilityDefinitions: CapabilityDefinition[] = [
     owner: "memory/store.js",
     configPaths: ["memory", "context"],
     commands: [],
-    apis: ["/api/memory", "/api/memory/captures", "/api/conversations"],
-    description: "用户事实、episode、指定群本地消息采集、异步事实提炼、最近群聊上下文和第一人称链路注入。",
+    apis: ["/api/memory", "/api/memory/captures", "/api/memory/maintenance", "/api/conversations"],
+    description: "用户事实、episode、指定群消息采集与异步提炼、AI整理的逐组审核及有条件撤销、最近群聊上下文和第一人称链路注入。",
   },
   {
     id: "media-render-output",
