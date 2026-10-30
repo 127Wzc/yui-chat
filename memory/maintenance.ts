@@ -5,6 +5,7 @@ import { backgroundTaskService } from "../core/scheduling/background-task-servic
 import { estimateTokens } from "../core/chat/token-budget.js"
 import { hostRuntime } from "../core/runtime/host-runtime.js"
 import { runIsolatedModelTask } from "../models/isolated-task.js"
+import { normalizeModelUsage } from "../models/protocol/normalize.js"
 import { groupCaptureStore } from "./group-capture.js"
 import { vectorRecall } from "./vector-recall.js"
 import { sqliteMemoryStore } from "./sqlite-store.js"
@@ -163,10 +164,13 @@ export class MemoryMaintenance {
     signal.throwIfAborted();await this.settings(job.groupId,job.useHistory)
     await saveJob(id,{progress:{...progress,stage:"单次模型分析",inputTokens,tokenLimit:limit}})
     const response=await this.model({taskName:"replyer",channelId:String(settings.modelName)||undefined,systemPrompt:MAINTENANCE_PROMPT,prompt,maxTokens:Number(settings.maxTokens),timeoutMs:90000,singleAttempt:true,signal,event:{isGroup:true,group_id:job.groupId,user_id:job.userId||"memory-maintenance"},source:"memory-maintenance",purpose:"memory-maintenance",metadata:{jobId:id}})
+    // 模型调用已发生；先保存用量，后续格式或范围校验失败也保留本次消耗。
+    const resultProgress={...progress,stage:"校验整理结果",inputTokens,tokenLimit:limit,usage:normalizeModelUsage(response.usage)}
+    await saveJob(id,{progress:resultProgress},["analyzing"])
     const final=parseProposals(String(response.text||""),job,snapshot.memories.map(m=>m.id),messages.map(m=>m.id),Number(settings.minConfidence))
     signal.throwIfAborted();await this.settings(job.groupId,job.useHistory)
     await sqliteClient.transaction([...versionGuards(snapshot.versions),...await this.messageGuards(job),
-      {sql:"UPDATE memory_maintenance_jobs SET status='ready',plan_json=?,progress_json=?,updated_at=? WHERE id=? AND status='analyzing'",params:[JSON.stringify(final),JSON.stringify({...progress,stage:"变更预览",inputTokens,tokenLimit:limit,analysisComplete:true}),Date.now(),id],expectChanges:1}])
+      {sql:"UPDATE memory_maintenance_jobs SET status='ready',plan_json=?,progress_json=?,updated_at=? WHERE id=? AND status='analyzing'",params:[JSON.stringify(final),JSON.stringify({...resultProgress,stage:"变更预览",analysisComplete:true}),Date.now(),id],expectChanges:1}])
   }
   async view(id:unknown):Promise<Row> {
     this.available()
@@ -205,7 +209,7 @@ export class MemoryMaintenance {
     if(job.expiresAt<=Date.now())fail("任务已超过保留期限，请创建新的整理任务。",409)
     if(running.has(job.id))fail("上一轮分析正在停止，请稍后重试。",409)
     if(!["failed","cancelled","stale"].includes(job.status))fail("只有失败、取消或失效的任务可以重试。",409)
-    await saveJob(job.id,{status:"queued",error:""},[job.status]);this.schedule(job.id)
+    await saveJob(job.id,{status:"queued",error:"",progress:{stage:"等待重新取材"}},[job.status]);this.schedule(job.id)
     return this.view(job.id)
   }
   async cancel(id:unknown):Promise<Row> {

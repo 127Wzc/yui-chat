@@ -77,12 +77,14 @@ try {
   const groups=["g","other","many","history","backfill","race","failure","cancel","clear","batch","expiry","scope","manual","split","budget","history-scope","public-backfill"]
   for(const g of groups)await capture.setPolicy("group",g,{enabled:true,tokenLimit:60000,overrides:{tokenLimit:true}})
   let serial=0,calls=0,historyCalls=0,inputs=[],choose=()=>[]
+  const reportedUsage={input:11618,output:3279,total:14897,cached:0,reasoning:133,source:"reported",inputKnown:true,outputKnown:true,totalKnown:true}
+  let modelUsage=reportedUsage
   const model=async options=>{
     calls++
     assert.equal(options.singleAttempt,true,"整理任务必须禁止渠道 fallback，单次完成")
     const input=JSON.parse(options.prompt);inputs.push(input)
     const operations=await choose(input,options)
-    return {text:typeof operations==="string"?operations:JSON.stringify({reviewedIds:input.memories.map(m=>m.id),reviewedMessageIds:input.history.map(m=>m.id),operations})}
+    return {text:typeof operations==="string"?operations:JSON.stringify({reviewedIds:input.memories.map(m=>m.id),reviewedMessageIds:input.history.map(m=>m.id),operations}),usage:modelUsage}
   }
   const service=new MemoryMaintenance(model)
   async function fact(user,text,group="g",extra={}) {
@@ -122,6 +124,8 @@ try {
   assert.equal(complete.progress.memoryCount,261)
   assert.equal(complete.progress.messageCount,0)
   assert.equal(complete.requestedCount,0)
+  assert.deepEqual(complete.progress.usage,reportedUsage,"成功任务保存上游用量，预算估算单独保留")
+  assert.notEqual(complete.progress.inputTokens,complete.progress.usage.input)
   assert.equal(historyCalls,0)
   const defaultInput=inputs.at(-1)
   assert.equal(defaultInput.memories.length,261)
@@ -236,8 +240,47 @@ try {
   // 严格范围、完整覆盖和关联组检查；错误或半截 JSON 不开放部分应用。
   for(const bad of ["{",JSON.stringify({reviewedIds:[],reviewedMessageIds:[],operations:[]})]) {
     choose=()=>bad
-    await settle(await service.create("failure","atomic-user"),"failed")
+    const invalid=await settle(await service.create("failure","atomic-user"),"failed")
+    assert.deepEqual(invalid.progress.usage,reportedUsage,"格式和审阅核验失败也保留已发生的用量")
+    assert.deepEqual(invalid.plan,[])
   }
+  // 无历史时，证据元信息不能被当成已读原文；两类审阅范围分别说明匹配、缺失和多出数量。
+  const coverageFact=await fact("coverage-user","喜欢科幻小说","failure",{evidence:[{sourceEventId:"metadata-only",sourceType:"group-message:failure",messageId:"metadata-only"}]})
+  choose=input=>JSON.stringify({reviewedIds:input.memories.map(m=>m.id),reviewedMessageIds:[input.memories[0].evidence[0].id,input.memories[0].evidence[0].id],operations:[]})
+  const coverageFailure=await settle(await service.create("failure","coverage-user"),"failed")
+  assert(coverageFailure.error.includes("记忆确认 1/1 条（缺失 0 条，多出 0 个标识）"))
+  assert(coverageFailure.error.includes("原文确认 0/0 条（缺失 0 条，多出 1 个标识）"))
+  assert(coverageFailure.error.includes("未开启历史参考，原文审阅列表必须为空"))
+  assert(!coverageFailure.error.includes("metadata-only"),"失败摘要只记录计数，不复制模型返回的标识")
+  assert.deepEqual(coverageFailure.progress.usage,reportedUsage)
+  assert.equal((await get(coverageFact.id)).status,"active")
+  await assert.rejects(service.apply(coverageFailure.id,["unavailable-proposal"]),/不能应用/)
+  const {parseProposals}=await import("../output/runtime/memory/maintenance-plan.js")
+  const reviewJob={useHistory:true,snapshot:{memories:[],evidence:[],messages:[]}}
+  const reviewResponse=(memories,messages)=>JSON.stringify({reviewedIds:memories,reviewedMessageIds:messages,operations:[]})
+  assert.deepEqual(parseProposals(reviewResponse(["m2","m1","m1"],["h1"]),reviewJob,["m1","m2"],["h1"],0.7),[],"顺序和重复不改变原有集合核验语义")
+  for(const [memories,messages,memorySummary,messageSummary] of [
+    [["m1"],["h1"],"记忆确认 1/2 条（缺失 1 条，多出 0 个标识）","原文确认 1/1 条（缺失 0 条，多出 0 个标识）"],
+    [["m1","unknown-memory"],["unknown-message"],"记忆确认 1/2 条（缺失 1 条，多出 1 个标识）","原文确认 0/1 条（缺失 1 条，多出 1 个标识）"],
+    [["m1","m2"],[],"记忆确认 2/2 条（缺失 0 条，多出 0 个标识）","原文确认 0/1 条（缺失 1 条，多出 0 个标识）"],
+  ])assert.throws(()=>parseProposals(reviewResponse(memories,messages),reviewJob,["m1","m2"],["h1"],0.7),error=>error.message.includes(memorySummary)&&error.message.includes(messageSummary))
+  assert.throws(()=>parseProposals(JSON.stringify({reviewedIds:[],operations:[]}),reviewJob,[],[],0.7),/原文审阅列表格式错误/)
+  const memoryRefs=Array.from({length:59},(_,i)=>`memory-${i}`),metadataRefs=Array.from({length:73},(_,i)=>`evidence-${i}`)
+  assert.throws(()=>parseProposals(reviewResponse(memoryRefs,[...metadataRefs,metadataRefs[0],metadataRefs[1]]),{...reviewJob,useHistory:false},memoryRefs,[],0.7),error=>error.message.includes("记忆确认 59/59")&&error.message.includes("原文确认 0/0 条（缺失 0 条，多出 73 个标识）"))
+  choose=()=>[]
+  modelUsage={input:0,output:0,total:7,cached:0,reasoning:0,source:"reported",inputKnown:true,outputKnown:true,totalKnown:true}
+  const retried=await service.retry(coverageFailure.id)
+  assert.equal(retried.progress.usage,undefined,"重新分析不显示上一轮用量")
+  const zeroUsage=await settle(retried)
+  assert.deepEqual(zeroUsage.progress.usage,modelUsage,"上游零值与独立总量不被估算或求和替换")
+  modelUsage={input_tokens:123,total_tokens:777,Authorization:"must-not-persist"}
+  const partialUsage=await analyze("failure","coverage-user")
+  assert.deepEqual(partialUsage.progress.usage,{input:123,output:0,total:777,cached:0,reasoning:0,source:"reported",inputKnown:true,outputKnown:false,totalKnown:true})
+  modelUsage=undefined
+  const unknownUsage=await analyze("failure","coverage-user")
+  assert.equal(unknownUsage.progress.usage.source,"unknown")
+  assert.equal(unknownUsage.progress.usage.inputKnown,false)
+  modelUsage=reportedUsage
   choose=input=>[{...rewrite(input.memories[0],"越界事实"),sourceIds:[globalFact.id]}]
   await settle(await service.create("failure","atomic-user"),"failed")
   const combined=await fact("split-user","喜欢滑雪，也喜欢游泳","split")
@@ -694,6 +737,19 @@ try {
   assert(noChanges.includes("分析完成，无需变更")&&!noChanges.includes("应用选中的"))
   const readOnly=await renderReview({...clientReady,reviewedAt:Date.now()})
   assert(readOnly.includes("已保留原样")&&!readOnly.includes('type="checkbox"')&&!readOnly.includes("应用选中的"))
+  for(const job of [clientReady,coverageFailure]){
+    const html=await renderReview(job)
+    assert(html.includes(`预计输入 ${job.progress.inputTokens} / ${job.progress.tokenLimit} Token`))
+    assert(html.includes("本次用量：输入 11618（上游），输出 3279（上游），合计 14897（上游） Token。"),"成功和校验失败任务均展示上游用量")
+  }
+  const failedReview=await renderReview(coverageFailure)
+  assert(failedReview.includes("原文确认 0/0 条（缺失 0 条，多出 1 个标识）"))
+  assert(!failedReview.includes("应用选中的"))
+  assert((await renderReview(zeroUsage)).includes("输入 0（上游），输出 0（上游），合计 7（上游）"))
+  assert((await renderReview(partialUsage)).includes("输入 123（上游），输出 未提供，合计 777（上游）"))
+  assert((await renderReview(unknownUsage)).includes("输入 未提供，输出 未提供，合计 未提供"))
+  assert(!(await renderReview({...clientReady,progress:{inputTokens:7817,tokenLimit:200000}})).includes("本次用量"),"旧任务不虚构实际用量")
+  assert((await renderReview({...clientReady,progress:{usage:{input:10,output:20,total:30,source:"estimated"}}})).includes("输入 10（估算），输出 20（估算），合计 30（估算）"))
   for(const [job,bucket,label] of [
     [clientReady,"review","待审核"],[{...clientReady,plan:[]},"history","无需变更"],
     [{...reviewOnly,reviewedAt:0},"history","仅供核对"],[closed,"history","已保留原样"],

@@ -22,6 +22,12 @@ export const MemoryMaintenanceReview={
     const proposals=computed(()=>rows(job.value.plan).filter(p=>p.kind!=="review"))
     const notes=computed(()=>rows(job.value.plan).filter(p=>p.kind==="review"))
     const state=computed(()=>maintenanceTaskState(job.value)),working=computed(()=>maintenanceActive(job.value.status))
+    const usageSummary=computed(()=>{
+      if(!job.value.progress.usage)return ""
+      const usage=asRecord(job.value.progress.usage)
+      const counter=(key:string)=>usage[`${key}Known`]===true?`${usage[key]}（上游）`:usage.source==="estimated"?`${usage[key]}（估算）`:"未提供"
+      return `本次用量：输入 ${counter("input")}，输出 ${counter("output")}，合计 ${counter("total")} Token。`
+    })
     const canReview=computed(()=>job.value.status==="ready"&&!job.value.reviewedAt)
     const dirty=computed(()=>canReview.value&&baseline.value!==JSON.stringify([selected.value,drafts]))
     const scopeOptions=computed(()=>job.value.userId?[{value:"user",label:"全局记忆"},{value:"user_group",label:"当前群个人记忆"}]:[{value:"group",label:"群公共记忆"}])
@@ -96,7 +102,7 @@ export const MemoryMaintenanceReview={
     }
     onMounted(()=>{timer=setInterval(()=>{if(working.value&&!busy.value)void refresh()},1500)})
     onUnmounted(()=>{seq++;clearInterval(timer);setDirtyScope(dirtyKey,false)})
-    return{job,open,busy,error,selected,drafts,editing,sourceTexts,proposals,notes,state,working,canReview,scopeOptions,kinds,scope,stamp:maintenanceStamp,close,openMemory,refresh,toggleEdit,editText,action,apply,dismiss,undo,loadSource}
+    return{job,open,busy,error,selected,drafts,editing,sourceTexts,proposals,notes,state,working,usageSummary,canReview,scopeOptions,kinds,scope,stamp:maintenanceStamp,close,openMemory,refresh,toggleEdit,editText,action,apply,dismiss,undo,loadSource}
   },
   template:`
     <SideDrawer :open="open" :title="name || (job.userId ? '用户 ' + job.userId : '群公共记忆')" :subtitle="stamp(job.createdAt) + ' · ' + (job.useHistory ? '参考本群历史' : '仅整理已有记忆')" icon="sparkles" width="840px" @close="close">
@@ -105,7 +111,7 @@ export const MemoryMaintenanceReview={
         <span v-if="job.progress.memoryCount != null">已有记忆 <strong>{{ job.progress.memoryCount }}</strong> 条</span>
         <span v-if="job.useHistory">参考发言 <strong>{{ job.progress.messageCount || 0 }} / {{ job.requestedCount }}</strong> 条</span><span v-else>未参考聊天原文</span>
       </div>
-      <details v-if="job.useHistory || job.progress.inputTokens" class="maintenance-material-detail"><summary>取材与用量</summary><p v-if="job.useHistory">数据库 {{ job.progress.databaseCount || 0 }} 条，历史补充 {{ job.progress.historyCount || 0 }} 条；扫描 {{ job.progress.historyScanned || 0 }} 条群消息。</p><p v-if="job.progress.from">发言时间：{{ stamp(job.progress.from) }} 至 {{ stamp(job.progress.to) }}</p><p v-if="job.progress.inputTokens">预计输入 {{ job.progress.inputTokens }} / {{ job.progress.tokenLimit }} Token；单次分析。</p></details>
+      <details v-if="job.useHistory || job.progress.inputTokens || usageSummary" class="maintenance-material-detail"><summary>取材与用量</summary><p v-if="job.useHistory">数据库 {{ job.progress.databaseCount || 0 }} 条，历史补充 {{ job.progress.historyCount || 0 }} 条；扫描 {{ job.progress.historyScanned || 0 }} 条群消息。</p><p v-if="job.progress.from">发言时间：{{ stamp(job.progress.from) }} 至 {{ stamp(job.progress.to) }}</p><p v-if="job.progress.inputTokens">预计输入 {{ job.progress.inputTokens }} / {{ job.progress.tokenLimit }} Token；单次分析。</p><p v-if="usageSummary">{{ usageSummary }}</p></details>
       <p v-if="job.progress.warning" class="muted small">{{ job.progress.warning }}</p>
       <p v-if="error || job.error" class="error-text" role="alert">{{ error || job.error }}</p>
       <div v-if="working" class="maintenance-outcome" role="status"><Icon name="refresh" :size="24" class="icon-spin" /><h3>{{ job.progress.stage || state.label }}</h3><p>分析在后台继续，完成后会进入待审核或已结束。</p></div>
