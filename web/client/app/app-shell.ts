@@ -1,4 +1,4 @@
-import { onMounted, onUnmounted, computed, ref } from "vue"
+import { onMounted, onUnmounted, computed, nextTick, ref } from "vue"
 import {
   store,
   tabSlices,
@@ -175,21 +175,26 @@ export const AppShell = {
       await boot()
     }
 
-    async function loginDirect() {
-      const token = String(loginToken.value || "").trim()
+    async function loginDirect(event: SubmitEvent) {
+      const form = event.currentTarget
+      const token = String(form instanceof HTMLFormElement ? new FormData(form).get("password") || "" : loginToken.value || "").trim()
       if (!token) {
         loginError.value = "请输入 Web Token"
         return
       }
+      // 部分密码管理器只填充 DOM，不触发 input；同步后续渲染使用的值。
+      loginToken.value = token
       loginBusy.value = true
       loginError.value = ""
       try {
         syncToken(token)
         await request("/api/auth/session", { method: "POST", body: "{}" })
         syncToken("")
-        loginToken.value = ""
         store.bootError = ""
         await loadInitial()
+        // 登录成功后先移除表单，让密码管理器能识别异步登录成功，再清除内存中的值。
+        await nextTick()
+        loginToken.value = ""
         connectWs()
         toast("登录成功")
       } catch (err) {
@@ -245,10 +250,13 @@ export const AppShell = {
         <div class="panel-head"><h2><Icon name="key" :size="15" />Web 登录</h2></div>
         <div class="panel-body">
           <p class="muted small">静态登录需要在管理台设置访问令牌；未设置时此入口禁用。主人也可以在机器人聊天中发送 <code>#yui面板</code> 获取一次性快捷链接。</p>
-          <form class="login-form login-manual" @submit.prevent="loginDirect">
+          <form class="login-form login-manual" method="post" autocomplete="on" @submit.prevent="loginDirect">
             <Field
               label="Web Token"
               type="password"
+              input-id="current-password"
+              name="password"
+              autocomplete="current-password"
               v-model="loginToken"
               placeholder="输入配置中的 web.authToken"
             />
@@ -327,7 +335,7 @@ export const AppShell = {
               <Icon name="chevron-down" :size="13" />
             </summary>
             <div class="account-popover">
-              <div class="account-popover-head"><b>当前浏览器登录</b><span>使用受保护的 HttpOnly 会话，不保存 Web Token</span></div>
+              <div class="account-popover-head"><b>当前浏览器登录</b><span>使用受保护的 HttpOnly 会话；浏览器可按你的选择保存 Web Token</span></div>
               <button class="btn danger" type="button" @click="logout"><Icon name="power" :size="14" />退出当前浏览器</button>
             </div>
           </details>

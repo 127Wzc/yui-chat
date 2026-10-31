@@ -322,6 +322,31 @@ export async function checkGroupContext(image) {
         execution:{effect:"read",repeatPolicy:"allow"},
         execute:async args=>{queries.push(args.query); return args.query.includes("Steam") ? "Steam 指令" : "瑞幸小黄油拿铁资料"},
       }))
+      // An ambiguous follow-up must still be able to use an authorized knowledge tool based on history.
+      let followupTurn = 0
+      mock.sendMessage = async request => {
+        followupTurn++
+        const result = {id:`followup-${followupTurn}`,text:"",stopReason:"tool_calls",usage:{input:1,output:1,total:2,source:"reported"}}
+        if (followupTurn === 1) {
+          assert(request.messages.some(message => contentToText(message.content).includes("机器人签到有哪些指令")))
+          assert(request.tools.some(tool => tool.name === "knowledge_manage"), "ordinary follow-up must not prohibit the authorized tool")
+          return {...result,toolCalls:[{id:"followup-query",name:"knowledge_manage",arguments:{action:"search",query:"机器人签到指令 需要管理员权限吗"}}]}
+        }
+        return {...result,toolCalls:[{id:"followup-delivery",name:"message_send",arguments:{parts:[{type:"text",text:"需要管理员权限。"}]}}]}
+      }
+      const followupConfig = structuredClone(next)
+      followupConfig.tools.enabled = true
+      followupConfig.tools.enabledTools = ["knowledge_manage", "message_send"]
+      followupConfig.tools.promptSelection.enabled = true
+      followupConfig.tools.promptSelection.maxDefinitionTokens = 4000
+      followupConfig.chat.maxToolRounds = 4
+      await chatService.runModelStepWithChannel({e:{...observer,isMaster:true,reply:async()=>({message_id:"followup-answer"})},
+        prompt:"需要管理员吗？",config:followupConfig,
+        history:[{role:"user",content:"机器人签到有哪些指令？"},{role:"assistant",content:"我帮你确认签到功能。"}],
+        step:{id:"reply",task:"replyer",mode:"final"},channel:{id:"mock",type:"mock",model:"mock",modelConfig:{toolUse:true}}})
+      assert.deepEqual(queries,["机器人签到指令 需要管理员权限吗"])
+      queries.length = 0
+
       let turn = 0
       mock.sendMessage = async request=>{
         turn++

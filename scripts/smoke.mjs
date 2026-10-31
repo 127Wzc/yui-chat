@@ -4382,10 +4382,10 @@ async function checkConversations() {
       isGroup: true,
       group_id: "20001",
       user_id: "10001",
-      msg: "怎么使用帮助指令",
-      raw_message: "怎么使用帮助指令",
+      msg: "机器人怎么使用帮助指令",
+      raw_message: "机器人怎么使用帮助指令",
       sender: { user_id: "10001", nickname: "Smoke User" },
-    }, "怎么使用帮助指令")
+    }, "机器人怎么使用帮助指令")
     assert(toolTraceResult.toolChain.some(item => item.name === "knowledge_manage" && item.status === "ok"), "chat result should record the knowledge tool chain")
 
     let hostedRuntime

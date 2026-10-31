@@ -153,6 +153,9 @@ export const Field = defineComponent({
     tip: String,
     rows: Number,
     disabled: Boolean,
+    inputId: String,
+    name: String,
+    autocomplete: { type: String, default: "off" },
     // 显示在输入框下方的常驻说明；tip 仍用于悬浮说明。
     description: String,
   },
@@ -216,10 +219,12 @@ export const Field = defineComponent({
       ></textarea>
       <input
         v-else
+        :id="inputId"
+        :name="name"
         :type="type"
         :value="modelValue"
         :placeholder="placeholder"
-        autocomplete="off"
+        :autocomplete="autocomplete"
         :disabled="disabled"
         @input="onInput"
         @keydown.enter="$emit('enter', $event)"

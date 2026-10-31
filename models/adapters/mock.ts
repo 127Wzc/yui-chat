@@ -1,4 +1,5 @@
 import crypto from "node:crypto"
+import { isBotCommandQuery } from "../../knowledge/command-intent.js"
 import { ModelAdapter, contentToText, notifyModelRequest } from "./base.js"
 import type { JsonValue } from "../../core/message-chain/types.js"
 import type { ModelListRequest, ModelRequest, ModelResponse } from "../protocol/types.js"
@@ -48,8 +49,9 @@ export class MockAdapter extends ModelAdapter {
     }
     const last = [...messages].reverse().find(item => item.role === "user")
     const text = contentToText(last?.content || "")
+    const currentText = text.split("【本轮发言】\n").at(-1) || text
     const commandTool = tools.find(tool => tool.name === "knowledge_manage")
-    if (commandTool && /指令|命令|怎么|如何|帮助|help/i.test(text)) {
+    if (commandTool && isBotCommandQuery(currentText)) {
       return {
         id: crypto.randomUUID(),
         text: "",
@@ -58,7 +60,7 @@ export class MockAdapter extends ModelAdapter {
         toolCalls: [{
           id: crypto.randomUUID(),
           name: "knowledge_manage",
-          arguments: { action: "search", query: text, limit: 5 } as Record<string, JsonValue>,
+          arguments: { action: "search", query: currentText, limit: 5 } as Record<string, JsonValue>,
         }],
       }
     }

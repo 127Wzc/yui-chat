@@ -25,7 +25,9 @@ try {
   const { commandImports } = await import("../output/runtime/knowledge/command-import.js")
   const { searchKnowledgeDetailed, knowledgeQueryTerms } = await import("../output/runtime/knowledge/retrieval.js")
   const { normalizeSearchQuery } = await import("../output/runtime/knowledge/command-document-builder.js")
-  const { estimateTokens, selectPromptTools, isBotCommandQuery } = await import("../output/runtime/core/chat/token-budget.js")
+  const { estimateTokens, selectPromptTools } = await import("../output/runtime/core/chat/token-budget.js")
+  const { isBotCommandQuery } = await import("../output/runtime/knowledge/command-intent.js")
+  const { MockAdapter } = await import("../output/runtime/models/adapters/mock.js")
   const { vectorIndex } = await import("../output/runtime/knowledge/vector-index.js")
   const { KnowledgeManageTool } = await import("../output/runtime/tools/builtins/command.js")
   const { ToolRegistry } = await import("../output/runtime/tools/support/registry.js")
@@ -107,11 +109,20 @@ try {
   }
   assert.equal(normalizeSearchQuery("#当前体力"),"#当前体力")
   assert.equal(normalizeSearchQuery("*关闭验证"),"*关闭验证")
-  for(const query of ["机器人怎么关闭入群验证","如何查体力","#体力怎么用","这个指令有什么参数"]){
+  for(const query of ["机器人怎么关闭入群验证","群里怎么关闭入群验证","如何查体力","#体力怎么用","机器人签到要发什么指令","从知识库查售后规定"]){
     assert(isBotCommandQuery(query),query)
     assert.equal(selectPromptTools([readerView,{name:"web_search",description:"机器人指令查询"}],query,{maxTools:1,maxDefinitionTokens:1200})[0]?.name,"knowledge_manage")
   }
-  for(const query of ["如何做饭","怎么学习英语","查一下今天的新闻"])assert(!isBotCommandQuery(query),query)
+  for(const query of ["如何做饭","怎么学习英语","查一下今天的新闻","群里怎么这么安静？","Linux 的 grep 命令怎么用？","帮助我安慰朋友","把这篇文档总结一下","这个指令有什么参数","机器人你怎么不说话"]){
+    assert(!isBotCommandQuery(query),query)
+  }
+  const mock=new MockAdapter()
+  const mockRequest=content=>mock.sendMessage({channel:{model:"mock"},messages:[{role:"user",content}],tools:[{name:"knowledge_manage"}]})
+  const ordinary=await mockRequest("【群聊参考资料】\n机器人有哪些指令\n\n【本轮发言】\n群里怎么这么安静？")
+  assert.equal(ordinary.toolCalls.length,0,"ordinary chat and unrelated group context must not trigger the mock knowledge tool")
+  const command=await mockRequest("【本轮发言】\n机器人签到要发什么指令")
+  assert.equal(command.toolCalls[0]?.name,"knowledge_manage")
+  assert.equal(command.toolCalls[0]?.arguments.query,"机器人签到要发什么指令")
   for(let i=0;i<15;i++)await knowledgeStore.create({name:`扩展资料${i}`,description:"完整用途".repeat(125),config:{fieldDescription:"字段细节".repeat(300)}})
   const [largeView]=await registry.prepareModelTools([raw],{e:master})
   const largeDefinition=modelToolDefinition(largeView).function
