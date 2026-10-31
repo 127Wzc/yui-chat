@@ -41,7 +41,9 @@ interface LogModelCall extends UnknownRecord {
   parent_tool_id?: string
   response_text?: string
   stop_reason?: string
+  input_tokens?: number
   total_tokens?: number
+  cached_tokens?: number
   duration_ms?: number
   started_at?: number
   input_text?: string
@@ -94,6 +96,7 @@ interface LogRun extends UnknownRecord {
   tool_calls?: number
   failed_tools?: number
   total_tokens?: number
+  cached_tokens?: number
   duration_ms?: number
   response_text?: string
   metadata?: UnknownRecord
@@ -189,7 +192,7 @@ interface ConversationDetail extends UnknownRecord {
 }
 
 interface LogSummary extends UnknownRecord {
-  totals?: { total?: number; calls?: number; failures?: number; cost?: number; currency?: string; toolSuccessRate?: number; toolFailures?: number }
+  totals?: { total?: number; cached?: number; calls?: number; failures?: number; cost?: number; currency?: string; toolSuccessRate?: number; toolFailures?: number }
   models?: Array<{ name?: string; model_display_name?: string; provider_name?: string }>
   persistence?: { available?: boolean; queued?: number; droppedEvents?: number; lastFlushAt?: string; lastError?: string }
 }
@@ -260,6 +263,21 @@ export function modelTokenCounters(model: UnknownRecord): Array<{ label: string;
       note: source === "unknown" && running ? "等待上游" : usageSourceLabel(source),
     }
   })
+}
+
+export function modelCacheCounter(model: UnknownRecord): { label: string; value: number | null; source: string; note: string } {
+  const cached = Number(model.cached_tokens)
+  const running = model.status === "running"
+  if (running || !Number.isFinite(cached) || cached <= 0) {
+    return { label: "缓存输入", value: null, source: "unknown", note: running ? "等待上游" : "未命中或未提供" }
+  }
+  const input = Number(model.input_tokens)
+  const known = asRecord(asRecord(model.metadata).usageKnown)
+  const inputReported = typeof known.input === "boolean" ? known.input : model.usage_source === "reported"
+  const protocol = String(model.protocol || model.adapter || "")
+  const comparable = ["responses", "openai-responses", "chat-completions", "openai-compatible", "qwen", "chatglm"].includes(protocol)
+  const ratio = comparable && inputReported && input >= cached ? ` · 占输入 ${(cached / input * 100).toFixed(1)}%` : ""
+  return { label: "缓存输入", value: cached, source: "reported", note: `上游报告${ratio}` }
 }
 
 function time(value: unknown): string {
@@ -811,6 +829,7 @@ export const LogsTab = {
     const totals = computed(() => state.summary?.totals || {})
     const metrics = computed(() => [
       { label: "Token 总量", value: number(totals.value.total), icon: "activity", tone: "blue", tip: "输入 + 输出 Token" },
+      { label: "缓存输入", value: Number(totals.value.cached) > 0 ? number(totals.value.cached) : "—", icon: "database", tone: "green", tip: "上游报告的缓存输入；未命中或上游未提供时显示 —，各协议的用量口径可能不同。" },
       { label: "模型调用", value: number(totals.value.calls), icon: "cpu", tone: "purple" },
       { label: "模型失败率", value: `${totals.value.calls ? (((totals.value.failures || 0) / totals.value.calls) * 100).toFixed(1) : "0.0"}%`, icon: "alert", tone: totals.value.failures ? "orange" : "green" },
       { label: "估算费用", value: totals.value.cost ? `${Number(totals.value.cost).toFixed(4)} ${totals.value.currency || "CNY"}` : "-", icon: "wallet", tone: "blue", tip: "没有价格或 Token 时显示为 -" },
@@ -909,7 +928,7 @@ export const LogsTab = {
       totals, metrics, timeline, modelResponses, modelOptions, availableToolCount, actualToolCount, hostedToolCallCount, toolInvocationHint,
       number, time, duration, categoryLabel, deliveryLabel, statusLabel, modelStopLabel, protocolLabel, protocolShortLabel, streamLabel, modelNamesLabel, modelProtocolsLabel, modelStreamsLabel, shortId, messagePreview, hostedToolCalls, responsesRecoveryLabel, scopeLabel, sourceLabel, purposeLabel, lineageLabel, modelRouteDetail, availableTools, renderRichContent, refresh, resetAndRefresh, resetFilters, applyFilters,
       conversationScope, conversationTitle, promptPreview, toolGroupsForModel, unlinkedConversationTools,
-      requestForDisplay, rawRequests, rawResponse, responseMedia, usageSourceLabel, modelTokenCounters, channelNamesLabel, compactionLabel,
+      requestForDisplay, rawRequests, rawResponse, responseMedia, usageSourceLabel, modelTokenCounters, modelCacheCounter, channelNamesLabel, compactionLabel,
       openRun, openModelDetail, openModelDetailById, openConversation, loadConversationTurn, saveSettings, cleanupLogs, cleanupAllLogs,
       extractionState, extractionItems, extractionScopeLabel, extractionActionLabel, extractionEvidenceLabel,
       modelContextCount: (item: LogModelCall) => Number(item.context_message_count ?? modelMetadata(item).messageCount) || 0,
@@ -943,7 +962,7 @@ export const LogsTab = {
     <div class="stack logs-page">
       <section class="logs-summary-row" aria-label="日志统计总量">
         <div class="logs-inline-summary">
-          <div v-for="item in metrics" :key="item.label" class="logs-inline-metric"><span>{{ item.label }}</span><b>{{ item.value }}</b></div>
+          <div v-for="item in metrics" :key="item.label" class="logs-inline-metric" :title="item.tip || undefined"><span>{{ item.label }}</span><b>{{ item.value }}</b></div>
         </div>
         <button class="btn small outline logs-settings-button" type="button" @click="settingsDrawerOpen = true"><Icon name="sliders" :size="13" />设置</button>
       </section>
@@ -987,7 +1006,7 @@ export const LogsTab = {
       <SideDrawer :open="drawerOpen" title="运行链路详情" subtitle="按模型请求、工具轮次和结束状态展示完整链路" icon="activity" width="720px" @close="drawerOpen = false">
         <div v-if="state.detail" class="logs-detail">
           <div class="detail-summary"><div><span class="badge" :class="state.detail.run.status === 'ok' ? 'on' : 'risk-medium'">{{ statusLabel(state.detail.run.status) }}</span><span v-if="state.detail.run.model_name" class="badge">{{ modelNamesLabel(state.detail.run) }}</span><span v-if="state.detail.run.model_name" class="badge">{{ modelProtocolsLabel(state.detail.run) }}</span><span v-if="state.detail.run.model_name" class="badge">{{ modelStreamsLabel(state.detail.run) }}</span><span class="muted">{{ time(state.detail.run.started_at) }} · 总耗时 {{ duration(state.detail.run.duration_ms) }}</span><span v-if="state.detail.run.session_id || state.detail.run.conversation_key" class="muted tiny logs-session-short" :title="state.detail.run.session_id || state.detail.run.conversation_key">sessionId {{ shortId(state.detail.run.session_id || state.detail.run.conversation_key) }}</span><span v-if="state.detail.run.error_message" class="text-danger tiny logs-inline-message" :title="state.detail.run.error_message">失败：{{ messagePreview(state.detail.run.error_message) }}</span></div><button v-if="state.detail.run.conversation_key" class="btn small outline" type="button" @click="openConversation"><Icon name="message" :size="13" />查看完整会话</button></div><JsonBlock v-if="store.developerMode && state.detail.run.error_details && Object.keys(state.detail.run.error_details).length" title="运行失败诊断详情" :value="state.detail.run.error_details" :open="true" />
-          <div class="logs-detail-stats"><span>模型请求 <b>{{ number(state.detail.run.model_calls) }}</b></span><span>可用工具 <b>{{ number(availableToolCount) }}</b></span><span>工具事件 <b>{{ number(actualToolCount) }}</b></span><span v-if="state.detail.run.failed_tools">失败 <b class="text-danger">{{ number(state.detail.run.failed_tools) }}</b></span><span>Token <b>{{ number(state.detail.run.total_tokens) }}</b></span></div>
+          <div class="logs-detail-stats"><span>模型请求 <b>{{ number(state.detail.run.model_calls) }}</b></span><span>可用工具 <b>{{ number(availableToolCount) }}</b></span><span>工具事件 <b>{{ number(actualToolCount) }}</b></span><span v-if="state.detail.run.failed_tools">失败 <b class="text-danger">{{ number(state.detail.run.failed_tools) }}</b></span><span>Token <b>{{ number(state.detail.run.total_tokens) }}</b></span><span title="上游报告的缓存输入；未命中或上游未提供时显示 —">缓存输入 <b>{{ Number(state.detail.run.cached_tokens) > 0 ? number(state.detail.run.cached_tokens) : '—' }}</b></span></div>
           <details v-if="state.detail.run.response_text" class="logs-run-response"><summary>查看最终模型回复（{{ number(state.detail.run.response_text.length) }} 字符）</summary><div class="logs-rich-content" v-html="renderRichContent(state.detail.run.response_text)"></div><details v-if="store.developerMode" class="logs-raw-content"><summary>原始回复</summary><pre>{{ state.detail.run.response_text }}</pre></details></details>
           <div v-if="state.detail.childRuns?.length" class="logs-detail-stats logs-child-runs"><span>子运行 <b>{{ number(state.detail.childRuns.length) }}</b></span><span v-for="child in state.detail.childRuns" :key="child.id" class="badge">{{ sourceLabel(child.source) }} · {{ statusLabel(child.status) }} · {{ String(child.id).slice(0, 8) }}</span></div>
           <nav class="logs-detail-filter" aria-label="链路筛选"><button type="button" :class="{ active: timelineFilter === 'all' }" @click="timelineFilter = 'all'">全部</button><button type="button" :class="{ active: timelineFilter === 'model' }" @click="timelineFilter = 'model'">模型请求 {{ number(state.detail.modelCalls?.length || 0) }}</button><button type="button" :class="{ active: timelineFilter === 'tool' }" @click="timelineFilter = 'tool'">工具事件 {{ number(state.detail.toolCalls?.length || 0) }}</button><button type="button" :class="{ active: timelineFilter === 'error' }" @click="timelineFilter = 'error'">异常</button></nav>
@@ -1012,7 +1031,7 @@ export const LogsTab = {
             <div class="logs-detail-window-meta"><div><span class="badge" :class="modelDetail.modelCall.status === 'ok' ? 'on' : 'risk-medium'">{{ statusLabel(modelDetail.modelCall.status) }}</span><span class="badge">{{ protocolShortLabel(modelDetail.modelCall.protocol || modelDetail.modelCall.adapter) }}</span><span class="badge">{{ streamLabel(modelDetail.modelCall.stream) }}</span><span v-if="compactionLabel(modelDetail.modelCall)" class="badge on">{{ compactionLabel(modelDetail.modelCall) }}</span><span class="muted">第 {{ modelDetail.modelCall.sequence || '-' }} 次 · {{ channelNamesLabel(modelDetail.modelCall) }} · {{ modelNamesLabel(modelDetail.modelCall) }} · {{ purposeLabel(modelDetail.modelCall.purpose) }}</span><span v-if="modelDetail.modelCall.session_id || modelDetail.modelCall.conversation_key" class="muted tiny logs-session-short" :title="modelDetail.modelCall.session_id || modelDetail.modelCall.conversation_key">sessionId {{ shortId(modelDetail.modelCall.session_id || modelDetail.modelCall.conversation_key) }}</span></div><div class="row"><label class="heading-switch"><Switch :model-value="store.developerMode" @update:model-value="toggleDeveloperMode" /><span>{{ store.developerMode ? '开发者模式已开启' : '开发者模式' }}</span><HelpTip tip="开启后显示适配器实际发送的脱敏请求体和失败诊断；提示会浮在抽屉外，不会被滚动区域裁切。" /></label><span class="muted tiny">{{ time(modelDetail.modelCall.started_at) }} · {{ duration(modelDetail.modelCall.duration_ms) }}</span></div></div>
             <p v-if="modelDetail.snapshot?.truncated" class="logs-silent-note warning">快照已截断，以下只展示保留下来的内容。</p>
             <div class="logs-detail-stats logs-token-stats" aria-label="Token 用量与来源">
-              <span v-for="counter in modelTokenCounters(modelDetail.modelCall)" :key="counter.label" :class="'logs-token-' + counter.source">{{ counter.label }} <b>{{ counter.value == null ? '—' : number(counter.value) }}</b><small>{{ counter.note }}</small></span>
+              <span v-for="counter in [...modelTokenCounters(modelDetail.modelCall), modelCacheCounter(modelDetail.modelCall)]" :key="counter.label" :class="'logs-token-' + counter.source">{{ counter.label }} <b>{{ counter.value == null ? '—' : number(counter.value) }}</b><small>{{ counter.note }}</small></span>
               <span v-if="modelDetail.modelCall.metadata?.localInputBudget != null" class="logs-token-estimated">请求前输入预算 <b>{{ number(modelDetail.modelCall.metadata.localInputBudget) }}</b><small>本地估算</small></span>
             </div>
 

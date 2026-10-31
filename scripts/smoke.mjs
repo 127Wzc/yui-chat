@@ -7292,7 +7292,7 @@ async function checkWebRichContent() {
   try {
     Object.defineProperty(globalThis, "localStorage", { configurable: true, value: { getItem: () => null } })
     Object.defineProperty(globalThis, "location", { configurable: true, value: { pathname: "/yui-chat" } })
-    const { modelTokenCounters, usageSourceLabel, modelNamesLabel, channelNamesLabel, compactionLabel } = await import("../output/runtime/web/client/features/logs/logs-tab.js")
+    const { LogsTab, modelTokenCounters, modelCacheCounter, usageSourceLabel, modelNamesLabel, channelNamesLabel, compactionLabel } = await import("../output/runtime/web/client/features/logs/logs-tab.js")
     assert(modelNamesLabel({ model_name: "backend-key", model_identifier: "gpt-visible" }) === "gpt-visible" && channelNamesLabel({ provider_name: "我的渠道" }) === "我的渠道", "log display names must use the channel and upstream model instead of the internal model key")
     assert(compactionLabel({ metadata: { compaction: { mode: "server", count: 0 } } }) === "自动压缩已开启" && compactionLabel({ compaction_count: 1 }) === "对话含上下文压缩" && compactionLabel({}) === "", "enabling compaction must not be confused with actually performing compaction")
     assert(compactionLabel({ metadata: { localCompaction: { before: 2000, after: 1000 } } }) === "本地压缩" && compactionLabel({ metadata: { compaction: { mode: "local-fallback", count: 0 } } }) === "本地压缩兜底" && compactionLabel({ local_compaction_fallback_count: 1 }) === "本地压缩兜底", "local budget trimming and Responses fallback must have distinct labels")
@@ -7301,6 +7301,36 @@ async function checkWebRichContent() {
     const running = modelTokenCounters({ status: "running", usage_source: "unknown", estimated_input_tokens: 2048 })
     assert(running[0].value === 2048 && running[0].source === "estimated" && running[1].value === null && running[1].note === "等待上游", "running calls must display the local input budget and pending output")
     assert(usageSourceLabel("mixed") === "部分估算" && modelTokenCounters({ status: "ok", usage_source: "reported", input_tokens: 0, output_tokens: 0, total_tokens: 0 }).every(item => item.source === "reported" && item.value === 0), "reported zero usage must retain its source styling")
+    const cachedCall = { id: "cached-model", status: "ok", protocol: "responses", usage_source: "reported", input_tokens: 13685, output_tokens: 56, total_tokens: 13741, cached_tokens: 9216, metadata: { usageKnown: { input: true } } }
+    assert(modelCacheCounter(cachedCall).value === 9216 && modelCacheCounter(cachedCall).note.includes("67.3%"), "reported cached input should show its share of comparable reported input")
+    assert(modelCacheCounter({ ...cachedCall, cached_tokens: 0 }).note === "未命中或未提供" && modelCacheCounter({ status: "running" }).note === "等待上游", "missing cache information must not be presented as a known miss")
+    assert(!modelCacheCounter({ ...cachedCall, protocol: "claude-messages" }).note.includes("%") && !modelCacheCounter({ ...cachedCall, metadata: { usageKnown: { input: false } } }).note.includes("%"), "different protocol accounting or estimated input must not produce a misleading cache ratio")
+
+    const { createSSRApp } = await import("vue")
+    const { renderToString } = await import("vue/server-renderer")
+    const { components } = await import("../output/runtime/web/client/ui/components.js")
+    const renderLogCache = async cached => {
+      const call = { ...cachedCall, cached_tokens: cached }
+      const app = createSSRApp({
+        ...LogsTab,
+        setup() {
+          const view = LogsTab.setup()
+          view.state.summary = { totals: { total: 13741, cached, calls: 1 }, models: [] }
+          view.state.detail = { run: { id: "cached-run", status: "ok", model_calls: 1, total_tokens: 13741, cached_tokens: cached }, modelCalls: [call], toolCalls: [] }
+          view.drawerOpen.value = true
+          view.modelDetailOpen.value = true
+          view.modelDetail.value = { modelCall: call }
+          return view
+        },
+      })
+      for (const [name, component] of Object.entries(components)) if (name !== "SideDrawer") app.component(name, component)
+      app.component("SideDrawer", { props: ["open"], template: '<div v-if="open"><slot/><slot name="actions"/></div>' })
+      return renderToString(app)
+    }
+    const cachedHtml = await renderLogCache(9216)
+    assert((cachedHtml.match(/9,216/g) || []).length >= 3 && cachedHtml.includes("占输入 67.3%"), "the summary, run and model detail must render cached tokens without developer mode")
+    const unknownCacheHtml = await renderLogCache(0)
+    assert(unknownCacheHtml.includes("未命中或未提供") && !unknownCacheHtml.includes("占输入 0.0%"), "unknown cache information must remain clear in the rendered page")
   } finally {
     for (const [key, descriptor] of browserGlobals) {
       if (descriptor) Object.defineProperty(globalThis, key, descriptor)

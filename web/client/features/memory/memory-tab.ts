@@ -1695,7 +1695,7 @@ export const MemoryTab = {
     const memoryView = reactive({
       openMaintenanceTasks,
       memoryDetail, memorySources, memoryDetailLoading, memoryDetailError, loadMemoryDetail, memoryPercent, memoryTimeLabel, memorySourceLabel,
-      activeWorkspace, extractionPane, busy, captureBusy, captureAction, showGroupPicker, groupPickerQuery, selectedGroupId, selectedPolicy, capturePolicies, filteredPolicies, captureDefaults, captureDraftPolicy, captureDraftDirty, captureDraftEditing, historyBackfillLimit, historyBackfillFrom, backfillLimitMax, extractionModelOptions, groupWorkspace, groupMemory, groupMemoryQuery, groupMemoryPage,
+      activeWorkspace, extractionPane, busy, captureBusy, captureAction, showGroupPicker, groupPickerQuery, selectedGroupId, selectedPolicy, capture, capturePolicies, filteredPolicies, captureDefaults, captureDraftPolicy, captureDraftDirty, captureDraftEditing, historyBackfillLimit, historyBackfillFrom, backfillLimitMax, extractionModelOptions, groupWorkspace, groupMemory, groupMemoryQuery, groupMemoryPage,
       members, memberQuery, selectedMember, selectedMemberName, memberWorkspace, memberScope, memberMemoryQuery, memberMemoryPage, currentMemberMemory,
       showMemoryDrawer, showProfileDrawer, showCaptureSettings, showReextractDialog, selectedCapture, captureMessages, captureWindows, captureWindowPage, captureMessageQuery, captureMessagePage, captureMessagePageJump, captureMessageOrder, captureMessagePageCount, captureDraft, draft, windowDetails, windowDetailLoading,
       selectedTimelineWindow, timelineWindowDetail, selectedWindowMessages, timelineWindows, reextractStart, reextractEnd, reextractPlan, reextractBusy, extractionCounts, runRecordWindows,

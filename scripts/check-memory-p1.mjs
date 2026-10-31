@@ -642,6 +642,44 @@ try {
   assert.equal(clientView.captureDraft.tokenLimit, clientView.captureDefaults.tokenLimit)
 
   const originalClientFetch = global.fetch
+  const { MemoryExtractionWorkspace } = await import("../output/runtime/web/client/features/memory/memory-extraction-workspace.js")
+  try {
+    const capturePolicy = { scopeId: "new-group", enabled: true, tokenLimit: 200000, retentionDays: 30 }
+    const capture = { policies: [capturePolicy], dailyBudget: { used: 123, limit: 456, reserved: 7 } }
+    global.fetch = async (url, options = {}) => {
+      const path = String(url)
+      let result
+      if (options.method === "PUT" && path.endsWith("/api/memory/captures/group/new-group")) result = { capture }
+      else if (path.includes("/workspace")) result = { workspace: {} }
+      else if (path.includes("/messages")) result = { messages: { items: [], total: 0, page: 1, pageSize: 30 } }
+      else if (path.includes("/windows")) result = { windows: { items: [], total: 0, page: 1, pageSize: 30 } }
+      else if (path.includes("/calendar")) result = { calendar: { items: [] } }
+      else throw new Error(`Unexpected memory test request: ${path}`)
+      return { ok: true, json: async () => ({ ok: true, ...result }) }
+    }
+    clientView.openCaptureSettings()
+    clientView.captureDraft.scopeId = "new-group"
+    await clientView.saveCapturePolicy()
+    await clientView.switchWorkspace("extract")
+    assert.equal(clientView.selectedPolicy.scopeId, "new-group", "the newly saved group must be selected")
+    const renderExtraction = async (view = clientView) => {
+      const app = createSSRApp({ components: { MemoryExtractionWorkspace }, setup: () => ({ view }), template: '<MemoryExtractionWorkspace :view="view" />' })
+      for (const [name, component] of Object.entries(components)) app.component(name, component)
+      return renderToString(app)
+    }
+    const extractionHtml = await renderExtraction()
+    assert(extractionHtml.includes("按日提炼覆盖") && extractionHtml.includes("已计入 123 Token") && extractionHtml.includes("/ 456") && extractionHtml.includes("预留 7 Token"), "the extraction page must render the selected group and the real daily budget")
+    const noBudgetHtml = await renderExtraction({ ...clientView, capture: undefined })
+    assert(noBudgetHtml.includes("按日提炼覆盖") && !noBudgetHtml.includes("今日全部群后台提炼已计入"), "the extraction page must remain usable before budget data is available")
+    for (const pane of ["messages", "tasks"]) {
+      clientView.extractionPane = pane
+      const html = await renderExtraction()
+      assert(html.includes(pane === "messages" ? "实时采集与历史补录" : "提炼运行记录"), `the ${pane} pane must render for a new group`)
+    }
+  } finally {
+    global.fetch = originalClientFetch
+  }
+
   const pendingDetails = []
   global.fetch = () => new Promise(resolve => pendingDetails.push(payload => resolve({ ok: true, json: async () => payload })))
   const completeDetail = (index, id) => pendingDetails[index]({ ok: true, item: { id, text: `最新${id}`, tags: ["group-capture", "preference"] }, evidence: { items: [], total: 0, page: 1, pageSize: 20 } })
