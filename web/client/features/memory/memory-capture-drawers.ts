@@ -115,9 +115,9 @@ export const MemoryCaptureDrawers = {
           <div><dt>有效期限</dt><dd>{{ view.memoryDetail.expiresAt ? view.memoryTimeLabel(view.memoryDetail.expiresAt) : '无固定到期时间' }}</dd></div>
           <div v-if="view.memoryDetail.lifecycle?.nextTransitionAt" class="memory-next-transition"><dt>预计下次变化</dt><dd>{{ view.memoryTimeLabel(view.memoryDetail.lifecycle.nextTransitionAt) }} · {{ view.memoryLifecycle({ status: view.memoryDetail.lifecycle.nextStatus }).label }}</dd></div>
         </dl>
-        <p class="memory-detail-note">置信度是写入时的评估值，不代表经过统计验证的准确率。活跃度影响召回优先级；再次确认会重新计时，归档不等于删除。</p>
+        <p class="memory-detail-note">置信度是写入时的评估值，不代表经过统计验证的准确率。热度只影响使用频率，长期未提及仍可检索；有效性由到期时间、撤回、替代和人工归档决定。</p>
       </section>
-      <Field label="记忆内容" type="textarea" :rows="4" v-model="view.draft.memoryText" placeholder="写入一条明确、可复用的事实。" />
+      <section v-if="view.memoryDetail?.lifecycle?.validity === 'pending'" class="memory-source-section"><h3>采纳后的变化</h3><p class="muted small">以下当前事实将保留为历史，候选内容成为当前事实；保留原状态则收起候选。</p><blockquote v-for="old in view.memoryDetail.conflicts" :key="old.id">{{ old.text }}</blockquote><p v-if="view.memoryDetail.conflictsTruncated" class="muted small">同类冲突较多，请使用手动 AI 整理完整核对。</p></section><Field label="记忆内容" type="textarea" :rows="4" v-model="view.draft.memoryText" placeholder="写入一条明确、可复用的事实。" />
       <Field label="标签" v-model="view.draft.memoryTags" placeholder="偏好, 沟通方式（可选）" />
       <section v-if="view.draft.memoryId" class="memory-source-section" aria-label="关联的来源消息">
         <div class="memory-detail-heading"><h3><Icon name="message" :size="16" />来源消息 <span v-if="view.memoryDetail?.evidenceCount != null" class="badge">{{ view.memoryDetail.evidenceCount }}</span></h3><span v-if="view.memoryDetailLoading" class="muted small" role="status">正在加载…</span></div>
@@ -135,7 +135,7 @@ export const MemoryCaptureDrawers = {
       </section>
       <template #actions>
         <button class="btn outline" type="button" @click="view.closeMemoryEditor"><Icon name="x" :size="14" />取消</button>
-        <button class="btn primary" type="button" :disabled="view.busy || view.memoryDetailLoading || Boolean(view.memoryDetailError)" @click="view.saveMemory"><Icon name="save" :size="14" />保存记忆</button>
+        <button v-if="view.memoryDetail?.lifecycle?.validity === 'pending'" class="btn outline" type="button" :disabled="view.busy || view.memoryDetailLoading || Boolean(view.memoryDetailError)" @click="view.resolveMemory('keep')">保留原状态</button><button v-if="view.memoryDetail?.lifecycle?.validity === 'pending'" class="btn primary" type="button" :disabled="view.busy || view.memoryDetailLoading || Boolean(view.memoryDetailError) || view.memoryDetail.conflictsTruncated" @click="view.resolveMemory('accept')">采纳为当前事实</button><button v-else class="btn primary" type="button" :disabled="view.busy || view.memoryDetailLoading || Boolean(view.memoryDetailError)" @click="view.saveMemory()"><Icon name="save" :size="14" />保存记忆</button>
       </template>
     </SideDrawer>
 

@@ -6,11 +6,12 @@ import { stripMessageCodes } from "../core/message/message-context.js"
 import { hostRuntime } from "../core/runtime/host-runtime.js"
 import { sqliteClient } from "../core/storage/sqlite/client.js"
 import { matchesCronExpression } from "../core/scheduling/cron.js"
+import { normalizeModelUsage } from "../models/protocol/normalize.js"
 import { runIsolatedModelTask } from "../models/isolated-task.js"
 import { expiryFor } from "./decay.js"
 import { memoryRepository } from "./repository.js"
 import { sqliteMemoryStore } from "./sqlite-store.js"
-import { isSingleValueFact, validateMemoryWrite } from "./write-policy.js"
+import { canonicalFactKey, normalizedFactValue, factKeyToken, factUpdateDecision, isDerivedMemory as isAutomaticMemory, isSingleValueFact, validateMemoryWrite } from "./write-policy.js"
 import { errorSummary } from "../core/shared/error-details.js"
 
 const DAY = 24 * 60 * 60 * 1000
@@ -160,22 +161,23 @@ function records(value: unknown): UnknownRecord[] {
 export const DEFAULT_GROUP_MEMORY_PROMPT = [
   "任务：从群聊原文中提炼以后仍有帮助、可以独立理解的原子记忆。不要总结聊天过程，也不要保存原句拼接。没有合格事实时返回空 candidates。",
   "先为每条候选选择且只选择一种记忆作用域：",
-  "1. user（个人全局记忆）：用户本人明确自述、脱离当前群仍成立的稳定个人事实。适合姓名/昵称、性别或称谓、生日或带日期的年龄、长期兴趣与偏好、职业/学习方向、稳定习惯和交流偏好。subjectId 与 speakerId 都必须是该用户 QQ。",
-  "2. user_group（个人群记忆）：只在当前群有意义的个人事实，例如本群昵称、群内角色或职责、与本群成员的关系、本群项目与任务、群内约定下的偏好。不能确定是否适合跨群使用的个人事实，默认放这里。subjectId 与 speakerId 都必须是该用户 QQ。",
+  "1. user（个人全局记忆）：用户本人明确自述、脱离当前群仍成立的稳定个人事实。适合姓名/昵称、性别或称谓、生日或带日期的年龄、长期兴趣与偏好、职业/学习方向、稳定习惯和交流偏好。subjectId 与 speakerId 都必须使用该用户在本批中的成员编号（如 u1）。",
+  "2. user_group（个人群记忆）：只在当前群有意义的个人事实，例如本群昵称、群内角色或职责、与本群成员的关系、本群项目与任务、群内约定下的偏好。不能确定是否适合跨群使用的个人事实，默认放这里。subjectId 与 speakerId 都必须使用该用户在本批中的成员编号（如 u1）。",
   "3. group（群记忆）：属于整个群的规则、共同计划、公开决定、群主题和共同经历。应由群主/管理员明确宣布，或至少两名不同成员的消息共同支持；subjectId 留空。单个成员自己的偏好、身份或任务不能写成群记忆。",
   "作用域与内容类型是两回事。kind 只能从 identity、preference、relationship、plan、group_rule、experience、episode 中选择；episode 是有时效的事件类型，不是第四种作用域，并且只记录事件结论。",
   "证据规则：只依据本批输入中的文字和消息 ID。个人事实必须来自本人直接陈述；他人转述、猜测、玩笑、角色扮演、反问、机器人回复、纯指令和来源不明的转发均不能成为被提及者的确定事实。不要从昵称、头像或语气猜测性别、年龄或关系。",
   "拆分规则：一条候选只表达一个可独立更新的事实。‘我是男的，25 岁，喜欢咖啡’必须拆为三条。text 用第三人称写简洁结论，不包含聊天过程；同一事实只输出一次，不要同时换句话重复。",
   "撤回规则：仅当用户本人明确否定或撤回自己既有的事实（如‘我不喝咖啡了’‘别再叫我玉玉’）时，输出 operation 为 retract 的候选：factKey 填被撤回的事实槽位，factValue 可填被否定的旧值或留空，text 用第三人称写撤回结论，evidenceMessageIds 指向那条否定消息。普通新事实一律用 add（或省略 operation），不要用 retract。",
+  "修订规则：只有本人明确修正已有单值事实时才用 replace。新旧说法存在冲突但不是明确修正时仍可输出有直接证据的 add，由服务端保留待核实；不同偏好可并存。",
   "键值规则：factKey 表示稳定的事实槽位，factValue 表示用于去重和修订的简短规范值。优先使用 identity.name、identity.nickname、identity.gender、identity.pronouns、identity.birth_date、identity.age、profile.occupation、profile.education、preference.<topic>、communication.style、group_role.<role>、relationship.<person_or_role>、plan.<topic>、group.rule.<topic>、group.event.<topic>。factKey 必须使用小写英文、数字、点或下划线，不得包含具体取值、中文或整句话。",
   "称呼规则：text 一律用“用户”指代本人，不要把昵称或群名片写死在事实文本里；平台昵称与群名片由系统自动维护（identity.qq_nickname、identity.group_card），不要为它们输出候选。只有用户明确表达的称呼偏好（如“以后叫我小玉”）才输出 identity.nickname。",
-  "时间规则：年龄写成‘用户于 YYYY-MM-DD 自述为 N 岁’，validTo 不晚于证据日期一年后。计划、临时状态、阶段性任务和事件必须填写合理的 validTo；生日、姓名、性别、长期偏好等稳定事实没有明确失效时间时可留空。",
+  "时间规则：年龄写成‘用户于 YYYY-MM-DD 自述为 N 岁’，validTo 不晚于证据日期一年后。有明确期限的计划和临时状态按原始消息时间解析 validTo；未给期限时留空，由系统设置参考期，不能猜截止日或推断已完成。事件结论保留发生时间；生日、姓名、性别、长期偏好等稳定事实没有明确失效时间时留空。",
   "用户本人明确自述的个人资料按证据与作用域规则提取，不按敏感关键词或号码格式过滤内容。",
   "置信度建议：本人清晰自述或管理员明确公告为 0.85–0.98；上下文明确但表述较弱为 0.70–0.84；低于 0.70、存在歧义或需要推断时不要输出。importance 只表示未来对话价值，不表示置信度。",
-  "示例 A：[m1] 10001：我叫玉玉，我是男的，今年25岁，平时喜欢手冲咖啡。输出 4 条 user：identity.nickname=玉玉、identity.gender=male、identity.age=25、preference.coffee=hand_brew；年龄带证据日期和 validTo。",
-  "示例 B：[m2] 10001：我在这个群负责每周发布版本。输出 user_group：group_role.release=weekly_release；不要提升为 user，也不要写成 group。",
-  "示例 C：群主宣布‘以后每周一晚八点开例会’，或多名成员确认该安排。输出 group：group.rule.weekly_meeting=monday_20_00。",
-  "示例 D：10001 说‘听说 10002 是女生’。不要输出 10002 的性别记忆。",
+  "示例 A（仅说明拆分，不属于本批来源）：某用户说‘我叫玉玉，我是男的，今年25岁，平时喜欢手冲咖啡’。输出 4 条 user：identity.nickname=玉玉、identity.gender=male、identity.age=25、preference.coffee=hand_brew；年龄带证据日期和 validTo。",
+  "示例 B（不属于本批来源）：某用户说‘我在这个群负责每周发布版本’。输出 user_group：group_role.release=weekly_release；不要提升为 user，也不要写成 group。",
+  "示例 C（不属于本批来源）：群主宣布‘以后每周一晚八点开例会’，或多名成员确认该安排。输出 group：group.rule.weekly_meeting=monday_20_00。",
+  "示例 D（不属于本批来源）：甲说‘听说乙是女生’。不要输出乙的性别记忆。",
 ].join("\n")
 
 function now(): number { return Date.now() }
@@ -590,20 +592,6 @@ function partitionRowsByTokens(rows: UnknownRecord[] = [], limit = 200000): Part
   return { chunks, skipped, estimatedTokens: rows.reduce((sum, row) => sum + rowTokenCount(row), 0) }
 }
 
-function normalizedFactValue(value: unknown = "", max = 160): string {
-  return cleanText(value, max).toLowerCase()
-    .replace(/[\s，,。.!！?？、:：;；'"“”‘’（）()【】\[\]_-]+/g, "")
-}
-
-function canonicalFactKey(value: unknown = ""): string {
-  const key = cleanText(value, 80).toLowerCase().replace(/[^a-z0-9._-]+/g, ".").replace(/^\.+|\.+$/g, "")
-  return /^[a-z][a-z0-9_-]*(?:\.[a-z0-9_-]+)+$/.test(key) ? key : ""
-}
-
-function factKeyToken(key: unknown = "", value: unknown = ""): string {
-  return `${key}:${normalizedFactValue(value)}`
-}
-
 function identityClaims(text: unknown = ""): FactClaim[] {
   const source = cleanText(text, 600)
   const claims = []
@@ -676,7 +664,7 @@ function rowFacts(row: UnknownRecord = {}): FactClaim[] {
 // 槽位上随时间只有一个现值，新值直接替换（supersede）旧值；preference.* 保持多值，
 // 一个人可同时保有多种喜好，取消或矛盾由 retract 候选显式表达而不是互相覆盖。
 function isDerivedMemory(row: UnknownRecord = {}): boolean {
-  return String(row.source || "").startsWith("group-window") || String(row.source || "").startsWith("maintenance:") || String(row.source || "") === "superseded"
+  return isAutomaticMemory(row)
 }
 
 function preferredCanonical(rows: UnknownRecord[] = [], candidate: UnknownRecord = {}): UnknownRecord | null {
@@ -699,7 +687,7 @@ function extractionPrompt(scopeId: unknown, window: UnknownRecord = {}, rows: Un
     if (reply) marks.push(`[回复 ${reply.messageId}]`)
     const mentioned = [...new Set(segments.filter(segment => segment?.type === "at" && segment?.targetId).map(segment => String(segment.targetId)))]
     if (mentioned.length) marks.push(`[@${mentioned.join(" @")}]`)
-    return `[${row.message_id}] ${row.sender_id}${row.sender_name ? `(${row.sender_name})` : ""}${row.sender_role ? ` [role=${row.sender_role}]` : ""}${marks.length ? ` ${marks.join(" ")}` : ""}：${row.text_content}`
+    return `[${row.message_id}] ${new Date(Number(row.sent_at)).toISOString()} ${row.sender_id}${row.sender_name ? `(${row.sender_name})` : ""}${row.sender_role ? ` [role=${row.sender_role}]` : ""}${marks.length ? ` ${marks.join(" ")}` : ""}：${row.text_content}`
   }).join("\n")
   // 引用/提及格式说明放在固定组装处而不是可被逐群覆盖的默认提示词里，自定义模板同样受益。
   return [
@@ -707,7 +695,7 @@ function extractionPrompt(scopeId: unknown, window: UnknownRecord = {}, rows: Un
     `时间窗：${new Date(Number(window.window_start || 0)).toISOString()} 至 ${new Date(Number(window.window_end || 0)).toISOString()}`,
     policyPrompt(template),
     "消息行内的 [回复 消息ID] 表示该消息回复哪条消息，[@QQ号] 表示提及了哪些成员；可据此判断答复指向、本人确认和多人支持等证据关系。",
-    "只返回 JSON：{\"candidates\":[{\"operation\":\"add|retract\",\"scope\":\"user|user_group|group\",\"subjectId\":\"个人记忆对应的用户QQ；group 留空\",\"speakerId\":\"作出直接陈述的原始说话人QQ\",\"factKey\":\"identity.gender\",\"factValue\":\"male\",\"text\":\"第三人称原子事实\",\"kind\":\"identity|preference|relationship|plan|group_rule|experience|episode\",\"confidence\":0.0,\"importance\":0.0,\"validTo\":\"ISO 可选\",\"evidenceMessageIds\":[\"消息ID\"]}]}",
+    "只返回 JSON：{\"candidates\":[{\"operation\":\"add|replace|retract\",\"scope\":\"user|user_group|group\",\"subjectId\":\"个人记忆对应的本批成员编号如u1；group 留空\",\"speakerId\":\"作出直接陈述的本批成员编号如u1\",\"factKey\":\"identity.gender\",\"factValue\":\"male\",\"text\":\"第三人称原子事实\",\"kind\":\"identity|preference|relationship|plan|group_rule|experience|episode\",\"confidence\":0.0,\"importance\":0.0,\"validTo\":\"ISO 可选\",\"evidenceMessageIds\":[\"消息ID\"]}]}",
     "消息：",
     messages,
   ].join("\n")
@@ -715,7 +703,7 @@ function extractionPrompt(scopeId: unknown, window: UnknownRecord = {}, rows: Un
 
 const EXTRACTOR_SYSTEM = [
   "你是群聊事实记忆提炼器。严格区分三种记忆作用域：user 是跨群可用的个人全局记忆，user_group 是仅当前群可用的个人记忆，group 是当前群的公共记忆；episode 只能作为 kind，不能作为作用域。",
-  "产物必须是有证据、可独立理解、可去重更新的原子事实，不是聊天记录或聊天摘要。只可使用输入中的原始消息 ID、用户 ID 和文字；证据不足时返回空 candidates。",
+  "产物必须是有证据、可独立理解、可去重更新的原子事实，不是聊天记录或聊天摘要。只可使用输入中的消息编号、成员编号和文字；证据不足时返回空 candidates。",
   "用户本人明确自述的资料应正常提取，不按敏感关键词或号码格式过滤内容。",
   "个人事实不接受他人转述；不要把玩笑、推测、角色扮演、机器人回复、纯指令或来源不明的转发当作事实。用户本人明确否定或撤回既有事实时，用 operation 为 retract 的候选表达撤回，不要写成新事实。",
   "输出必须是严格 JSON，不要使用 Markdown。",
@@ -756,7 +744,7 @@ function windowView(row: UnknownRecord = {}, targetNames: Map<string, string> = 
     contentHash: row.content_hash, extractorVersion: row.extractor_version, status: row.status, attemptCount: Number(row.attempt_count || 0),
     nextAttemptAt: Number(row.next_attempt_at || 0), errorMessage: row.error_message, result: resultItemsWithTargetNames(items, targetNames),
     processingChunk: Number(row.processing_chunk || 0), processingChunkTotal: Number(row.processing_chunk_total || 0),
-    modelCallCount: Number(resultInfo.modelCallCount || 0), processedMessageCount: Number(resultInfo.messageCount || 0),
+    modelCallCount: Number(resultInfo.modelCallCount || 0), processedMessageCount: Number(resultInfo.processedMessageCount ?? resultInfo.messageCount ?? 0), pendingMessageCount:Number(resultInfo.pendingMessageCount||0), usage:resultInfo.usage||null, incremental:resultInfo.incremental===true,
     memoryResultCount, ignoredResultCount, truncated: Boolean(resultInfo.truncated), omittedItemCount: Number(resultInfo.omittedItemCount || 0),
     sourceMessageCount: Number(row.source_message_count || 0), sourceFirstAt: Number(row.source_first_at || 0), sourceLastAt: Number(row.source_last_at || 0),
     sourceFirstMessageId: String(row.source_first_message_id || ""), sourceLastMessageId: String(row.source_last_message_id || ""),
@@ -766,6 +754,7 @@ function windowView(row: UnknownRecord = {}, targetNames: Map<string, string> = 
 }
 
 export class GroupCaptureStore {
+  constructor(private readonly model: typeof runIsolatedModelTask = runIsolatedModelTask) {}
   policies = new Map<string, GroupPolicy>()
   queue: NormalizedEvent[] = []
   flushTimer: ReturnType<typeof setTimeout> | null = null
@@ -1050,7 +1039,7 @@ export class GroupCaptureStore {
     }
     // 平台数据是这两个槽位的权威来源：旧值全部归档，复用 superseded 的修订与清理语义。
     for (const row of rows) {
-      await memoryRepository.update(row.id, { status: "archived", source: "superseded" })
+      await memoryRepository.update(row.id, { status: "archived", source: "superseded", validityReason: "superseded" })
     }
     await memoryRepository.insert({
       ...scope, type: "fact", text, normalized: text.toLowerCase(),
@@ -1956,13 +1945,14 @@ export class GroupCaptureStore {
     const allowed = new Set(records(plan.entries).flatMap(item => records(item.archive).map(row => String(row.id || ""))))
     const requested = [...new Set((Array.isArray(ids) ? ids : []).map(value => String(value)).filter(value => allowed.has(value)))]
     if (!requested.length) return { archived: 0, plan }
-    for (const memoryId of requested) await memoryRepository.update(memoryId, { status: "archived", source: "duplicate-merged" })
+    for (const memoryId of requested) await memoryRepository.update(memoryId, { status: "archived", source: "duplicate-merged", validityReason: "duplicate" })
     await sqliteMemoryStore.refreshStats()
     return { archived: requested.length, plan: await this.duplicateMemoryPlan(scopeType, scopeId) }
   }
 
   async cleanupExpired(): Promise<UnknownRecord> {
     if (!sqliteClient.status.available) return { messages: 0 }
+    await sqliteClient.run("DELETE FROM memory_extraction_budget_daily WHERE day<?",[localDayString(now()-90*DAY)])
     await sqliteClient.run("DELETE FROM memory_maintenance_jobs WHERE (status='applied' AND undo_until<?) OR (status<>'applied' AND expires_at<?)",[now(),now()])
     // 仍被记忆引用的原文保留供溯源；只回收无人引用的到期消息。
     const result = await sqliteClient.run(`DELETE FROM group_memory_messages WHERE expires_at > 0 AND expires_at <= ?
@@ -2002,6 +1992,7 @@ export class GroupCaptureStore {
           result.windows = Number(record(windows).changes || 0)
         }
         if (["derived", "all"].includes(mode)) {
+          await sqliteClient.run("DELETE FROM group_memory_extraction_batches WHERE job_id IN (SELECT id FROM group_memory_extraction_jobs WHERE group_id=?)",[idValue])
           if (mode === "derived") {
             await sqliteClient.run(
               `UPDATE group_memory_extraction_jobs
@@ -2054,12 +2045,13 @@ export class GroupCaptureStore {
     }
     if (existing && options.requeue) {
       if (["pending", "running"].includes(String(existing.status || ""))) return { rows, contentHash, queued: false, partition }
-      await sqliteClient.run(
-        `UPDATE group_memory_extraction_jobs SET content_hash=?, status='pending', attempt_count=0, next_attempt_at=0, needs_reextract=0,
+      await sqliteClient.transaction([
+        {sql:`UPDATE group_memory_extraction_jobs SET content_hash=?, status='pending', attempt_count=0, next_attempt_at=0, needs_reextract=0,
           processing_chunk=0, processing_chunk_total=0,
-          token_limit=?, estimated_input_tokens=?, skipped_message_count=?, error_message='', result_json='[]', completed_at=0, updated_at=? WHERE id=?`,
-        [contentHash, limit, partition.estimatedTokens, partition.skipped.length, timestamp, existing.id],
-      )
+          token_limit=?, estimated_input_tokens=?, skipped_message_count=?, error_message='', result_json='[]', completed_at=0, updated_at=? WHERE id=? AND status IN ('completed','failed')`,
+          params:[contentHash, limit, partition.estimatedTokens, partition.skipped.length, timestamp, existing.id],expectChanges:1},
+        {sql:"DELETE FROM group_memory_extraction_batches WHERE job_id=?",params:[existing.id]},
+      ])
       return { rows, contentHash, queued: true, partition }
     }
     const inserted = await sqliteClient.run(
@@ -2221,7 +2213,7 @@ export class GroupCaptureStore {
        SET status='pending', next_attempt_at=0, processing_chunk=0, processing_chunk_total=?,
            attempt_count=?, needs_reextract=0, error_message=?, result_json=?, completed_at=0, updated_at=?
        WHERE id=?`,
-      [retry ? 0 : Number(row.processing_chunk_total || 0), retry ? 0 : Number(row.attempt_count || 0), retry ? "" : String(row.error_message || ""), retry ? "[]" : String(row.result_json || "[]"), timestamp, idValueWindow],
+      [retry ? 0 : Number(row.processing_chunk_total || 0), retry ? 0 : Number(row.attempt_count || 0), retry ? "" : String(row.error_message || ""), String(row.result_json || "[]"), timestamp, idValueWindow],
     )
     const queuedRow = {
       ...row,
@@ -2232,7 +2224,7 @@ export class GroupCaptureStore {
       attempt_count: retry ? 0 : Number(row.attempt_count || 0),
       needs_reextract: 0,
       error_message: retry ? "" : String(row.error_message || ""),
-      result_json: retry ? "[]" : String(row.result_json || "[]"),
+      result_json: String(row.result_json || "[]"),
       completed_at: 0,
       updated_at: timestamp,
     }
@@ -2309,102 +2301,153 @@ export class GroupCaptureStore {
     }
   }
 
+  async extractionInput(window: UnknownRecord, targets: UnknownRecord[], allRows: UnknownRecord[]): Promise<{prompt:string;rows:UnknownRecord[];decode:(value:UnknownRecord[])=>UnknownRecord[]}> {
+    const targetIds=new Set(targets.map(row=>String(row.id)))
+    const context:UnknownRecord[]=[]
+    let contextTokens=0
+    const addContext=(row:UnknownRecord|undefined)=>{
+      if(!row||targetIds.has(String(row.id))||context.some(r=>r.id===row.id))return
+      const cost=rowTokenCount(row)
+      if(contextTokens+cost>400)return
+      context.push(row);contextTokens+=cost
+    }
+    const first=allRows.findIndex(row=>row.id===targets[0]?.id)
+    for(const row of allRows.slice(Math.max(0,first-2),first))addContext(row)
+    for(const target of targets)for(const segment of records(parseJson(target.segments_json,[])))if(segment.type==="reply")addContext(allRows.find(row=>row.message_id===segment.messageId))
+    const rows=[...context,...targets].sort((a,b)=>Number(a.sent_at)-Number(b.sent_at)||String(a.id).localeCompare(String(b.id)))
+    const people=new Map([...new Set(rows.map(row=>String(row.sender_id)))].map((id,index)=>[id,`u${index+1}`]))
+    const messages=new Map(rows.map((row,index)=>[String(row.message_id),`m${index+1}`]))
+    const aliased=rows.map(row=>({...row,message_id:messages.get(String(row.message_id)),sender_id:people.get(String(row.sender_id)),segments_json:JSON.stringify(records(parseJson(row.segments_json,[])).map(segment=>({...segment,...(segment.type==="reply"?{messageId:messages.get(String(segment.messageId))||"上下文未提供"}:{}),...(segment.type==="at"?{targetId:people.get(String(segment.targetId))||"其他成员"}:{})})))}))
+    const scopes:MemoryScope[]=[{scopeType:"group",ownerId:String(window.group_id),groupId:String(window.group_id)}]
+    for(const ownerId of people.keys())scopes.push({scopeType:"user",ownerId,groupId:""},{scopeType:"user_group",ownerId,groupId:String(window.group_id)})
+    const factLimit=integer(record(groupConfig().consolidation).relatedFactLimit,8,0,20)
+    const related=factLimit?await memoryRepository.search(scopes,targets.map(row=>row.text_content).join(" ").slice(0,4000),{limit:factLimit}):[]
+    const facts:UnknownRecord[]=[]
+    let factTokens=0
+    for(const row of related){
+      const fact={id:`f${facts.length+1}`,subjectId:people.get(String(row.owner_id))||"",scope:row.scope_type,text:row.text,factKey:row.fact_key,factValue:row.fact_value,lastConfirmedAt:row.last_confirmed_at}
+      const cost=estimateTokens(fact)
+      if(factTokens+cost>2000)continue
+      facts.push(fact);factTokens+=cost
+    }
+    const template=this.policies.get(this.key("group",window.group_id))?.promptTemplate
+    const prompt=[extractionPrompt(window.group_id,window,aliased,template),
+      "本批 u1/u2 等是成员编号，m1/m2 等是消息编号。subjectId、speakerId、evidenceMessageIds 必须精确使用这些编号，服务端还原真实归属。",
+      `需要提炼的消息：${targets.map(row=>messages.get(String(row.message_id))).join(",")}；其他消息仅作上下文，候选必须引用至少一条需要提炼的消息。`,
+      "相关旧事实（仅供比较，不代表已全量审阅）："+JSON.stringify(facts),
+      "明确修正旧的单值事实才用 operation=replace；普通冲突用 add，服务端保留待核实。长期偏好允许并存，明确取消用 retract。",
+    ].join("\n")
+    const decode=(candidates:UnknownRecord[])=>candidates.map(candidate=>{
+      const ids=Array.isArray(candidate.evidenceMessageIds)?candidate.evidenceMessageIds:[]
+      const decoded=ids.map(id=>[...messages].find(([,alias])=>alias===id)?.[0])
+      const subject=candidate.scope==="group"?"":([...people].find(([,alias])=>alias===candidate.subjectId)?.[0])
+      const speaker=candidate.speakerId?[...people].find(([,alias])=>alias===candidate.speakerId)?.[0]:""
+      if(!ids.length||decoded.some(id=>!id)||candidate.scope!=="group"&&!subject||candidate.speakerId&&!speaker)throw new Error("模型返回了本批以外的成员或来源编号，未将该批标为已处理。")
+      return {...candidate,subjectId:subject,speakerId:speaker,evidenceMessageIds:decoded}
+    }).filter(candidate=>(candidate.evidenceMessageIds as unknown[]).some(id=>targets.some(row=>row.message_id===id)))
+    return {prompt,rows,decode}
+  }
+
   async processWindow(window: UnknownRecord = {}): Promise<void> {
-    if (!window?.id) return
-    const config = groupConfig()
-    const consolidation = record(config.consolidation)
-    const first = window
-    const scopeKey = this.key("group", first.group_id)
-    const clearEpoch = this.clearEpoch(scopeKey)
-    const policy = this.policies.get(this.key("group", window.group_id))
-    const modelName = String(policy?.modelName || "").trim()
-    const attempts = Number(window.attempt_count || 0) + 1
-    try {
-      if (modelName) selectedChatModel(modelName)
-      const sourceRows = await sqliteClient.all(
-        `SELECT id, message_id, sender_id, sender_name, sender_role, sent_at,
-                text_content, segments_json, content_hash, conflict_count
-         FROM group_memory_messages
-         WHERE group_id=? AND sent_at>=? AND sent_at<? AND is_command=0 AND text_content<>''
-         ORDER BY sent_at ASC, message_id ASC`,
-        [first.group_id, first.window_start, first.window_end],
-      )
-      const inputTokenLimit = Number(first.token_limit) || tokenLimit(policy?.tokenLimit)
-      const partition = partitionRowsByTokens(sourceRows, inputTokenLimit)
-      const chunks = partition.chunks
-      const batchTextChars = sourceRows.reduce((sum, row) => sum + String(row.text_content || "").length, 0)
-      // 完成时回写实际处理内容的哈希（与 createDailyWindow/markChangedDailyWindows 同一公式）：
-      // pending 期间补录进来的消息已被本次提炼覆盖，不应再被旧哈希误判为“需重提炼”。
-      const processedHash = hash(sourceRows.map(row => `${row.message_id}:${row.content_hash}`).join("\n"))
-      if (clearEpoch !== this.clearEpoch(scopeKey)) return
-      await sqliteClient.run(
-        `UPDATE group_memory_extraction_jobs SET status='running', attempt_count=?, processing_chunk=0, processing_chunk_total=?, token_limit=?, estimated_input_tokens=?, skipped_message_count=?, needs_reextract=0, updated_at=? WHERE id=?`,
-        [attempts, chunks.length, inputTokenLimit, partition.estimatedTokens, partition.skipped.length, now(), first.id],
-      )
-      if (!sourceRows.length || !chunks.length) {
-        await sqliteClient.run(
-          "UPDATE group_memory_extraction_jobs SET status='completed', content_hash=?, processing_chunk=0, processing_chunk_total=0, result_json=?, error_message='', completed_at=?, updated_at=? WHERE id=?",
-          [processedHash, JSON.stringify({ items: [], modelCallCount: 0, messageCount: sourceRows.length, textChars: batchTextChars, skippedMessageCount: partition.skipped.length }), now(), now(), first.id],
-        )
-        return
+    if(!window.id)return
+    const consolidation=record(groupConfig().consolidation)
+    const scopeKey=this.key("group",window.group_id),epoch=this.clearEpoch(scopeKey)
+    const isCurrent=()=>epoch===this.clearEpoch(scopeKey)
+    const policy=this.policies.get(scopeKey)
+    const attempts=Number(window.attempt_count||0)+1
+    let deferred=false
+    try{
+      const claimed=await sqliteClient.run("UPDATE group_memory_extraction_jobs SET status='running',attempt_count=?,error_message='',updated_at=? WHERE id=? AND status='pending'",[attempts,now(),window.id])
+      if(!claimed.changes)return
+      const sourceRows=await sqliteClient.all(`SELECT id,message_id,sender_id,sender_name,sender_role,sent_at,text_content,segments_json,content_hash FROM group_memory_messages WHERE group_id=? AND sent_at>=? AND sent_at<? AND is_command=0 AND text_content<>'' ORDER BY sent_at,message_id`,[window.group_id,window.window_start,window.window_end])
+      const byId=new Map(sourceRows.map(row=>[String(row.id),row]))
+      const versions=(rows:UnknownRecord[])=>rows.map(row=>({id:String(row.id),hash:String(row.content_hash)}))
+      const checkpoints=await sqliteClient.all("SELECT * FROM group_memory_extraction_batches WHERE job_id=? ORDER BY created_at,batch_key",[window.id])
+      const done=new Set<string>()
+      let result:UnknownRecord={...extractionResultSummary(window.result_json).result,incremental:true,modelCallCount:Number(extractionResultSummary(window.result_json).result.modelCallCount||0)}
+      let items=records(result.items)
+      const saveResult=async(patch:UnknownRecord={})=>{
+        result={...result,...patch,items}
+        await sqliteClient.run("UPDATE group_memory_extraction_jobs SET result_json=?,updated_at=? WHERE id=?",[serializeExtractionResult(result),now(),window.id])
       }
-      const candidates: UnknownRecord[] = []
-      const consolidationMaxTokens = integer(policy?.maxTokens, integer(consolidation.maxTokens, 100000, 256, 100000), 256, 100000)
-      for (let index = 0; index < chunks.length; index += 1) {
-        if (clearEpoch !== this.clearEpoch(scopeKey)) return
-        const chunk = chunks[index]
-        await sqliteClient.run("UPDATE group_memory_extraction_jobs SET processing_chunk=?, processing_chunk_total=?, updated_at=? WHERE id=?", [index + 1, chunks.length, now(), first.id])
-      const result = await runIsolatedModelTask({
-          taskName: String(consolidation.taskName || "replyer"),
-          channelId: modelName || undefined,
-          systemPrompt: EXTRACTOR_SYSTEM,
-          prompt: extractionPrompt(first.group_id, { window_start: first.window_start, window_end: first.window_end }, chunk, policy?.promptTemplate),
-          maxTokens: consolidationMaxTokens,
-          source: "group-memory-consolidation",
-          purpose: "memory-consolidation",
-          event: { group_id: first.group_id, isGroup: true, user_id: "memory-consolidator" },
-          metadata: { memoryExtraction: { groupId: first.group_id, windowId: first.id } },
-          snapshotMetadata: { memoryExtraction: { groupId: first.group_id, windowId: first.id } },
-        })
-        if (clearEpoch !== this.clearEpoch(scopeKey)) return
-        const payload = modelJson(result.text)
-        // 解析失败必须抛错走既有重试/failed 路径，不能静默当作“无事实”完成；
-        // 错误信息不携带模型原文，error_message 会持久化并在管理台展示。
-        if (!payload || !Array.isArray(payload.candidates)) {
-          // 推理型模型的思考 token 计入输出上限，撞顶截断是 JSON 不完整的最常见原因，直接在错误里给出处置提示。
-          const truncated = Number(record(result.usage).output || 0) >= consolidationMaxTokens
-          throw new Error(`第 ${index + 1}/${chunks.length} 个子窗口未返回可解析的 candidates JSON（返回文本 ${String(result.text || "").length} 字符${truncated ? `；模型输出达到 ${consolidationMaxTokens} Token 上限被截断，请调大系统默认或该群的输出 Token 上限` : ""}）`)
-        }
-        candidates.push(...records(payload.candidates))
-      }
-      await this.withScopeLock(scopeKey, async () => {
-        if (clearEpoch !== this.clearEpoch(scopeKey)) return
-        const applied = await this.applyCandidates(first, sourceRows, candidates, { isCurrent: () => clearEpoch === this.clearEpoch(scopeKey) })
-        if (clearEpoch !== this.clearEpoch(scopeKey)) return
-        const completedAt = now()
-        const resultJson = serializeExtractionResult({
-          items: applied,
-          modelCallCount: chunks.length,
-          messageCount: sourceRows.length,
-          textChars: batchTextChars,
-          estimatedInputTokens: partition.estimatedTokens,
-          skippedMessageCount: partition.skipped.length,
-        })
-        await sqliteClient.run(
-          "UPDATE group_memory_extraction_jobs SET status='completed', content_hash=?, processing_chunk=0, processing_chunk_total=0, result_json=?, error_message='', completed_at=?, updated_at=? WHERE id=?",
-          [processedHash, resultJson, completedAt, completedAt, first.id],
-        )
+      const apply=async(key:string,candidates:UnknownRecord[],targets:UnknownRecord[])=>this.withScopeLock(scopeKey,async()=>{
+        if(!isCurrent())return
+        const applied=await this.applyCandidates(window,sourceRows,candidates,{isCurrent})
+        if(!isCurrent())return
+        items=[...items,...applied].filter((item,index,array)=>array.findIndex(other=>other.id===item.id&&other.action===item.action&&other.factKey===item.factKey)===index)
+        result={...result,items,processedMessageCount:new Set([...done,...targets.map(row=>String(row.id))]).size,pendingMessageCount:sourceRows.length-new Set([...done,...targets.map(row=>String(row.id))]).size}
+        await sqliteClient.transaction([
+          {sql:"UPDATE group_memory_extraction_batches SET status='applied',candidates_json='[]',updated_at=? WHERE job_id=? AND batch_key=?",params:[now(),window.id,key],expectChanges:1},
+          {sql:"UPDATE group_memory_extraction_jobs SET result_json=?,updated_at=? WHERE id=?",params:[serializeExtractionResult(result),now(),window.id],expectChanges:1},
+        ])
+        for(const row of targets)done.add(String(row.id))
       })
-    } catch (err) {
-      if (clearEpoch !== this.clearEpoch(scopeKey)) return
-      const limit = number(consolidation.maxAttempts, 3, 1, 20)
-      const retry = attempts < limit
-      const delay = Math.min(60 * 60000, 5 * 60000 * 2 ** Math.max(0, attempts - 1))
-      await sqliteClient.run(
-        "UPDATE group_memory_extraction_jobs SET status=?, attempt_count=?, next_attempt_at=?, processing_chunk=0, processing_chunk_total=0, error_message=?, updated_at=? WHERE id=?",
-        [retry ? "pending" : "failed", attempts, retry ? now() + delay : 0, safeError(err), now(), first.id],
-      )
-      this.noteError(err)
+      for(const checkpoint of checkpoints){
+        const saved=record(parseJson(checkpoint.source_versions_json,{}))
+        const targetVersions=records(saved.targets)
+        const valid=targetVersions.every(v=>byId.get(String(v.id))?.content_hash===v.hash) && records(saved.context).every(v=>
+          checkpoint.status==="applied"&&!byId.has(String(v.id)) || byId.get(String(v.id))?.content_hash===v.hash)
+        if(!valid){await sqliteClient.run("DELETE FROM group_memory_extraction_batches WHERE job_id=? AND batch_key=?",[window.id,checkpoint.batch_key]);continue}
+        const targets=targetVersions.map(v=>byId.get(String(v.id))).filter((row):row is UnknownRecord=>Boolean(row))
+        if(checkpoint.status==="applied")for(const row of targets)done.add(String(row.id))
+        else await apply(String(checkpoint.batch_key),records(parseJson(checkpoint.candidates_json,[])),targets)
+      }
+      const pending=sourceRows.filter(row=>!done.has(String(row.id)))
+      const limit=Number(window.token_limit)||tokenLimit(policy?.tokenLimit)
+      const partition=partitionRowsByTokens(pending,limit)
+      await saveResult({messageCount:sourceRows.length,pendingMessageCount:pending.length,processedMessageCount:done.size,textChars:sourceRows.reduce((n,row)=>n+String(row.text_content||"").length,0),estimatedInputTokens:partition.estimatedTokens,skippedMessageCount:partition.skipped.length})
+      await sqliteClient.run("UPDATE group_memory_extraction_jobs SET processing_chunk_total=?,estimated_input_tokens=?,skipped_message_count=? WHERE id=?",[partition.chunks.length,partition.estimatedTokens,partition.skipped.length,window.id])
+      for(let index=0;index<partition.chunks.length;index++){
+        if(!isCurrent())return
+        const targets=partition.chunks[index].filter(row=>!done.has(String(row.id)))
+        if(!targets.length)continue
+        const input=await this.extractionInput(window,targets,sourceRows)
+        const key=hash(JSON.stringify(versions(targets)))
+        const estimated=estimateTokens(input.prompt)+estimateTokens(EXTRACTOR_SYSTEM)+16
+        let maxTokens=integer(policy?.maxTokens,integer(consolidation.maxTokens,100000,256,100000),256,100000)
+        const dailyLimit=integer(consolidation.tokensPerDay,0,0,1000000000)
+        const day=localDayString()
+        await sqliteClient.run("INSERT OR IGNORE INTO memory_extraction_budget_daily(day) VALUES(?)",[day])
+        if(dailyLimit){
+          const used=await sqliteClient.get("SELECT used_tokens,reserved_tokens FROM memory_extraction_budget_daily WHERE day=?",[day])
+          maxTokens=Math.min(maxTokens,dailyLimit-Number(used?.used_tokens||0)-Number(used?.reserved_tokens||0)-estimated)
+          if(maxTokens<256){deferred=true;throw new Error("当日后台提炼预算不足，保留进度次日继续。")}
+        }
+        const reserve=estimated+maxTokens
+        const reserved=await sqliteClient.run("UPDATE memory_extraction_budget_daily SET reserved_tokens=reserved_tokens+? WHERE day=? AND (?=0 OR used_tokens+reserved_tokens+?<=?)",[reserve,day,dailyLimit,reserve,dailyLimit])
+        if(!reserved.changes){deferred=true;throw new Error("当日后台提炼预算不足，保留未处理消息，次日继续。可调整全局每日 Token 预算。")}
+        await sqliteClient.run("UPDATE group_memory_extraction_jobs SET processing_chunk=?,updated_at=? WHERE id=?",[index+1,now(),window.id])
+        let response:UnknownRecord={}
+        try{
+          response=await this.model({taskName:String(consolidation.taskName||"replyer"),channelId:String(policy?.modelName||"")||undefined,singleAttempt:true,maxTokens,systemPrompt:EXTRACTOR_SYSTEM,prompt:input.prompt,
+            source:"group-memory-consolidation",purpose:"memory-consolidation",event:{group_id:window.group_id,isGroup:true,user_id:"memory-consolidator"},metadata:{memoryExtraction:{groupId:window.group_id,windowId:window.id}}})
+        }finally{
+          const usage=normalizeModelUsage(response.usage)
+          const inputTokens=usage.inputKnown?usage.input:estimated
+          // 上游未提供用量的中断保守计入本次预留；不冒充真实 Token。
+          const outputTokens=usage.outputKnown?usage.output:response.text?estimateTokens(response.text):maxTokens
+          const charged=usage.totalKnown?usage.total:inputTokens+outputTokens
+          await sqliteClient.run("UPDATE memory_extraction_budget_daily SET reserved_tokens=MAX(0,reserved_tokens-?),used_tokens=used_tokens+? WHERE day=?",[reserve,charged,day])
+          const previous=record(result.usage)
+          await saveResult({modelCallCount:Number(result.modelCallCount||0)+1,usage:{input:Number(previous.input||0)+inputTokens,output:Number(previous.output||0)+outputTokens,total:Number(previous.total||0)+charged,estimated:Boolean(previous.estimated)||!usage.inputKnown||!usage.outputKnown||!usage.totalKnown},lastUsage:usage})
+        }
+        if(!isCurrent())return
+        const payload=modelJson(response.text)
+        if(!payload||!Array.isArray(payload.candidates)||records(payload.candidates).length!==payload.candidates.length)throw new Error(`第 ${index+1} 个子窗口未返回可解析的 candidates JSON，已保存本次消耗。`)
+        const candidates=input.decode(records(payload.candidates))
+        const context=input.rows.filter(row=>!targets.some(target=>target.id===row.id))
+        await sqliteClient.run("INSERT INTO group_memory_extraction_batches(job_id,batch_key,source_versions_json,candidates_json,status,created_at,updated_at) VALUES(?,?,?,?,'extracted',?,?) ON CONFLICT(job_id,batch_key) DO UPDATE SET source_versions_json=excluded.source_versions_json,candidates_json=excluded.candidates_json,status='extracted',updated_at=excluded.updated_at",[window.id,key,JSON.stringify({targets:versions(targets),context:versions(context)}),JSON.stringify(candidates),now(),now()])
+        await apply(key,candidates,targets)
+      }
+      if(!isCurrent())return
+      await saveResult({processedMessageCount:done.size,pendingMessageCount:sourceRows.length-done.size})
+      if(partition.skipped.length)throw new Error("有消息超过单次输入上限，已保留未处理状态；请调大输入上限后重试。")
+      await sqliteClient.run("UPDATE group_memory_extraction_jobs SET status='completed',content_hash=?,needs_reextract=0,processing_chunk=0,processing_chunk_total=0,error_message='',completed_at=?,updated_at=? WHERE id=?",[hash(sourceRows.map(row=>`${row.message_id}:${row.content_hash}`).join("\n")),now(),now(),window.id])
+    }catch(error){
+      if(!isCurrent())return
+      const retry=deferred||attempts<integer(consolidation.maxAttempts,3,1,20)
+      await sqliteClient.run("UPDATE group_memory_extraction_jobs SET status=?,attempt_count=?,next_attempt_at=?,processing_chunk=0,processing_chunk_total=0,error_message=?,updated_at=? WHERE id=?",[retry?"pending":"failed",deferred?Number(window.attempt_count||0):attempts,deferred?dayAfter(now()):retry?now()+Math.min(3600000,300000*2**Math.max(0,attempts-1)):0,safeError(error),now(),window.id])
+      if(!deferred)this.noteError(error)
     }
   }
 
@@ -2423,7 +2466,7 @@ export class GroupCaptureStore {
       const kind = rawScope === "episode" ? "episode" : cleanText(raw?.kind || "fact", 48).toLowerCase()
       const rawOperation = String(raw?.operation || "add").toLowerCase()
       // 未知 operation 维持旧行为按 add 处理，retract 单独走撤回路径。
-      const operation = rawOperation === "retract" ? "retract" : "add"
+      const operation = rawOperation === "retract" ? "retract" : rawOperation === "replace" ? "replace" : "add"
       const text = cleanText(raw?.text || "", 500)
       const evidenceIds = [...new Set((Array.isArray(raw?.evidenceMessageIds) ? raw.evidenceMessageIds : []).map(value => String(value)).filter(value => byMessageId.has(value)))].slice(0, 8)
       if (!text || !evidenceIds.length || rawOperation === "ignore" || !["user", "user_group", "group"].includes(scope)) continue
@@ -2453,7 +2496,7 @@ export class GroupCaptureStore {
       }
       for (const atom of candidateAtoms({ ...raw, text, kind }, evidence, scope)) {
         let clean
-        // 写入策略拒绝（如包含凭证类文本）是预期的过滤路径，直接丢弃该候选即可。
+        // 格式不合格的候选不入库；内容不按敏感关键词过滤。
         try { clean = validateMemoryWrite(atom.text, { source: "group-window" }) } catch { continue }
         const factKey = cleanText(atom.factKey || genericFactKey(atom.kind, clean), 180)
         const factValue = cleanText(atom.factValue || normalizedFactValue(clean, 160), 160)
@@ -2487,6 +2530,8 @@ export class GroupCaptureStore {
       const candidateFactKey = String(candidate.factKey || "")
       const candidateFactValue = String(candidate.factValue || "")
       const candidateEvidence: UnknownRecord[] = candidate.evidence || []
+      const observedAt = Math.max(0,...candidateEvidence.map(row=>Number(row.sent_at||0)))
+      if (!observedAt) continue
       const scope: MemoryScope = candidate.scope === "user"
         ? { scopeType: "user", ownerId: String(candidate.subjectId || ""), groupId: "" }
         : candidate.scope === "user_group"
@@ -2496,8 +2541,12 @@ export class GroupCaptureStore {
       const existingRows = await rowsFor(scope)
       // rowsFor 的候选集有 500 条上限；按 fact_key 精确补查（走 memory_items_fact_identity_idx），
       // 避免超大作用域下同槽位旧记忆不在候选集内造成重复插入或漏修订。
-      for (const row of await memoryRepository.listByFactKey(scope, candidate.factKey)) {
+      for (const row of await memoryRepository.listByFactKey(scope, candidate.factKey,{includeExpired:true})) {
         if (!existingRows.some(item => item.id === row.id)) existingRows.push(row)
+      }
+      if(existingRows.length>=500){
+        const exact=await memoryRepository.findExactFact(scope,candidateText,type)
+        if(exact&&!existingRows.some(row=>row.id===exact.id))existingRows.push(exact)
       }
       if (candidate.operation === "retract") {
         const retractValue = normalizedFactValue(candidate.factValue)
@@ -2506,16 +2555,11 @@ export class GroupCaptureStore {
           && rowFacts(row).some(fact => fact.key === candidate.factKey && (!retractValue || normalizedFactValue(String(fact.value)) === retractValue)))
         const archivedIds = []
         for (const row of targets) {
+          if(rowFacts(row).length>1){applied.push({id:row.id,scopeType:scope.scopeType,ownerId:scope.ownerId,text:candidateText,action:"review",reason:"原记忆含多条事实，请先手动整理，避免撤回时丢失其他事实"});continue}
+          if (observedAt <= await memoryRepository.observationTime(row)) continue
           if (typeof options.isCurrent === "function" && !options.isCurrent()) return applied
           // 归档复用既有 superseded 语义，隐私清理 hardDeleteGroup 已覆盖该来源。
-          await memoryRepository.update(row.id, { status: "archived", source: "superseded" })
-          for (const source of candidateEvidence) {
-            await memoryRepository.addEvidence(row.id, {
-              messageId: source.message_id,
-              sourceEventId: source.id,
-              sourceType: `group-message:${window.group_id}`,
-            })
-          }
+          await memoryRepository.update(row.id, { status: "archived", source: "superseded", validityReason: "retracted", observedAt },{expectedCurrent:row,evidence:candidateEvidence.map(source=>({messageId:source.message_id,sourceEventId:source.id,sourceType:`group-message:${window.group_id}`}))})
           const index = existingRows.findIndex(item => item.id === row.id)
           if (index >= 0) existingRows.splice(index, 1)
           archivedIds.push(row.id)
@@ -2530,13 +2574,16 @@ export class GroupCaptureStore {
         })
         continue
       }
-      const sameValueRows = existingRows.filter(row => row.type === type && rowFacts(row).some(fact => fact.key === candidate.factKey && String(fact.value) === String(candidate.factValue)))
+      const sameValueRows = existingRows.filter(row => row.type === type && (row.normalized_key===candidateText.toLowerCase() || rowFacts(row).some(fact => fact.key === candidate.factKey && normalizedFactValue(fact.value) === normalizedFactValue(candidate.factValue))))
       const sameSlotRows = existingRows.filter(row => row.type === type && rowFacts(row).some(fact => fact.key === candidate.factKey))
       const same = preferredCanonical(sameValueRows, candidate)
       const conflict = !same && isSingleValueFact(candidate.factKey)
-        ? preferredCanonical(sameSlotRows.filter(row => !rowFacts(row).some(fact => fact.key === candidate.factKey && String(fact.value) === String(candidate.factValue))), candidate)
+        ? preferredCanonical(sameSlotRows.filter(row => !rowFacts(row).some(fact => fact.key === candidate.factKey && normalizedFactValue(fact.value) === normalizedFactValue(candidate.factValue))), candidate)
         : null
       const validTo = parseMoment(candidate.validTo)
+      const referenceWindow = !validTo && ["plan","state","temporary"].includes(String(candidate.kind))
+      const candidateExpiry = validTo || (type === "episode" ? expiryFor("episode",config,observedAt) : referenceWindow ? expiryFor("short",config,observedAt) : 0)
+      if(conflict&&rowFacts(conflict).length>1){applied.push({id:conflict.id,scopeType:scope.scopeType,ownerId:scope.ownerId,text:candidateText,action:"review",reason:"原记忆含多条事实，请先手动整理后更新"});continue}
       if (conflict && !isDerivedMemory(conflict)) {
         applied.push({
           id: conflict.id, scopeType: scope.scopeType, ownerId: scope.ownerId, type, text: candidateText,
@@ -2572,52 +2619,49 @@ export class GroupCaptureStore {
           memory = await memoryRepository.update(same.id, {
             factKey: candidateFactKey, factValue: candidateFactValue,
             ...(normalizeExisting ? { text: candidateText, normalized: candidateText.toLowerCase() } : {}),
-            lastConfirmedAt: now(), status: "active", source: isDerivedMemory(same) ? windowSource : String(same.source || windowSource),
-            confidence: Math.min(1, Number(same.confidence || 0.7) + 0.04),
-          }, { evidence })
+            lastConfirmedAt: Math.max(observedAt,await memoryRepository.observationTime(same)), observedAt: Math.max(observedAt,await memoryRepository.observationTime(same)), status: "active", source: isDerivedMemory(same) && same.source!=="explicit-user" ? windowSource : String(same.source || windowSource),
+            confidence: Math.min(1, Number(same.confidence || 0.7) + (observedAt > await memoryRepository.observationTime(same) ? 0.04 : 0)),
+            ...(observedAt > await memoryRepository.observationTime(same) && Number(candidateExpiry)>0 ? {expiresAt:Math.max(Number(same.expires_at||0),Number(candidateExpiry))} : {}),
+          }, { evidence,expectedCurrent:same })
         }
         for (const duplicate of sameValueRows) {
           if (duplicate.id === same.id || !isDerivedMemory(duplicate) || !factsCoveredByBatch(duplicate, batchFactTokens)) continue
-          await memoryRepository.update(duplicate.id, { status: "archived", source: "duplicate-merged" })
+          await memoryRepository.update(duplicate.id, { status: "archived", source: "duplicate-merged", validityReason: "duplicate" },{expectedCurrent:duplicate})
           const index = existingRows.findIndex(row => row.id === duplicate.id)
           if (index >= 0) existingRows.splice(index, 1)
           duplicateCount += 1
         }
-      } else if (conflict) {
-        action = "updated"
-        await memoryRepository.update(conflict.id, { status: "archived", source: "superseded" })
-        const index = existingRows.findIndex(row => row.id === conflict.id)
-        if (index >= 0) existingRows.splice(index, 1)
-        memory = await memoryRepository.insert({
-          ...scope,
-          type,
-          text: candidateText,
-          normalized: candidateText.toLowerCase(),
-          factKey: candidateFactKey,
-          factValue: candidateFactValue,
-          tags: ["group-capture", cleanText(candidate.kind || type, 48)].filter(Boolean),
-          importance: number(candidate.importance, type === "episode" ? 0.4 : 0.62, 0, 1),
-          confidence: number(candidate.confidence, 0.7, 0, 1),
-          source: windowSource,
-          expiresAt: validTo > now() ? validTo : type === "episode" ? expiryFor("episode", config) : 0,
-        }, { evidence })
       } else {
-        memory = await memoryRepository.insert({
-          ...scope,
-          type,
-          text: candidateText,
-          normalized: candidateText.toLowerCase(),
-          factKey: candidateFactKey,
-          factValue: candidateFactValue,
-          tags: ["group-capture", cleanText(candidate.kind || type, 48)].filter(Boolean),
-          importance: number(candidate.importance, type === "episode" ? 0.4 : 0.62, 0, 1),
-          confidence: number(candidate.confidence, 0.7, 0, 1),
-          source: windowSource,
-          expiresAt: validTo > now() ? validTo : type === "episode" ? expiryFor("episode", config) : 0,
-        }, { evidence })
+        const decision = conflict ? factUpdateDecision({...conflict,evidence_at:await memoryRepository.observationTime(conflict)},observedAt,
+          candidate.operation === "replace" || candidateEvidence.some(row=>/改成|改为|更正|搬到|搬去|不再|现在|目前|已经|如今|以后/.test(String(row.text_content||"")))) : "add"
+        if (decision === "older" || decision === "protected") {
+          applied.push({id:conflict?.id,scopeType:scope.scopeType,ownerId:scope.ownerId,type,text:candidateText,action:"ignored",reason:decision==="older"?"来源早于现有事实，已保留较新状态":"已保留手工维护的记忆"})
+          continue
+        }
+        const item = {
+          ...scope,type,text:candidateText,normalized:candidateText.toLowerCase(),factKey:candidateFactKey,factValue:candidateFactValue,
+          tags:["group-capture",cleanText(candidate.kind||type,48)].filter(Boolean),
+          importance:number(candidate.importance,type==="episode"?0.4:0.62,0,1),confidence:number(candidate.confidence,0.7,0,1),source:windowSource,
+          observedAt,lastConfirmedAt:observedAt,
+          // 历史 validTo 不能因已过去而被清零；默认 episode 期限也从原文时间起算。
+          expiresAt:candidateExpiry,
+          validityReason:referenceWindow?"reference-window":"",
+          ...(decision==="pending"?{status:"archived",validityReason:"pending"}:{}),
+        }
+        if (conflict && decision === "replace") {
+          memory=await memoryRepository.replaceFact(conflict,item,evidence)
+          action="updated"
+          const index=existingRows.findIndex(row=>row.id===conflict.id)
+          if(index>=0)existingRows.splice(index,1)
+        } else if (decision === "pending") {
+          // 写入中断后重放检查点时，复用同来源的待核实记录。
+          const pending=await sqliteClient.get("SELECT id FROM memory_items WHERE scope_type=? AND owner_id=? AND group_id=? AND fact_key=? AND fact_value=? AND validity_reason='pending' AND source=? LIMIT 1",[scope.scopeType,scope.ownerId,scope.groupId,candidateFactKey,candidateFactValue,windowSource])
+          memory=pending?await memoryRepository.update(pending.id,{observedAt,lastConfirmedAt:observedAt},{evidence}):await memoryRepository.insert(item,{evidence,uniqueFact:false})
+          action="review"
+        } else memory=await memoryRepository.insert(item,{evidence,uniqueFact:decision!=="pending"})
       }
       if (!memory) continue
-      if (!existingRows.some(row => row.id === memory.id)) existingRows.push(memory)
+      if(memory.status!=="archived"){const index=existingRows.findIndex(row=>row.id===memory.id);if(index>=0)existingRows[index]=memory;else existingRows.push(memory)}
       applied.push({ id: memory.id, scopeType: scope.scopeType, ownerId: scope.ownerId, type, text: memory.text, factKey: candidateFactKey, factValue: candidateFactValue, action, duplicateCount, evidenceCount: candidateEvidence.length, evidenceMessageIds: candidateEvidence.map(row => row.message_id) })
     }
     if (applied.length) await sqliteMemoryStore.refreshStats()
@@ -2633,6 +2677,7 @@ export class GroupCaptureStore {
       "SELECT status, COUNT(*) AS count FROM group_memory_extraction_jobs WHERE extractor_version=? GROUP BY status",
       [EXTRACTOR_VERSION],
     )
+    const budget=await sqliteClient.get("SELECT used_tokens,reserved_tokens FROM memory_extraction_budget_daily WHERE day=?",[localDayString()])
     return {
       available: Boolean(sqliteClient.status.available),
       initialized: this.initialized,
@@ -2641,6 +2686,7 @@ export class GroupCaptureStore {
       defaultPromptTemplate: DEFAULT_GROUP_MEMORY_PROMPT,
       defaultPolicy: policyDefaults(),
       consolidationSchedule: consolidationSchedule(),
+      dailyBudget:{day:localDayString(),limit:Number(record(groupConfig().consolidation).tokensPerDay||0),used:Number(budget?.used_tokens||0),reserved:Number(budget?.reserved_tokens||0)},
       historyBackfillMaxMessages: integer(groupConfig().historyBackfillMaxMessages, 500, 1, 5000),
       policies,
       windows: Object.fromEntries(windows.map(row => [row.status, Number(row.count || 0)])),

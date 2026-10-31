@@ -34,7 +34,7 @@ try {
     }
     upgrade.prepare("INSERT INTO memory_items(id,scope_type,owner_id,type,text,normalized_key,last_confirmed_at,created_at,updated_at) VALUES('before-upgrade','user','u','fact','升级前事实','before-upgrade',1,1,1)").run()
     const migrations = runStateMigrations(upgrade)
-    assert.deepEqual(migrations.map(row => row.id), [...onlineFiles, "010-memory-portraits.sql", "011-memory-maintenance.sql", "012-memory-maintenance-single-pass.sql", "013-memory-token-limits.sql", "014-memory-maintenance-review.sql"])
+    assert.deepEqual(migrations.map(row => row.id), [...onlineFiles, "010-memory-portraits.sql", "011-memory-maintenance.sql", "012-memory-maintenance-single-pass.sql", "013-memory-token-limits.sql", "014-memory-maintenance-review.sql", "015-memory-incremental-updates.sql"])
     assert(migrations.slice(0, onlineFiles.length).every(row => row.applied_at === 1), "existing migrations must not rerun")
     assert.equal(upgrade.prepare("SELECT text FROM memory_items WHERE id='before-upgrade'").get().text, "升级前事实")
     assert.deepEqual(upgrade.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'portrait_%' ORDER BY name").all().map(row => row.name), ["portrait_jobs", "portrait_monthly_usage", "portrait_reports", "portrait_type_defaults"])

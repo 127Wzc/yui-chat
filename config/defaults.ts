@@ -508,6 +508,8 @@ export const defaults = {
       shortTermHours: 72,
       episodeDays: 90,
       expiredGraceDays: 30,
+      // 到期事实保留历史，0 不自动删除；short/episode 继续按原有宽限期清理。
+      expiredFactDays: 0,
     },
     retrieval: {
       // 普通对话融合、重排后的注入条数；显式读取全部个人记忆走独立列表。
@@ -566,6 +568,9 @@ export const defaults = {
         minConfidence: 0.7,
         // 每轮扫描最多处理的提炼窗口数；大量补录后可临时调高加速消化。
         maxWindowsPerScan: 2,
+        // 全部群每日后台提炼预算；0 不限制，保留生产既有配置行为。手动 AI 整理独立计费。
+        tokensPerDay: 0,
+        relatedFactLimit: 8,
       },
     },
   },

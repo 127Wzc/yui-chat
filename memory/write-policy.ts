@@ -52,6 +52,28 @@ export function isExplicitMemoryIntent(value: unknown = ""): boolean { return ex
 export function isSingleValueFact(factKey: unknown = ""): boolean {
   return factKey === "communication.style" || /^(?:identity|profile|group_role|plan)\./.test(String(factKey))
 }
+
+export function isDerivedMemory(item: Record<string, unknown>): boolean {
+  return /^(?:group-window|maintenance:)/.test(String(item.source || "")) || ["explicit-user", "superseded", "duplicate-merged"].includes(String(item.source || ""))
+}
+
+export function canonicalFactKey(value: unknown = ""): string {
+  const key = String(value || "").trim().slice(0,80).toLowerCase().replace(/[^a-z0-9._-]+/g,".").replace(/^\.+|\.+$/g,"")
+  return /^[a-z][a-z0-9_-]*(?:\.[a-z0-9_-]+)+$/.test(key) ? key : ""
+}
+export function normalizedFactValue(value: unknown = "", max = 160): string {
+  return String(value || "").replace(/\s+/g," ").trim().slice(0,max).toLowerCase().replace(/[\s，,。.!！?？、:：;；'"“”‘’（）()【】\[\]_-]+/g,"")
+}
+export function factKeyToken(key: unknown = "", value: unknown = ""): string { return `${key}:${normalizedFactValue(value)}` }
+
+/** 即时写入与窗口提炼共用：旧证据不覆盖新状态，含糊冲突先核实。 */
+export function factUpdateDecision(current: Record<string, unknown>, observedAt: number, replace: boolean, protectManual = true): string {
+  if (protectManual && !isDerivedMemory(current)) return "protected"
+  const previous = Number(current.observed_at || current.evidence_at || current.last_confirmed_at || current.created_at || 0)
+  if (observedAt < previous) return "older"
+  if (observedAt === previous) return "pending"
+  return replace ? "replace" : "pending"
+}
 export function validateMemoryWrite(value: unknown = "", { explicitRequired = false, source = "" }: MemoryWriteOptions = {}): string {
   const text = String(value || "").replace(/\s+/g, " ").trim()
   if (!text) throw new Error("记忆内容不能为空。")

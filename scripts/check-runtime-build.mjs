@@ -176,6 +176,7 @@ for (const relative of [
   "core/storage/sqlite/migrations/012-memory-maintenance-single-pass.sql",
   "core/storage/sqlite/migrations/013-memory-token-limits.sql",
   "core/storage/sqlite/migrations/014-memory-maintenance-review.sql",
+  "core/storage/sqlite/migrations/015-memory-incremental-updates.sql",
   "memory/maintenance.js",
   "memory/maintenance-data.js",
   "memory/maintenance-plan.js",

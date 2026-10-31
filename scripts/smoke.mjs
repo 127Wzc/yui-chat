@@ -2934,7 +2934,7 @@ async function checkSqliteStorage() {
   try {
     assert(sqliteClient.status.available, "SQLite state database should initialize in worker")
     assert(sqliteClient.status.integrity === "ok", "SQLite state database should pass quick_check")
-    assert((sqliteClient.status.migrations || []).map(row => row.id).join(",") === "001-baseline.sql,002-tool-call-events.sql,003-model-call-snapshots.sql,004-conversation-state.sql,005-log-session.sql,006-extension-installations.sql,007-cosine-retrieval.sql,008-command-import.sql,009-command-availability.sql,010-memory-portraits.sql,011-memory-maintenance.sql,012-memory-maintenance-single-pass.sql,013-memory-token-limits.sql,014-memory-maintenance-review.sql", "SQLite state database should apply the baseline, combined tool/runtime, model snapshot, conversation state, and extension installation schema")
+    assert((sqliteClient.status.migrations || []).map(row => row.id).join(",") === "001-baseline.sql,002-tool-call-events.sql,003-model-call-snapshots.sql,004-conversation-state.sql,005-log-session.sql,006-extension-installations.sql,007-cosine-retrieval.sql,008-command-import.sql,009-command-availability.sql,010-memory-portraits.sql,011-memory-maintenance.sql,012-memory-maintenance-single-pass.sql,013-memory-token-limits.sql,014-memory-maintenance-review.sql,015-memory-incremental-updates.sql", "SQLite state database should apply the baseline, combined tool/runtime, model snapshot, conversation state, and extension installation schema")
     const removed = await sqliteClient.get("SELECT name FROM sqlite_master WHERE type='table' AND name='knowledge_sources'")
     assert(!removed, "baseline state database should not recreate removed transitional tables")
   } finally {

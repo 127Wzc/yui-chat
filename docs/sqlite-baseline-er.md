@@ -200,7 +200,7 @@ flowchart LR
 | state | `storage_meta` | 存储元信息 | `key`, `value`, `updated_at` |
 | state | `runtime_config` | 单行运行配置覆盖 | `id=1`, `schema_version`, `revision`, `overrides_json` |
 | state | `conversations` | 临时对话历史 | `conversation_key`, `history_json`, `expires_at` |
-| state | `memory_items` | 长期事实、画像、群提炼结果 | 作用域、正文、事实键值、状态、过期时间 |
+| state | `memory_items` | 长期事实、画像、群提炼结果 | 作用域、正文、事实键值、状态、过期时间；`observed_at` 原始确认时间、`validity_reason` 状态原因、`superseded_by` 替代关系 |
 | state | `memory_maintenance_jobs` | AI 整理分析、预览及有条件撤销 | 操作者、用户/群、历史开关、快照、单次建议、`reviewed_at` 结束审阅时间、提交回执与期限；同一用户跨群仅一条运行任务 |
 | state | `memory_maintenance_sources` | 整理快照和结果的清理关联 | 任务外键、原件/结果记忆 ID、来源群；清理资料时移除恢复副本 |
 | state | `memory_maintenance_versions` | 所有记忆/证据写入共用的版本 | 作用域/用户/群复合键及递增版本，供预览应用与撤销事务校验 |
@@ -208,6 +208,8 @@ flowchart LR
 | state | `portrait_reports` | 各类型月度画像及最近三版本 | 群、用户、类型、版本、任务快照、结构化报告、来源哈希、失效状态 |
 | state | `portrait_monthly_usage` | 独立月度成功额度 | 群、用户、类型、北京时间月份、报告 ID；与版本清理解耦 |
 | state | `portrait_jobs` | 按需画像任务及管理员操作记录 | 操作者、强制重提炼、运行状态、通用错误；同群同用户同类型仅一条运行任务 |
+| state | `group_memory_extraction_batches` | 每日提炼检查点 | 窗口外键、本批标识、消息版本、待应用候选和应用状态；成功后清除候选正文，清理窗口时级联删除 |
+| state | `memory_extraction_budget_daily` | 后台提炼日预算 | 本地日期、已计入和在途预留 Token，保留 90 天 |
 | state | `memory_evidence` | 记忆的最小证据引用 | `memory_id`, `source_event_id`, `source_type`, `message_id` |
 | state | `memory_fts` | 记忆 FTS5 投影 | `memory_id`, `text` |
 | state | `knowledge_bases` | 知识库设置与当前向量空间 | 模型、维度、检索设置、`active_vector_space_id` |

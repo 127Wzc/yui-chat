@@ -14,7 +14,7 @@ const STATE_TABLES = [
   "capability_rules", "knowledge_grants",
   "knowledge_document_history", "knowledge_import_runs", "knowledge_import_changes", "knowledge_vector_tasks", "knowledge_command_disabled",
   "ai_runs", "model_call_events", "model_call_snapshots", "tool_call_events", "ai_usage_daily", "embedding_budget_daily",
-  "group_memory_policies", "group_memory_messages", "group_memory_extraction_jobs",
+  "group_memory_policies", "group_memory_messages", "group_memory_extraction_jobs", "group_memory_extraction_batches", "memory_extraction_budget_daily",
 ]
 
 const VECTOR_TABLES = ["embedding_spaces", "embedding_records"]
@@ -46,7 +46,7 @@ try {
   state = new Database(path.join(root, "state.sqlite3"))
   state.pragma("foreign_keys = ON")
   const stateMigrations = runStateMigrations(state)
-  assert.deepEqual(stateMigrations.map(row => row.id), ["001-baseline.sql", "002-tool-call-events.sql", "003-model-call-snapshots.sql", "004-conversation-state.sql", "005-log-session.sql", "006-extension-installations.sql", "007-cosine-retrieval.sql", "008-command-import.sql", "009-command-availability.sql", "010-memory-portraits.sql", "011-memory-maintenance.sql", "012-memory-maintenance-single-pass.sql", "013-memory-token-limits.sql", "014-memory-maintenance-review.sql"], "state database must apply the baseline, combined tool/runtime, model snapshot, and conversation state migrations")
+  assert.deepEqual(stateMigrations.map(row => row.id), ["001-baseline.sql", "002-tool-call-events.sql", "003-model-call-snapshots.sql", "004-conversation-state.sql", "005-log-session.sql", "006-extension-installations.sql", "007-cosine-retrieval.sql", "008-command-import.sql", "009-command-availability.sql", "010-memory-portraits.sql", "011-memory-maintenance.sql", "012-memory-maintenance-single-pass.sql", "013-memory-token-limits.sql", "014-memory-maintenance-review.sql", "015-memory-incremental-updates.sql"], "state database must apply the baseline, combined tool/runtime, model snapshot, and conversation state migrations")
   for (const table of STATE_TABLES) assert(tableNames(state).includes(table), `missing state table: ${table}`)
   for (const table of REMOVED_STATE_TABLES) assert(!tableNames(state).includes(table), `removed state table must not return: ${table}`)
   assert.equal(state.pragma("quick_check", { simple: true }), "ok", "baseline state database must pass quick_check")

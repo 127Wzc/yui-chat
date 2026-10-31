@@ -736,10 +736,11 @@ export const MemoryTab = {
     function memoryLifecycle(item: MemoryRecord = {}): MemoryRecord {
       const status = item?.lifecycle?.status || item.status || "active"
       const detail = item?.lifecycle || item
-      const label = ({
+      const validityLabel = ({stale:"待更新",pending:"待核实",retracted:"已撤回",superseded:"已替代",duplicate:"重复已合并"} as Record<string,string>)[detail.validity]
+      const label = validityLabel || ({
         active: "生效中",
-        warm: "待巩固",
-        cold: "低活跃",
+        warm: "有效 · 较少提及",
+        cold: "有效 · 长期未提及",
         expired: "已过期",
         archived: item.source === "superseded" ? "已被修正" : "已归档",
         deleted: "已删除",
@@ -778,6 +779,7 @@ export const MemoryTab = {
         updated: { label: "已修改", tone: "risk-medium" },
         reinforced: { label: "已强化", tone: "accent" },
         retracted: { label: "已撤回", tone: "risk-medium" },
+        review: { label: "待核实", tone: "risk-medium" },
         ignored: { label: "已忽略", tone: "muted" },
       })[action] || { label: "已处理", tone: "muted" }
     }
@@ -785,7 +787,7 @@ export const MemoryTab = {
     function taskResultSummary(results: MemoryRecord[] = [], fallback = 0): string {
       if (!Array.isArray(results) || !results.length) return `覆盖 ${fallback} 条可分析消息`
       const counts = results.reduce((all, item) => ({ ...all, [item.action || "added"]: Number(all[item.action || "added"] || 0) + 1 }), {})
-      const labels = [["added", "新增"], ["updated", "修改"], ["reinforced", "强化"], ["ignored", "忽略"]]
+      const labels = [["added", "新增"], ["updated", "修改"], ["reinforced", "强化"], ["review", "待核实"], ["ignored", "忽略"]]
         .filter(([key]) => counts[key])
         .map(([key, label]) => `${label} ${counts[key]}`)
       const merged = results.reduce((sum, item) => sum + Number(item.duplicateCount || 0), 0)
@@ -990,6 +992,7 @@ export const MemoryTab = {
       try {
         const result = await request(pageUrl(`/api/memory/groups/${encodeURIComponent(groupId)}/workspace`, {
           groupQuery: groupMemoryQuery.value,
+          includeHistory:true,
           groupPage: groupMemoryPage.value,
           memberQuery: memberQuery.value,
           memberLimit: 100,
@@ -1076,6 +1079,7 @@ export const MemoryTab = {
           groupQuery: memberScope.value === "user_group" ? query : "",
           groupPage: memberScope.value === "user_group" ? memberMemoryPage.value : 1,
           globalQuery: memberScope.value === "user" ? query : "",
+          includeHistory:true,
           globalPage: memberScope.value === "user" ? memberMemoryPage.value : 1,
           pageSize: PAGE_SIZE,
         }))
@@ -1482,7 +1486,13 @@ export const MemoryTab = {
       }
     }
 
-    async function saveMemory() {
+    async function resolveMemory(resolution: string) {
+      const approvedDraft=JSON.stringify([draft.memoryId,memoryDetail.value?.revision,draft.memoryText,draft.memoryTags])
+      if(!await confirmAction({title:resolution==="accept"?"采纳这条记忆？":"保留当前事实？",message:resolution==="accept"?"这条建议将成为当前事实，同一单值槽位的旧事实保留为历史。":"这条建议将收起，现有事实保持原样。",confirmText:resolution==="accept"?"采纳":"保留原样"}))return
+      if(approvedDraft!==JSON.stringify([draft.memoryId,memoryDetail.value?.revision,draft.memoryText,draft.memoryTags]))return toast("待处理记忆已变化，请重新核对后确认")
+      await saveMemory(resolution)
+    }
+    async function saveMemory(resolution = "") {
       if (!draft.memoryText.trim()) return toast("请输入记忆内容")
       busy.value = true
       try {
@@ -1491,13 +1501,13 @@ export const MemoryTab = {
         if (draft.scopeType === "group") {
           result = await request(`/api/memory/groups/${encodeURIComponent(draft.groupId)}/facts`, {
             method: "POST",
-            body: JSON.stringify({ id: draft.memoryId || undefined, text: draft.memoryText.trim(), tags: splitTokens(draft.memoryTags) }),
+            body: JSON.stringify({ id: draft.memoryId || undefined, text: draft.memoryText.trim(), tags: splitTokens(draft.memoryTags),resolution:typeof resolution==="string"?resolution:undefined,expectedRevision:memoryDetail.value?.revision }),
           })
           await loadGroupWorkspace({ silent: true })
         } else {
           result = await request(`/api/memory/groups/${encodeURIComponent(draft.groupId)}/members/${encodeURIComponent(draft.ownerId)}/facts`, {
             method: "POST",
-            body: JSON.stringify({ scopeType: draft.scopeType, id: draft.memoryId || undefined, text: draft.memoryText.trim(), tags: splitTokens(draft.memoryTags) }),
+            body: JSON.stringify({ scopeType: draft.scopeType, id: draft.memoryId || undefined, text: draft.memoryText.trim(), tags: splitTokens(draft.memoryTags),resolution:typeof resolution==="string"?resolution:undefined,expectedRevision:memoryDetail.value?.revision }),
           })
           await loadMemberWorkspace({ silent: true })
         }
@@ -1691,7 +1701,7 @@ export const MemoryTab = {
       selectedTimelineWindow, timelineWindowDetail, selectedWindowMessages, timelineWindows, reextractStart, reextractEnd, reextractPlan, reextractBusy, extractionCounts, runRecordWindows,
       calendarDays, calendarMeta, calendarRange, calendarMetric, calendarBusy, calendarWeeks, calendarMetricLabel, calendarSummary, calendarWeeksElement, timelineDetailLoading, timelineDetailError,
       windowSelectionMode, selectedWindowStarts, selectedWindowItems, selectedWindowSummary,
-      policyTitle, policyOverrideSummary, memberTitle, timeLabel, rangeLabel, scopeLabel, extractionScopeLabel, extractionResultLabel, backfillStatusLabel, windowStatusLabel, timelineStatus, calendarStatus, calendarDayClass, calendarDayTitle, calendarDayAriaLabel, dayNumber, segmentSummary, normalizationView, compactNumber, windowWorkload, memoryLifecycle, resultAction, taskResultSummary, runningWindowProgress, taskListSummary, batchProgressLabel, captureDefaultLabel, captureFieldHint, captureFieldSource, updateCaptureField, resetCaptureField, selectGroup, selectMember, switchWorkspace, refreshWorkspace, openCaptureSettings, closeCaptureSettings, closeMemoryEditor, closeProfileEditor, saveCapturePolicy, openSystemSettings, backfillHistory, backfillFromMessage, queueExtraction,
+      policyTitle, policyOverrideSummary, memberTitle, timeLabel, rangeLabel, scopeLabel, extractionScopeLabel, extractionResultLabel, backfillStatusLabel, windowStatusLabel, timelineStatus, calendarStatus, calendarDayClass, calendarDayTitle, calendarDayAriaLabel, dayNumber, segmentSummary, normalizationView, compactNumber, windowWorkload, memoryLifecycle, resultAction, taskResultSummary, runningWindowProgress, taskListSummary, batchProgressLabel, captureDefaultLabel, captureFieldHint, captureFieldSource, updateCaptureField, resetCaptureField, selectGroup, selectMember, switchWorkspace, refreshWorkspace, openCaptureSettings, closeCaptureSettings, closeMemoryEditor, closeProfileEditor, resolveMemory, saveCapturePolicy, openSystemSettings, backfillHistory, backfillFromMessage, queueExtraction,
       isWindowSelected, toggleWindowSelectionMode, toggleWindowSelection, openRunWindow, extractionWindowAction, runExtractionWindow, clearWindowSelection, selectVisibleWindows, confirmSelectedWindows, handleCalendarScroll,
       loadCaptureDetails, loadExtractionWorkspace, loadCalendar, previewReextraction, openReextractDialog, confirmReextraction, reextractSingleDay, selectTimelineWindow, changeCaptureMessagePage, jumpCaptureMessagePage, changeCaptureMessageOrder, changeCaptureWindowPage, targetForGroup, targetForMember, openMemoryEditor, saveMemory, deleteMemory, openProfileEditor, saveProfile, changeGroupPage, changeMemberPage,
       setCalendarWeeksElement,
@@ -1706,7 +1716,7 @@ export const MemoryTab = {
       selectedTimelineWindow, timelineWindowDetail, selectedWindowMessages, timelineWindows, reextractStart, reextractEnd, reextractPlan, reextractBusy, extractionCounts, runRecordWindows,
       calendarDays, calendarMeta, calendarRange, calendarMetric, calendarBusy, calendarWeeks, calendarMetricLabel, calendarSummary, calendarWeeksElement, timelineDetailLoading, timelineDetailError,
       windowSelectionMode, selectedWindowStarts, selectedWindowItems, selectedWindowSummary,
-      policyTitle, policyOverrideSummary, memberTitle, timeLabel, rangeLabel, scopeLabel, extractionScopeLabel, extractionResultLabel, backfillStatusLabel, windowStatusLabel, timelineStatus, calendarStatus, calendarDayClass, calendarDayTitle, calendarDayAriaLabel, dayNumber, segmentSummary, normalizationView, compactNumber, windowWorkload, memoryLifecycle, resultAction, taskResultSummary, runningWindowProgress, taskListSummary, batchProgressLabel, captureDefaultLabel, captureFieldHint, captureFieldSource, updateCaptureField, resetCaptureField, selectGroup, selectMember, switchWorkspace, refreshWorkspace, openCaptureSettings, closeCaptureSettings, closeMemoryEditor, closeProfileEditor, saveCapturePolicy, openSystemSettings, backfillHistory, backfillFromMessage, queueExtraction,
+      policyTitle, policyOverrideSummary, memberTitle, timeLabel, rangeLabel, scopeLabel, extractionScopeLabel, extractionResultLabel, backfillStatusLabel, windowStatusLabel, timelineStatus, calendarStatus, calendarDayClass, calendarDayTitle, calendarDayAriaLabel, dayNumber, segmentSummary, normalizationView, compactNumber, windowWorkload, memoryLifecycle, resultAction, taskResultSummary, runningWindowProgress, taskListSummary, batchProgressLabel, captureDefaultLabel, captureFieldHint, captureFieldSource, updateCaptureField, resetCaptureField, selectGroup, selectMember, switchWorkspace, refreshWorkspace, openCaptureSettings, closeCaptureSettings, closeMemoryEditor, closeProfileEditor, resolveMemory, saveCapturePolicy, openSystemSettings, backfillHistory, backfillFromMessage, queueExtraction,
       isWindowSelected, toggleWindowSelectionMode, toggleWindowSelection, openRunWindow, extractionWindowAction, runExtractionWindow, clearWindowSelection, selectVisibleWindows, confirmSelectedWindows, handleCalendarScroll,
       loadCaptureDetails, loadExtractionWorkspace, loadCalendar, previewReextraction, openReextractDialog, confirmReextraction, reextractSingleDay, selectTimelineWindow, changeCaptureMessagePage, jumpCaptureMessagePage, changeCaptureMessageOrder, changeCaptureWindowPage, targetForGroup, targetForMember, openMemoryEditor, saveMemory, deleteMemory, openProfileEditor, saveProfile, changeGroupPage, changeMemberPage,
     }

@@ -113,9 +113,10 @@ export async function saveSnapshot(job: Job, snapshot: Snapshot): Promise<void> 
   await sqliteClient.transaction(operations)
 }
 
-const columns = ["id","scope_type","owner_id","group_id","type","text","normalized_key","fact_key","fact_value","tags_json","importance","confidence","status","source","last_confirmed_at","expires_at","created_at","updated_at"] as const
+const columns = ["id","scope_type","owner_id","group_id","type","text","normalized_key","fact_key","fact_value","tags_json","importance","confidence","status","source","last_confirmed_at","expires_at","created_at","updated_at","observed_at","validity_reason","superseded_by"] as const
 /** 写入来源、正文、事实键和检索正文共用事务；范围迁移也通过本方法处理。 */
 export function writeMemory(row: MemoryRow, exists: boolean, evidence: Evidence[], replaceEvidence = false): SqliteOperation[] {
+  row = {observed_at:0,validity_reason:"",superseded_by:"",...row}
   const operations: SqliteOperation[] = exists ? [{ sql: `UPDATE memory_items SET ${columns.slice(1).map(c=>`${c}=?`).join(",")} WHERE id=?`,params:[...columns.slice(1).map(c=>row[c]),row.id],expectChanges:1 }]
     : [{ sql:`INSERT INTO memory_items(${columns.join(",")}) VALUES(${columns.map(()=>"?").join(",")})`,params:columns.map(c=>row[c]),expectChanges:1 }]
   operations.push({sql:"DELETE FROM memory_fts WHERE memory_id=?",params:[row.id]})

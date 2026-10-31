@@ -9,9 +9,10 @@ import { normalizeModelUsage } from "../models/protocol/normalize.js"
 import { groupCaptureStore } from "./group-capture.js"
 import { vectorRecall } from "./vector-recall.js"
 import { sqliteMemoryStore } from "./sqlite-store.js"
+import { memoryRepository } from "./repository.js"
 import { record,records,identifier,fail,hash,messageHash,readSnapshot,readMemories,versions,getJob,publicJob,saveJob,saveSnapshot,versionGuards,writeMemory,currentRows,currentEvidence,cleanupMaintenance } from "./maintenance-data.js"
 import type { Row,Job,Target } from "./maintenance-data.js"
-import { MAINTENANCE_PROMPT,parseProposals,proposalView,buildChanges,assertNoFactConflicts } from "./maintenance-plan.js"
+import { MAINTENANCE_PROMPT,reviewProposals,proposalView,buildChanges,assertNoFactConflicts } from "./maintenance-plan.js"
 import type { Proposal,Changes } from "./maintenance-plan.js"
 import type { SqliteOperation } from "../core/storage/types.js"
 
@@ -167,10 +168,10 @@ export class MemoryMaintenance {
     // 模型调用已发生；先保存用量，后续格式或范围校验失败也保留本次消耗。
     const resultProgress={...progress,stage:"校验整理结果",inputTokens,tokenLimit:limit,usage:normalizeModelUsage(response.usage)}
     await saveJob(id,{progress:resultProgress},["analyzing"])
-    const final=parseProposals(String(response.text||""),job,snapshot.memories.map(m=>m.id),messages.map(m=>m.id),Number(settings.minConfidence))
+    const {plan:final,review}=reviewProposals(String(response.text||""),job,snapshot.memories.map(m=>m.id),messages.map(m=>m.id),Number(settings.minConfidence))
     signal.throwIfAborted();await this.settings(job.groupId,job.useHistory)
     await sqliteClient.transaction([...versionGuards(snapshot.versions),...await this.messageGuards(job),
-      {sql:"UPDATE memory_maintenance_jobs SET status='ready',plan_json=?,progress_json=?,updated_at=? WHERE id=? AND status='analyzing'",params:[JSON.stringify(final),JSON.stringify({...resultProgress,stage:"变更预览",analysisComplete:true}),Date.now(),id],expectChanges:1}])
+      {sql:"UPDATE memory_maintenance_jobs SET status='ready',plan_json=?,progress_json=?,updated_at=? WHERE id=? AND status='analyzing'",params:[JSON.stringify(final),JSON.stringify({...resultProgress,review,stage:review.complete?"变更预览":"部分变更需人工处理",analysisComplete:review.complete}),Date.now(),id],expectChanges:1}])
   }
   async view(id:unknown):Promise<Row> {
     this.available()
@@ -201,7 +202,29 @@ export class MemoryMaintenance {
     if(!ref)fail("原文不属于本任务的参考范围。",404)
     const source=await sqliteClient.get<Message>(`SELECT * FROM group_memory_messages WHERE id=? AND group_id=? AND (expires_at=0 OR expires_at>? OR ${linkedMessage})`,[ref.id,job.groupId,Date.now()])
     if(!source||(job.userId&&source.sender_id!==job.userId)||messageHash(source)!==ref.hash)return {available:false,id:ref.id}
-    return {available:true,id:ref.id,text:source.text_content,sentAt:source.sent_at,author:source.sender_id}
+    return {available:true,id:ref.id,text:source.text_content,sentAt:source.sent_at,author:source.sender_id,authorName:source.sender_name||""}
+  }
+  async evidence(id:unknown,memoryId:unknown,page:unknown=1):Promise<Row> {
+    this.available();const job=await getJob(id)
+    const original=job.snapshot.memories.find(m=>m.id===String(memoryId))
+    if(!original)fail("记忆不属于本次整理范围。",404)
+    const current=await memoryRepository.get(original.id)
+    if(!current||current.scope_type!==original.scope_type||current.owner_id!==original.owner_id||current.group_id!==original.group_id)fail("记忆已删除或范围已变化，请在记忆页查看。",409)
+    // 仅管理员显式展开来源时读取现有原文，不补录历史，也不发给模型。
+    const currentPage=Number(page)
+    if(!Number.isSafeInteger(currentPage)||currentPage<1)fail("来源页码必须为正整数。")
+    return memoryRepository.listEvidence(original.id,currentPage)
+  }
+  async keepIssue(id:unknown,issueId:unknown):Promise<Row> {
+    this.available();const job=await getJob(id)
+    const index=job.plan.findIndex(p=>p.id===String(issueId)&&p.blocked===true)
+    if(index<0)fail("未找到本任务的异常项。",404)
+    if(job.plan[index].resolution==="kept"||job.reviewedAt)return this.view(job.id)
+    if(!["ready","applied","undone"].includes(job.status))fail("当前任务不能处理异常项。",409)
+    // 原子修改一项审阅决定，保留并发处理的其他项和提交回执。
+    const result=await sqliteClient.run(`UPDATE memory_maintenance_jobs SET plan_json=json_set(plan_json,'$[${index}].resolution','kept'),updated_at=? WHERE id=? AND status IN ('ready','applied','undone') AND reviewed_at=0 AND json_extract(plan_json,'$[${index}].id')=? AND json_extract(plan_json,'$[${index}].blocked')=1`,[Date.now(),job.id,String(issueId)])
+    if(Number(result.changes)!==1)fail("任务状态已变化，请刷新后重试。",409)
+    return this.view(job.id)
   }
   async retry(id:unknown):Promise<Row> {
     this.available(true);await this.recover()
@@ -263,7 +286,14 @@ export class MemoryMaintenance {
     const oldIds=new Set(changes.before.map(m=>m.id))
     for(const row of changes.after) operations.push(...writeMemory(row,oldIds.has(row.id),changes.evidenceAfter.filter(e=>e.memory_id===row.id)))
     for(const memoryId of changes.created)operations.push({sql:"INSERT INTO memory_maintenance_sources(job_id,memory_id,group_id) VALUES(?,?,'')",params:[job.id,memoryId]})
-    const receipt={...changes,summary:{applied:selected.length,created:changes.created.length,archived:changes.after.filter(m=>m.status==="archived").length,edited:Object.keys(edits).length,appliedAt:Date.now()}}
+    const results=changes.after.filter(m=>m.status!=="archived")
+    let resultIndex=0
+    const groups=selected.map(p=>{
+      const outputs=results.slice(resultIndex,resultIndex+p.outputs.length).map(m=>({text:m.text,scope:m.scope_type,factKey:m.fact_key,factValue:m.fact_value,confidence:m.confidence}))
+      resultIndex+=p.outputs.length
+      return {id:p.id,kind:p.kind,outputs}
+    })
+    const receipt={...changes,summary:{applied:selected.length,created:changes.created.length,archived:changes.after.filter(m=>m.status==="archived").length,edited:Object.keys(edits).length,appliedAt:Date.now(),groups}}
     operations.push(this.receiptUpdate(job,receipt,applyHash))
     try{await sqliteClient.transaction(operations)}catch(error){
       const latest=await getJob(job.id)

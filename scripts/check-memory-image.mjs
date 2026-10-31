@@ -71,12 +71,12 @@ try {
   const dataFrom = prompt => JSON.parse(prompt.slice(prompt.indexOf("\n\n[\n") + 2, prompt.lastIndexOf("\n\n参考数据结束")))
   const ownReference = await appendMemoryImageReference(event, ownRequest, "水彩人物肖像")
   const records = dataFrom(ownReference.prompt)
-  assert.equal(records.length, 264)
+  assert.equal(records.length, 265)
   assert(ownReference.prompt.length > 4000, "memory attachment must bypass the drawing-instruction field's 4000-character limit")
   for (const row of own) assert.equal(records.find(item => item.id === row.id)?.text, row.text, "full text including newlines must survive without summarization")
   assert.equal(records.find(item => item.id === "untrusted").text, fixtures.find(item => item.id === "untrusted").text)
-  for (const id of ["other-user", "other-group", "public", "profile", "short", "interaction", "archived", "deleted", "expired", "decayed"]) assert(!records.some(item => item.id === id), id)
-  assert(records.some(item => item.id === "cold") && records.some(item => item.id === "episode"))
+  for (const id of ["other-user", "other-group", "public", "profile", "short", "interaction", "archived", "deleted", "expired"]) assert(!records.some(item => item.id === id), id)
+  assert(records.some(item => item.id === "cold") && records.some(item => item.id === "episode") && records.some(item=>item.id==="decayed"))
   assert.equal(ownReference.metadata.complete, true)
   assert.equal((await appendMemoryImageReference(event, "用QQ 100001的全部记忆画图", "肖像")).metadata.userId, event.user_id, "members may select their own explicit QQ number")
   assert.match(await sqliteMemoryStore.buildPrompt(event, ownRequest), /generate_image/)
@@ -138,8 +138,8 @@ try {
   providerResolver.resolveCandidateChannels = () => [{ id: "test-image", model: "test-image", type: "openai-images", purpose: "image", modelConfig: {} }]
   try {
     const output = await toolRegistry.execute("generate_image", { prompt: "水彩肖像", referenceImages: [] }, { e: event, prompt: ownRequest, execution: { background: false } })
-    assert.equal(dataFrom(imageRequest.prompt).length, 264)
-    assert.equal(output.metadata.memoryReference.memoryCount, 264)
+    assert.equal(dataFrom(imageRequest.prompt).length, 265)
+    assert.equal(output.metadata.memoryReference.memoryCount, 265)
     assert.equal(output.metadata.memoryReference.format, "full-text")
     imageRequest = null
     await assert.rejects(() => toolRegistry.execute("generate_image", { prompt: "群像", referenceImages: [] }, { e: event, prompt: "用全部用户的记忆画图", execution: { background: false } }), /只有主人/)

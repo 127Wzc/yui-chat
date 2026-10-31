@@ -103,7 +103,8 @@ export class MemoryWriteTool {
   async execute(args: ToolArgs = {}, context: MemoryToolContext = {}): Promise<string> {
     const fact = text(args.fact).trim()
     if (!fact) return "没有可写入的记忆。"
-    await memoryStore.addFact(context.e, fact.slice(0, 160), { source: "explicit-user" })
+    const result = await memoryStore.addFact(context.e, fact.slice(0, 160), { source: "explicit-user",factKey:args.factKey,factValue:args.factValue,operation:args.operation })
+    if(result?.writeReason)return String(result.writeReason)
     return `已写入记忆：${fact.slice(0, 160)}`
   }
 }
@@ -211,6 +212,9 @@ export class MemoryManageTool {
       action: { type: "string", enum: ["search", "list", "write", "forget", "profile_read", "profile_write"], description: "Memory or profile operation." },
       query: { type: "string", description: "Memory search query." },
       fact: { type: "string", description: "Concise stable fact to remember." },
+      factKey: { type: "string", description: "Optional stable slot shared with daily extraction, e.g. identity.city, communication.style, preference.coffee. Reuse existing keys." },
+      factValue: { type: "string", description: "Atomic value for factKey." },
+      operation: { type: "string", enum: ["add","replace"], description: "Use replace only for an explicit correction of an existing single-value fact; preferences can coexist." },
       id: { type: "string", description: "Memory id to forget." },
       limit: { type: "number", description: "Maximum result count." },
       includeCold: { type: "boolean", description: "Include low-priority memories when listing." },

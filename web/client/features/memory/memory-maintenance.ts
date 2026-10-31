@@ -6,15 +6,18 @@ export type MaintenanceRow=Record<string,any>
 const rows=(value:unknown)=>asRecords(value) as MaintenanceRow[]
 export const maintenanceActive=(status:string)=>["queued","collecting","analyzing"].includes(status)
 export const maintenanceStamp=(value:unknown)=>value?new Date(Number(value)).toLocaleString("zh-CN",{hour12:false}):"未记录"
-export function maintenanceTaskState(job:MaintenanceRow):{bucket:string;label:string;tone:string;changes:number;notes:number}{
-  const plan=rows(job.plan),changes=plan.filter(p=>p.kind!=="review").length,notes=plan.length-changes
-  if(maintenanceActive(job.status))return{bucket:"running",label:({queued:"排队中",collecting:"读取资料",analyzing:"分析中"} as Record<string,string>)[job.status],tone:"on",changes,notes}
+export function maintenanceTaskState(job:MaintenanceRow):{bucket:string;label:string;tone:string;changes:number;notes:number;issues:number}{
+  const plan=rows(job.plan),changes=plan.filter(p=>p.kind!=="review"&&!p.blocked).length,notes=plan.filter(p=>p.kind==="review"&&!p.blocked).length
+  const issues=job.reviewedAt?0:plan.filter(p=>p.blocked&&p.resolution!=="kept").length
+  const counts={changes,notes,issues}
+  if(maintenanceActive(job.status))return{bucket:"running",label:({queued:"排队中",collecting:"读取资料",analyzing:"分析中"} as Record<string,string>)[job.status],tone:"on",...counts}
+  if(["ready","applied","undone"].includes(job.status)&&issues)return{bucket:"review",label:job.status==="undone"?`已撤销 · ${issues} 项待处理`:job.status==="applied"?`已提交 · ${issues} 项待处理`:`待审核 · ${changes} 组 / ${issues} 项异常`,tone:"warn",...counts}
   if(job.status==="ready"){
-    if(job.reviewedAt)return{bucket:"history",label:"已保留原样",tone:"off",changes,notes}
-    if(changes)return{bucket:"review",label:`待审核 · ${changes} 组`,tone:"warn",changes,notes}
-    return{bucket:"history",label:notes?"仅供核对":"无需变更",tone:"off",changes,notes}
+    if(job.reviewedAt)return{bucket:"history",label:"已保留原样",tone:"off",...counts}
+    if(changes)return{bucket:"review",label:`待审核 · ${changes} 组`,tone:"warn",...counts}
+    return{bucket:"history",label:plan.some(p=>p.blocked)?"异常项已保留":notes?"仅供核对":"无需变更",tone:"off",...counts}
   }
-  return{bucket:"history",label:({applied:"已应用",undone:"已撤销",cancelled:"已取消",failed:"分析失败",stale:"资料已变化"} as Record<string,string>)[job.status]||job.status,tone:["failed","stale"].includes(job.status)?"bad":"off",changes,notes}
+  return{bucket:"history",label:({applied:"已应用",undone:"已撤销",cancelled:"已取消",failed:"分析失败",stale:"资料已变化"} as Record<string,string>)[job.status]||job.status,tone:["failed","stale"].includes(job.status)?"bad":"off",...counts}
 }
 
 /** 发起入口只创建后台分析，所有进度和审阅集中到整理任务工作区。 */

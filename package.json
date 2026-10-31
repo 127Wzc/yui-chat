@@ -5,7 +5,7 @@
   "description": "Yui Chat AI plugin for TRSS-Yunzai",
   "scripts": {
     "postinstall": "node scripts/postinstall.mjs",
-    "check": "npm run check:types && npm run check:types-client && npm run check:types-runtime && npm run check:runtime-build && npm run check:structure && npm run check:sqlite-baseline && npm run check:sqlite-integration && npm run check:memory-p1 && npm run check:portraits && npm run check:memory-maintenance && npm run check:memory-vectors && npm run check:memory-retrieval && npm run check:knowledge-p1 && npm run check:knowledge-rag && npm run check:command-benchmark && npm run check:runtime-p1 && npm run check:actions && npm run check:silent-tools && npm run check:mcp-selection && npm run check:capability-permissions && npm run check:sticker-expression && npm run check:daily-still && npm run check:code-editor && npm run check:reasoning && npm run check:render && npm run check:extension-installation && npm run smoke",
+    "check": "npm run check:types && npm run check:types-client && npm run check:types-runtime && npm run check:runtime-build && npm run check:structure && npm run check:sqlite-baseline && npm run check:sqlite-integration && npm run check:memory-p1 && npm run check:memory-strategy && npm run check:portraits && npm run check:memory-maintenance && npm run check:memory-vectors && npm run check:memory-retrieval && npm run check:knowledge-p1 && npm run check:knowledge-rag && npm run check:command-benchmark && npm run check:runtime-p1 && npm run check:actions && npm run check:silent-tools && npm run check:mcp-selection && npm run check:capability-permissions && npm run check:sticker-expression && npm run check:daily-still && npm run check:code-editor && npm run check:reasoning && npm run check:render && npm run check:extension-installation && npm run smoke",
     "check:types": "tsc -p tsconfig.json --noEmit",
     "check:types-client": "tsc -p tsconfig.client.json --noEmit",
     "build:types": "tsc -p tsconfig.build.json",
@@ -17,6 +17,7 @@
     "check:sqlite-baseline": "node scripts/check-sqlite-baseline.mjs",
     "check:sqlite-integration": "node scripts/check-sqlite-integration.mjs",
     "check:memory-p1": "node scripts/check-memory-p1.mjs",
+    "check:memory-strategy": "node scripts/check-memory-strategy.mjs",
     "check:portraits": "node scripts/check-portraits.mjs",
     "check:memory-maintenance": "node scripts/check-memory-maintenance.mjs",
     "check:memory-vectors": "node scripts/check-memory-vectors.mjs",

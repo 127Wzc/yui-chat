@@ -30,7 +30,7 @@ interface SchemaManifest extends UnknownRecord {
 }
 interface ManifestTab { sections?: string[] }
 interface ModelConfig { purpose?: string; adapter?: string; name?: string; modelIdentifier?: string; capabilities?: { chat?: boolean; embedding?: boolean } }
-interface ConsolidationConfig { modelName?: string; maxTokens?: number; minConfidence?: number; maxWindowsPerScan?: number; schedule?: { mode?: string; time?: string; cron?: string } }
+interface ConsolidationConfig { tokensPerDay?:number; relatedFactLimit?:number; modelName?: string; maxTokens?: number; minConfidence?: number; maxWindowsPerScan?: number; schedule?: { mode?: string; time?: string; cron?: string } }
 interface GroupCaptureConfig {
   defaultRetentionDays?: number
   defaultTokenLimit?: number
@@ -42,7 +42,7 @@ interface AdvancedConfig extends UnknownRecord {
   logging?: { level?: string; history?: UnknownRecord }
   system?: { backups?: { maxFiles?: number; maxAgeDays?: number } }
   security?: { linkSafety?: { allowPrivateHosts?: boolean; trustedPrivateDnsBypass?: boolean; screenshotAllowedHosts?: string[] } }
-  memory?: { retrieval?: { embeddingTokensPerDay?: number; resultLimit?: number; promptTokenBudget?: number; embeddingModel?: string; rerankEnabled?: boolean; rerankModel?: string; rerankMaxCandidates?: number; rerankInputTokenBudget?: number; rerankTimeoutMs?: number; rerankCacheTtlMs?: number; rerankMinScore?: number | null }; groupCapture?: GroupCaptureConfig }
+  memory?: { retention?:{expiredFactDays?:number}; retrieval?: { embeddingTokensPerDay?: number; resultLimit?: number; promptTokenBudget?: number; embeddingModel?: string; rerankEnabled?: boolean; rerankModel?: string; rerankMaxCandidates?: number; rerankInputTokenBudget?: number; rerankTimeoutMs?: number; rerankCacheTtlMs?: number; rerankMinScore?: number | null }; groupCapture?: GroupCaptureConfig }
   knowledge?: { indexing?: { globalEmbeddingTokensPerDay?: number } }
   modelTasks?: { replyer?: { modelList?: string[] } }
   models?: ModelConfig[]
@@ -88,6 +88,9 @@ export const AdvancedTab = {
       captureMaxTokens: config.value.memory?.groupCapture?.consolidation?.maxTokens ?? 100000,
       captureMinConfidence: config.value.memory?.groupCapture?.consolidation?.minConfidence ?? 0.7,
       captureMaxWindowsPerScan: config.value.memory?.groupCapture?.consolidation?.maxWindowsPerScan ?? 2,
+      captureTokensPerDay: config.value.memory?.groupCapture?.consolidation?.tokensPerDay ?? 0,
+      captureRelatedFactLimit: config.value.memory?.groupCapture?.consolidation?.relatedFactLimit ?? 8,
+      captureExpiredFactDays: config.value.memory?.retention?.expiredFactDays ?? 0,
       captureScheduleMode: config.value.memory?.groupCapture?.consolidation?.schedule?.mode || "interval",
       captureScheduleTime: config.value.memory?.groupCapture?.consolidation?.schedule?.time || "03:00",
       captureScheduleCron: config.value.memory?.groupCapture?.consolidation?.schedule?.cron || "0 3 * * *",
@@ -245,6 +248,9 @@ export const AdvancedTab = {
       const confidence = Number(consolidation.minConfidence)
       draft.captureMinConfidence = Number.isFinite(confidence) ? confidence : 0.7
       draft.captureMaxWindowsPerScan = Number(consolidation.maxWindowsPerScan) || 2
+      draft.captureTokensPerDay = Number(consolidation.tokensPerDay) || 0
+      draft.captureRelatedFactLimit = consolidation.relatedFactLimit ?? 8
+      draft.captureExpiredFactDays = config.value.memory?.retention?.expiredFactDays ?? 0
       draft.captureScheduleMode = consolidation.schedule?.mode || "interval"
       draft.captureScheduleTime = consolidation.schedule?.time || "03:00"
       draft.captureScheduleCron = consolidation.schedule?.cron || "0 3 * * *"
@@ -425,6 +431,9 @@ export const AdvancedTab = {
           "memory.groupCapture.consolidation.maxTokens": maxTokens,
           "memory.groupCapture.consolidation.minConfidence": minConfidence,
           "memory.groupCapture.consolidation.maxWindowsPerScan": maxWindowsPerScan,
+          "memory.groupCapture.consolidation.tokensPerDay": Math.max(0,Math.min(1000000000,Math.round(Number(draft.captureTokensPerDay)||0))),
+          "memory.groupCapture.consolidation.relatedFactLimit": Math.max(0,Math.min(20,Math.round(Number(draft.captureRelatedFactLimit)||0))),
+          "memory.retention.expiredFactDays": Math.max(0,Math.min(1000000,Math.round(Number(draft.captureExpiredFactDays)||0))),
           "memory.groupCapture.consolidation.schedule.mode": scheduleMode,
           "memory.groupCapture.consolidation.schedule.time": scheduleTime,
           "memory.groupCapture.consolidation.schedule.cron": scheduleCron,
@@ -667,39 +676,48 @@ export const AdvancedTab = {
         </PagedList>
       </Panel>
 
-      <Panel v-if="activeSection === 'memory-capture'" title="群记忆系统默认" icon="database">
+      <Panel v-if="activeSection === 'memory-capture'" title="群记忆系统默认" icon="database" class="memory-capture-defaults">
         <template #actions><button class="btn primary small" type="button" @click="saveCaptureDefaults"><Icon name="save" :size="14" />保存系统默认</button></template>
-        <p class="muted small">新采集群会继承这些值。单群可在“记忆管理 → 采集设置”中按字段覆盖，恢复继承后会立即重新跟随这里的默认值。</p>
+        <p class="muted small">每日提炼与手动 AI 整理共用输入上限、提炼模型、输出上限和置信度。单群可在“记忆管理 → 采集设置”覆盖这些值，恢复继承后跟随系统默认。</p>
 
         <div class="settings-stack">
           <div class="form-section">
-            <div class="developer-section-head"><div><b>原始消息与输入切分</b><span>保留期更新后，继承默认的群会按消息发送时间重新计算到期时间。</span></div></div>
+            <div class="developer-section-head"><div><b>消息保留与输入上限</b><span>保留期更新后，继承默认的群会按消息发送时间重新计算到期时间。</span></div></div>
             <div class="form-grid capture-token-limits">
-              <Field label="原始消息保留天数" type="number" v-model="draft.captureRetentionDays" hint="0 表示永久保留；有限保留最少 1 天" />
-              <Field label="输入 Token 上限（单日子窗口）" type="number" v-model="draft.captureTokenLimit" hint="默认 200,000，可设 3,000–1,000,000；每日提炼按消息正文估算，AI 整理包含系统提示与完整资料" />
+              <Field label="原始消息保留天数" type="number" v-model="draft.captureRetentionDays" description="0 表示永久保留；有限保留最少 1 天" />
+              <Field label="输入 Token 上限（提炼与 AI 整理）" type="number" v-model="draft.captureTokenLimit" description="默认 200,000，可设 3,000–1,000,000。每日提炼按消息切分；AI 整理计入系统提示和完整资料，超限时停止。" />
             </div>
           </div>
 
           <div class="form-section">
             <div class="developer-section-head"><div><b>提炼默认</b><span>留空模型时跟随当前默认对话模型；这些值可由单群覆盖。</span></div></div>
-            <Field label="提炼模型" type="select" :options="captureModelOptions" v-model="draft.captureModelName" :hint="defaultReplyModelName ? '留空时使用默认对话模型：' + defaultReplyModelName : '留空时使用当前默认对话模型'" />
+            <Field label="提炼模型" type="select" :options="captureModelOptions" v-model="draft.captureModelName" :description="defaultReplyModelName ? '留空时使用默认对话模型：' + defaultReplyModelName : '留空时使用当前默认对话模型'" />
             <div class="form-grid capture-token-limits">
-              <Field label="输出 Token 上限（单次提炼）" type="number" v-model="draft.captureMaxTokens" hint="默认 100,000，可设 256–100,000；思考 Token 也计入，实际受模型能力限制" />
-              <Field label="候选置信度阈值" type="number" v-model="draft.captureMinConfidence" hint="0–1；低于此值的候选不会写入记忆" />
+              <Field label="输出 Token 上限（提炼与 AI 整理）" type="number" v-model="draft.captureMaxTokens" description="默认 100,000，可设 256–100,000；思考 Token 也计入，实际受模型能力限制" />
+              <Field label="候选置信度阈值" type="number" v-model="draft.captureMinConfidence" description="0–1；低于此值的候选不会写入记忆" />
             </div>
             <label class="field"><span class="field-label">提炼提示词</span><span class="row"><Switch v-model="draft.captureUseBuiltInPrompt" /><small>{{ draft.captureUseBuiltInPrompt ? '使用内置默认提示词' : '使用下方自定义提示词' }}</small></span></label>
-            <Field label="提示词内容" type="textarea" :rows="12" v-model="draft.capturePromptTemplate" :disabled="draft.captureUseBuiltInPrompt" :hint="draft.captureUseBuiltInPrompt ? '当前展示的是内置默认提示词；关闭上方开关后可复制并修改。' : '自定义提示词会成为新群的默认值。'" />
+            <Field label="提示词内容" type="textarea" :rows="12" v-model="draft.capturePromptTemplate" :disabled="draft.captureUseBuiltInPrompt" :description="draft.captureUseBuiltInPrompt ? '当前展示的是内置默认提示词；关闭上方开关后可复制并修改。' : '自定义提示词会成为新群的默认值。'" />
           </div>
 
           <div class="form-section">
-            <div class="developer-section-head"><div><b>全局调度</b><span>控制已关闭自然日何时交给模型提炼；不提供单群覆盖，避免一个群占满提炼队列。</span></div></div>
+            <div class="developer-section-head"><div><b>后台提炼与调度</b><span>全部群共用后台预算与执行计划；这些参数只用于每日窗口提炼。</span></div></div>
             <div class="form-grid capture-token-limits">
-              <Field label="每轮扫描窗口数" type="number" v-model="draft.captureMaxWindowsPerScan" hint="1–64；积压时可临时调高" />
+              <Field label="每日提炼 Token 预算" type="number" v-model="draft.captureTokensPerDay" description="全部群共用，0 不限制。包含失败重试，额度不足次日继续；手动 AI 整理不计入此预算。" />
+              <Field label="相关旧事实条数" type="number" v-model="draft.captureRelatedFactLimit" description="默认 8，0–20；本地检索，不额外调用模型" />
+              <Field label="每轮扫描窗口数" type="number" v-model="draft.captureMaxWindowsPerScan" description="1–64；积压时可临时调高" />
               <Field label="提炼触发方式" type="select" v-model="draft.captureScheduleMode" :options="[{ value: 'interval', label: '跟随扫描间隔（兼容默认）' }, { value: 'time', label: '每天固定时间' }, { value: 'cron', label: 'Cron 表达式' }]" />
             </div>
-            <Field v-if="draft.captureScheduleMode === 'time'" label="每天触发时间" type="time" v-model="draft.captureScheduleTime" hint="按服务器本地时区执行，例如 03:00。" />
-            <Field v-if="draft.captureScheduleMode === 'cron'" label="Cron（分 时 日 月 周）" v-model="draft.captureScheduleCron" placeholder="0 3 * * *" hint="五段本地 Cron；例如 0 3 * * * = 每天 03:00，*/30 * * * * = 每 30 分钟。" />
+            <Field v-if="draft.captureScheduleMode === 'time'" label="每天触发时间" type="time" v-model="draft.captureScheduleTime" description="按服务器本地时区执行，例如 03:00。" />
+            <Field v-if="draft.captureScheduleMode === 'cron'" label="Cron（分 时 日 月 周）" v-model="draft.captureScheduleCron" placeholder="0 3 * * *" description="五段本地 Cron；例如 0 3 * * * = 每天 03:00，*/30 * * * * = 每 30 分钟。" />
             <p class="muted tiny">原始消息仍按实时采集；这里仅控制自动提炼。手动“立即执行”不受此计划限制。</p>
+          </div>
+
+          <div class="form-section">
+            <div class="developer-section-head"><div><b>记忆历史保留</b><span>到期后退出当前召回，保留多久单独设置。</span></div></div>
+            <div class="form-grid capture-token-limits">
+              <Field label="事实到期后删除天数" type="number" v-model="draft.captureExpiredFactDays" description="0 保留历史。短期记录与经历继续使用原有清理规则。" />
+            </div>
           </div>
 
           <div class="form-section">

@@ -172,6 +172,7 @@ export function registerKnowledgeRoutes(app: RouteApp): void {
   app.get("/api/memory/groups/:groupId/workspace", auth, handleRoute(async (req, res) => {
     const workspace = await memoryStore.getGroupWorkspace(req.params.groupId, {
       groupQuery: req.query.groupQuery,
+      includeHistory: req.query.includeHistory !== "false",
       groupPage: Number(req.query.groupPage || 1),
       memberQuery: req.query.memberQuery,
       memberLimit: Number(req.query.memberLimit || 80),
@@ -182,6 +183,7 @@ export function registerKnowledgeRoutes(app: RouteApp): void {
   app.get("/api/memory/groups/:groupId/members/:userId", auth, handleRoute(async (req, res) => {
     const workspace = await memoryStore.getGroupMemberWorkspace(req.params.groupId, req.params.userId, {
       groupQuery: req.query.groupQuery,
+      includeHistory: req.query.includeHistory !== "false",
       groupPage: Number(req.query.groupPage || 1),
       globalQuery: req.query.globalQuery,
       globalPage: Number(req.query.globalPage || 1),
@@ -192,7 +194,7 @@ export function registerKnowledgeRoutes(app: RouteApp): void {
   app.post("/api/memory/groups/:groupId/facts", auth, handleRoute(async (req, res) => {
     const groupId = String(req.params.groupId || "").trim()
     const item = await memoryStore.saveScopedMemory({
-      scopeType: "group", ownerId: groupId, groupId, id: req.body?.id, text: req.body?.text, tags: req.body?.tags,
+      scopeType: "group", ownerId: groupId, groupId, id: req.body?.id, text: req.body?.text, tags: req.body?.tags, resolution:req.body?.resolution, expectedRevision:req.body?.expectedRevision,
     })
     res.json({
       ok: true,
@@ -211,7 +213,7 @@ export function registerKnowledgeRoutes(app: RouteApp): void {
     const groupId = String(req.params.groupId || "").trim()
     const scopeType = req.body?.scopeType === "user" ? "user" : "user_group"
     const item = await memoryStore.saveScopedMemory({
-      scopeType, ownerId: req.params.userId, groupId, id: req.body?.id, text: req.body?.text, tags: req.body?.tags,
+      scopeType, ownerId: req.params.userId, groupId, id: req.body?.id, text: req.body?.text, tags: req.body?.tags, resolution:req.body?.resolution, expectedRevision:req.body?.expectedRevision,
     })
     res.json({
       ok: true,

@@ -1,4 +1,5 @@
 import { statusFor } from "./decay.js"
+import { isDerivedMemory, isSingleValueFact } from "./write-policy.js"
 import crypto from "node:crypto"
 import { sqliteClient } from "../core/storage/sqlite/client.js"
 import type { SqliteOperation } from "../core/storage/types.js"
@@ -24,6 +25,9 @@ interface MemoryItem extends UnknownRecord {
   source?: string
   lastConfirmedAt?: unknown
   expiresAt?: unknown
+  observedAt?: unknown
+  validityReason?: string
+  supersededBy?: string
 }
 
 interface MemoryScope extends UnknownRecord {
@@ -57,6 +61,16 @@ function parse<T = unknown>(value: unknown, fallback?: T): T {
 }
 
 const id = (): string => crypto.randomUUID()
+
+function insertOperations(item: MemoryItem, memoryId: string, evidence: unknown = []): SqliteOperation[] {
+  const timestamp = Date.now()
+  const text = String(item.text || "")
+  return [
+    { sql: "INSERT INTO memory_items(id,scope_type,owner_id,group_id,type,text,normalized_key,fact_key,fact_value,tags_json,importance,confidence,status,source,last_confirmed_at,expires_at,created_at,updated_at,observed_at,validity_reason,superseded_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", params: [memoryId,item.scopeType,item.ownerId,item.groupId||"",item.type||"fact",text,item.normalized||text.toLowerCase(),String(item.factKey||""),String(item.factValue||""),JSON.stringify(item.tags||[]),Number(item.importance??0.6),Number(item.confidence??0.8),item.status||"active",item.source||"manual",item.lastConfirmedAt??timestamp,item.expiresAt||0,timestamp,timestamp,item.observedAt||0,item.validityReason||"",item.supersededBy||""] },
+    { sql: "INSERT INTO memory_fts(memory_id,text) VALUES(?,?)", params: [memoryId,ftsIndexText(text)] },
+    ...evidenceOperations(memoryId,evidence),
+  ]
+}
 
 function evidenceOperations(memoryId: string, evidence: unknown = []): SqliteOperation[] {
   return (Array.isArray(evidence) ? evidence : []).map(item => {
@@ -115,22 +129,61 @@ function ftsQuery(value: unknown = ""): string {
 
 export class MemoryRepository {
   async insert(item: MemoryItem = {}, options: RepositoryOptions = {}): Promise<MemoryItem | null> {
-    const timestamp = Date.now()
     const memoryId = item.id || id()
-    const itemText = String(item.text || "")
-    const params = [memoryId, item.scopeType, item.ownerId, item.groupId || "", item.type || "fact", itemText, item.normalized || itemText.toLowerCase(), String(item.factKey || ""), String(item.factValue || ""), JSON.stringify(item.tags || []), Number(item.importance ?? 0.6), Number(item.confidence ?? 0.8), item.status || "active", item.source || "manual", item.lastConfirmedAt || timestamp, item.expiresAt || 0, timestamp, timestamp]
+    const unique:SqliteOperation[] = options.uniqueFact===true ? [{sql:"SELECT COUNT(*) AS count FROM memory_items WHERE scope_type=? AND owner_id=? AND group_id=? AND type=? AND status IN ('active','warm','cold') AND ((fact_key<>'' AND fact_key=? AND fact_value=?) OR normalized_key=?)",params:[item.scopeType,item.ownerId,item.groupId||"",item.type||"fact",item.factKey||"",item.factValue||"",item.normalized||String(item.text||"").toLowerCase()],mode:"get",expect:{count:0}}] : []
+    await sqliteClient.transaction([...unique,...insertOperations(item, memoryId, options.evidence)])
+    vectorRecall.markDirty()
+    return this.get(memoryId)
+  }
+
+  /** 替代与新事实入库共用事务，插入失败不能留下已归档但无替代的旧行。 */
+  async replaceFact(current: MemoryItem, item: MemoryItem, evidence: unknown = []): Promise<MemoryItem | null> {
+    const memoryId = id()
     await sqliteClient.transaction([
-      { sql: "INSERT INTO memory_items(id, scope_type, owner_id, group_id, type, text, normalized_key, fact_key, fact_value, tags_json, importance, confidence, status, source, last_confirmed_at, expires_at, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", params },
-      { sql: "INSERT INTO memory_fts(memory_id, text) VALUES(?, ?)", params: [memoryId, ftsIndexText(itemText)] },
-      ...evidenceOperations(String(memoryId || ""), options.evidence),
+      {sql:"SELECT updated_at,status,source,text,fact_key,fact_value,observed_at,expires_at FROM memory_items WHERE id=?",params:[current.id],mode:"get",expect:Object.fromEntries(["updated_at","status","source","text","fact_key","fact_value","observed_at","expires_at"].map(key=>[key,current[key]]))},
+      { sql: "UPDATE memory_items SET status='archived',validity_reason='superseded',superseded_by=?,updated_at=? WHERE id=? AND updated_at=? AND status IN ('active','warm','cold')", params: [memoryId,Date.now(),current.id,current.updated_at],expectChanges:1 },
+      ...insertOperations(item,memoryId,evidence),
     ])
     vectorRecall.markDirty()
     return this.get(memoryId)
   }
 
+  async observationTime(item: MemoryItem): Promise<number> {
+    if (Number(item.observed_at || 0)) return Number(item.observed_at)
+    if(!isDerivedMemory(item))return Number(item.last_confirmed_at||item.created_at||0)
+    const source = await sqliteClient.get<UnknownRecord>(`SELECT MAX(m.sent_at) AS time FROM memory_evidence e JOIN group_memory_messages m ON m.id=e.source_event_id AND e.source_type='group-message:'||m.group_id AND (e.message_id='' OR e.message_id=m.message_id) WHERE e.memory_id=?`,[item.id])
+    return Number(source?.time || item.last_confirmed_at || item.created_at || 0)
+  }
+
+  async revision(item: MemoryItem): Promise<number> {
+    const row=await sqliteClient.get("SELECT revision FROM memory_maintenance_versions WHERE scope_type=? AND owner_id=? AND group_id=?",[item.scope_type,item.owner_id,item.group_id||""])
+    return Number(row?.revision||0)
+  }
+
+  async resolvePending(current: MemoryItem, accept: boolean, text: string, tags: unknown, revision: number): Promise<MemoryItem | null> {
+    if(current.status!=="archived"||current.validity_reason!=="pending")throw new Error("这条记忆已不在待核实状态，请刷新。")
+    if(accept&&Number(current.expires_at||0)>0&&Number(current.expires_at)<=Date.now())throw new Error("这条建议已到期，不能直接采纳为当前事实。")
+    const timestamp=Date.now()
+    await sqliteClient.transaction([
+      {sql:"SELECT COALESCE((SELECT revision FROM memory_maintenance_versions WHERE scope_type=? AND owner_id=? AND group_id=?),0) AS revision",params:[current.scope_type,current.owner_id,current.group_id||""],mode:"get",expect:{revision}},
+      {sql:"SELECT status,validity_reason,updated_at FROM memory_items WHERE id=?",params:[current.id],mode:"get",expect:{status:"archived",validity_reason:"pending",updated_at:current.updated_at}},
+      ...(accept&&isSingleValueFact(current.fact_key)?[{sql:"UPDATE memory_items SET status='archived',validity_reason='superseded',superseded_by=?,updated_at=? WHERE id<>? AND scope_type=? AND owner_id=? AND group_id=? AND fact_key=? AND status IN ('active','warm','cold')",params:[current.id,timestamp,current.id,current.scope_type,current.owner_id,current.group_id,current.fact_key]}]:[]),
+      {sql:"UPDATE memory_items SET status=?,validity_reason=?,source=?,text=?,normalized_key=?,tags_json=?,updated_at=? WHERE id=?",params:[accept?"active":"archived",accept?"":"manual","manual-edit",text,text.toLowerCase(),JSON.stringify(tags||[]),timestamp,current.id],expectChanges:1},
+      {sql:"DELETE FROM memory_fts WHERE memory_id=?",params:[current.id]},
+      {sql:"INSERT INTO memory_fts(memory_id,text) VALUES(?,?)",params:[current.id,ftsIndexText(text)]},
+    ])
+    vectorRecall.markDirty()
+    return this.get(current.id)
+  }
+
   async get(memoryId: unknown): Promise<MemoryItem | null> {
     const row = await sqliteClient.get<MemoryItem>("SELECT * FROM memory_items WHERE id = ?", [memoryId])
     return row ? { ...row, tags: parse(row.tags_json) } : null
+  }
+
+  async findExactFact(scope: MemoryScope, text: string, type = "fact"): Promise<MemoryItem | null> {
+    const row=await sqliteClient.get<MemoryItem>("SELECT * FROM memory_items WHERE scope_type=? AND owner_id=? AND group_id=? AND type=? AND normalized_key=? AND status IN ('active','warm','cold') ORDER BY created_at,id LIMIT 1",[scope.scopeType,scope.ownerId,scope.groupId||"",type,text.toLowerCase()])
+    return row?{...row,tags:parse(row.tags_json)}:null
   }
 
   async listEvidence(memoryId: string, page = 1): Promise<UnknownRecord> {
@@ -162,9 +215,16 @@ export class MemoryRepository {
   async update(memoryId: unknown, patch: MemoryItem = {}, options: RepositoryOptions = {}): Promise<MemoryItem | null> {
     const current = await this.get(memoryId)
     if (!current) return null
+    const expected=record(options.expectedCurrent)
+    if(Object.keys(expected).length && ["updated_at","source","status","text"].some(key=>expected[key]!==current[key]))throw new Error("记忆在提炼期间已变化，保留检查点供续处理。")
+    if(patch.observedAt!==undefined){
+      patch={...patch,observedAt:Math.max(Number(patch.observedAt)||0,Number(current.observed_at)||0),lastConfirmedAt:Math.max(Number(patch.lastConfirmedAt)||0,Number(current.last_confirmed_at)||0),confidence:Math.max(Number(patch.confidence??current.confidence),Number(current.confidence))}
+    }
     const next: MemoryItem = { ...current, ...patch, tags: patch.tags || current.tags || [], updated_at: Date.now() }
     await sqliteClient.transaction([
+      {sql:"SELECT updated_at,status,source,text,confidence,last_confirmed_at,observed_at,expires_at,validity_reason FROM memory_items WHERE id=?",params:[memoryId],mode:"get",expect:Object.fromEntries(["updated_at","status","source","text","confidence","last_confirmed_at","observed_at","expires_at","validity_reason"].map(key=>[key,current[key]]))},
       { sql: "UPDATE memory_items SET text=?, normalized_key=?, fact_key=?, fact_value=?, tags_json=?, importance=?, confidence=?, status=?, source=?, last_confirmed_at=?, expires_at=?, updated_at=? WHERE id=?", params: [next.text, next.normalized || String(next.text).toLowerCase(), next.factKey ?? next.fact_key ?? "", next.factValue ?? next.fact_value ?? "", JSON.stringify(next.tags), Number(next.importance), Number(next.confidence), next.status, next.source, next.lastConfirmedAt || next.last_confirmed_at, next.expiresAt ?? next.expires_at ?? 0, next.updated_at, memoryId] },
+      { sql: "UPDATE memory_items SET observed_at=?,validity_reason=?,superseded_by=? WHERE id=?", params: [patch.observedAt??current.observed_at??0,patch.validityReason??current.validity_reason??"",patch.supersededBy??current.superseded_by??"",memoryId] },
       { sql: "DELETE FROM memory_fts WHERE memory_id = ?", params: [memoryId] },
       ...(next.status === "deleted" ? [] : [{ sql: "INSERT INTO memory_fts(memory_id, text) VALUES(?, ?)", params: [memoryId, ftsIndexText(next.text)] }]),
       ...evidenceOperations(String(memoryId || ""), options.evidence),
@@ -291,9 +351,9 @@ export class MemoryRepository {
     const rows = await sqliteClient.all<MemoryItem>(
       `SELECT * FROM memory_items
        WHERE scope_type=? AND owner_id=? AND group_id=? AND fact_key=?
-         AND status IN ('active','warm','cold') AND (expires_at = 0 OR expires_at > ?)
+         AND status IN ('active','warm','cold') AND (?=1 OR expires_at = 0 OR expires_at > ?)
        ORDER BY importance DESC, updated_at DESC LIMIT ?`,
-      [scope.scopeType, scope.ownerId, scope.groupId || "", key, Date.now(), Math.max(1, Number(options.limit) || 50)],
+      [scope.scopeType, scope.ownerId, scope.groupId || "", key,options.includeExpired===true?1:0, Date.now(), Math.max(1, Number(options.limit) || 50)],
     )
     return rows.map(row => ({ ...row, tags: parse(row.tags_json) }))
   }
@@ -307,8 +367,8 @@ export class MemoryRepository {
     const page = Math.max(1, Number(options.page) || 1)
     const query = String(options.query || "").trim().slice(0, 200)
     const status = options.includeCold ? "('active','warm','cold')" : "('active','warm')"
-    const base = "scope_type=? AND owner_id=? AND group_id=? AND type NOT IN ('profile','short') AND NOT (type='episode' AND source='interaction') AND status IN " + status + " AND (expires_at = 0 OR expires_at > ?)"
-    const params = [scopeType, ownerId, groupId, Date.now()]
+    const base = "scope_type=? AND owner_id=? AND group_id=? AND type NOT IN ('profile','short') AND NOT (type='episode' AND source='interaction') AND " + (options.includeHistory===true?"status<>'deleted'":"((status IN " + status + " AND (expires_at = 0 OR expires_at > ?)) OR (status='archived' AND validity_reason='pending'))")
+    const params:unknown[] = [scopeType, ownerId, groupId,...(options.includeHistory===true?[]:[Date.now()])]
     const filter = query ? " AND text LIKE ?" : ""
     const filterParams = query ? [`%${query}%`] : []
     const total = await sqliteClient.get(`SELECT COUNT(*) AS count FROM memory_items WHERE ${base}${filter}`, [...params, ...filterParams])
@@ -326,7 +386,8 @@ export class MemoryRepository {
     const query = String(options.query || "").trim().slice(0, 120)
     const limit = Math.max(1, Math.min(200, Number(options.limit) || 80))
     const filter = query ? " AND (member_id LIKE ? OR member_name LIKE ?)" : ""
-    const params = [key, key, Date.now(), ...(query ? [`%${query}%`, `%${query}%`] : []), limit]
+    const history=options.includeHistory===true
+    const params = [key, key, ...(history?[]:[Date.now()]), ...(query ? [`%${query}%`, `%${query}%`] : []), limit]
     const rows = await sqliteClient.all<UnknownRecord>(
       `SELECT member_id, MAX(member_name) AS member_name, MAX(seen_at) AS last_seen_at,
         COUNT(DISTINCT NULLIF(memory_id, '')) AS memory_count
@@ -339,7 +400,7 @@ export class MemoryRepository {
          FROM memory_items
          WHERE scope_type='user_group' AND group_id=? AND type NOT IN ('profile','short')
            AND NOT (type='episode' AND source='interaction')
-           AND status IN ('active','warm','cold') AND (expires_at=0 OR expires_at>?)
+           AND ${history?"status<>'deleted'":"status IN ('active','warm','cold') AND (expires_at=0 OR expires_at>?)"}
        )
        WHERE member_id<>''${filter}
        GROUP BY member_id
@@ -481,9 +542,10 @@ export class MemoryRepository {
     }))
   }
 
-  async deleteExpired(graceDays: unknown = 30): Promise<number> {
+  async deleteExpired(graceDays: unknown = 30, expiredFactDays: unknown = 0): Promise<number> {
     const threshold = Date.now() - Math.max(0, Number(graceDays) || 30) * 86400000
-    const rows = await sqliteClient.all<UnknownRecord>("SELECT id FROM memory_items WHERE expires_at > 0 AND expires_at < ?", [threshold])
+    const factDays = Math.max(0, Number(expiredFactDays) || 0)
+    const rows = await sqliteClient.all<UnknownRecord>("SELECT id FROM memory_items WHERE expires_at > 0 AND ((type IN ('short','episode') AND expires_at < ?) OR (type='fact' AND ?>0 AND expires_at < ?))", [threshold,factDays,Date.now()-factDays*86400000])
     if (!rows.length) return 0
     const ids = rows.map(row => row.id)
     await sqliteClient.transaction([{ sql: `DELETE FROM memory_fts WHERE memory_id IN (${ids.map(() => "?").join(",")})`, params: ids }, { sql: `DELETE FROM memory_items WHERE id IN (${ids.map(() => "?").join(",")})`, params: ids }])

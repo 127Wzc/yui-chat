@@ -27,8 +27,21 @@ export function statusFor(item: UnknownRecord = {}, now = Date.now()): string {
   const value = decayValue(item, now)
   if (value >= 0.7) return "active"
   if (value >= 0.35) return "warm"
-  if (value >= 0.15) return "cold"
-  return "archived"
+  return "cold"
+}
+
+/** 有效性不由热度决定；兼容旧来源标记，不推测恢复明确归档的记录。 */
+export function validityFor(item: UnknownRecord = {}, now = Date.now()): string {
+  const status = String(item.status || "")
+  if (status === "deleted") return "deleted"
+  if (status === "archived") {
+    const reason = String(item.validity_reason || "")
+    if (["superseded", "retracted", "pending", "duplicate"].includes(reason)) return reason
+    if (item.source === "superseded") return "superseded"
+    if (item.source === "duplicate-merged") return "duplicate"
+    return "archived"
+  }
+  return Number(item.expires_at || 0) > 0 && Number(item.expires_at) <= now ? (item.validity_reason === "reference-window" ? "stale" : "expired") : "valid"
 }
 
 /** 与召回共用衰减规则；返回预测时间，不写回状态或改变置信度。 */
@@ -37,16 +50,19 @@ export function lifecycleFor(item: UnknownRecord = {}, now = Date.now()): Unknow
   const halfLife = memoryHalfLifeDays(item)
   const confirmed = Number(item.last_confirmed_at || item.updated_at || item.created_at || now)
   const expiresAt = Number(item.expires_at || 0)
-  const threshold = ({ active: 0.7, warm: 0.35, cold: 0.15 } as Record<string, number>)[status]
+  const threshold = ({ active: 0.7, warm: 0.35 } as Record<string, number>)[status]
   let nextTransitionAt = threshold && Number.isFinite(halfLife)
     ? Math.floor(confirmed - Math.log2(threshold) * halfLife * DAY) + 1 : 0
-  let nextStatus = nextTransitionAt ? ({ active: "warm", warm: "cold", cold: "archived" } as Record<string, string>)[status] : ""
+  let nextStatus = nextTransitionAt ? ({ active: "warm", warm: "cold" } as Record<string, string>)[status] : ""
   if (["active", "warm", "cold"].includes(status) && expiresAt > now && (!nextTransitionAt || expiresAt <= nextTransitionAt)) {
     nextTransitionAt = expiresAt
     nextStatus = "expired"
   }
   return {
-    status, decay: decayValue(item, now), halfLifeDays: Number.isFinite(halfLife) ? halfLife : null,
+    status, validity: validityFor(item, now), reason: String(item.validity_reason || ""),
+    supersededBy: String(item.superseded_by || ""),
+    previouslyHiddenByAge: !["archived", "deleted", "expired"].includes(status) && decayValue(item, now) < 0.15,
+    decay: decayValue(item, now), halfLifeDays: Number.isFinite(halfLife) ? halfLife : null,
     lastConfirmedAt: confirmed, expiresAt, nextTransitionAt, nextStatus,
   }
 }

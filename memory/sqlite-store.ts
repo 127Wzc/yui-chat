@@ -10,7 +10,7 @@ import { resolveMemoryRecallPlan, retrieveMemory } from "./retrieval.js"
 import { groupKey, scopeKey, scopesFor, userKey } from "./scopes.js"
 import type { MemoryScope } from "./scopes.js"
 import { vectorRecall } from "./vector-recall.js"
-import { validateMemoryWrite } from "./write-policy.js"
+import { canonicalFactKey, normalizedFactValue, factUpdateDecision, isSingleValueFact, validateMemoryWrite } from "./write-policy.js"
 
 type UnknownRecord = Record<string, unknown>
 
@@ -63,6 +63,8 @@ interface ScopedMemoryInput {
   id?: unknown
   text?: unknown
   tags?: unknown
+  resolution?: unknown
+  expectedRevision?: unknown
 }
 
 function record(value: unknown): UnknownRecord {
@@ -166,7 +168,7 @@ export class SqliteMemoryStore {
     if (!sqliteClient.status.available) return
     const memory = record(record(configStore.get()).memory)
     const retention = record(memory.retention)
-    await memoryRepository.deleteExpired(retention.expiredGraceDays)
+    await memoryRepository.deleteExpired(retention.expiredGraceDays, retention.expiredFactDays)
     // 清理过期行后同步向量索引，让已过期记忆的向量随之删除。
     vectorRecall.markDirty()
     await this.refreshStats()
@@ -207,11 +209,23 @@ export class SqliteMemoryStore {
       : opts.owner === "scope" && e.isGroup
         ? { scopeType: "user_group", ownerId: userKey(e), groupId: groupKey(e) }
         : { scopeType: "user", ownerId: userKey(e), groupId: "" }
-    const existing = (await memoryRepository.list([owner], { limit: 500, includeCold: true })).find(item => item.type === "fact" && item.normalized_key === text.toLowerCase())
-    if (existing) return memoryRepository.update(existing.id, { lastConfirmedAt: Date.now(), confidence: Math.min(1, Number(existing.confidence || 0.8) + 0.04), status: "active", source: String(opts.source || existing.source || "manual") })
-    const result = await memoryRepository.insert({ ...owner, type: String(opts.type || "fact"), text, normalized: text.toLowerCase(), tags: opts.tags || [], importance: opts.importance ?? 0.62, confidence: opts.confidence ?? 0.78, source: String(opts.source || "manual") })
+    const observedAt = Number(e.time || e.timestamp || 0) > 0 ? Number(e.time || e.timestamp) * (Number(e.time || e.timestamp)>1e11?1:1000) : Date.now()
+    const factKey = canonicalFactKey(opts.factKey)
+    const factValue = String(opts.factValue || normalizedFactValue(text))
+    const rows = await memoryRepository.list([owner], {limit:500,includeCold:true})
+    if(factKey) for(const row of await memoryRepository.listByFactKey(owner,factKey)) if(!rows.some(r=>r.id===row.id)) rows.push(row)
+    const existing = rows.find(item => item.type === "fact" && (item.normalized_key === text.toLowerCase() || factKey && item.fact_key===factKey && normalizedFactValue(item.fact_value)===normalizedFactValue(factValue)))
+      || (rows.length>=500 ? await memoryRepository.findExactFact(owner,text) : null)
+    // 即时工具没有可靠的新独立证据时，重复调用只返回原件，不再提高置信度。
+    if (existing) return existing
+    const item = { ...owner, type: String(opts.type || "fact"), text, normalized: text.toLowerCase(),factKey,factValue,observedAt,lastConfirmedAt:observedAt, tags: opts.tags || [], importance: Number(opts.importance ?? 0.62), confidence: Number(opts.confidence ?? 0.78), source: String(opts.source || "manual") }
+    const conflict = factKey && isSingleValueFact(factKey) ? rows.find(row=>row.fact_key===factKey) : null
+    const decision = conflict ? factUpdateDecision({...conflict,evidence_at:await memoryRepository.observationTime(conflict)},observedAt,opts.operation==="replace") : "add"
+    if(decision==="older"||decision==="protected")return {...conflict,writeAction:"ignored",writeReason:decision==="older"?"已保留较新的记忆":"已保留手工维护的记忆，请在管理界面核对修改"}
+    const result = conflict && decision==="replace" ? await memoryRepository.replaceFact(conflict,item)
+      : await memoryRepository.insert({...item,...(decision==="pending"?{status:"archived",validityReason:"pending"}:{})},{uniqueFact:decision!=="pending"})
     await this.refreshStats()
-    return result
+    return result ? {...result,writeAction:decision==="pending"?"review":decision,writeReason:decision==="pending"?"存在同类冲突，已保留为待核实建议":""} : result
   }
 
   async getProfile(eOrUserId: UnknownRecord | string): Promise<UnknownRecord> {
@@ -256,7 +270,7 @@ export class SqliteMemoryStore {
     return { ...scope, profile, items }
   }
 
-  async saveScopedMemory({ scopeType, ownerId, groupId, id, text, tags }: ScopedMemoryInput = {}): Promise<UnknownRecord> {
+  async saveScopedMemory({ scopeType, ownerId, groupId, id, text, tags, resolution, expectedRevision }: ScopedMemoryInput = {}): Promise<UnknownRecord> {
     await this.load()
     const scope = managedScope(scopeType, ownerId, groupId)
     if (!scope) throw new Error("记忆范围和对象 ID 不能为空。")
@@ -280,12 +294,20 @@ export class SqliteMemoryStore {
     }
     const row = await memoryRepository.get(String(id))
     if (!row || row.scope_type !== scope.scopeType || row.owner_id !== scope.ownerId || (row.group_id || "") !== scope.groupId) throw new Error("未找到这条长期记忆。")
+    if(resolution!==undefined&&resolution!==""){
+      if(!["accept","keep"].includes(String(resolution)))throw new Error("待核实处理方式无效。")
+      if(!Number.isSafeInteger(expectedRevision)||Number(expectedRevision)<0)throw new Error("请先查看最新的冲突与依据再处理。")
+      if(resolution==="accept"&&(await memoryRepository.listByFactKey(scope,row.fact_key,{limit:51,includeExpired:true})).length>50)throw new Error("同类冲突超过 50 条，请使用手动 AI 整理完整核对。")
+      const result=await memoryRepository.resolvePending(row,resolution==="accept",clean,Array.isArray(tags)?tags:row.tags,Number(expectedRevision))
+      await this.refreshStats()
+      return toLegacy(result||{})
+    }
     const result = await memoryRepository.update(row.id, {
       text: clean,
       normalized: clean.toLowerCase(),
       tags: Array.isArray(tags) ? tags : row.tags,
       lastConfirmedAt: Date.now(),
-      status: "active",
+      status: String(row.status || "active"),
       source: "manual-edit",
     })
     await this.refreshStats()
@@ -295,12 +317,16 @@ export class SqliteMemoryStore {
   async getMemoryDetail(input: UnknownRecord = {}): Promise<UnknownRecord> {
     await this.load()
     const scope = managedScope(input.scopeType, input.ownerId, input.groupId)
+    if(!scope)throw new Error("记忆范围无效。")
+    const revision=await memoryRepository.revision({scope_type:scope.scopeType,owner_id:scope.ownerId,group_id:scope.groupId})
     const row = await memoryRepository.get(String(input.id || ""))
     if (!scope || !row || !isManagedMemory(row) || row.status === "deleted" || row.scope_type !== scope.scopeType || row.owner_id !== scope.ownerId || (row.group_id || "") !== scope.groupId || (scope.scopeType === "group" && input.groupId && String(input.groupId) !== scope.groupId)) {
       throw new Error("未找到这条长期记忆。")
     }
     const evidence = await memoryRepository.listEvidence(String(row.id), Number(input.evidencePage || 1))
-    return { item: { ...toLegacy(row), evidenceCount: evidence.total }, evidence }
+    const conflicts=row.validity_reason==="pending" ? await memoryRepository.listByFactKey(scope,row.fact_key,{limit:51,includeExpired:true}) : []
+    if(revision!==await memoryRepository.revision(row))throw new Error("资料已变化，请重新加载最新记忆和依据。")
+    return { item: { ...toLegacy(row), evidenceCount: evidence.total,revision,conflicts:conflicts.slice(0,50).map(toLegacy),conflictsTruncated:conflicts.length>50 }, evidence }
   }
 
   async saveManagedMemory({ scopeType, ownerId, id, text, tags }: ScopedMemoryInput = {}): Promise<UnknownRecord> {
@@ -327,9 +353,9 @@ export class SqliteMemoryStore {
     if (!key) throw new Error("群号不能为空。")
     const groupMemory = await memoryRepository.listPage(
       { scopeType: "group", ownerId: key, groupId: key },
-      { query: options.groupQuery, page: options.groupPage, pageSize: options.pageSize, includeCold: true },
+      { query: options.groupQuery, page: options.groupPage, pageSize: options.pageSize, includeCold: true,includeHistory:options.includeHistory!==false },
     )
-    const members = await memoryRepository.listGroupMembers(key, { query: options.memberQuery, limit: options.memberLimit })
+    const members = await memoryRepository.listGroupMembers(key, { query: options.memberQuery, limit: options.memberLimit, includeHistory:options.includeHistory!==false })
     return { groupId: key, groupMemory: pageView(groupMemory), members }
   }
 
@@ -340,10 +366,10 @@ export class SqliteMemoryStore {
     if (!group || !user) throw new Error("群号和用户 QQ 不能为空。")
     const [groupMemory, globalMemory, profile] = await Promise.all([
       memoryRepository.listPage({ scopeType: "user_group", ownerId: user, groupId: group }, {
-        query: options.groupQuery, page: options.groupPage, pageSize: options.pageSize, includeCold: true,
+        query: options.groupQuery, page: options.groupPage, pageSize: options.pageSize, includeCold: true,includeHistory:options.includeHistory!==false,
       }),
       memoryRepository.listPage({ scopeType: "user", ownerId: user, groupId: "" }, {
-        query: options.globalQuery, page: options.globalPage, pageSize: options.pageSize, includeCold: true,
+        query: options.globalQuery, page: options.globalPage, pageSize: options.pageSize, includeCold: true,includeHistory:options.includeHistory!==false,
       }),
       this.getProfile(user),
     ])

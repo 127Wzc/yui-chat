@@ -78,6 +78,7 @@ try {
   for (const [days, status] of [[0, "active"], [180, "warm"], [360, "cold"]]) {
     const life = lifecycleFor(visibilityFact, visibilityStart + days * visibilityDay)
     assert.equal(life.status, status)
+    if(!life.nextTransitionAt)continue
     assert.equal(statusFor(visibilityFact, life.nextTransitionAt - 1), status)
     assert.equal(statusFor(visibilityFact, life.nextTransitionAt), life.nextStatus, "predicted transition must match recall status at its boundary")
   }
@@ -543,7 +544,7 @@ try {
   })))
   await groupCaptureStore.applyCandidates(
     { id: "member-list-window", group_id: "member-list-group" },
-    memberRows.map(row => ({ id: row.id, message_id: row.messageId, sender_id: row.userId, sender_name: row.name, sender_role: "member" })),
+    memberRows.map(row => ({ id: row.id, message_id: row.messageId, sender_id: row.userId, sender_name: row.name, sender_role: "member", sent_at: Date.now() })),
     [
       { scope: "user_group", subjectId: "member-list-a", speakerId: "member-list-a", factKey: "preference.coffee", factValue: "hand_brew", text: "用户喜欢手冲咖啡", confidence: 0.9, evidenceMessageIds: ["member-list-message-a"] },
       { scope: "user_group", subjectId: "member-list-a", speakerId: "member-list-a", factKey: "preference.tea", factValue: "oolong", text: "用户喜欢乌龙茶", confidence: 0.9, evidenceMessageIds: ["member-list-message-a"] },
@@ -586,7 +587,7 @@ try {
     const manuallyQueuedRow = await sqliteClient.get(
       "SELECT status, attempt_count, next_attempt_at, error_message, result_json FROM group_memory_extraction_jobs WHERE id='manual-run-window'",
     )
-    assert.deepEqual(manuallyQueuedRow, { status: "pending", attempt_count: 0, next_attempt_at: 0, error_message: "", result_json: "[]" }, "manual retry must reset the failed job before background execution")
+    assert.deepEqual(manuallyQueuedRow, { status: "pending", attempt_count: 0, next_attempt_at: 0, error_message: "", result_json: '[{"text":"旧结果"}]' }, "manual retry resets attempts but preserves prior results and usage")
     await new Promise(resolve => setTimeout(resolve, 10))
     await sqliteClient.run("UPDATE group_memory_extraction_jobs SET status='completed', needs_reextract=0 WHERE id='manual-run-window'")
     await assert.rejects(
@@ -666,6 +667,23 @@ try {
     completeDetail(3, "closed")
     await settleClient()
     assert.equal(clientView.memoryDetail.text, "即将关闭", "a closed drawer must ignore its pending detail response")
+    const pendingIndex=pendingDetails.length
+    clientView.openMemoryEditor({id:"pending",text:"用户住苏州"},clientScope)
+    pendingDetails[pendingIndex]({ok:true,item:{id:"pending",text:"用户住苏州",tags:[],revision:9,lifecycle:{validity:"pending"},conflicts:[{id:"original",text:"用户住杭州"}]},evidence:{items:[],total:0,page:1,pageSize:20}})
+    await settleClient()
+    const reviewApp=createSSRApp({components:{MemoryCaptureDrawers},setup:()=>({view:clientView}),template:'<MemoryCaptureDrawers :view="view" />'})
+    for(const [name,component] of Object.entries(components))if(name!=="SideDrawer")reviewApp.component(name,component)
+    reviewApp.component("SideDrawer",{props:["open"],template:'<div v-if="open"><slot/><slot name="actions"/></div>'})
+    const reviewHtml=await renderToString(reviewApp)
+    assert(reviewHtml.includes("用户住杭州")&&reviewHtml.includes("用户住苏州"),"pending review shows original and proposed content")
+    assert(reviewHtml.includes("采纳为当前事实")&&reviewHtml.includes("保留原状态"))
+    let submitted
+    global.fetch=async (_url,options)=>{submitted=JSON.parse(options.body);return{ok:true,json:async()=>({ok:true,stats:{}})}}
+    await clientView.saveMemory("accept")
+    assert.equal(submitted.resolution,"accept")
+    assert.equal(submitted.expectedRevision,9,"approval submits the revision actually shown to the administrator")
+    assert.equal(submitted.id,"pending")
+    assert.equal(clientView.showMemoryDrawer,false)
   } finally {
     global.fetch = originalClientFetch
   }

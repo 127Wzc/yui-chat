@@ -37,8 +37,8 @@ try {
     upgrade.prepare("INSERT INTO group_memory_policies(group_id,created_at,updated_at) VALUES('inherited',1,2)").run()
     const savedPolicies=upgrade.prepare("SELECT * FROM group_memory_policies ORDER BY group_id").all()
     const migrated=runStateMigrations(upgrade)
-    assert.equal(migrated.at(-1).id,"014-memory-maintenance-review.sql")
-    assert(migrated.slice(0,-2).every(m=>m.applied_at===1))
+    assert.equal(migrated.at(-1).id,"015-memory-incremental-updates.sql")
+    assert(migrated.slice(0,-3).every(m=>m.applied_at===1))
     assert.equal(upgrade.prepare("SELECT text FROM memory_items WHERE id='legacy'").get().text,"原有事实")
     assert.equal(upgrade.prepare("SELECT source_event_id FROM memory_evidence").get().source_event_id,"original")
     assert.deepEqual(runStateMigrations(upgrade),migrated)
@@ -171,9 +171,9 @@ try {
   },{useHistory:true,count:2})
   await assert.rejects(service.source(scopedMember.id,"scope-b1"),/范围/)
   choose=()=>[{kind:"add",sourceIds:[],outputs:[{text:"个人候选",scope:"user",factKey:"preference.test",factValue:"测试",memoryIds:[],messageIds:["scope-a1"],confidence:0.8,expiresAt:0}],reason:"不能在群公共任务写入个人记忆"}]
-  await settle(await service.create("history-scope","",{useHistory:true,count:3}),"failed")
+  const wrongScope=await settle(await service.create("history-scope","",{useHistory:true,count:3}));assert(wrongScope.plan[0].blocked);await assert.rejects(service.apply(wrongScope.id,[wrongScope.plan[0].id]),/异常变更/)
   choose=()=>[{kind:"add",sourceIds:[],outputs:[{text:"本人候选",scope:"user",factKey:"preference.test",factValue:"测试",memoryIds:[],messageIds:["scope-b1"],confidence:0.8,expiresAt:0}],reason:"不能拿其他成员的原文作本人依据"}]
-  await settle(await service.create("history-scope","scope-a",{useHistory:true,count:2}),"failed")
+  const wrongAuthor=await settle(await service.create("history-scope","scope-a",{useHistory:true,count:2}));assert(wrongAuthor.plan[0].blocked);await assert.rejects(service.apply(wrongAuthor.id,[wrongAuthor.plan[0].id]),/异常变更/)
   choose=()=>[]
   const batchInputStart=inputs.length
   const scopedBatch=await service.group("history-scope",{useHistory:true,count:1})
@@ -237,24 +237,26 @@ try {
   assert.equal((await service.view(atomic.id)).status,"ready")
   await db.exec("DROP TRIGGER maintenance_test_failure")
 
-  // 严格范围、完整覆盖和关联组检查；错误或半截 JSON 不开放部分应用。
-  for(const bad of ["{",JSON.stringify({reviewedIds:[],reviewedMessageIds:[],operations:[]})]) {
+  // 无法解析或缺少操作数组时失败；可解析的局部异常在后续逐组隔离。
+  let malformedFailure
+  for(const bad of ["{",JSON.stringify({reviewedIds:[],reviewedMessageIds:[],operations:{}})]) {
     choose=()=>bad
     const invalid=await settle(await service.create("failure","atomic-user"),"failed")
     assert.deepEqual(invalid.progress.usage,reportedUsage,"格式和审阅核验失败也保留已发生的用量")
-    assert.deepEqual(invalid.plan,[])
+    assert.deepEqual(invalid.plan,[]);malformedFailure=invalid
   }
   // 无历史时，证据元信息不能被当成已读原文；两类审阅范围分别说明匹配、缺失和多出数量。
   const coverageFact=await fact("coverage-user","喜欢科幻小说","failure",{evidence:[{sourceEventId:"metadata-only",sourceType:"group-message:failure",messageId:"metadata-only"}]})
   choose=input=>JSON.stringify({reviewedIds:input.memories.map(m=>m.id),reviewedMessageIds:[input.memories[0].evidence[0].id,input.memories[0].evidence[0].id],operations:[]})
-  const coverageFailure=await settle(await service.create("failure","coverage-user"),"failed")
-  assert(coverageFailure.error.includes("记忆确认 1/1 条（缺失 0 条，多出 0 个标识）"))
-  assert(coverageFailure.error.includes("原文确认 0/0 条（缺失 0 条，多出 1 个标识）"))
-  assert(coverageFailure.error.includes("未开启历史参考，原文审阅列表必须为空"))
-  assert(!coverageFailure.error.includes("metadata-only"),"失败摘要只记录计数，不复制模型返回的标识")
+  const coverageFailure=await settle(await service.create("failure","coverage-user"))
+  assert.equal(coverageFailure.progress.analysisComplete,false)
+  assert(coverageFailure.plan[0].issue.includes("记忆确认 1/1 条（缺失 0 条，多出 0 个标识）"))
+  assert(coverageFailure.plan[0].issue.includes("原文确认 0/0 条（缺失 0 条，多出 1 个标识）"))
+  assert(coverageFailure.plan[0].blocked)
+  assert(!coverageFailure.plan[0].issue.includes("metadata-only"),"失败摘要只记录计数，不复制模型返回的标识")
   assert.deepEqual(coverageFailure.progress.usage,reportedUsage)
   assert.equal((await get(coverageFact.id)).status,"active")
-  await assert.rejects(service.apply(coverageFailure.id,["unavailable-proposal"]),/不能应用/)
+  await assert.rejects(service.apply(coverageFailure.id,[coverageFailure.plan[0].id]),/异常变更/)
   const {parseProposals}=await import("../output/runtime/memory/maintenance-plan.js")
   const reviewJob={useHistory:true,snapshot:{memories:[],evidence:[],messages:[]}}
   const reviewResponse=(memories,messages)=>JSON.stringify({reviewedIds:memories,reviewedMessageIds:messages,operations:[]})
@@ -269,7 +271,7 @@ try {
   assert.throws(()=>parseProposals(reviewResponse(memoryRefs,[...metadataRefs,metadataRefs[0],metadataRefs[1]]),{...reviewJob,useHistory:false},memoryRefs,[],0.7),error=>error.message.includes("记忆确认 59/59")&&error.message.includes("原文确认 0/0 条（缺失 0 条，多出 73 个标识）"))
   choose=()=>[]
   modelUsage={input:0,output:0,total:7,cached:0,reasoning:0,source:"reported",inputKnown:true,outputKnown:true,totalKnown:true}
-  const retried=await service.retry(coverageFailure.id)
+  const retried=await service.retry(malformedFailure.id)
   assert.equal(retried.progress.usage,undefined,"重新分析不显示上一轮用量")
   const zeroUsage=await settle(retried)
   assert.deepEqual(zeroUsage.progress.usage,modelUsage,"上游零值与独立总量不被估算或求和替换")
@@ -282,13 +284,77 @@ try {
   assert.equal(unknownUsage.progress.usage.inputKnown,false)
   modelUsage=reportedUsage
   choose=input=>[{...rewrite(input.memories[0],"越界事实"),sourceIds:[globalFact.id]}]
-  await settle(await service.create("failure","atomic-user"),"failed")
+  const unknownReference=await settle(await service.create("failure","atomic-user"));assert(unknownReference.plan[0].blocked)
+  // 精确关联的正常组可单独提交；遗漏、未知引用和重叠操作整组隔离，不能编辑后绕过。
+  await message("failure","partial-proof","partial-user","我喜欢阅读科幻小说。")
+  await db.run("UPDATE group_memory_messages SET sender_name='示例读者' WHERE id='partial-proof'")
+  const partialA=await fact("partial-user","喜欢科幻小说","failure",{evidence:[{sourceEventId:"partial-proof",sourceType:"group-message:failure",messageId:"partial-proof"}]})
+  const partialB=await fact("partial-user","爱好科幻小说","failure")
+  const partialC=await fact("partial-user","喜欢摄影","failure")
+  const beforePartial=await get(partialC.id)
+  const partialPlan=await analyze("failure","partial-user",input=>JSON.stringify({
+    reviewedIds:[partialA.id,partialB.id,"wrong-identifier"],reviewedMessageIds:[],operations:[
+      {kind:"merge",sourceIds:[partialA.id,partialB.id],outputs:[output(input.memories.find(m=>m.id===partialA.id),{memoryIds:[partialA.id,partialB.id]})],reason:"合并同一偏好"},
+      rewrite(input.memories.find(m=>m.id===partialC.id),"喜欢自然摄影"),
+      {kind:"archive",sourceIds:["wrong-identifier"],outputs:[],reason:"无法精确关联的归档"},
+    ],
+  }))
+  assert.equal(partialPlan.progress.review.memories.matched,2)
+  assert.equal(partialPlan.progress.review.memories.missing,1)
+  assert.equal(partialPlan.progress.review.memories.unexpected,1)
+  assert.equal(partialPlan.progress.analysisComplete,false)
+  const normalGroup=partialPlan.plan.find(p=>!p.blocked&&p.kind!=="review"),isolated=partialPlan.plan.filter(p=>p.blocked)
+  assert.equal(normalGroup.kind,"merge");assert.equal(isolated.length,3)
+  assert(isolated.some(p=>p.before.some(m=>m.id===partialC.id)),"遗漏项可按真实正文单独处理")
+  assert(isolated.every(p=>!p.selected&&!p.outputs.length))
+  await assert.rejects(service.apply(partialPlan.id,[normalGroup.id,isolated[0].id]),/异常变更/)
+  assert.equal((await get(partialA.id)).status,"active","混入异常项时整次提交不写入")
+  const proofCalls=calls,proofHistoryCalls=historyCalls
+  const proof=await service.evidence(partialPlan.id,partialA.id)
+  assert.equal(proof.items[0].text,"我喜欢阅读科幻小说。")
+  assert.equal(proof.items[0].senderId,"partial-user")
+  assert.equal(calls,proofCalls);assert.equal(historyCalls,proofHistoryCalls)
+  await assert.rejects(service.source(partialPlan.id,"partial-proof"),/未开启/)
+  await assert.rejects(service.evidence(partialPlan.id,globalFact.id),/本次整理范围/)
+  await assert.rejects(service.evidence(partialPlan.id,partialA.id,0),/页码/)
+  await assert.rejects(service.evidence(partialPlan.id,partialA.id,"Infinity"),/页码/)
+  const partialApplied=await service.apply(partialPlan.id,[normalGroup.id])
+  assert.equal(partialApplied.status,"applied");assert.equal(partialApplied.receipt.applied,1)
+  assert.deepEqual(await get(partialC.id),beforePartial)
+  assert.equal(partialApplied.plan.filter(p=>p.blocked&&!p.resolution).length,3,"提交正常组不会吞掉未处理异常")
+  assert.equal((await service.evidence(partialPlan.id,partialA.id)).items[0].text,proof.items[0].text,"归档后仍可核对原件来源")
+  const partialKept=await Promise.all(isolated.map(p=>service.keepIssue(partialPlan.id,p.id)))
+  assert(partialKept.every(job=>job.status==="applied"))
+  const allKept=await service.view(partialPlan.id)
+  assert(allKept.plan.filter(p=>p.blocked).every(p=>p.resolution==="kept"),"并发保留异常项不能覆盖其他项决定")
+  assert.deepEqual(await get(partialC.id),beforePartial)
+  assert.equal((await service.keepIssue(partialPlan.id,isolated[0].id)).status,"applied","保留决定可幂等重试")
+  await assert.rejects(service.keepIssue(partialPlan.id,normalGroup.id),/异常项/)
+  const partialUndone=await service.undo(partialPlan.id)
+  assert.equal(partialUndone.status,"undone");assert.equal((await get(partialA.id)).status,"active")
+  assert.deepEqual(await get(partialC.id),beforePartial)
+  const overlapA=await fact("overlap-user","喜欢徒步","failure"),overlapB=await fact("overlap-user","喜欢阅读","failure")
+  const overlapping=await analyze("failure","overlap-user",input=>[
+    rewrite(input.memories.find(m=>m.id===overlapA.id),"爱好徒步"),
+    {...rewrite(input.memories.find(m=>m.id===overlapA.id),"常去徒步"),sourceIds:[overlapA.id,"unknown"]},
+    rewrite(input.memories.find(m=>m.id===overlapB.id),"爱好阅读"),
+  ])
+  assert(overlapping.plan.slice(0,2).every(p=>p.blocked&&p.issue.includes("多组变更")))
+  assert.equal(overlapping.plan[2].kind,"rewrite");assert(!overlapping.plan[2].blocked)
+  await service.apply(overlapping.id,[overlapping.plan[2].id])
+  assert.equal((await get(overlapA.id)).status,"active")
+  const overlapUndone=await service.undo(overlapping.id)
+  assert.equal(overlapUndone.status,"undone")
+  await Promise.all(overlapUndone.plan.filter(p=>p.blocked).map(p=>service.keepIssue(overlapping.id,p.id)))
+  const overlapHandled=await service.view(overlapping.id)
+  assert(overlapHandled.plan.filter(p=>p.blocked).every(p=>p.resolution==="kept"),"撤销正常提交后，异常项仍可独立处理")
+  const archivePreview=await analyze("failure","coverage-user",input=>[{kind:"archive",sourceIds:[input.memories[0].id],outputs:[],reason:"请管理员核对是否需要退出召回"}])
   const combined=await fact("split-user","喜欢滑雪，也喜欢游泳","split")
   const split=await analyze("split","split-user",input=>[{kind:"rewrite",sourceIds:[combined.id],outputs:[output(input.memories[0],{text:"喜欢滑雪",factKey:"preference.ski",factValue:"滑雪"}),output(input.memories[0],{text:"喜欢游泳",factKey:"preference.swim",factValue:"游泳"})],reason:"拆为两个可独立更新的偏好"}])
   await assert.rejects(service.apply(split.id,[split.plan[0].id],{[split.plan[0].id]:[split.plan[0].outputs[0]]}),/不能删减/)
   await assert.rejects(service.apply(split.id,[split.plan[0].id],{[split.plan[0].id]:split.plan[0].outputs.map(o=>({...o,scope:"group"}))}),/范围越界/)
   const manual=split.plan[0].outputs.map(o=>({...o,text:o.text+"运动",factValue:o.factValue+"运动"}))
-  await service.apply(split.id,[split.plan[0].id],{[split.plan[0].id]:manual})
+  const splitApplied=await service.apply(split.id,[split.plan[0].id],{[split.plan[0].id]:manual})
   const manualRows=await db.all("SELECT * FROM memory_items WHERE owner_id='split-user' AND status='active'")
   assert.equal(manualRows.length,2);assert(manualRows.every(m=>m.source===`maintenance:${split.id}`&&JSON.parse(m.tags_json).includes("manual-revision")&&m.fact_value.endsWith("运动")))
   await memoryRepository.update(manualRows[0].id,{text:"后续人工更新"})
@@ -656,6 +722,14 @@ try {
     await next(0);return res
   }
   for(const route of routes)assert.equal((await invoke(route,{query:{token},body:{token}})).code,401)
+  const evidenceRoute=routes.find(r=>r.p.endsWith("/memories/:memoryId/evidence"))
+  const evidenceResponse=await invoke(evidenceRoute,{headers:{"yui-chat-token":token},params:{id:partialPlan.id,memoryId:partialA.id}})
+  assert.equal(evidenceResponse.code,200);assert.equal(evidenceResponse.headers["Cache-Control"],"no-store")
+  assert.equal(evidenceResponse.body.evidence.items[0].text,proof.items[0].text)
+  assert.equal((await invoke(evidenceRoute,{headers:{"yui-chat-token":token},params:{id:partialPlan.id,memoryId:globalFact.id}})).code,404)
+  const keepRoute=routes.find(r=>r.p.endsWith("/issues/:issueId/keep"))
+  assert.equal((await invoke(keepRoute,{headers:{"yui-chat-token":token},params:{id:coverageFailure.id,issueId:coverageFailure.plan[0].id}})).code,200)
+  assert.equal((await invoke(keepRoute,{headers:{"yui-chat-token":token},params:{id:coverageFailure.id,issueId:normalGroup.id}})).code,404)
   const getRoute=routes.find(r=>r.p.endsWith("/jobs/:id")&&r.method==="GET")
   const callsBefore=calls
   const read=await invoke(getRoute,{headers:{"yui-chat-token":token},params:{id:noHistory.id}})
@@ -718,8 +792,9 @@ try {
     assert.deepEqual(errors,[],component.name)
   }
   const {components}=await import("../output/runtime/web/client/ui/components.js")
-  async function renderReview(job){
-    const app=createSSRApp(MemoryMaintenanceReview,{job,name:"示例成员"})
+  async function renderReview(job,{activeId="",evidence={}}={}){
+    const component={...MemoryMaintenanceReview,setup(props,ctx){const state=MemoryMaintenanceReview.setup(props,ctx);state.activeId.value=activeId;Object.assign(state.evidence,evidence);return state}}
+    const app=createSSRApp(component,{job,name:"示例成员"})
     for(const [name,component] of Object.entries(components))app.component(name,component)
     const ctx={},html=await renderToString(app,ctx)
     return html+Object.values(ctx.teleports||{}).join("")
@@ -731,12 +806,12 @@ try {
   assert(rendered.includes("仅供核对")&&rendered.includes("可应用变更"))
   assert.equal((rendered.match(/type="checkbox"/g)||[]).length,plan.plan.length,"提示项不能显示禁用勾选框")
   const onlyNotes=await renderReview({...reviewOnly,reviewedAt:0})
-  assert(onlyNotes.includes("仅供核对，不会修改记忆")&&onlyNotes.includes("保留原样，结束审阅")&&onlyNotes.includes("查看对应记忆"))
-  assert(!onlyNotes.includes('type="checkbox"')&&!onlyNotes.includes("应用选中的"))
+  assert(onlyNotes.includes("仅供核对，不会修改记忆")&&onlyNotes.includes("保留原样，结束审阅")&&onlyNotes.includes("前往对应记忆页"))
+  assert(!onlyNotes.includes('type="checkbox"')&&!onlyNotes.includes("提交已选的"))
   const noChanges=await renderReview({...clientReady,plan:[]})
-  assert(noChanges.includes("分析完成，无需变更")&&!noChanges.includes("应用选中的"))
+  assert(noChanges.includes("分析完成，无需变更")&&!noChanges.includes("提交已选的"))
   const readOnly=await renderReview({...clientReady,reviewedAt:Date.now()})
-  assert(readOnly.includes("已保留原样")&&!readOnly.includes('type="checkbox"')&&!readOnly.includes("应用选中的"))
+  assert(readOnly.includes("已保留原样")&&!readOnly.includes('type="checkbox"')&&!readOnly.includes("提交已选的"))
   for(const job of [clientReady,coverageFailure]){
     const html=await renderReview(job)
     assert(html.includes(`预计输入 ${job.progress.inputTokens} / ${job.progress.tokenLimit} Token`))
@@ -744,12 +819,31 @@ try {
   }
   const failedReview=await renderReview(coverageFailure)
   assert(failedReview.includes("原文确认 0/0 条（缺失 0 条，多出 1 个标识）"))
-  assert(!failedReview.includes("应用选中的"))
+  assert(!failedReview.includes("提交已选的"))
   assert((await renderReview(zeroUsage)).includes("输入 0（上游），输出 0（上游），合计 7（上游）"))
   assert((await renderReview(partialUsage)).includes("输入 123（上游），输出 未提供，合计 777（上游）"))
   assert((await renderReview(unknownUsage)).includes("输入 未提供，输出 未提供，合计 未提供"))
   assert(!(await renderReview({...clientReady,progress:{inputTokens:7817,tokenLimit:200000}})).includes("本次用量"),"旧任务不虚构实际用量")
   assert((await renderReview({...clientReady,progress:{usage:{input:10,output:20,total:30,source:"estimated"}}})).includes("输入 10（估算），输出 20（估算），合计 30（估算）"))
+  const partialHtml=await renderReview(partialPlan)
+  assert(partialHtml.includes("部分内容需要你单独处理")&&partialHtml.includes("处理前")&&partialHtml.includes("处理后"))
+  assert.equal((partialHtml.match(/type="checkbox"/g)||[]).length,1,"异常项不能进入选择列表")
+  assert(partialHtml.includes("2 条原件 → 1 条结果"))
+  assert(!partialHtml.includes(partialA.id)&&!partialHtml.includes("group-message:"),"管理员看到正文，不展示内部来源编号")
+  const readableProof=await renderReview(partialPlan,{evidence:{[partialA.id]:{...proof,loaded:true,loading:false}}})
+  assert(readableProof.includes("我喜欢阅读科幻小说。")&&readableProof.includes("示例读者"))
+  assert(!readableProof.includes("partial-proof")&&!readableProof.includes(partialA.id))
+  const missingPreview=await renderReview(partialPlan,{activeId:isolated.find(p=>p.before.some(m=>m.id===partialC.id)).id})
+  assert(missingPreview.includes("喜欢摄影")&&missingPreview.includes("这项保留原样")&&missingPreview.includes("单独查看 / 编辑这条记忆"))
+  const archiveHtml=await renderReview(archivePreview)
+  assert(archiveHtml.includes("1 条原件将移入归档")&&archiveHtml.includes("退出日常召回")&&archiveHtml.includes("不新增替代记忆"))
+  const editedReceiptHtml=await renderReview(splitApplied)
+  assert(editedReceiptHtml.includes("喜欢滑雪运动")&&editedReceiptHtml.includes("提交结果"),"应用后展示人工编辑并实际写入的结果")
+  assert.equal(maintenanceTaskState(partialApplied).bucket,"review","正常组已提交但异常未处理，仍留在待审核")
+  assert.equal(maintenanceTaskState(allKept).bucket,"history")
+  assert.equal(maintenanceTaskState(overlapUndone).bucket,"review")
+  assert.equal(maintenanceTaskState(overlapHandled).bucket,"history")
+  assert((await renderReview(allKept)).includes("异常部分已保留原样"))
   for(const [job,bucket,label] of [
     [clientReady,"review","待审核"],[{...clientReady,plan:[]},"history","无需变更"],
     [{...reviewOnly,reviewedAt:0},"history","仅供核对"],[closed,"history","已保留原样"],
@@ -797,6 +891,31 @@ try {
     assert(ui.job.reviewedAt>0)
     assert(!Object.keys(store.dirtyScopes).some(key=>key.startsWith("memory-maintenance:")))
   }finally{dismissalUi.app.unmount();global.fetch=originalFetch}
+
+  // 展开依据分页读取；保留异常不清除正常组的编辑，人工入口携带具体记忆。
+  let reviewState=partialPlan
+  const sourceRequests=[],manualEvents=[]
+  global.fetch=async(url,options)=>{
+    sourceRequests.push(url)
+    if(url.includes("/evidence"))return{ok:true,json:async()=>({ok:true,evidence:{...proof,page:1,pageSize:20}})}
+    if(url.endsWith("/keep"))reviewState={...reviewState,plan:reviewState.plan.map(p=>p.id===isolated[0].id?{...p,resolution:"kept"}:p)}
+    return{ok:true,json:async()=>({ok:true,job:reviewState})}
+  }
+  const sourceUi=mount(MemoryMaintenanceReview,{job:partialPlan,name:"示例成员",onOpenMemory:event=>manualEvents.push(event)})
+  try{
+    assert.equal(sourceRequests.length,0,"打开审阅不会主动读取聊天原文")
+    const ui=sourceUi.ui
+    await ui.loadEvidence(partialA.id);await ui.loadEvidence(partialA.id)
+    assert.equal(sourceRequests.length,1,"已经展开的来源复用本次读取结果")
+    assert.equal(ui.evidence[partialA.id].items[0].text,proof.items[0].text)
+    ui.editText(normalGroup,0,"喜欢阅读科幻作品");await nextTick()
+    await ui.keepIssue(isolated[0]);await nextTick()
+    assert.equal(ui.drafts[normalGroup.id][0].text,"喜欢阅读科幻作品")
+    assert(store.dirtyScopes[`memory-maintenance:${partialPlan.id}`],"保留异常不能清掉未提交编辑的脏标记")
+    const leave=ui.openMemory(isolated[0].before[0]);assert(confirmState.open);settleConfirm(true);await leave
+    assert.equal(manualEvents[0].memory.id,partialC.id)
+    assert.equal(manualEvents[0].memory.text,"喜欢摄影")
+  }finally{sourceUi.app.unmount();global.fetch=originalFetch}
 
   // 取消响应先到、旧轮询后到，界面仍保持已取消。
   let finishOldRead
@@ -850,6 +969,26 @@ try {
     global.fetch=queueFetch
     await ui.submitted({jobId:reviewOnly.id,failures:[{userId:"blocked",error:"任务冲突"}]});assert.equal(ui.filter,"history");assert.equal(ui.submission.failures.length,1)
   }finally{queue.app.unmount();global.fetch=originalFetch}
+
+  // 人工处理定位具体记忆及其全局/本群范围，取消工作区切换时保留审阅。
+  const manualOpened=[]
+  const navigationView={selectedGroupId:"failure",members:[],memberTitle:item=>item.userId,activeWorkspace:"maintenance",selectedMember:null,memberScope:"user_group",async switchWorkspace(value){this.activeWorkspace=value},async selectMember(member){this.selectedMember=member;this.memberScope="user_group"},openMemoryEditor(item,target){manualOpened.push({item,target})}}
+  global.fetch=async()=>({ok:true,json:async()=>({ok:true,jobs:[]})})
+  const navigation=mount(MemoryMaintenanceWorkspace,{view:navigationView,seed:{}})
+  try{
+    const memory={...normalGroup.before[0],scope:"user"}
+    await navigation.ui.openMemory({...partialPlan,memory})
+    assert.equal(navigationView.memberScope,"user")
+    assert.deepEqual(manualOpened[0].target,{scopeType:"user",ownerId:partialPlan.userId,groupId:partialPlan.groupId})
+    assert.equal(manualOpened[0].item.id,memory.id)
+    await navigation.ui.openMemory({...partialPlan,userId:"",memory:{...memory,scope:"group"}})
+    assert.equal(navigationView.selectedMember,null)
+    assert.equal(manualOpened[1].target.scopeType,"group")
+    navigationView.activeWorkspace="maintenance";navigationView.switchWorkspace=async()=>{}
+    navigation.ui.selected=partialPlan
+    await navigation.ui.openMemory({...partialPlan,memory})
+    assert.equal(manualOpened.length,2);assert.equal(navigation.ui.selected.id,partialPlan.id)
+  }finally{navigation.app.unmount();global.fetch=originalFetch}
 
   let finishInitialList,listCalls=0
   const justCreated={...clientReady,id:"just-created",status:"queued"}

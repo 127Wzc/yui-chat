@@ -54,14 +54,18 @@ export const MemoryMaintenanceWorkspace={
     }
     function changed(next:MaintenanceRow){
       const previous=jobs.value.find(item=>item.id===next.id)
-      if(previous?.status!==next.status||previous?.reviewedAt!==next.reviewedAt){seq++;pending=false;loading.value=false}
+      if(previous?.status!==next.status||previous?.reviewedAt!==next.reviewedAt||maintenanceTaskState(previous||{}).issues!==maintenanceTaskState(next).issues){seq++;pending=false;loading.value=false}
       jobs.value=jobs.value.map(item=>item.id===next.id?next:item)
       if(["applied","undone"].includes(next.status))emit("changed")
     }
     async function openMemory(job:MaintenanceRow){
-      selected.value=null
       await props.view.switchWorkspace("manage")
+      if(props.view.activeWorkspace&&props.view.activeWorkspace!=="manage")return
+      selected.value=null
       if(job.userId)await props.view.selectMember((props.view.members as MaintenanceRow[]||[]).find(member=>member.userId===job.userId)||{userId:job.userId})
+      else props.view.selectedMember=null
+      if(job.userId&&job.memory)props.view.memberScope=job.memory.scope
+      if(job.memory)props.view.openMemoryEditor(job.memory,{scopeType:job.memory.scope,ownerId:job.userId||job.groupId,groupId:job.groupId})
     }
     watch(()=>props.view.selectedGroupId,()=>{seq++;pending=false;jobs.value=[];selected.value=null;opening.value="";query.value="";error.value="";submission.value={};void refresh()})
     watch(()=>props.seed,value=>{void submitted(value)})
@@ -82,7 +86,7 @@ export const MemoryMaintenanceWorkspace={
           <template #default="{ item }"><article class="maintenance-task-row">
             <div class="maintenance-task-identity"><span class="maintenance-task-icon"><Icon :name="item.userId ? 'message' : 'database'" :size="18" /></span><div><h3>{{ targetName(item) }}</h3><p class="muted small">{{ item.userId ? '个人全局与本群记忆' : '本群公共记忆' }}<span v-if="item.userId && targetName(item) !== item.userId"> · {{ item.userId }}</span></p></div></div>
             <div class="maintenance-task-meta"><time :datetime="new Date(item.createdAt).toISOString()">{{ stamp(item.createdAt) }}</time><span>{{ item.useHistory ? '参考本群历史' : '仅整理已有记忆' }}</span><span class="maintenance-task-id" :title="item.id">任务 {{ item.id }}</span></div>
-            <div class="maintenance-task-status"><span class="badge maintenance-status" :class="state(item).tone">{{ state(item).label }}</span><small v-if="state(item).bucket === 'running'">{{ item.progress.stage || '后台执行中' }}</small><small v-else-if="item.status === 'applied'">已应用 {{ item.receipt.applied }} 组</small><small v-else-if="state(item).notes">{{ state(item).notes }} 条核对提示 · 提示项保留原样</small><small v-else-if="item.status === 'failed' || item.status === 'stale'">打开查看原因</small><small v-else-if="state(item).label === '无需变更'">原记忆保持不变</small></div>
+            <div class="maintenance-task-status"><span class="badge maintenance-status" :class="state(item).tone">{{ state(item).label }}</span><small v-if="state(item).bucket === 'running'">{{ item.progress.stage || '后台执行中' }}</small><small v-else-if="state(item).issues">{{ state(item).issues }} 项异常待单独处理 · 正常变更可独立提交</small><small v-else-if="item.status === 'applied'">已应用 {{ item.receipt.applied }} 组</small><small v-else-if="state(item).notes">{{ state(item).notes }} 条核对提示 · 提示项保留原样</small><small v-else-if="item.status === 'failed' || item.status === 'stale'">打开查看原因</small><small v-else-if="state(item).label === '无需变更'">原记忆保持不变</small></div>
             <button class="btn small" :class="state(item).bucket === 'review' ? 'primary' : 'outline'" type="button" :disabled="Boolean(opening)" @click="open(item)">{{ opening === item.id ? '正在打开…' : state(item).bucket === 'review' ? '审阅变更' : state(item).bucket === 'running' ? '查看进度' : '查看结果' }}</button>
           </article></template>
         </PagedList>
