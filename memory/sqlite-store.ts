@@ -189,14 +189,6 @@ export class SqliteMemoryStore {
     return this.statsCache
   }
 
-  async appendInteraction(_e: UnknownRecord, _prompt: unknown, _answer: unknown): Promise<void> {
-    // 保留对话流程的调用形状，短期上下文和群采集分别负责对应数据。
-    // 但 SQLite 模式下不再写入任何数据——short 与 interaction episode 的读路径已全部关闭
-    // （isManagedMemory、listPage、retrieveMemory 都会过滤这两类行），继续写只有写放大；
-    // 短期上下文由 recent-context 承担，群记忆由 group-capture 提炼入库。
-    return
-  }
-
   async addFact(e: UnknownRecord, fact: unknown, opts: StoreOptions = {}): Promise<MemoryRow | null> {
     await this.load()
     const text = validateMemoryWrite(fact, { source: opts.source || "manual" })

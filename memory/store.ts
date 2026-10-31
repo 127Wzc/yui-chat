@@ -27,7 +27,6 @@ export interface MemoryStoreContract extends MemoryBackend {
   updateProfile(event: unknown, patch: UnknownRecord): Promise<{ userId: string; profile: UnknownRecord; facts?: UnknownRecord[]; updatedAt?: unknown }>
   forgetMemory(event: unknown, memoryId: unknown): Promise<UnknownRecord>
   buildPrompt(event: unknown, prompt: unknown): Promise<string>
-  appendInteraction(event: unknown, prompt: unknown, response: unknown): Promise<unknown>
   flush(): Promise<unknown>
   stats(): UnknownRecord
 }

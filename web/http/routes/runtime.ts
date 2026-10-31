@@ -134,7 +134,6 @@ export function registerRuntimeRoutes(app: RouteApp): void {
       channelId: channelId || undefined,
       source: "web-test",
       disableTools: true,
-      persistMemory: false,
     })
     const { recordWebChatTest } = await import("../../../core/runtime/setup-guide.js")
     recordWebChatTest(result)

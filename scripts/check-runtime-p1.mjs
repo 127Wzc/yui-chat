@@ -216,7 +216,6 @@ try {
       source: "runtime-p1-race",
       applyInputFilters: false,
       disableTools: true,
-      persistMemory: false,
     })
     await withTimeout(saveEntered.promise, 5000, "conversation save entry")
     const keyRaceClear = chatService.clearByKeys([keyRaceKey])
@@ -251,7 +250,6 @@ try {
       source: "runtime-p1-race",
       applyInputFilters: false,
       disableTools: true,
-      persistMemory: false,
     })
     await new Promise(resolve => setTimeout(resolve, 20))
     assert.equal(observedHistory, null, "a new send must wait while the preceding clear is deleting")
@@ -279,14 +277,12 @@ try {
       source: "runtime-p1-race",
       applyInputFilters: false,
       disableTools: true,
-      persistMemory: false,
     })
     const dualSendB = chatService.send(dualEvent, "dual prompt B", {
       channelId: "mock",
       source: "runtime-p1-race",
       applyInputFilters: false,
       disableTools: true,
-      persistMemory: false,
     })
     await withTimeout(bothDualEntered.promise, 5000, "dual send entry")
     releaseDual.resolve()
@@ -311,7 +307,6 @@ try {
       source: "runtime-p1-race",
       applyInputFilters: false,
       disableTools: true,
-      persistMemory: false,
     })
     assert.equal(emptyResult.text, "", "<EMPTY> replies must normalize to empty text")
     const emptyStored = await sqliteClient.get("SELECT history_json, expires_at FROM conversations WHERE conversation_key = ?", [emptyKey])
@@ -323,7 +318,7 @@ try {
     const deliveredEvent = { isGroup: false, user_id: "delivered-reply-user", sender: { nickname: "delivered reply" } }
     const deliveredKey = "mock:p:delivered-reply-user"
     chatService.runObservedStep = async () => ({ ...successfulStep(""), requiresFinalReply: false, replyDelivered: true, deliveredReplyText: "正文已经由发送工具投递。" })
-    const deliveredResult = await chatService.send(deliveredEvent, "评价一下", { channelId: "mock", applyInputFilters: false, persistMemory: false })
+    const deliveredResult = await chatService.send(deliveredEvent, "评价一下", { channelId: "mock", applyInputFilters: false })
     assert.equal(deliveredResult.text, "", "a tool-delivered answer must not be sent again by the normal output path")
     assert.equal(deliveredResult.deliveredReplyText, "正文已经由发送工具投递。")
     const deliveredHistory = (await conversationStore.get(deliveredKey)).history
@@ -336,12 +331,87 @@ try {
     const failedWriteEvent = { isGroup: false, user_id: "failed-write-user", sender: { nickname: "failed write" } }
     chatService.runObservedStep = async () => successfulStep("回复已经生成")
     conversationStore.save = async () => { throw new Error("injected conversation write failure") }
-    const failedWriteResult = await chatService.send(failedWriteEvent, "测试写入失败", { channelId: "mock", applyInputFilters: false, persistMemory: false })
+    const failedWriteResult = await chatService.send(failedWriteEvent, "测试写入失败", { channelId: "mock", applyInputFilters: false })
     assert.equal(failedWriteResult.text, "回复已经生成")
     assert.equal(failedWriteResult.historySaved, false)
     assert(!chatService.listConversations().some(item => item.key === failedWriteKey))
     assert.equal(await conversationStore.get(failedWriteKey), null)
     conversationStore.save = originalConversationSave
+
+    // 并发请求已读取同一历史时，一次写入失败不能让后续回复覆盖已提交的记录。
+    for (const mode of ["reply", "silent", "read-failure", "clear"]) {
+      const userId = `race-failed-write-${mode}`
+      const key = `mock:p:${userId}`
+      const event = { isGroup: false, user_id: userId, sender: { nickname: userId } }
+      await conversationStore.save({
+        id: key,
+        history: [{ role: "user", content: "original question" }, { role: "assistant", content: "original reply" }],
+        turns: [{ id: "original-turn", usage: { input: 1, output: 1, total: 2 }, toolChain: [] }],
+        protocolState: { responses: { fixture: { previousResponseId: "original-response" } } },
+      })
+      const entered = deferred()
+      const releases = { saved: deferred(), failed: deferred(), later: deferred() }
+      let started = 0
+      chatService.runObservedStep = async ({ prompt }) => {
+        if (++started === 3) entered.resolve()
+        await releases[prompt].promise
+        return successfulStep(prompt === "later" && mode === "silent" ? "<EMPTY>" : `${prompt} reply`)
+      }
+      conversationStore.save = async payload => {
+        if (payload.history.some(message => message.content === "failed")) throw new Error("injected conversation write failure")
+        return originalConversationSave.call(conversationStore, payload)
+      }
+      const options = { channelId: "mock", applyInputFilters: false, disableTools: true }
+      const saved = chatService.send(event, "saved", options)
+      const failed = chatService.send(event, "failed", options)
+      const later = chatService.send(event, "later", options)
+      await withTimeout(entered.promise, 5000, `concurrent recovery ${mode} entry`)
+      releases.saved.resolve()
+      assert.notEqual((await saved).historySaved, false)
+      releases.failed.resolve()
+      assert.equal((await failed).historySaved, false)
+
+      const originalGet = conversationStore.get
+      const reloadEntered = deferred()
+      const releaseReload = deferred()
+      if (mode === "read-failure" || mode === "clear") {
+        conversationStore.get = async requestedKey => {
+          if (requestedKey !== key) return originalGet.call(conversationStore, requestedKey)
+          if (mode === "read-failure") throw new Error("injected conversation read failure")
+          reloadEntered.resolve()
+          await releaseReload.promise
+          return originalGet.call(conversationStore, requestedKey)
+        }
+      }
+      try {
+        releases.later.resolve()
+        let cleared
+        if (mode === "clear") {
+          await withTimeout(reloadEntered.promise, 5000, "conversation recovery reload entry")
+          cleared = chatService.clearByKeys([key])
+          releaseReload.resolve()
+        }
+        const result = await later
+        assert.equal(result.text, mode === "silent" ? "" : "later reply", "recovery must retain the generated reply")
+        if (mode === "read-failure") assert.equal(result.historySaved, false, "a failed recovery read must report unsaved history")
+        else assert.notEqual(result.historySaved, false)
+        if (cleared) await cleared
+      } finally {
+        conversationStore.get = originalGet
+        conversationStore.save = originalConversationSave
+      }
+      const stored = await conversationStore.get(key)
+      if (mode === "clear") {
+        assert.equal(stored, null, "clearing during a recovery read must not resurrect the conversation")
+      } else {
+        const expected = ["original question", "original reply", "saved", "saved reply"]
+        if (mode === "reply") expected.push("later", "later reply")
+        assert.deepEqual(stored?.history.map(message => message.content), expected, `${mode} must preserve all previously committed history`)
+        assert.equal(stored?.turns.length, mode === "reply" ? 3 : 2, `${mode} must preserve previously committed turn metadata`)
+        assert.equal(stored?.protocolState.responses.fixture.previousResponseId, "original-response", `${mode} must preserve protocol state`)
+      }
+      await chatService.clearByKeys([key])
+    }
 
     const scopeStarted = deferred()
     const releaseScopeReply = deferred()
@@ -357,7 +427,6 @@ try {
       source: "runtime-p1-race",
       applyInputFilters: false,
       disableTools: true,
-      persistMemory: false,
     })
     await withTimeout(scopeStarted.promise, 5000, "scope race model step")
     assert.equal(await conversationStore.get(scopeRaceKey), null, "the racing scope key must not exist before clear")
@@ -381,7 +450,6 @@ try {
       source: "runtime-p1-race",
       applyInputFilters: false,
       disableTools: true,
-      persistMemory: false,
     })
     await withTimeout(allStarted.promise, 5000, "clearAll race model step")
     await chatService.clearAll()

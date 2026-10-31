@@ -156,7 +156,7 @@ export async function checkQuotedContext(image) {
       requests.push({ messages, caller })
       return { id: `quoted-turn-${requests.length}`, text: "第二点主要是图片加载问题。", toolCalls: [], stopReason: "end_turn", usage: { input: 1, output: 1, total: 2, source: "reported" } }
     }
-    const send = (e, prompt) => chatService.send(e, prompt, { disableTools: true, persistMemory: false })
+    const send = (e, prompt) => chatService.send(e, prompt, { disableTools: true })
     const lastContent = () => requests.at(-1).messages.findLast(item => item.role === "user").content
     recentContextStore.record({ ...event, message_id: "unrelated", message: [{ type: "image", url: newImage }] })
     const textResult = await send(textEvent, "埋埋看看这个")

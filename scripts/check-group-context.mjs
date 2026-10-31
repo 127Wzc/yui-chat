@@ -34,7 +34,7 @@ export async function checkGroupContext(image) {
     const identity = JSON.parse(content.match(/^【本轮身份】\n([^\n]+)/)[1])
     assert.equal(identity.requester.role, role, "当前身份应与工具权限使用的宿主角色一致")
   }
-  const send = (event, prompt) => chatService.send({...event,msg:prompt},prompt,{disableTools:true,persistMemory:false})
+  const send = (event, prompt) => chatService.send({...event,msg:prompt},prompt,{disableTools:true})
   const current = () => requests.at(-1).messages.findLast(item => item.role === "user")
   try {
     await configStore.save(next)
@@ -78,7 +78,7 @@ export async function checkGroupContext(image) {
       assert.equal(diagnostics.includedMessages, background.messages.length)
       assert.equal(diagnostics.eligibleMessages, diagnostics.includedMessages + diagnostics.omittedMessages)
     }
-    await chatService.send({...a,message_id:"natural-group",msg:"玉玉他们叽里呱啦说啥呢"},"玉玉他们叽里呱啦说啥呢",{source:"firstPerson",disableTools:true,persistMemory:false})
+    await chatService.send({...a,message_id:"natural-group",msg:"玉玉他们叽里呱啦说啥呢"},"玉玉他们叽里呱啦说啥呢",{source:"firstPerson",disableTools:true})
     assert(contentToText(current().content).includes("水仙是什么意思"))
     assert(contentToText(current().content).includes("水仙是自己和自己配对"))
     const small = JSON.parse(recentContextStore.buildReference(a,"玖弦聊了什么",{maxTokens:50}))

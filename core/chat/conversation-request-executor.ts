@@ -417,45 +417,42 @@ export async function sendConversation(
         modelCalls: final.modelCalls || [],
         toolChain: finalToolChain,
       }
-      const conversationWritten = await runtime.enqueueConversationMutation(async () => {
-        if (!runtime.conversationVersionCurrent(conversationVersion)) return false
-        const previousValue = runtime.conversations.get(key)
-        const previous = record(previousValue)
-        const baseHistory = Array.isArray(previousValue) ? previousValue : list(previous.history)
-        const nextHistory = [
-          ...baseHistory,
-          { role: "user", content: text(final.historyUserContent) || prompt, metadata: { messageId: text(record(event).message_id), requesterId: text(record(event).user_id), imageReferences: list(final.imageReferences) } },
-          { role: "assistant", content: finalText },
-        ].slice(-maxHistoryMessages)
-        const turns = [...list(previous.turns), turn].slice(-Math.max(1, Math.floor(maxHistoryMessages / 2)))
-        const usage = emptyUsage()
-        for (const item of turns) addUsage(usage, record(item).usage)
-        const protocolState = updatedProtocolState(previous.protocolState, final.responseState)
-        const toolCalls = turns.reduce((sum: number, item) => sum + list(record(item).toolChain).length, 0)
+      await runtime.enqueueConversationMutation(async () => {
+        if (!runtime.conversationVersionCurrent(conversationVersion)) return
         try {
+          // 缓存可能因并发写入失败或淘汰而缺失，必须基于 SQLite 已提交历史追加。
+          const previousValue = runtime.conversations.get(key) ?? await conversationStore.get(key)
+          if (!runtime.conversationVersionCurrent(conversationVersion)) return
+          const previous = record(previousValue)
+          const baseHistory = Array.isArray(previousValue) ? previousValue : list(previous.history)
+          const nextHistory = [
+            ...baseHistory,
+            { role: "user", content: text(final.historyUserContent) || prompt, metadata: { messageId: text(record(event).message_id), requesterId: text(record(event).user_id), imageReferences: list(final.imageReferences) } },
+            { role: "assistant", content: finalText },
+          ].slice(-maxHistoryMessages)
+          const turns = [...list(previous.turns), turn].slice(-Math.max(1, Math.floor(maxHistoryMessages / 2)))
+          const usage = emptyUsage()
+          for (const item of turns) addUsage(usage, record(item).usage)
+          const protocolState = updatedProtocolState(previous.protocolState, final.responseState)
+          const toolCalls = turns.reduce((sum: number, item) => sum + list(record(item).toolChain).length, 0)
           await conversationStore.save({ id: key, sessionId, history: nextHistory, turns, usage, toolCalls, protocolState })
           runtime.conversations.set(key, { sessionId, history: nextHistory, turns, usage, toolCalls, protocolState, lastSeen: Date.now() })
         } catch (error) {
           runtime.conversations.delete(key)
           historySaved = false
-          hostRuntime.logger?.warn?.("[yui-chat] 会话写入 SQLite 失败，本轮历史未保存", error)
-          return false
+          hostRuntime.logger?.warn?.("[yui-chat] 会话读取或写入 SQLite 失败，本轮历史未保存", error)
         }
-        return true
       })
-      if (conversationWritten && options.persistMemory !== false && runtime.conversationVersionCurrent(conversationVersion)) {
-        const { memoryStore } = await import("../../memory/store.js")
-        await memoryStore.appendInteraction(event, prompt, finalText)
-      }
     } else {
       await runtime.enqueueConversationMutation(async () => {
         if (!runtime.conversationVersionCurrent(conversationVersion)) return
-        const previousValue = runtime.conversations.get(key)
-        const previous = record(previousValue)
-        const currentHistory = Array.isArray(previousValue) ? previousValue : list(previous.history || history)
-        const protocolState = updatedProtocolState(previous.protocolState, final.responseState)
-        const next = { ...previous, sessionId, history: currentHistory, protocolState, lastSeen: Date.now() }
         try {
+          const previousValue = runtime.conversations.get(key) ?? await conversationStore.get(key)
+          if (!runtime.conversationVersionCurrent(conversationVersion)) return
+          const previous = record(previousValue)
+          const currentHistory = Array.isArray(previousValue) ? previousValue : list(previous.history)
+          const protocolState = updatedProtocolState(previous.protocolState, final.responseState)
+          const next = { ...previous, sessionId, history: currentHistory, protocolState, lastSeen: Date.now() }
           await conversationStore.save({
             id: key,
             sessionId,
@@ -469,7 +466,7 @@ export async function sendConversation(
         } catch (error) {
           runtime.conversations.delete(key)
           historySaved = false
-          hostRuntime.logger?.warn?.("[yui-chat] 刷新 SQLite 会话活跃时间失败", error)
+          hostRuntime.logger?.warn?.("[yui-chat] 读取或刷新 SQLite 会话活跃时间失败", error)
         }
       })
     }
