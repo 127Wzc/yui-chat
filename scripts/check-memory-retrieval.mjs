@@ -9,7 +9,7 @@ global.logger = { mark() {}, info() {}, warn() {}, error() {}, debug() {} }
 global.Bot = { express: null, wsf: {}, uin: [] }
 global.segment = { at: String, image: String, record: String, reply: String }
 global.plugin = class {}
-let sqliteClient, vectorRecall, modelLogStore, fileMemoryStore
+let sqliteClient, vectorRecall, modelLogStore
 try {
   const { defaults } = await import("../output/runtime/config/defaults.js")
   const { configStore } = await import("../output/runtime/config/store.js")
@@ -17,7 +17,6 @@ try {
   const { SqliteRuntimeConfigRepository } = await import("../output/runtime/core/storage/sqlite/runtime-config-repository.js")
   const { memoryRepository } = await import("../output/runtime/memory/repository.js")
   const { sqliteMemoryStore } = await import("../output/runtime/memory/sqlite-store.js")
-  ;({ fileMemoryStore } = await import("../output/runtime/memory/file-store.js"))
   ;({ vectorRecall } = await import("../output/runtime/memory/vector-recall.js"))
   ;({ modelLogStore } = await import("../output/runtime/core/observability/model-log.js"))
   const { retrieveMemory, fuseMemoryCandidates } = await import("../output/runtime/memory/retrieval.js")
@@ -249,23 +248,9 @@ try {
     assert.equal(clientStore.dirtyScopes["system:memory-capture"], undefined)
   } finally { global.fetch = originalFetch }
 
-  // 文件后端仍保持有界读取，不能将截掉的窗口伪装成全量。
-  await fileMemoryStore.addFact(event, "我喜欢茶", { immediate: true })
-  await fileMemoryStore.addFact(event, "本群我喜欢咖啡", { owner: "scope", immediate: true })
-  await fileMemoryStore.addFact({ user_id: "other" }, "他喜欢汽水", { immediate: true })
-  const fileRead = await fileMemoryStore.listOwnMemories(event)
-  assert.equal(fileRead.complete, true)
-  assert.equal(fileRead.items.length, 2)
-  assert(!fileRead.items.some(item => item.text.includes("汽水")))
-  await fs.appendFile(path.join(fileMemoryStore.rootDir, "memories", "users", "caller.jsonl"), " ".repeat(2100000))
-  const bounded = await fileMemoryStore.listOwnMemories(event)
-  assert.equal(bounded.complete, false)
-  assert.match(bounded.warning, /不能保证全量/)
   console.log("ok memory-retrieval: dual recall/RRF, independent rerank/fallback, default injection count, uncapped own full reads, pagination, budget honesty and scope/lifecycle isolation")
 } finally {
   if (vectorRecall?.dirtyTimer) clearTimeout(vectorRecall.dirtyTimer)
-  if (fileMemoryStore?.flushTimer) clearTimeout(fileMemoryStore.flushTimer)
-  await fileMemoryStore?.flush().catch(() => {})
   await modelLogStore?.stop({ flush: true }).catch(() => {})
   await sqliteClient?.close().catch(() => {})
   await fs.rm(root, { recursive: true, force: true })

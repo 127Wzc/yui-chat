@@ -54,6 +54,7 @@ interface AppConfig extends UnknownRecord {
 interface ChatResult extends UnknownRecord {
   inputBlocked?: boolean
   inputBlockReason?: string
+  historySaved?: boolean
   text?: string
   content?: unknown
   images?: unknown[]
@@ -64,6 +65,7 @@ interface ChatResponse extends UnknownRecord {
   sessionId?: string
   session?: ChatSession
   result?: ChatResult
+  historyUnavailable?: boolean
 }
 
 function createSessionId() {
@@ -144,8 +146,7 @@ export const ChatTab = {
         sessions.value = Array.isArray(response.sessions) ? response.sessions : []
         const selected = sessions.value.find(item => item.sessionId === sessionId.value)
         if (selected) applySession(selected, { updateSelection: false })
-        // 列表为空或当前会话不在列表（如 SQLite 降级只有本地消息）时保留已展示的
-        // 内容；只有用户显式切换或新建会话才清空当前对话。
+        // 当前会话不在列表时保留已展示的内容，避免刷新期间清空用户输入。
         else if (sessions.value[0] && !sessionId.value && !messages.value.length) applySession(sessions.value[0])
       } catch (err) {
         toast(errorMessage(err, "读取测试历史失败"))
@@ -188,11 +189,12 @@ export const ChatTab = {
         } else if (response.result?.inputBlocked) {
           addPendingMessage({ role: "system", text: response.result.inputBlockReason || "消息已被输入过滤器拦截。" })
         } else if (response.result?.text || response.result?.content || response.result?.images?.length || response.result?.media) {
-          // SQLite 降级时服务端没有持久会话可回查：直接用返回的回复文本本地追加，
-          // 不再依赖 loadSessions 兜底（空列表会把刚发的消息清掉）。
+          // 服务端未返回会话时仍展示已取得的回复，避免重复发送。
           const content = response.result.content ?? response.result.text ?? response.result.images ?? response.result.media
           addPendingMessage({ role: "assistant", text: plainTextContent(content), content, raw: response.result })
         }
+        if (response.result?.historySaved === false) toast("回复已生成，但会话历史未能保存。")
+        else if (response.historyUnavailable) toast("回复已生成，但暂时无法读取会话历史。")
         await refreshSlices(["setupGuide", "conversations"])
       } catch (err) {
         addPendingMessage({ role: "error", text: errorMessage(err, "对话测试失败。") })

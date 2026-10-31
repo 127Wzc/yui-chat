@@ -15,7 +15,7 @@
 - 插件唯一身份为 `yui-chat`：源码目录、包名、数据目录、Web 路由、请求头、Cookie、环境变量、日志前缀和 UI 品牌不得恢复 `chatgpt-next`。不保留旧名称、旧路径或旧命令兼容。
 - 除第一人称自然呼叫外，插件命令前缀只在 `core/message/command-prefixes.ts` 的 `PLUGIN_COMMAND_PREFIX_PATTERN` 定义；命令注册与服务端解析必须使用该模块的派生函数，不得在 `apps/` 另写前缀正则。默认前缀为 `#yui`，默认第一人称为“埋埋”。
 - 当前模型配置为 `apiProviders → models → modelTasks`。`workflows` 会在配置归一化时删除，禁止恢复旧 workflow 说明或入口。
-- `config/config.json` 是忽略提交的极简启动文件，只保留 SQLite 启动参数和 Web Token；其余用户配置位于 `state.sqlite3/runtime_config`，完整默认值只在 `config/defaults.ts`。长期数据在 `data/yui-chat/`，缓存仅在插件 `cache/`。路径统一从 `config/store.ts` 导入。
+- SQLite 是必需的状态存储，用户配置和 Web Token 位于 `state.sqlite3/runtime_config`，完整默认值只在 `config/defaults.ts`。长期数据在 `data/yui-chat/`，缓存仅在插件 `cache/`。路径统一从 `config/store.ts` 导入。
 - Web 挂载到 `/yui-chat`（可配置），宿主会跳过其鉴权；敏感 API 和 WebSocket 必须自行鉴权。管理 Token 只从请求头读取，浏览器使用 HttpOnly 短会话；凭证不得进入日志、浏览器存储或 URL。
 - 私网 URL 与 URL 截图域名策略统一由 `security.linkSafety` 配置，默认允许私网、可信资源私网 DNS 与全部截图域名；管理员可收紧为精确域名或 `*.example.com`。HTML/URL 截图功能本身、主动问候和子代理仍是独立功能开关；本机只签发一次性登录码，不得恢复整站免鉴权。
 - 业务源码以 TypeScript 为唯一实现；根目录 `index.js` 只接入 Yunzai，Custom 扩展和第三方静态资源是受控动态边界。不得新增同名 JS/TS 业务实现或迁移阶段兼容桥，运行产物统一由 `npm run build:runtime` 生成到 `output/runtime/`。
@@ -41,10 +41,10 @@
 ### 配置与持久化
 
 - `configStore.get()` 返回冻结快照，禁止修改；`await configStore.load()` 返回可编辑副本。读改写用 `configStore.update(updater)`，仅完整替换用 `save()`；Web 通过 `updateConfigAndApply()` 热应用。
-- 配置提交顺序必须是“读取启动项并连接 SQLite → 合并主配置与默认值 → 旧字段迁移 → 候选值归一化与校验 → 拆分启动项和运行覆盖 → 原子替换启动 JSON并写入 SQLite → 发布完整只读快照”。SQLite 写入失败必须回滚 JSON；已经标记 SQLite 主配置时不得无声降级到默认配置。正常提交和恢复不得自动备份；只有管理员显式操作才创建配置包。配置包除逻辑运行配置覆盖外只允许导出 SQLite 配置白名单，严禁包含日志、用量流水、聊天、记忆和知识正文。不得直接写 `config/config.json`，也不得在仓库队列之外拼接旧快照后保存。
+- 配置提交顺序必须是“连接 SQLite → 读取主配置并合并默认值 → 旧字段迁移 → 候选值归一化与校验 → 事务写入 SQLite → 发布完整只读快照”。数据库或主配置不可用时不得无声降级到默认值。正常提交和恢复不得自动备份；只有管理员显式操作才创建配置包。配置包除逻辑运行配置覆盖外只允许导出 SQLite 配置白名单，严禁包含日志、用量流水、聊天、记忆和知识正文。不得在仓库队列之外拼接旧快照后保存。
 - 小型整文件 JSON 复用 `core/storage/atomic-json-repository.ts`，保持一域一文件和现有 Store，不再叠加 Repository/Service；大文件、JSONL、二进制数据各用原有读写模型。
 - 一次性定时任务仅在投递成功后删除；失败任务保留有限重试状态，最终失败必须可列出和取消。创建、取消和投递结果都通过仓库 `update()`，不得用旧内存快照整份覆盖。
-- 文件记忆后端的事实和 episode 保持分文件 JSONL 与有界读取，episode 按 `maxEpisodesPerScope` 收敛。命中元数据和追加内容共用批量 flush；写失败不得清除脏标记或缓冲。
+- 持久化缓冲或待处理队列写入失败时不得静默清除；重试和故障状态应可诊断。
 - 新临时文件放在 `cacheDir`/`tempDir`，并接入现有清理和 diagnostics。
 
 ### 安全与网络

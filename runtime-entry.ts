@@ -13,8 +13,6 @@ import { stickerExpressionCoordinator } from "./core/persona/sticker-expression-
 import { cleanupMediaCache } from "./core/media/media-cache.js"
 import { scheduleTaskService } from "./core/scheduling/schedule-task-service.js"
 import { hostRuntime } from "./core/runtime/host-runtime.js"
-import { sqliteClient } from "./core/storage/sqlite/client.js"
-import { SqliteRuntimeConfigRepository } from "./core/storage/sqlite/runtime-config-repository.js"
 import { knowledgeStore } from "./knowledge/store.js"
 import { knowledgeIndexJobs } from "./knowledge/index-jobs.js"
 import { capabilityStore } from "./tools/access/capability-store.js"
@@ -33,15 +31,8 @@ async function boot(): Promise<void> {
   if (runtimeGlobals[globalKey]) return
   runtimeGlobals[globalKey] = true
   hostRuntime.registerInboundMessages(yunzaiRoot)
-  const bootstrapConfig = await configStore.load()
-  const sqliteStatus = await sqliteClient.init(bootstrapConfig)
-  if (!sqliteStatus.available && configStore.meta().runtimeConfigBackend === "sqlite") {
-    throw new Error(`SQLite 主配置不可用，已停止加载以避免套用默认配置：${sqliteStatus.error || "unknown"}`)
-  }
-  const config = sqliteStatus.available
-    ? await configStore.attachRuntimeConfigRepository(new SqliteRuntimeConfigRepository(sqliteClient))
-    : bootstrapConfig
-  if (sqliteStatus.available) await installationInstaller.init()
+  const config = await configStore.load()
+  await installationInstaller.init()
   modelLogStore.start(config)
   modelLogStore.cleanupExpired().catch(err => modelLogStore.noteError(err))
   await knowledgeStore.init(config)
@@ -49,7 +40,7 @@ async function boot(): Promise<void> {
   knowledgeIndexJobs.start()
   await toolRegistry.init()
   await filterRegistry.init()
-  if (sqliteStatus.available) installationInstaller.start()
+  installationInstaller.start()
   // 启动只加载导入后的知识目录，不扫描源码或调用内容补全模型。
   await commandObserver.init()
   await groupCaptureStore.init()

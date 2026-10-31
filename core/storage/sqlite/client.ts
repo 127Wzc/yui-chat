@@ -106,14 +106,8 @@ export class SqliteClient implements SqliteClientContract {
   }
 
   /** 启动一次 Worker 并等待 ready 消息；重复调用复用同一个初始化 Promise。 */
-  async init(config: Record<string, unknown> = {}): Promise<SqliteStatus> {
+  async init(): Promise<SqliteStatus> {
     if (this.ready) return this.ready
-    const storage = isRecord(config.storage) ? config.storage : {}
-    const sqlite = isRecord(storage.sqlite) ? storage.sqlite : {}
-    if (sqlite.enabled === false) {
-      this.state = { ...this.state, error: "disabled" }
-      return this.state
-    }
 
     const storageDir = this.options.joinPath(this.options.dataDir, "storage")
     const worker = this.options.createWorker(this.options.workerUrl, {
@@ -123,7 +117,6 @@ export class SqliteClient implements SqliteClientContract {
       workerData: {
         stateFile: this.options.joinPath(storageDir, "state.sqlite3"),
         vectorFile: this.options.joinPath(storageDir, "vectors.sqlite3"),
-        options: sqlite,
       },
     })
     this.worker = worker
@@ -139,7 +132,7 @@ export class SqliteClient implements SqliteClientContract {
         if (!isRecord(message) || message.type !== "ready") return
         this.state = statusFromReadyMessage(message)
         if (!this.state.available) {
-          this.options.logger?.error?.(`[yui-chat] SQLite 初始化失败，已降级为文件存储：${this.state.error}`)
+          this.options.logger?.error?.(`[yui-chat] SQLite 初始化失败：${this.state.error}`)
         } else if (!this.state.vector.available) {
           this.options.logger?.warn?.(`[yui-chat] 向量索引不可用，知识检索将降级 FTS5：${this.state.vector.error}`)
         }

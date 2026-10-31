@@ -61,6 +61,9 @@ function preflightExistingDatabase(file: string, inspect: (db: SqliteDatabase) =
 /** 初始化状态库和可选向量库；向量库失败时只降级检索，不阻断普通对话。 */
 async function initialize(): Promise<{ migrations: SqliteMigration[]; integrity: string; vector: VectorStatus }> {
   const context = workerContext()
+  if ((!fs.existsSync(context.stateFile) || fs.statSync(context.stateFile).size === 0) && fs.existsSync(context.vectorFile)) {
+    throw new Error("state.sqlite3 缺失或为空，但已有向量库；请恢复状态库后重试。")
+  }
   preflightExistingDatabase(context.stateFile, preflightStateMigrations)
   stateDb = openSqliteDatabase(context.stateFile, context.options)
   const integrity = text(stateDb.prepare("PRAGMA quick_check").pluck().get()) || "unknown"

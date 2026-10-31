@@ -112,17 +112,18 @@ try {
   const { chatService } = await import("../output/runtime/core/chat/chat-service.js")
   ;({ modelLogStore } = await import("../output/runtime/core/observability/model-log.js"))
 
-  await configStore.load()
   const restartSqlite = async () => {
     await sqliteClient.close()
     const status = await sqliteClient.init(defaults)
     assert.equal(status.available, true, "fresh SQLite runtime must restart")
   }
-  // 预置损坏的向量库：init 必须把它改名 .corrupt 后重建，而不是拒绝启动或静默沿用坏文件。
+  // 预置状态库并损坏向量库：init 必须把它改名 .corrupt 后重建，而不是拒绝启动或静默沿用坏文件。
+  await configStore.load()
+  await sqliteClient.close()
   const storageDir = path.join(dataDir, "storage")
   await fs.mkdir(storageDir, { recursive: true })
   await fs.writeFile(path.join(storageDir, "vectors.sqlite3"), "definitely not a sqlite database")
-  assert.equal((await sqliteClient.init(defaults)).available, true, "fresh SQLite runtime must initialize")
+  assert.equal((await sqliteClient.init()).available, true, "SQLite state database must initialize")
   assert.equal(sqliteClient.status.vector?.available, false, "corrupted vector db degrades to FTS for this boot")
   assert(
     (await fs.readdir(storageDir)).some(name => name.startsWith("vectors.sqlite3.corrupt.")),
@@ -329,6 +330,18 @@ try {
     assert.equal(deliveredHistory.length, 2, "tool-delivered answers must retain the actual conversation turn")
     assert.equal(deliveredHistory[1].content, "正文已经由发送工具投递。", "history should use the delivered answer rather than an empty placeholder")
     await chatService.clearByKeys([deliveredKey])
+
+    // 写库失败不能把临时内存历史当作已保存，也不能抹掉已经生成或投递的答复。
+    const failedWriteKey = "mock:p:failed-write-user"
+    const failedWriteEvent = { isGroup: false, user_id: "failed-write-user", sender: { nickname: "failed write" } }
+    chatService.runObservedStep = async () => successfulStep("回复已经生成")
+    conversationStore.save = async () => { throw new Error("injected conversation write failure") }
+    const failedWriteResult = await chatService.send(failedWriteEvent, "测试写入失败", { channelId: "mock", applyInputFilters: false, persistMemory: false })
+    assert.equal(failedWriteResult.text, "回复已经生成")
+    assert.equal(failedWriteResult.historySaved, false)
+    assert(!chatService.listConversations().some(item => item.key === failedWriteKey))
+    assert.equal(await conversationStore.get(failedWriteKey), null)
+    conversationStore.save = originalConversationSave
 
     const scopeStarted = deferred()
     const releaseScopeReply = deferred()

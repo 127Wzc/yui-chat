@@ -10,7 +10,7 @@ type RuntimeConfigRow = {
 }
 
 function objectValue(value: unknown): RuntimeConfigObject {
-  if (!isJsonValue(value) || !value || Array.isArray(value)) return {}
+  if (!isJsonValue(value) || !value || typeof value !== "object" || Array.isArray(value)) throw new Error("SQLite 主配置格式无效，已停止加载。")
   return value as RuntimeConfigObject
 }
 
@@ -23,7 +23,7 @@ function numberValue(value: unknown, fallback = 0): number {
  * SQLite 运行配置仓库。
  *
  * 这个类只维护 `runtime_config` 的单行稀疏覆盖项和版本信息，不参与默认值合并、
- * 配置校验、启动项拆分或 Web 权限判断。实例生命周期由配置 Store 管理，底层客户端
+ * 配置校验或 Web 权限判断。实例生命周期由配置 Store 管理，底层客户端
  * 只需要提供异步 `get`/`run`，因此可以使用 Worker 客户端或测试替身。
  */
 export class SqliteRuntimeConfigRepository implements RuntimeConfigRepository {
@@ -46,7 +46,7 @@ export class SqliteRuntimeConfigRepository implements RuntimeConfigRepository {
 
     let overrides: RuntimeConfigObject
     try {
-      overrides = objectValue(JSON.parse(String(row.overrides_json || "{}")))
+      overrides = objectValue(JSON.parse(String(row.overrides_json)))
     } catch {
       throw new Error("SQLite 主配置 JSON 损坏，已停止加载。")
     }
@@ -62,16 +62,16 @@ export class SqliteRuntimeConfigRepository implements RuntimeConfigRepository {
   /** 原子更新覆盖项；revision 由 SQLite 负责递增，保存后重新读取权威状态。 */
   async save(overrides: RuntimeConfigObject = {}): Promise<RuntimeConfigStorageState> {
     const updatedAt = Date.now()
-    await this.client.run(
-      `INSERT INTO runtime_config(id, schema_version, revision, overrides_json, updated_at)
-       VALUES(1, 1, 1, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET
-         schema_version=excluded.schema_version,
+    const result = await this.client.run(
+      `UPDATE runtime_config SET
+         schema_version=1,
          revision=runtime_config.revision + 1,
-         overrides_json=excluded.overrides_json,
-         updated_at=excluded.updated_at`,
+         overrides_json=?,
+         updated_at=? WHERE id=1`,
       [JSON.stringify(objectValue(overrides)), updatedAt],
     )
+    if (Number(result.changes) !== 1) throw new Error("SQLite 主配置记录缺失，已停止保存。")
     return this.load()
   }
+
 }

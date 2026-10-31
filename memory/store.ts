@@ -1,12 +1,10 @@
-import { sqliteClient } from "../core/storage/sqlite/client.js"
+import { sqliteMemoryStore } from "./sqlite-store.js"
 import type { UnknownRecord } from "../core/message/types.js"
 import type { MemoryImageRead, MemoryImageSelection } from "./image-request.js"
 
-type MemoryMethod = (...args: unknown[]) => unknown
 type MemoryBackend = Record<string, unknown>
 
 export interface MemoryStoreContract extends MemoryBackend {
-  rootDir?: string
   load(): Promise<unknown>
   listProfiles(options?: UnknownRecord): Promise<UnknownRecord[]>
   listManagedScopes(options?: UnknownRecord): Promise<UnknownRecord[]>
@@ -34,50 +32,7 @@ export interface MemoryStoreContract extends MemoryBackend {
   stats(): UnknownRecord
 }
 
-type PromptModule = {
-  profileLines(profile?: unknown): string[]
-}
-
-type ScopeModule = {
-  scopeKey(event?: unknown): string
-  userKey(event?: unknown): string
-}
-
-function loadModule<T>(specifier: string): Promise<T> {
-  return import(specifier) as unknown as Promise<T>
-}
-
-// 文件和 SQLite 后端仍保留各自的存储生命周期；总入口只在这里选择当前可用后端。
-const [{ fileMemoryStore }, { sqliteMemoryStore }, promptModule, scopeModule] = await Promise.all([
-  loadModule<{ fileMemoryStore: MemoryBackend }>("./file-store.js"),
-  loadModule<{ sqliteMemoryStore: MemoryBackend }>("./sqlite-store.js"),
-  loadModule<PromptModule>("./prompt.js"),
-  loadModule<ScopeModule>("./scopes.js"),
-])
-
-function active(): MemoryBackend {
-  return sqliteClient.status.available ? sqliteMemoryStore : fileMemoryStore
-}
-
-function bind(value: unknown, target: MemoryBackend): unknown {
-  return typeof value === "function" ? (value as MemoryMethod).bind(target) : value
-}
-
-/**
- * 记忆后端门面：根据 SQLite 状态选择持久化实现，并保持既有方法调用形状。
- * 不负责事实抽取、向量检索或文件写入；这些职责分别属于两个后端和检索模块。
- */
-export const memoryStore: MemoryStoreContract = new Proxy({} as MemoryStoreContract, {
-  get(_target, property: string | symbol): unknown {
-    const backend = active()
-    return bind(backend[property as string], backend)
-  },
-  set(_target, property: string | symbol, value: unknown): boolean {
-    active()[property as string] = value
-    return true
-  },
-})
-
-export const profileLines = promptModule.profileLines
-export const scopeKey = scopeModule.scopeKey
-export const userKey = scopeModule.userKey
+/** 记忆统一使用 SQLite；数据库不可用时由存储操作报告错误。 */
+export const memoryStore = sqliteMemoryStore as unknown as MemoryStoreContract
+export { profileLines } from "./prompt.js"
+export { scopeKey, userKey } from "./scopes.js"

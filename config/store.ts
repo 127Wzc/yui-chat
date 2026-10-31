@@ -22,8 +22,6 @@ import type {
 
 type ConfigRecord = Record<string, unknown>
 type Config = ConfigRecord
-type ConfigBackend = "json" | "sqlite"
-type ConfigPath = readonly string[]
 type BackupRow = {
   fileName: string
   reason: string
@@ -40,7 +38,6 @@ type BackupRow = {
   error?: string
 }
 type LoadError = Record<string, string>
-type ReloadOptions = { force?: boolean; persistDefaults?: boolean; keepCurrent?: boolean }
 type BackupOptions = { validateCandidate?: (current: RuntimeConfigSnapshot, candidate: RuntimeConfigObject) => Promise<void> | void; beforeSave?: (sqliteConfig: unknown) => Promise<void> | void }
 
 const pluginRootOverride = String(process.env.YUI_CHAT_PLUGIN_ROOT || "").trim()
@@ -53,8 +50,6 @@ export const yunzaiRoot = path.resolve(pluginRoot, "../..")
 const runtimeRootValue = String(process.env.YUI_CHAT_RUNTIME_ROOT || "").trim()
 /** 显式隔离的测试运行根；生产未设置时保持宿主既有目录。 */
 export const runtimeRoot = runtimeRootValue ? path.resolve(runtimeRootValue) : ""
-export const configDir = runtimeRoot ? path.join(runtimeRoot, "config") : path.join(pluginRoot, "config")
-export const configFile = path.join(configDir, "config.json")
 export const dataDir = runtimeRoot ? path.join(runtimeRoot, "data/yui-chat") : path.join(yunzaiRoot, "data/yui-chat")
 export const configBackupDir = path.join(dataDir, "backups")
 export const cacheDir = runtimeRoot ? path.join(runtimeRoot, "cache") : path.join(pluginRoot, "cache")
@@ -69,14 +64,7 @@ const secretKeyParts = new Set([
   "password", "passwords", "secret", "secrets", "token", "tokens", "auth",
 ])
 const noConfigOverride = Symbol("no-config-override")
-const localConfigFormat = "yui-chat-bootstrap-v1"
 const configPublishHooks = new Set<ConfigPublishHook>()
-const bootstrapConfigPaths: ConfigPath[] = [
-  ["web", "authToken"],
-  ["storage", "sqlite", "enabled"],
-  ["storage", "sqlite", "busyTimeoutMs"],
-  ["storage", "sqlite", "synchronous"],
-]
 
 function isObject(value: unknown): value is ConfigRecord {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value)
@@ -151,63 +139,6 @@ function configOverride(value: unknown, defaultValue: unknown): unknown | typeof
 export function extractConfigOverrides(config: unknown): ConfigRecord {
   const override = configOverride(config, defaults)
   return override === noConfigOverride || !isObject(override) ? {} : override
-}
-
-function configPathValue(value: unknown, parts: ConfigPath): { exists: boolean; value: unknown } {
-  let current: unknown = value
-  for (const part of parts) {
-    if (!isObject(current) || !Object.hasOwn(current, part)) return { exists: false, value: undefined }
-    current = current[part]
-  }
-  return { exists: true, value: current }
-}
-
-function setConfigPath(target: ConfigRecord, parts: ConfigPath, value: unknown): void {
-  let current = target
-  for (const part of parts.slice(0, -1)) current = recordProperty(current, part)
-  const last = parts[parts.length - 1]
-  if (last) current[last] = clone(value)
-}
-
-function deleteConfigPath(target: unknown, parts: ConfigPath, index = 0): void {
-  if (!isObject(target) || !Object.hasOwn(target, parts[index])) return
-  const key = parts[index]
-  if (index === parts.length - 1) delete target[key]
-  else {
-    deleteConfigPath(target[key], parts, index + 1)
-    if (isObject(target[key]) && !Object.keys(target[key]).length) delete target[key]
-  }
-}
-
-function splitStoredOverrides(overrides: ConfigRecord = {}): { bootstrap: ConfigRecord; runtime: ConfigRecord } {
-  const bootstrap: ConfigRecord = {}
-  const runtime = clone(overrides)
-  for (const parts of bootstrapConfigPaths) {
-    const entry = configPathValue(overrides, parts)
-    if (entry.exists) setConfigPath(bootstrap, parts, entry.value)
-    deleteConfigPath(runtime, parts)
-  }
-  return { bootstrap, runtime }
-}
-
-/** 拆分必须保留在启动 JSON 的引导项与 SQLite 运行覆盖项。 */
-export function splitConfigOverrides(config: unknown): { all: ConfigRecord; bootstrap: ConfigRecord; runtime: ConfigRecord } {
-  const all = extractConfigOverrides(config)
-  return { all, ...splitStoredOverrides(all) }
-}
-
-function localConfigDocument(overrides: ConfigRecord, backend: ConfigBackend): ConfigRecord {
-  if (backend !== "sqlite") return clone(overrides)
-  return { $format: localConfigFormat, $runtimeConfig: "sqlite", ...clone(overrides) }
-}
-
-function parseLocalConfigDocument(value: unknown): { backend: ConfigBackend; overrides: ConfigRecord } {
-  if (!isObject(value) || value.$format !== localConfigFormat) return { backend: "json", overrides: isObject(value) ? value : {} }
-  if (value.$runtimeConfig !== "sqlite") throw new Error(`不支持的运行配置存储：${String(value.$runtimeConfig || "unknown")}`)
-  const overrides = clone(value)
-  delete overrides.$format
-  delete overrides.$runtimeConfig
-  return { backend: "sqlite", overrides }
 }
 
 function normalizeModelRoutingDefaults(config: Config): Config {
@@ -592,6 +523,13 @@ export function mergeRedactedConfigSecrets(candidate: unknown, current: unknown,
 function prepareConfig(value: unknown): Config {
   const raw = clone(value || {})
   const incoming = migrateStickerExpressionTimes(migratePersonaPrompt(normalizeMessageFilters(isObject(raw) ? raw : {})))
+  if (isObject(incoming.memory)) {
+    for (const key of ["maxFactsPerUser", "maxEpisodesPerScope", "maxMemoriesPerOwner", "maxLoadedMemoriesPerOwner", "cacheEntries", "flushDelayMs", "promptBudgetChars", "profileFactLimit", "relevantLimit", "autoWriteBack"]) delete incoming.memory[key]
+  }
+  if (isObject(incoming.storage)) {
+    delete incoming.storage.sqlite
+    if (!Object.keys(incoming.storage).length) delete incoming.storage
+  }
   const merged = clone(mergeConfig(defaults, incoming))
   const candidate = normalizeConfig(isObject(merged) ? merged : {})
   assertConfigValid(candidate as RuntimeConfigObject)
@@ -602,28 +540,16 @@ function serializeConfig(value: Config): string {
   return `${JSON.stringify(value, null, 2) ?? "null"}\n`
 }
 
-interface ConfigFileState {
-  document: ConfigRecord
-  userConfig: ConfigRecord
-  backendHint: ConfigBackend
-  exists: boolean
-  mtimeMs: number
-}
-
-/** 配置 Store 的 TypeScript 实现：串行化写入、冻结快照，并区分引导 JSON 与 SQLite 覆盖项。 */
+/** 配置 Store 通过单写队列持久化 SQLite 覆盖项，并发布冻结快照。 */
 export class ConfigStore implements ConfigStoreContract {
   private config: Config = deepFreeze(clone(defaults)) as unknown as Config
   private loaded = false
-  private configFileMtimeMs = 0
   private lastReloadedAt = ""
   private lastLoadError: LoadError | null = null
   private dirsReady = false
   private revision = 0
   private mutationQueue: Promise<unknown> = Promise.resolve()
-  private runtimeConfigBackendHint: ConfigBackend = "json"
   private runtimeConfigRepository: RuntimeConfigRepository | null = null
-  private runtimeConfigOverrides: Config = {}
-  private runtimeConfigExists = false
 
   private enqueueMutation<T>(operation: () => Promise<T> | T): Promise<T> {
     const pending = this.mutationQueue.then(operation, operation)
@@ -633,7 +559,6 @@ export class ConfigStore implements ConfigStoreContract {
 
   private async ensureDirs(): Promise<void> {
     if (this.dirsReady) return
-    await fs.mkdir(configDir, { recursive: true })
     await fs.mkdir(dataDir, { recursive: true })
     await fs.mkdir(configBackupDir, { recursive: true })
     await fs.mkdir(cacheDir, { recursive: true })
@@ -641,36 +566,11 @@ export class ConfigStore implements ConfigStoreContract {
     this.dirsReady = true
   }
 
-  private async statConfigFile(): Promise<{ exists: boolean; mtimeMs: number }> {
-    try {
-      const stat = await fs.stat(configFile)
-      return { exists: true, mtimeMs: Number(stat.mtimeMs || 0) }
-    } catch (error) {
-      if (errorCode(error) !== "ENOENT") throw error
-      return { exists: false, mtimeMs: 0 }
-    }
-  }
-
-  private async readConfigFile(): Promise<ConfigFileState> {
-    const stat = await this.statConfigFile()
-    let document: unknown = {}
-    if (stat.exists) {
-      try {
-        document = JSON.parse(await fs.readFile(configFile, "utf8"))
-      } catch (error) {
-        if (errorCode(error) !== "ENOENT") throw error
-      }
-    }
-    const parsed = parseLocalConfigDocument(document)
-    return { document: isObject(document) ? document : {}, userConfig: parsed.overrides, backendHint: parsed.backend, exists: stat.exists, mtimeMs: stat.mtimeMs }
-  }
-
-  private publish(candidate: Config, options: { mtimeMs?: number; lastLoadError?: LoadError } = {}): Config {
+  private publish(candidate: Config): Config {
     this.config = deepFreeze(candidate) as unknown as Config
     this.loaded = true
-    this.configFileMtimeMs = Number(options.mtimeMs || 0)
     this.lastReloadedAt = new Date().toISOString()
-    this.lastLoadError = options.lastLoadError || null
+    this.lastLoadError = null
     this.revision++
     for (const hook of configPublishHooks) {
       try {
@@ -682,80 +582,43 @@ export class ConfigStore implements ConfigStoreContract {
     return clone(this.config)
   }
 
-  private async quarantineInvalidConfig(): Promise<string> {
-    const stat = await this.statConfigFile()
-    if (!stat.exists) return ""
-    const stamp = new Date().toISOString().replace(/[:.]/g, "-")
-    const suffix = crypto.randomBytes(4).toString("hex")
-    const quarantineFile = path.join(configBackupDir, `config.invalid.${stamp}-${suffix}.json`)
-    await fs.rename(configFile, quarantineFile)
-    return quarantineFile
+  private async repository(): Promise<RuntimeConfigRepository> {
+    if (this.runtimeConfigRepository) return this.runtimeConfigRepository
+    const [{ sqliteClient }, { SqliteRuntimeConfigRepository }] = await Promise.all([
+      import("../core/storage/sqlite/client.js"),
+      import("../core/storage/sqlite/runtime-config-repository.js"),
+    ])
+    const status = await sqliteClient.init()
+    if (!status.available) throw new Error(`SQLite 主配置不可用，已停止加载：${status.error || "unknown"}`)
+    this.runtimeConfigRepository = new SqliteRuntimeConfigRepository(sqliteClient)
+    return this.runtimeConfigRepository
   }
 
-  /** 管理端显式重载配置；仍沿用 Store 内部串行与失败保留当前快照策略。 */
-  async reloadFromDisk(options: ReloadOptions = {}): Promise<{ reloaded: boolean; config: Config; mtimeMs: number; error?: Error; keptCurrent?: boolean; fallbackDefault?: boolean; quarantinedFile?: string }> {
+  private async performLoad(): Promise<Config> {
     await this.ensureDirs()
     try {
-      if (this.loaded && !options.force) {
-        const stat = await this.statConfigFile()
-        if (stat.mtimeMs === this.configFileMtimeMs) return { reloaded: false, config: clone(this.config), mtimeMs: this.configFileMtimeMs }
+      const repository = await this.repository()
+      const stored = await repository.load()
+      if (!stored.exists) throw new Error("SQLite 主配置记录缺失，已停止加载。")
+      const overrides = clone(stored.overrides)
+      migrateStoredReasoning(overrides)
+      const candidate = prepareConfig(overrides)
+      const normalized = extractConfigOverrides(candidate)
+      if (!sameJsonValue(normalized, stored.overrides)) await repository.save(normalized as RuntimeConfigObject)
+      if (this.loaded && sameJsonValue(candidate, this.config)) {
+        this.lastLoadError = null
+        return clone(this.config)
       }
-      const source = await this.readConfigFile()
-      this.runtimeConfigBackendHint = source.backendHint
-      const storedOverrides = this.runtimeConfigRepository ? mergeConfig(this.runtimeConfigOverrides, source.userConfig) : source.userConfig
-      migrateStoredReasoning(storedOverrides)
-      const candidate = prepareConfig(storedOverrides)
-      const { all, bootstrap } = splitConfigOverrides(candidate)
-      const storage = isObject(candidate.storage) && isObject(candidate.storage.sqlite) ? candidate.storage.sqlite : {}
-      const expectedBackend: ConfigBackend = this.runtimeConfigRepository && storage.enabled !== false ? "sqlite" : "json"
-      const expectedDocument = localConfigDocument(expectedBackend === "sqlite" ? bootstrap : all, expectedBackend)
-      const shouldPersist = source.backendHint === "sqlite" && !this.runtimeConfigRepository
-        ? false
-        : !source.exists || (options.persistDefaults === true && serializeConfig(source.document) !== serializeConfig(expectedDocument))
-      const config = shouldPersist ? await this.performSave(candidate) : this.publish(candidate, { mtimeMs: source.mtimeMs })
-      return { reloaded: true, config, mtimeMs: this.configFileMtimeMs }
+      return this.publish(candidate)
     } catch (error) {
-      const loadError: LoadError = { message: errorMessage(error), time: new Date().toISOString() }
-      if (this.loaded && options.keepCurrent !== false) {
-        this.lastLoadError = loadError
-        hostRuntime.logger?.warn?.("[yui-chat] 配置热重载失败，继续使用内存配置", error)
-        return { reloaded: false, config: clone(this.config), mtimeMs: this.configFileMtimeMs, error: error instanceof Error ? error : new Error(errorMessage(error)), keptCurrent: true }
-      }
-      hostRuntime.logger?.warn?.("[yui-chat] 配置读取失败，将隔离原文件并使用默认配置", error)
-      let quarantinedFile = ""
-      try {
-        quarantinedFile = await this.quarantineInvalidConfig()
-      } catch (quarantineError) {
-        hostRuntime.logger?.error?.("[yui-chat] 非法配置隔离失败，保留原文件且仅在内存使用默认配置", quarantineError)
-        loadError.quarantineError = errorMessage(quarantineError)
-      }
-      loadError.quarantinedFile = quarantinedFile
-      this.lastLoadError = loadError
-      const fallback = prepareConfig(defaults)
-      let config: Config
-      if (quarantinedFile) {
-        try {
-          config = await this.performSave(fallback, { lastLoadError: loadError })
-        } catch (recoveryError) {
-          loadError.recoveryError = errorMessage(recoveryError)
-          hostRuntime.logger?.error?.("[yui-chat] 默认配置落盘失败，仅在内存中继续运行", recoveryError)
-          config = this.publish(fallback, { lastLoadError: loadError })
-        }
-      } else {
-        config = this.publish(fallback, { lastLoadError: loadError })
-      }
-      return { reloaded: true, config, mtimeMs: this.configFileMtimeMs, error: error instanceof Error ? error : new Error(errorMessage(error)), fallbackDefault: true, quarantinedFile }
+      this.lastLoadError = { message: errorMessage(error), time: new Date().toISOString() }
+      throw error
     }
   }
 
-  /** 从磁盘载入一次；之后调用会先检查文件是否发生变化。 */
+  /** 返回从 SQLite 读取并校验后的可编辑配置副本。 */
   async load(): Promise<RuntimeConfigObject> {
-    if (this.loaded) {
-      await this.reloadFromDisk({ keepCurrent: true })
-      return clone(this.config) as RuntimeConfigObject
-    }
-    await this.enqueueMutation(() => this.reloadFromDisk({ persistDefaults: true, keepCurrent: false }))
-    return clone(this.config) as RuntimeConfigObject
+    return this.enqueueMutation(() => this.performLoad() as Promise<RuntimeConfigObject>)
   }
 
   /** 获取冻结的运行快照，调用方禁止直接修改。 */
@@ -768,124 +631,64 @@ export class ConfigStore implements ConfigStoreContract {
     return redactConfigSecrets(this.config) as RuntimeConfigObject
   }
 
-  /** 校验候选配置，不会修改当前快照。 */
   validate(nextConfig: RuntimeConfigObject = this.config as RuntimeConfigObject) {
     return validateConfig(nextConfig)
   }
 
-  /** 返回配置来源、版本和文件位置等诊断信息，不包含配置正文或凭证。 */
   meta(): ConfigStoreMeta {
     return {
       loaded: this.loaded,
       runtimeRoot,
-      configFile,
       configBackupDir,
-      configFileMtimeMs: this.configFileMtimeMs,
       lastReloadedAt: this.lastReloadedAt,
       lastLoadError: this.lastLoadError,
       revision: this.revision,
-      runtimeConfigBackend: this.runtimeConfigBackendHint,
       runtimeConfigAttached: Boolean(this.runtimeConfigRepository),
     }
   }
 
-  /** 接入 SQLite 运行配置仓库，并在同一串行队列中完成首次归一化保存。 */
+  /** 注入配置仓库，供隔离测试和宿主接入使用。 */
   attachRuntimeConfigRepository(repository: RuntimeConfigRepository): Promise<RuntimeConfigSnapshot> {
     if (!repository || typeof repository.load !== "function" || typeof repository.save !== "function") throw new TypeError("runtime config repository must expose load() and save()")
     return this.enqueueMutation(async () => {
-      const stored = await repository.load()
-      const source = await this.readConfigFile()
-      if (source.backendHint === "sqlite" && !stored?.exists) throw new Error("SQLite 主配置记录缺失，已停止加载以避免使用默认配置覆盖本地设置。")
-      const previousRepository = this.runtimeConfigRepository
-      const previousOverrides = this.runtimeConfigOverrides
-      const previousExists = this.runtimeConfigExists
-      const previousBackendHint = this.runtimeConfigBackendHint
+      const previous = this.runtimeConfigRepository
       this.runtimeConfigRepository = repository
-      this.runtimeConfigOverrides = clone(stored?.overrides || {})
-      this.runtimeConfigExists = Boolean(stored?.exists)
-      this.runtimeConfigBackendHint = source.backendHint
       try {
-        const merged = mergeConfig(this.runtimeConfigOverrides, source.userConfig)
-        migrateStoredReasoning(merged)
-        return this.performSave(prepareConfig(merged)) as Promise<RuntimeConfigSnapshot>
+        return await this.performLoad() as RuntimeConfigSnapshot
       } catch (error) {
-        this.runtimeConfigRepository = previousRepository
-        this.runtimeConfigOverrides = previousOverrides
-        this.runtimeConfigExists = previousExists
-        this.runtimeConfigBackendHint = previousBackendHint
+        this.runtimeConfigRepository = previous
         throw error
       }
     })
   }
 
-  /** 断开 SQLite 配置仓库；默认把当前完整快照转回 JSON 覆盖项。 */
-  detachRuntimeConfigRepository(options: { persistFull?: boolean } = {}): Promise<RuntimeConfigSnapshot> {
-    return this.enqueueMutation(async () => {
-      const snapshot = clone(this.config)
-      this.runtimeConfigRepository = null
-      this.runtimeConfigOverrides = {}
-      this.runtimeConfigExists = false
-      this.runtimeConfigBackendHint = "json"
-      if (options.persistFull === false) return snapshot as RuntimeConfigSnapshot
-      return this.performSave(snapshot) as Promise<RuntimeConfigSnapshot>
-    })
-  }
-
-  private async performSave(nextConfig: Config, options: ConfigSaveOptions = {}): Promise<Config> {
-    await this.ensureDirs()
+  private async performSave(nextConfig: Config): Promise<Config> {
     const candidate = prepareConfig(nextConfig)
-    if (!this.runtimeConfigRepository && this.runtimeConfigBackendHint === "sqlite") throw new Error("SQLite 主配置尚未连接，拒绝覆盖仅含启动项的 config.json。")
-    const { all, bootstrap, runtime } = splitConfigOverrides(candidate)
-    const storage = isObject(candidate.storage) && isObject(candidate.storage.sqlite) ? candidate.storage.sqlite : {}
-    const backend: ConfigBackend = this.runtimeConfigRepository && storage.enabled !== false ? "sqlite" : "json"
-    const contents = serializeConfig(localConfigDocument(backend === "sqlite" ? bootstrap : all, backend))
-    let previousContents: string | null = null
-    let previousExists = false
-    try {
-      previousContents = await fs.readFile(configFile, "utf8")
-      previousExists = true
-    } catch (error) {
-      if (errorCode(error) !== "ENOENT") throw error
-    }
-    if (previousContents !== contents) await writeFileAtomic(configFile, contents)
-    const runtimeConfigChanged = !this.runtimeConfigExists || !sameJsonValue(runtime, this.runtimeConfigOverrides)
-    if (this.runtimeConfigRepository && runtimeConfigChanged) {
-      try {
-        await this.runtimeConfigRepository.save(runtime as RuntimeConfigObject)
-      } catch (error) {
-        if (previousExists && previousContents !== null) await writeFileAtomic(configFile, previousContents)
-        else await fs.unlink(configFile).catch(unlinkError => { if (errorCode(unlinkError) !== "ENOENT") throw unlinkError })
-        throw error
-      }
-      this.runtimeConfigOverrides = clone(runtime)
-      this.runtimeConfigExists = true
-    }
-    this.runtimeConfigBackendHint = backend
-    let mtimeMs = 0
-    try {
-      const stat = await fs.stat(configFile)
-      mtimeMs = Number(stat.mtimeMs || 0)
-    } catch {
-      // best-effort：文件时间读取失败不影响已经完成的原子替换。
-    }
-    return this.publish(candidate, { mtimeMs, lastLoadError: options.lastLoadError as LoadError | undefined })
+    const repository = await this.repository()
+    const stored = await repository.load()
+    if (!stored.exists) throw new Error("SQLite 主配置记录缺失，已停止保存。")
+    const overrides = extractConfigOverrides(candidate)
+    if (!sameJsonValue(overrides, stored.overrides)) await repository.save(overrides as RuntimeConfigObject)
+    return this.publish(candidate)
   }
 
-  /** 保存完整配置；写入与 SQLite 运行覆盖项更新保持原子失败回滚。 */
-  save(nextConfig: RuntimeConfigObject = this.config as RuntimeConfigObject, options: ConfigSaveOptions = {}): Promise<RuntimeConfigSnapshot> {
-    const snapshot = clone(nextConfig) as Config
-    return this.enqueueMutation(() => this.performSave(snapshot, options) as Promise<RuntimeConfigSnapshot>)
+  /** 完整替换配置；只有数据库提交成功后才发布快照。 */
+  save(nextConfig?: RuntimeConfigObject, _options: ConfigSaveOptions = {}): Promise<RuntimeConfigSnapshot> {
+    const snapshot = nextConfig === undefined ? undefined : clone(nextConfig) as Config
+    return this.enqueueMutation(async () => {
+      if (!this.loaded) await this.performLoad()
+      return this.performSave(snapshot || clone(this.config)) as Promise<RuntimeConfigSnapshot>
+    })
   }
 
-  /** 在最新磁盘快照上串行执行更新器，防止并发 Web 请求互相覆盖。 */
-  update(mutator: RuntimeConfigUpdater, options: ConfigSaveOptions = {}): Promise<RuntimeConfigSnapshot> {
+  /** 在最新 SQLite 快照上串行执行更新器，防止并发请求互相覆盖。 */
+  update(mutator: RuntimeConfigUpdater, _options: ConfigSaveOptions = {}): Promise<RuntimeConfigSnapshot> {
     if (typeof mutator !== "function") throw new TypeError("config updater must be a function")
     return this.enqueueMutation(async () => {
-      const reload = await this.reloadFromDisk(this.loaded ? { keepCurrent: true } : { persistDefaults: true, keepCurrent: false })
-      if (reload.error && reload.keptCurrent) throw new Error(`磁盘配置无效，已停止更新以避免覆盖原文件：${reload.error.message}`)
+      await this.performLoad()
       const draft = clone(this.config) as RuntimeConfigObject
       const result = await mutator(draft)
-      return this.performSave((result === undefined ? draft : result) as Config, options) as Promise<RuntimeConfigSnapshot>
+      return this.performSave((result === undefined ? draft : result) as Config) as Promise<RuntimeConfigSnapshot>
     })
   }
 

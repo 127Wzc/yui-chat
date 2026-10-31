@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { configStore } from "../../config/store.js"
-import { hostRuntime } from "../runtime/host-runtime.js"
+import { sqliteClient } from "../storage/sqlite/client.js"
 import type { UnknownRecord } from "../message/types.js"
 import { conversationScopeMatches, conversationStore, parseConversationKey } from "./conversation-store.js"
 import { scopeFor } from "./chat-support.js"
@@ -137,6 +137,7 @@ export class ConversationState {
   }
 
   async getConversation(key: string, version: ConversationVersion | null = null): Promise<ConversationEntry> {
+    if (!sqliteClient.status.available) throw new Error("SQLite 不可用，无法读取会话。")
     const value = this.conversations.get(key)
     if (value) {
       const entry = Array.isArray(value) ? { history: value } : value
@@ -144,19 +145,15 @@ export class ConversationState {
       this.conversations.set(key, entry)
       return entry
     }
-    try {
-      const stored = await conversationStore.get(key)
-      // 同一归属的并发首轮可能一起读到空存储，采用已经创建的会话身份。
-      if ((!version || this.isCurrent(version)) && this.conversations.has(key)) return this.getConversation(key, version)
-      if (stored && (!version || this.isCurrent(version))) {
-        if (!stored.sessionId) stored.sessionId = randomUUID()
-        this.conversations.set(key, stored)
-        return stored
-      }
-      if (stored) return stored
-    } catch (error) {
-      hostRuntime.logger?.warn?.("[yui-chat] 读取 SQLite 会话失败，使用空历史", error)
+    const stored = await conversationStore.get(key)
+    // 同一归属的并发首轮可能一起读到空存储，采用已经创建的会话身份。
+    if ((!version || this.isCurrent(version)) && this.conversations.has(key)) return this.getConversation(key, version)
+    if (stored && (!version || this.isCurrent(version))) {
+      if (!stored.sessionId) stored.sessionId = randomUUID()
+      this.conversations.set(key, stored)
+      return stored
     }
+    if (stored) return stored
     const entry = { history: [], sessionId: randomUUID(), lastSeen: Date.now() }
     if (!version || this.isCurrent(version)) this.conversations.set(key, entry)
     return entry

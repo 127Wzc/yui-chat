@@ -303,8 +303,8 @@ export const AdvancedTab = {
       const accepted = await confirmAction({
         title: authToken ? "更换 Web 访问令牌？" : "禁用静态 Token 登录？",
         message: authToken
-          ? "新的长期令牌会立即写入 config/config.json；旧令牌和已有浏览器短会话会失效，当前浏览器会自动换发新会话。"
-          : "config.json 将不再保存静态登录令牌；以后仍可由主人发送 #yui面板 获取一次性快捷链接。当前浏览器会保留新换发的短会话。",
+          ? "新的长期令牌会立即保存；旧令牌和已有浏览器短会话会失效，当前浏览器会自动换发新会话。"
+          : "静态登录令牌将被清除；以后仍可由主人发送 #yui面板 获取一次性快捷链接。当前浏览器会保留新换发的短会话。",
         confirmText: authToken ? "确认更换" : "确认禁用",
         tone: "warn",
         icon: "key",
@@ -397,7 +397,7 @@ export const AdvancedTab = {
       try {
         const result = await request("/api/config/backups", { method: "POST", body: "{}" })
         store.configBackups = asRecords(result.backups)
-        toast(result.sqliteAvailable ? "配置包已创建，已包含 JSON 与 SQLite 配置项" : "配置包已创建；SQLite 不可用，本次只包含 JSON 配置", "success")
+        toast("配置包已创建", "success")
       } catch (err) { toast(errorMessage(err)) }
     }
     async function loadBackupDetails() {
@@ -495,7 +495,7 @@ export const AdvancedTab = {
       if (!fileName) return
       const accepted = await confirmAction({
         title: "回滚到这个配置备份？",
-        message: "这会替换当前 JSON 配置和备份中的 SQLite 配置项，并重新载入运行状态；如需保留当前配置，请先手动备份。",
+        message: "这会替换当前运行配置和备份中的配置项，并重新载入运行状态；如需保留当前配置，请先手动备份。",
         detail: fileName,
         confirmText: "确认回滚",
         tone: "warn",
@@ -609,7 +609,7 @@ export const AdvancedTab = {
       </Panel>
 
       <Panel title="Web 访问与登录" icon="key">
-        <p class="muted small">服务器地址前缀保存在运行配置中；静态入口只读取 <code>config/config.json</code> 中的 <code>web.authToken</code>。主人通过 <code>#yui面板</code> 获取的一次性快捷链接独立签发，页面不能主动生成。</p>
+        <p class="muted small">服务器地址前缀和静态令牌保存在运行配置中。主人通过 <code>#yui面板</code> 获取的一次性快捷链接独立签发，页面不能主动生成。</p>
         <div class="form-section web-auth-settings">
           <div class="developer-section-head">
             <div><b>服务器地址前缀</b><span>可填写自定义域名、端口和反向代理路径；系统会在后面拼接 Web 路由与一次性快捷码。</span></div>
@@ -645,7 +645,7 @@ export const AdvancedTab = {
 
       <Panel v-if="activeSection === 'backup'" title="配置备份与恢复" icon="restore">
         <template #actions><button class="btn primary small" type="button" @click="createBackup"><Icon name="save" :size="14" />手动备份配置</button></template>
-        <p class="muted small">备份只在点击按钮时创建。每份文件包含逻辑运行配置覆盖（含启动项和已配置的服务凭证），以及 SQLite 中的能力权限、知识库设置与授权；不包含运行日志、用量流水、聊天、记忆和知识正文。</p>
+        <p class="muted small">备份只在点击按钮时创建。每份文件包含逻辑运行配置覆盖（含已配置的服务凭证），以及 SQLite 中的能力权限、知识库设置与授权；不包含运行日志、用量流水、聊天、记忆和知识正文。</p>
         <div class="backup-directory"><Icon name="folder" :size="14" /><span>保存目录</span><code>{{ configMeta.configBackupDir || 'data/yui-chat/backups/' }}</code></div>
 
         <div class="form-section">

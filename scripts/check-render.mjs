@@ -91,9 +91,10 @@ try {
   toolRegistry.register(new GenerateImageTool())
   const { ConfigStore } = await import('../output/runtime/config/store.js')
   const normalizedStore = new ConfigStore()
+  let renderOverrides = { response: { render: { html: { enabled: true }, url: { enabled: false } } } }
   await normalizedStore.attachRuntimeConfigRepository({
-    load: async () => ({ exists: true, overrides: { response: { render: { html: { enabled: true }, url: { enabled: false } } } } }),
-    save: async () => {},
+    load: async () => ({ exists: true, overrides: renderOverrides }),
+    save: async value => { renderOverrides = structuredClone(value) },
   })
   const normalized = await normalizedStore.load()
   assert(!Object.hasOwn(normalized.response.render.html, 'enabled'), 'retired HTML gate is discarded')

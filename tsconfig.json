@@ -141,7 +141,6 @@
     "memory/store.ts",
     "memory/prompt.ts",
     "memory/scopes.ts",
-    "memory/file-store.ts",
     "memory/write-policy.ts",
     "memory/decay.ts",
     "memory/retrieval.ts",

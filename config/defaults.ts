@@ -56,13 +56,6 @@ export const defaults = {
       extensionGrants: [],
     },
   },
-  storage: {
-    sqlite: {
-      enabled: true,
-      busyTimeoutMs: 5000,
-      synchronous: "FULL",
-    },
-  },
   chat: {
     defaultChannel: "mock",
     defaultTask: "replyer",
@@ -494,16 +487,6 @@ export const defaults = {
     },
     injectProfile: true,
     injectRelevantFacts: true,
-    maxFactsPerUser: 30,
-    maxEpisodesPerScope: 100,
-    maxMemoriesPerOwner: 500,
-    maxLoadedMemoriesPerOwner: 600,
-    cacheEntries: 384,
-    flushDelayMs: 30000,
-    promptBudgetChars: 2200,
-    profileFactLimit: 5,
-    relevantLimit: 5,
-    autoWriteBack: true,
     retention: {
       shortTermHours: 72,
       episodeDays: 90,

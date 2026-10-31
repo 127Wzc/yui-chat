@@ -31,8 +31,6 @@ import { buildPersonaDigest } from "../persona/persona-digest.js"
 import { linkSafetyConfig } from "../network/link-safety-policy.js"
 import {
   cacheDir,
-  configDir,
-  configFile,
   configStore,
   dataDir,
   pluginRoot,
@@ -134,8 +132,6 @@ export async function buildDiagnostics(): Promise<UnknownRecord> {
   const paths = {
     pluginRoot,
     yunzaiRoot,
-    configDir,
-    configFile,
     dataDir,
     cacheDir,
     tempDir,

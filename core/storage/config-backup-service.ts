@@ -37,7 +37,7 @@ function text(value: unknown): string { return String(value ?? "") }
 function number(value: unknown): number { const parsed = Number(value); return Number.isFinite(parsed) ? parsed : 0 }
 
 export async function snapshotSqliteConfig(): Promise<SqliteConfigSnapshot> {
-  if (!sqliteClient.status.available) return { version: SQLITE_CONFIG_VERSION, available: false, tables: {} }
+  if (!sqliteClient.status.available) throw new Error("SQLite 不可用，无法创建配置包")
   // 三张表在同一个读事务中取快照，避免备份期间的并发写造成表间引用不一致。
   const keys = Object.keys(snapshotQueries)
   const results = await sqliteClient.transaction(keys.map(key => ({ sql: snapshotQueries[key], params: [], mode: "all" })))

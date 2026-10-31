@@ -16,8 +16,11 @@ global.plugin = class { constructor(options = {}) { this.options = options } }
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
+let sqliteClient
 try {
   const { configStore } = await import("../output/runtime/config/store.js")
+  ;({ sqliteClient } = await import("../output/runtime/core/storage/sqlite/client.js"))
+  assert.equal((await sqliteClient.init()).available, true)
   const { defaults } = await import("../output/runtime/config/defaults.js")
   const { toolRegistry: registry } = await import("../output/runtime/tools/support/registry.js")
   const { backgroundTaskService } = await import("../output/runtime/core/scheduling/background-task-service.js")
@@ -207,6 +210,7 @@ try {
   await customToolManager.dispose()
   console.log("ok silent background: nonblocking, failures, auto-delivery, revocation, timeout, full queue, model continuation, editor override")
 } finally {
+  await sqliteClient?.close().catch(() => {})
   await fs.rm(runtimeRoot, { recursive: true, force: true })
 }
 process.exit(0)

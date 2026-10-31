@@ -113,7 +113,6 @@ function webTestSessionFromRow(row: ConversationRow): WebTestSession | null {
 /** SQLite 会话存储；只负责 TTL、键匹配和原子清理，不承载聊天编排。 */
 export class ConversationStore {
   async get(key: string): Promise<{ sessionId: string; history: unknown[]; lastSeen: number; usage: UnknownRecord; toolCalls: number; turns: unknown[]; protocolState: UnknownRecord } | null> {
-    if (!sqliteClient.status.available) return null
     const conversation = await sqliteClient.get<ConversationRow>("SELECT history_json, state_json, last_seen_at, expires_at FROM conversations WHERE conversation_key = ?", [key])
     if (!conversation) return null
     if (Number(conversation.expires_at || 0) <= Date.now()) {
@@ -133,7 +132,6 @@ export class ConversationStore {
   }
 
   async save(input: { id: string; sessionId?: string; history?: readonly unknown[]; turns?: readonly unknown[]; usage?: UnknownRecord; toolCalls?: unknown; protocolState?: UnknownRecord }): Promise<boolean> {
-    if (!sqliteClient.status.available) return false
     const now = Date.now()
     const expiresAt = now + conversationTtlMs()
     if (now - lastSweepAt > SWEEP_INTERVAL_MS) {
@@ -169,7 +167,7 @@ export class ConversationStore {
 
   async clearKeys(ids: unknown[] = []): Promise<string[]> {
     const keys = uniqueKeys(ids)
-    if (!sqliteClient.status.available || !keys.length) return []
+    if (!keys.length) return []
     const placeholders = keys.map(() => "?").join(",")
     const result = await sqliteClient.transaction([
       { sql: `SELECT conversation_key FROM conversations WHERE conversation_key IN (${placeholders})`, params: keys, mode: "all" },
@@ -180,7 +178,6 @@ export class ConversationStore {
   }
 
   async clearAllKeys(): Promise<string[]> {
-    if (!sqliteClient.status.available) return []
     const result = await sqliteClient.transaction([
       { sql: "SELECT conversation_key FROM conversations", params: [], mode: "all" },
       { sql: "DELETE FROM conversations", params: [] },
@@ -191,7 +188,7 @@ export class ConversationStore {
 
   async clearScopeKeys(options: { isGroup?: boolean; groupId?: unknown; userIds?: unknown[] } = {}): Promise<string[]> {
     const users = uniqueKeys(options.userIds)
-    if (!sqliteClient.status.available || !users.length) return []
+    if (!users.length) return []
     const rows = await sqliteClient.all<UnknownRecord>("SELECT conversation_key FROM conversations", [])
     const matched = rows.map(row => text(row.conversation_key)).filter(key => {
       const parsed = parseConversationKey(key)
@@ -201,14 +198,12 @@ export class ConversationStore {
   }
 
   async touch(key: string): Promise<boolean> {
-    if (!sqliteClient.status.available) return false
     const now = Date.now()
     const result = await sqliteClient.run("UPDATE conversations SET last_seen_at = ?, expires_at = ? WHERE conversation_key = ?", [now, now + conversationTtlMs(), key])
     return Number(result.changes || 0) > 0
   }
 
   async listWebTestSessions(options: { limit?: unknown } = {}): Promise<WebTestSession[]> {
-    if (!sqliteClient.status.available) return []
     const max = Math.min(100, Math.max(1, Number(options.limit) || 50))
     const now = Date.now()
     await sqliteClient.run("DELETE FROM conversations WHERE expires_at <= ? AND instr(conversation_key, ':p:web-test-') > 0", [now])
@@ -225,7 +220,7 @@ export class ConversationStore {
 
   async deleteWebTestSession(key: string): Promise<number> {
     const identity = parseWebTestConversationKey(key)
-    if (!identity || !sqliteClient.status.available) return 0
+    if (!identity) return 0
     return this.clear([identity.key])
   }
 }

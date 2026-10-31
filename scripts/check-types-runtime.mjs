@@ -194,7 +194,7 @@ let runtimeConfigRow = {
 }
 const runtimeConfigClient = {
   async get() {
-    return runtimeConfigRow.revision ? runtimeConfigRow : undefined
+    return runtimeConfigRow
   },
   async run(_sql, params) {
     runtimeConfigRow = {
@@ -203,11 +203,11 @@ const runtimeConfigClient = {
       overrides_json: String(params[0]),
       updated_at: Number(params[1]),
     }
-    return {}
+    return { changes: 1 }
   },
 }
 const runtimeConfigRepository = new SqliteRuntimeConfigRepository(runtimeConfigClient)
-assert.equal((await runtimeConfigRepository.load()).exists, false)
+assert.equal((await runtimeConfigRepository.load()).exists, true)
 const savedConfig = await runtimeConfigRepository.save({ chat: { maxToolRounds: 4 } })
 assert.equal(savedConfig.overrides.chat.maxToolRounds, 4)
 
@@ -265,7 +265,7 @@ const sqliteClient = new SqliteClient({
   joinPath: (...parts) => parts.join("/"),
   execArgv: ["--input-type=module", "--max-old-space-size=3072"],
 })
-const sqliteStatus = await sqliteClient.init({ storage: { sqlite: { enabled: true } } })
+const sqliteStatus = await sqliteClient.init()
 assert.equal(sqliteStatus.available, true)
 assert.equal(workerData.stateFile, "/tmp/yui-chat/storage/state.sqlite3")
 assert.deepEqual(workerExecArgv, [])

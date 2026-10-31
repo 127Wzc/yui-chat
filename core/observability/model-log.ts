@@ -28,7 +28,6 @@ const RUN_LIST_COLUMNS = [
   "cached_tokens", "reasoning_tokens", "estimated_tokens", "model_calls", "tool_calls", "failed_tools",
   "estimated_cost",
 ]
-const TERMINAL_STATUSES = new Set(["ok", "error", "denied", "failed", "ambiguous", "canceled", "blocked", "skipped", "partial", "silent", "interrupted"])
 const SECRET_KEY = /token|key|secret|password|credential|authorization|cookie|api[_-]?key|encrypted[_-]?content/i
 
 function opaqueIdForLog(value: unknown): string {
@@ -102,23 +101,6 @@ interface DetailEvent {
   terminal?: boolean
   priority?: "high"
   bytes?: number
-}
-
-interface DailyRollup {
-  [key: string]: string | number
-  day: string
-  modelName: string
-  purpose: string
-  input: number
-  output: number
-  total: number
-  estimated: number
-  cached: number
-  reasoning: number
-  calls: number
-  failures: number
-  durationMs: number
-  cost: number
 }
 
 interface TraceScope {
@@ -690,7 +672,6 @@ function decodeCursor(value: unknown): RunCursor | null {
   try { return JSON.parse(Buffer.from(String(value), "base64url").toString("utf8")) } catch { return null }
 }
 
-function isTerminal(status: unknown): boolean { return TERMINAL_STATUSES.has(String(status || "")) }
 
 function modelCallStatus(error: unknown): string {
   if (!error) return "ok"
@@ -706,7 +687,6 @@ class ModelLogStore {
   memoryModels = new Map<string, LogRow>()
   memorySnapshots = new Map<string, LogRow>()
   memoryTools = new Map<string, LogRow>()
-  memoryDaily = new Map<string, DailyRollup>()
   timer: ReturnType<typeof setInterval> | null = null
   cleanupTimer: ReturnType<typeof setInterval> | null = null
   flushing = false
@@ -826,15 +806,6 @@ class ModelLogStore {
     }
     this.detailQueue.push(queued)
     this.detailQueueBytes += queued.bytes
-  }
-
-  enqueueDaily(delta: DailyRollup): void {
-    if (!this.enabled) return
-    const key = `${delta.day}|${delta.modelName}|${delta.purpose}`
-    const current = this.memoryDaily.get(key) || { ...delta, input: 0, output: 0, total: 0, estimated: 0, cached: 0, reasoning: 0, calls: 0, failures: 0, durationMs: 0, cost: 0 }
-    const numeric = current as unknown as Record<string, number>
-    for (const field of ["input", "output", "total", "estimated", "cached", "reasoning", "calls", "failures", "durationMs", "cost"]) numeric[field] = asNumber(numeric[field]) + asNumber(delta[field])
-    this.memoryDaily.set(key, current)
   }
 
   remember(event: DetailEvent): void {
@@ -1263,25 +1234,6 @@ class ModelLogStore {
       this.enqueueDetail({ kind: "run", row: trace.startRow, terminal: false })
     }
     call.traceUpdated = true
-    // SQLite 可用时由终态模型调用的触发器维护日汇总；内存日账本只服务于
-    // SQLite 不可用时的降级展示，避免两份长期聚合状态并行累积。
-    if (!sqliteClient.status.available) {
-      this.enqueueDaily({
-        day: dayOf(call.row.started_at),
-        modelName: String(row.model_name || ""),
-        purpose: String(row.purpose || ""),
-        input: usage.input,
-        output: usage.output,
-        total: usage.total,
-        estimated: budgetEstimate,
-        cached: usage.cached,
-        reasoning: usage.reasoning,
-        calls: 1,
-        failures: status === "ok" ? 0 : 1,
-        durationMs: asNumber(row.duration_ms),
-        cost: asNumber(row.estimated_cost),
-      })
-    }
     if (call.ownsTrace) this.finishTrace(trace, { status, response: response.text, error })
     call.finished = true
     return row
@@ -1404,7 +1356,7 @@ class ModelLogStore {
     if (this.flushing || this.managementPaused || (!force && now() < this.nextRetryAt)) return false
     if (!this.detailQueue.length) return true
     if (!sqliteClient.status.available) {
-      this.noteError("SQLite 不可用，日志仅保留在当前进程内存中")
+      this.noteError("SQLite 不可用，日志仍在队列中等待写入")
       this.nextRetryAt = now() + this.retryDelayMs
       this.retryDelayMs = Math.min(RETRY_MAX_MS, this.retryDelayMs * 2)
       return false
@@ -1425,7 +1377,7 @@ class ModelLogStore {
     let remainingDetails = detailTarget
     while (remainingDetails > 0) {
       if (!sqliteClient.status.available) {
-        this.noteError("SQLite 不可用，日志仅保留在当前进程内存中")
+        this.noteError("SQLite 不可用，日志仍在队列中等待写入")
         this.nextRetryAt = now() + this.retryDelayMs
         this.retryDelayMs = Math.min(RETRY_MAX_MS, this.retryDelayMs * 2)
         return false
@@ -1581,7 +1533,7 @@ class ModelLogStore {
   cleanup({ before = 0, filters = {}, dryRun = false, all = false }: { before?: number; filters?: LogFilters; dryRun?: boolean; all?: boolean } = {}): Promise<UnknownRecord> {
     return this.runExclusiveCleanup(async () => {
       const flushed = await this.flushBarrier(1500)
-      if (sqliteClient.status.available && !flushed) throw new Error("日志队列仍在刷新，请稍后重试清理")
+      if (!flushed) throw new Error("日志队列仍在刷新，请稍后重试清理")
       this.managementPaused = true
       try {
         return await this.cleanupAfterBarrier({ before, filters, dryRun, all })
@@ -1603,46 +1555,6 @@ class ModelLogStore {
     const runningCutoff = now() - 86400000
     const matchesCleanup = (row: LogRow): boolean => (all || this.matchesRun(row, filters, cutoff))
       && (all || !(String(row.status) === "running" && Number(row.started_at) >= runningCutoff))
-    if (!sqliteClient.status.available) {
-      const matches = [...this.memoryRuns.values()].filter(matchesCleanup)
-      const ids = new Set(matches.map(row => row.id))
-      const modelCalls = [...this.memoryModels.values()].filter(row => ids.has(String(row.run_id || ""))).length
-      const toolCalls = [...this.memoryTools.values()].filter(row => ids.has(String(row.run_id || ""))).length
-      if (!dryRun) {
-        if (scopedFilters) {
-          for (const row of this.memoryModels.values()) {
-            if (!ids.has(String(row.run_id || "")) || !(Number(row.ended_at) > 0)) continue
-            const key = `${dayOf(row.started_at)}|${row.model_name}|${row.purpose}`
-            const daily = this.memoryDaily.get(key)
-            if (!daily) continue
-            daily.input = Math.max(0, daily.input - asInt(row.input_tokens))
-            daily.output = Math.max(0, daily.output - asInt(row.output_tokens))
-            daily.total = Math.max(0, daily.total - asInt(row.total_tokens))
-            daily.estimated = Math.max(0, daily.estimated - asInt(row.estimated_input_tokens) - asInt(row.estimated_output_tokens))
-            daily.cached = Math.max(0, daily.cached - asInt(row.cached_tokens))
-            daily.reasoning = Math.max(0, daily.reasoning - asInt(row.reasoning_tokens))
-            daily.durationMs = Math.max(0, daily.durationMs - asInt(row.duration_ms))
-            daily.cost = Math.max(0, daily.cost - asNumber(row.estimated_cost))
-            daily.failures = Math.max(0, daily.failures - (row.status === "ok" ? 0 : 1))
-            daily.calls = Math.max(0, daily.calls - 1)
-            if (!daily.calls) this.memoryDaily.delete(key)
-          }
-        }
-        for (const id of ids) this.memoryRuns.delete(id)
-        for (const [id, row] of this.memoryModels) if (ids.has(String(row.run_id || ""))) this.memoryModels.delete(id)
-        for (const [id, row] of this.memorySnapshots) if (ids.has(String(row.run_id || ""))) this.memorySnapshots.delete(id)
-        for (const [id, row] of this.memoryTools) if (ids.has(String(row.run_id || ""))) this.memoryTools.delete(id)
-        this.removeQueuedRuns(ids)
-        if (all) {
-          this.memoryDaily.clear()
-          this.memorySnapshots.clear()
-        } else if (!scopedFilters && cutoff) {
-          const cutoffDay = dayOf(cutoff)
-          for (const [key, row] of this.memoryDaily) if (row.day < cutoffDay) this.memoryDaily.delete(key)
-        }
-      }
-      return { dryRun, runs: matches.length, modelCalls, toolCalls, persistent: false }
-    }
     const condition: { sql: string; params: unknown[] } = all
       ? { sql: "1=1", params: [] }
       : { sql: `${where.sql} AND NOT (status = 'running' AND started_at >= ?)`, params: [...where.params, runningCutoff] }
@@ -1703,13 +1615,7 @@ class ModelLogStore {
     for (const [id, row] of this.memoryModels) if (queuedIds.has(String(row.run_id || ""))) this.memoryModels.delete(id)
     for (const [id, row] of this.memorySnapshots) if (queuedIds.has(String(row.run_id || ""))) this.memorySnapshots.delete(id)
     for (const [id, row] of this.memoryTools) if (queuedIds.has(String(row.run_id || ""))) this.memoryTools.delete(id)
-    if (all) {
-      this.memoryDaily.clear()
-      this.memorySnapshots.clear()
-    } else if (cutoff && !scopedFilters) {
-      const cutoffDay = dayOf(cutoff)
-      for (const [key, row] of this.memoryDaily) if (row.day < cutoffDay) this.memoryDaily.delete(key)
-    }
+    if (all) this.memorySnapshots.clear()
     return result
   }
 
@@ -1761,7 +1667,7 @@ class ModelLogStore {
     const hasDetailFilters = ["status", "model", "purpose", "source", "userId", "groupId", "query"].some(key => Boolean(filters[key]))
     let rows: UnknownRecord[] = []
     let filteredRunWhere = null
-    if (sqliteClient.status.available && hasDetailFilters) {
+    if (hasDetailFilters) {
       filteredRunWhere = this.buildRunWhere({ ...filters, from: start, to: end })
       rows = await sqliteClient.all<UnknownRecord>(
         `SELECT strftime('%Y-%m-%d', started_at / 1000, 'unixepoch', '+8 hours') AS day,
@@ -1776,13 +1682,8 @@ class ModelLogStore {
          GROUP BY day, model_name, purpose ORDER BY day ASC`,
         filteredRunWhere.params,
       )
-    } else if (sqliteClient.status.available) {
+    } else {
       rows = await sqliteClient.all<UnknownRecord>("SELECT day, model_name, purpose, input_tokens, output_tokens, total_tokens, estimated_tokens, cached_tokens, reasoning_tokens, calls, failures, duration_ms, estimated_cost FROM ai_usage_daily WHERE day >= ? AND day <= ? ORDER BY day ASC", [dayOf(start), dayOf(end)])
-    } else if (hasDetailFilters) {
-      const runIds = new Set([...this.memoryRuns.values()].filter(row => this.matchesRun(row, { ...filters, from: start, to: end })).map(row => row.id))
-      rows = [...this.memoryModels.values()]
-        .filter(row => runIds.has(String(row.run_id || "")) && isTerminal(row.status))
-        .map(row => ({ ...row, day: dayOf(row.started_at), estimated_tokens: asInt(row.estimated_input_tokens) + asInt(row.estimated_output_tokens), calls: 1, failures: row.status === "ok" ? 0 : 1 }))
     }
     const merged = new Map<string, SummaryRow>()
     const add = (row: UnknownRecord): void => {
@@ -1796,9 +1697,6 @@ class ModelLogStore {
       merged.set(key, current)
     }
     rows.forEach(add)
-    if (!sqliteClient.status.available && !hasDetailFilters) {
-      for (const row of this.memoryDaily.values()) if (row.day >= dayOf(start) && row.day <= dayOf(end)) add({ day: row.day, model_name: row.modelName, purpose: row.purpose, input_tokens: row.input, output_tokens: row.output, total_tokens: row.total, estimated_tokens: row.estimated, cached_tokens: row.cached, reasoning_tokens: row.reasoning, calls: row.calls, failures: row.failures, duration_ms: row.durationMs, estimated_cost: row.cost })
-    }
     const daily = new Map<string, SummaryMetrics & { day: string }>()
     const models = new Map<string, SummaryMetrics & { name: string }>()
     const purposes = new Map<string, SummaryMetrics & { name: string }>()
@@ -1825,7 +1723,7 @@ class ModelLogStore {
       if (row.provider_name) value.providers.add(String(row.provider_name))
       displayNames.set(key, value)
     }
-    if (models.size && sqliteClient.status.available) {
+    if (models.size) {
       const names = await sqliteClient.all<UnknownRecord>("SELECT model_name, model_identifier, provider_name FROM model_call_events WHERE started_at>=? AND started_at<=? AND model_identifier<>'' GROUP BY model_name, model_identifier, provider_name", [start, end])
       names.forEach(rememberName)
     }
@@ -1852,17 +1750,6 @@ class ModelLogStore {
   async listRuns(filters: LogFilters = {}): Promise<UnknownRecord> {
     const limit = Math.max(1, Math.min(100, Number(filters.limit) || 50))
     const cursor = decodeCursor(filters.cursor)
-    if (!sqliteClient.status.available) {
-      const rows = [...this.memoryRuns.values()].filter(row => this.matchesRun(row, filters)).sort((a, b) => b.started_at - a.started_at || String(b.id).localeCompare(String(a.id)))
-      const filtered = cursor ? rows.filter(row => row.started_at < cursor.startedAt || (row.started_at === cursor.startedAt && row.id < cursor.id)) : rows
-      const selected = filtered.slice(0, limit)
-      const models = [...this.memoryModels.values()]
-      return {
-        items: selected.map(row => this.publicRunSummary(row, modelSummary(models.filter(model => model.run_id === row.id)))),
-        nextCursor: filtered.length > limit ? encodeCursor({ startedAt: filtered[limit - 1].started_at, id: filtered[limit - 1].id }) : "",
-        persistence: false,
-      }
-    }
     const where = this.buildRunWhere(filters)
     const clauses = where.sql ? [where.sql] : []
     const params = [...where.params]
@@ -1896,18 +1783,6 @@ class ModelLogStore {
   async getRun(id: unknown): Promise<UnknownRecord | null> {
     const key = String(id || "")
     if (!key) throw new Error("缺少运行 ID")
-    if (!sqliteClient.status.available) {
-      const run = this.memoryRuns.get(key)
-      if (!run) return null
-      const modelRows = [...this.memoryModels.values()].filter(row => row.run_id === key)
-      return {
-        run: { ...this.publicRun(run), ...modelSummary(modelRows) },
-        modelCalls: modelRows.map(row => this.publicModel(row, run)),
-        toolCalls: [...this.memoryTools.values()].filter(row => row.run_id === key).map(row => this.publicTool(row)),
-        childRuns: [...this.memoryRuns.values()].filter(row => row.parent_run_id === key).map(row => this.publicRun(row)),
-        persistence: false,
-      }
-    }
     let run = await sqliteClient.get<LogRow>("SELECT * FROM ai_runs WHERE id=?", [key])
     const liveRun = this.memoryRuns.get(key)
     if (liveRun && (!run || asInt(liveRun.ended_at) >= asInt(run.ended_at))) run = liveRun
@@ -1927,7 +1802,7 @@ class ModelLogStore {
     if (!key) throw new Error("缺少模型调用 ID")
     let model = this.memoryModels.get(key) || null
     let snapshot = this.memorySnapshots.get(key) || null
-    if (sqliteClient.status.available) {
+    {
       const persistedModel = await sqliteClient.get<LogRow>("SELECT * FROM model_call_events WHERE id=?", [key])
       const persistedSnapshot = await sqliteClient.get<LogRow>("SELECT * FROM model_call_snapshots WHERE model_call_id=?", [key])
       model = this.memoryModels.get(key) || model
@@ -1937,7 +1812,7 @@ class ModelLogStore {
     }
     if (!model) return null
     let run: LogRow | null = this.memoryRuns.get(String(model.run_id || "")) || null
-    if (sqliteClient.status.available && model.run_id) run = await sqliteClient.get<LogRow>("SELECT * FROM ai_runs WHERE id=?", [model.run_id]) || run
+    if (model.run_id) run = await sqliteClient.get<LogRow>("SELECT * FROM ai_runs WHERE id=?", [model.run_id]) || run
     return {
       modelCall: this.publicModel(model, run),
       snapshot: snapshot ? this.publicSnapshot(snapshot) : null,
@@ -1950,14 +1825,14 @@ class ModelLogStore {
     const key = String(runId || "")
     if (!key) throw new Error("缺少运行 ID")
     let anchor = this.memoryRuns.get(key) || null
-    if (sqliteClient.status.available) anchor = await sqliteClient.get<LogRow>("SELECT * FROM ai_runs WHERE id=?", [key]) || anchor
+    anchor = await sqliteClient.get<LogRow>("SELECT * FROM ai_runs WHERE id=?", [key]) || anchor
     if (!anchor) return null
     const conversationKey = String(anchor.conversation_key || "")
     if (!conversationKey) return { runId: key, conversationKey: "", items: [], available: false, persistence: Boolean(sqliteClient.status.available) }
 
     const sessionId = String(anchor.session_id || "")
     const rows = new Map<string, LogRow>()
-    if (sqliteClient.status.available && sessionId) {
+    if (sessionId) {
       const persisted = await sqliteClient.all<LogRow>(
         "SELECT id, source, purpose, session_id, conversation_key, scope_type, user_id, group_id, status, started_at, ended_at, duration_ms, response_text, prompt_text, model_calls, tool_calls, failed_tools, total_tokens FROM ai_runs WHERE session_id=? AND (parent_run_id='' OR parent_run_id IS NULL) ORDER BY started_at ASC, id ASC",
         [sessionId],
@@ -1975,7 +1850,7 @@ class ModelLogStore {
       const runKey = String(row.run_id || "")
       if (idSet.has(runKey)) modelIds.set(runKey, [...(modelIds.get(runKey) || []), String(row.id)])
     }
-    if (sqliteClient.status.available && ids.length) {
+    if (ids.length) {
       const persistedModels = await sqliteClient.all<LogRow>(
         "SELECT model_call_events.id, model_call_events.run_id FROM model_call_events INNER JOIN ai_runs ON ai_runs.id=model_call_events.run_id WHERE ((?<>'' AND ai_runs.session_id=?) OR (?='' AND ai_runs.id=?)) AND (ai_runs.parent_run_id='' OR ai_runs.parent_run_id IS NULL) ORDER BY model_call_events.started_at ASC, model_call_events.sequence ASC, model_call_events.id ASC",
         [sessionId, sessionId, sessionId, key],
@@ -2143,6 +2018,7 @@ class ModelLogStore {
   }
 
   async performCleanupExpired(): Promise<UnknownRecord> {
+    if (!sqliteClient.status.available) throw new Error("SQLite 不可用，无法清理日志。")
     const current = now()
     const settings = this.settings || retention()
     const detailCutoff = current - settings.detailDays * 86400000
@@ -2156,8 +2032,6 @@ class ModelLogStore {
     this.detailQueue = this.detailQueue.filter(event => Number(event.row?.started_at || current) >= detailCutoff)
     this.detailQueueBytes = this.detailQueue.reduce((total, event) => total + (Number(event.bytes) || detailEventBytes(event)), 0)
     const aggregateDay = dayOf(aggregateCutoff)
-    for (const [key, row] of this.memoryDaily) if (row.day < aggregateDay) this.memoryDaily.delete(key)
-    if (!sqliteClient.status.available) return { persistent: false, runs: expiredRunIds.size }
     const result = await sqliteClient.transaction([
       { sql: "DELETE FROM ai_runs WHERE started_at < ?", params: [detailCutoff] },
       { sql: "DELETE FROM ai_usage_daily WHERE day < ?", params: [aggregateDay] },

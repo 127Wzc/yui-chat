@@ -13,6 +13,8 @@ CREATE TABLE runtime_config (
   overrides_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(overrides_json)),
   updated_at INTEGER NOT NULL
 ) STRICT;
+INSERT INTO runtime_config(id, schema_version, revision, overrides_json, updated_at)
+VALUES(1, 1, 0, '{}', 0);
 
 CREATE TABLE conversations (
   conversation_key TEXT PRIMARY KEY,

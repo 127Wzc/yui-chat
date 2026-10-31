@@ -4,7 +4,6 @@ import type { JsonValue } from "../core/message-chain/types.js"
 export interface RuntimeConfigObject {
   version?: string
   web?: Record<string, JsonValue>
-  storage?: Record<string, JsonValue>
   chat?: Record<string, JsonValue>
   persona?: Record<string, JsonValue>
   response?: Record<string, JsonValue>
@@ -25,7 +24,7 @@ export type RuntimeConfigSnapshot = Readonly<RuntimeConfigObject>
 /** 更新器可以原地修改草稿，也可以返回新的配置；两种形式都由 Store 统一保存。 */
 export type RuntimeConfigUpdater = (current: RuntimeConfigObject) => RuntimeConfigObject | void | Promise<RuntimeConfigObject | void>
 
-/** SQLite 或文件配置仓库保存的稀疏覆盖项。 */
+/** SQLite 配置仓库保存的稀疏覆盖项。 */
 export interface RuntimeConfigStorageState {
   exists: boolean
   schemaVersion: number
@@ -64,12 +63,9 @@ export interface ConfigSaveOptions {
 export interface ConfigStoreMeta {
   loaded: boolean
   runtimeRoot: string
-  configFile: string
   configBackupDir: string
-  configFileMtimeMs: number
   lastReloadedAt: string
   lastLoadError: Record<string, JsonValue> | null
   revision: number
-  runtimeConfigBackend: "json" | "sqlite"
   runtimeConfigAttached: boolean
 }

@@ -17,14 +17,13 @@ global.logger = { mark() {}, info() {}, warn() {}, error() {}, debug() {} }
 global.Bot = { express: null, wsf: {}, uin: [] }
 global.segment = { at: String, image: String, record: String, reply: String }
 global.plugin = class {}
-let sqliteClient, fileMemoryStore, vectorRecall, modelLogStore
+let sqliteClient, vectorRecall, modelLogStore
 try {
   const { defaults } = await import("../output/runtime/config/defaults.js")
   const { configStore } = await import("../output/runtime/config/store.js")
   ;({ sqliteClient } = await import("../output/runtime/core/storage/sqlite/client.js"))
   const { SqliteRuntimeConfigRepository } = await import("../output/runtime/core/storage/sqlite/runtime-config-repository.js")
   const { sqliteMemoryStore } = await import("../output/runtime/memory/sqlite-store.js")
-  ;({ fileMemoryStore } = await import("../output/runtime/memory/file-store.js"))
   ;({ vectorRecall } = await import("../output/runtime/memory/vector-recall.js"))
   ;({ modelLogStore } = await import("../output/runtime/core/observability/model-log.js"))
   const { appendMemoryImageReference } = await import("../output/runtime/memory/image-reference.js")
@@ -151,30 +150,12 @@ try {
     adapterRegistry.generateImages = originalGenerate; providerResolver.resolveCandidateChannels = originalChannels; adapterRegistry.sendMessage = originalSend
   }
 
-  await fileMemoryStore.load()
-  await fileMemoryStore.addFact(event, "我喜欢茶", { immediate: true })
-  await fileMemoryStore.addFact(event, "我在本群喜欢种花", { owner: "scope", immediate: true })
-  await fileMemoryStore.addFact({ ...event, user_id: "200002" }, "张三在本群喜欢园艺", { owner: "scope", immediate: true })
-  await fileMemoryStore.addFact({ user_id: "200002" }, "张三喜欢天文", { immediate: true })
-  await fileMemoryStore.addFact({ ...event, user_id: "200002", group_id: "elsewhere" }, "张三在别群喜欢吉他", { owner: "scope", immediate: true })
-  await fileMemoryStore.addFact({ user_id: "300003" }, "另一个人喜欢滑雪", { immediate: true })
-  assert.equal((await fileMemoryStore.listImageMemories(event, { scope: "self" })).items.length, 2)
-  assert.equal((await fileMemoryStore.listImageMemories(master, { scope: "user", userId: "200002" })).items.length, 2)
-  assert.equal((await fileMemoryStore.listImageMemories(master, { scope: "group" })).items.length, 4)
-  assert.equal((await fileMemoryStore.listImageMemories(master, { scope: "all" })).items.length, 6)
-  await assert.rejects(() => fileMemoryStore.listImageMemories(event, { scope: "all" }), /只有主人/)
-  assert.match(await fileMemoryStore.buildPrompt(event, ownRequest), /generate_image/)
-  await fs.appendFile(path.join(fileMemoryStore.rootDir, "memories", "users", "100001.jsonl"), "not valid json\n")
-  const incomplete = await fileMemoryStore.listImageMemories(event, { scope: "self" })
-  assert.equal(incomplete.complete, false)
-  // 切到文件门面验证：不完整的全文绝不会提交给图片模型。
+  // 主状态库断开后不能切换到文件记忆并生成不完整的参考资料。
   await sqliteClient.close()
-  await assert.rejects(() => appendMemoryImageReference(event, ownRequest, "肖像"), /读取不完整/)
-  console.log("ok memory-image: full-text attachment, caller/master scopes, exact text preservation, no extraction, Registry-to-image flow and incomplete-read failure")
+  await assert.rejects(() => appendMemoryImageReference(event, ownRequest, "肖像"), /SQLite|closed/)
+  console.log("ok memory-image: full-text attachment, caller/master scopes, exact text preservation, no extraction, Registry-to-image flow and unavailable database failure")
 } finally {
   if (vectorRecall?.dirtyTimer) clearTimeout(vectorRecall.dirtyTimer)
-  if (fileMemoryStore?.flushTimer) clearTimeout(fileMemoryStore.flushTimer)
-  await fileMemoryStore?.flush().catch(() => {})
   await modelLogStore?.stop({ flush: true }).catch(() => {})
   await sqliteClient?.close().catch(() => {})
   await fs.rm(root, { recursive: true, force: true })

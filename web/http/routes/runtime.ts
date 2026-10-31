@@ -140,10 +140,17 @@ export function registerRuntimeRoutes(app: RouteApp): void {
     recordWebChatTest(result)
     // 回查必须用 chatService 实际持久化的键：任务配置 fallback 时 result.channel
     // 是实际应答渠道，而持久化键固定使用首选渠道 id，按渠道重算会 miss。
-    const session = result.conversationKey
-      ? (await conversationStore.listWebTestSessions({ limit: 100 })).find(item => item.key === result.conversationKey) || null
-      : null
-    res.json({ ok: true, sessionId, result, session })
+    let session: Awaited<ReturnType<typeof conversationStore.listWebTestSessions>>[number] | null = null
+    let historyUnavailable = false
+    if (result.conversationKey && result.historySaved !== false) {
+      try {
+        session = (await conversationStore.listWebTestSessions({ limit: 100 })).find(item => item.key === result.conversationKey) || null
+      } catch {
+        // 模型回复已经完成；保留结果并由页面提示历史暂时无法读取。
+        historyUnavailable = true
+      }
+    }
+    res.json({ ok: true, sessionId, result, session, historyUnavailable })
   }, { errorStatus: 400 }))
   app.get("/api/chat/test/sessions", auth, handleRoute(async (req, res) => {
     const sessions = await conversationStore.listWebTestSessions({ limit: Number(req.query.limit || 50) })

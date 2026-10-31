@@ -62,14 +62,6 @@ export const schema: SchemaGroup[] = [
     ],
   },
   {
-    group: "Storage",
-    fields: [
-      { path: "storage.sqlite.enabled", label: "启用 SQLite 持久化", type: "boolean" },
-      { path: "storage.sqlite.busyTimeoutMs", label: "SQLite 忙等待毫秒", type: "number" },
-      { path: "storage.sqlite.synchronous", label: "SQLite 同步级别", type: "string" },
-    ],
-  },
-  {
     group: "Chat",
     fields: [
       { path: "chat.defaultChannel", label: "默认渠道", type: "string" },
@@ -228,14 +220,6 @@ export const schema: SchemaGroup[] = [
       { path: "memory.portrait.inputTokenLimit", label: "画像输入 Token 上限", type: "number", description: "默认 300000；0 表示不限制本地输入预算，其他值至少 3000。仍受模型上下文容量限制。" },
       { path: "memory.portrait.maxTokens", label: "画像输出 Token 上限", type: "number", description: "1024–65536，默认 10000；推理型模型的思考也计入上限，实际受模型能力限制。" },
       { path: "memory.injectRelevantFacts", label: "注入相关记忆", type: "boolean" },
-      { path: "memory.autoWriteBack", label: "自动写回（仅文件回退模式生效）", type: "boolean" },
-      { path: "memory.relevantLimit", label: "检索条数", type: "number" },
-      { path: "memory.maxEpisodesPerScope", label: "单会话 Episode 上限", type: "number" },
-      { path: "memory.maxMemoriesPerOwner", label: "单主体记忆上限", type: "number" },
-      { path: "memory.maxLoadedMemoriesPerOwner", label: "单主体加载上限", type: "number" },
-      { path: "memory.cacheEntries", label: "记忆缓存条目", type: "number" },
-      { path: "memory.flushDelayMs", label: "记忆写回延迟毫秒", type: "number" },
-      { path: "memory.promptBudgetChars", label: "记忆注入字符预算", type: "number" },
       { path: "memory.retrieval.embeddingTokensPerDay", label: "记忆 embedding 每日 Token 预算", type: "number", advanced: true },
       { path: "memory.retention", label: "到期数据清理策略（事实默认保留历史）", type: "json" },
       { path: "memory.retrieval.embeddingModel", label: "记忆向量模型", type: "string", description: "独立于知识库 RAG；留空只进行全文检索。" },

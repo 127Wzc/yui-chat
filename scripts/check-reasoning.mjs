@@ -43,13 +43,9 @@ const runtimeRoot = fs.mkdtempSync(path.join(root, 'cache', 'reasoning-check-'))
 try {
   execFileSync(process.execPath, ['--input-type=module', '-e', `
     import assert from 'node:assert/strict'
-    const { ConfigStore, configFile } = await import('./output/runtime/config/store.js')
+    const { ConfigStore } = await import('./output/runtime/config/store.js')
     const { defaults } = await import('./output/runtime/config/defaults.js')
     const store = new ConfigStore()
-    const fs = await import('node:fs/promises')
-    const path = await import('node:path')
-    await fs.mkdir(path.dirname(configFile), { recursive: true })
-    await fs.writeFile(configFile, JSON.stringify({ $runtimeConfig: 'sqlite' }))
     let overrides = { models: [{ ...structuredClone(defaults.models[0]), adapter: 'openai-compatible', modelIdentifier: 'deepseek-flash', reasoning: { target: 'auto', effort: 'medium' } }] }
     let writes = 0
     const repository = { load: async () => ({ exists: true, overrides }), save: async value => { overrides = structuredClone(value); writes++ } }

@@ -187,8 +187,7 @@ assertRule(
 assertRule(renderService.split("\n").length <= 1000, "core/rendering/render-service.ts 超过 1000 行，请按渲染领域继续拆分", errors)
 
 const configStore = await domainSource("config/store.js")
-assertRule(configStore.includes("writeFileAtomic(configFile"), "config/store.ts 必须通过原子替换写入主配置", errors)
-assertRule(!configStore.includes("fs.writeFile(configFile"), "config/store.ts 不得直接覆盖主配置文件", errors)
+assertRule(configStore.includes("repository.save("), "运行配置必须提交至 SQLite", errors)
 assertRule(configStore.includes("YUI_CHAT_RUNTIME_ROOT") && configStore.includes("runtimeRoot"), "config/store.ts 必须支持显式隔离运行目录", errors)
 
 const mediaCache = await domainSource("core/media/media-cache.js")

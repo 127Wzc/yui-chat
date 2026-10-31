@@ -153,8 +153,7 @@ export class SqliteMemoryStore {
   loaded = false
   statsCache: { users: number; groups: number; scopes: number; profiles: number; memories: number; episodeFiles: number; pendingWrites: number } = { users: 0, groups: 0, scopes: 0, profiles: 0, memories: 0, episodeFiles: 0, pendingWrites: 0 }
 
-  async load(): Promise<typeof this.statsCache | null> {
-    if (!sqliteClient.status.available) return null
+  async load(): Promise<typeof this.statsCache> {
     if (!this.loaded) {
       await this.refreshStats()
       this.loaded = true
@@ -165,7 +164,6 @@ export class SqliteMemoryStore {
   }
 
   async flush(): Promise<void> {
-    if (!sqliteClient.status.available) return
     const memory = record(record(configStore.get()).memory)
     const retention = record(memory.retention)
     await memoryRepository.deleteExpired(retention.expiredGraceDays, retention.expiredFactDays)
@@ -177,7 +175,6 @@ export class SqliteMemoryStore {
   async save(): Promise<void> { await this.flush() }
 
   async refreshStats(): Promise<typeof this.statsCache> {
-    if (!sqliteClient.status.available) return this.statsCache
     const rows = await sqliteClient.all<UnknownRecord>("SELECT type, scope_type, COUNT(*) AS count FROM memory_items WHERE status != 'deleted' GROUP BY type, scope_type")
     const count = (type: unknown = null, scope: unknown = null): number => rows.filter(row => (!type || row.type === type) && (!scope || row.scope_type === scope)).reduce((sum, row) => sum + Number(row.count || 0), 0)
     this.statsCache = {
@@ -193,11 +190,10 @@ export class SqliteMemoryStore {
   }
 
   async appendInteraction(_e: UnknownRecord, _prompt: unknown, _answer: unknown): Promise<void> {
-    // 方法保留：memory/store.js 门面 Proxy 与 core/chat/chat-service.js 的调用点依赖它存在。
+    // 保留对话流程的调用形状，短期上下文和群采集分别负责对应数据。
     // 但 SQLite 模式下不再写入任何数据——short 与 interaction episode 的读路径已全部关闭
     // （isManagedMemory、listPage、retrieveMemory 都会过滤这两类行），继续写只有写放大；
     // 短期上下文由 recent-context 承担，群记忆由 group-capture 提炼入库。
-    // 文件存储模式（memory/file-store.js）保留旧行为。
     return
   }
 

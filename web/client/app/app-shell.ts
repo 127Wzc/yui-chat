@@ -244,7 +244,7 @@ export const AppShell = {
       <section v-if="needsLogin" class="panel boot-state login-panel">
         <div class="panel-head"><h2><Icon name="key" :size="15" />Web 登录</h2></div>
         <div class="panel-body">
-          <p class="muted small">静态登录只接受 <code>config/config.json</code> 中非空的 <code>web.authToken</code>；留空时此入口禁用。主人也可以在机器人聊天中发送 <code>#yui面板</code> 获取一次性快捷链接。</p>
+          <p class="muted small">静态登录需要在管理台设置访问令牌；未设置时此入口禁用。主人也可以在机器人聊天中发送 <code>#yui面板</code> 获取一次性快捷链接。</p>
           <form class="login-form login-manual" @submit.prevent="loginDirect">
             <Field
               label="Web Token"

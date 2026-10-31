@@ -862,13 +862,6 @@ function validateRuntimeNumbers(config: ConfigRecord, issues: ValidationIssue[])
     }
   }
   positiveNumber(issues, "chat.inputTokenBudget", config.chat?.inputTokenBudget, { min: 1000, max: 1000000 })
-  if (config.storage?.sqlite !== undefined) {
-    if (!isObject(config.storage.sqlite)) add(issues, "error", "storage.sqlite", "storage.sqlite 必须是对象")
-    else {
-      positiveNumber(issues, "storage.sqlite.busyTimeoutMs", config.storage.sqlite.busyTimeoutMs, { min: 100, max: 600000 })
-      if (config.storage.sqlite.synchronous && !["FULL", "NORMAL"].includes(String(config.storage.sqlite.synchronous).toUpperCase())) add(issues, "error", "storage.sqlite.synchronous", "synchronous 只支持 FULL 或 NORMAL")
-    }
-  }
   positiveNumber(issues, "response.autoUsePictureThreshold", config.response?.autoUsePictureThreshold, { min: 100, level: "warn" })
   const segmentation = config.response?.segmentation
   if (segmentation !== undefined) {
@@ -1000,15 +993,6 @@ function validateRuntimeNumbers(config: ConfigRecord, issues: ValidationIssue[])
     }
   }
   positiveNumber(issues, "context.recentMessageCount", config.context?.recentMessageCount, { min: 0, max: 1000, integer: true })
-  positiveNumber(issues, "memory.relevantLimit", config.memory?.relevantLimit, { min: 0 })
-  positiveNumber(issues, "memory.maxFactsPerUser", config.memory?.maxFactsPerUser, { min: 1 })
-  positiveNumber(issues, "memory.maxEpisodesPerScope", config.memory?.maxEpisodesPerScope, { min: 10, max: 5000 })
-  positiveNumber(issues, "memory.maxMemoriesPerOwner", config.memory?.maxMemoriesPerOwner, { min: 50, max: 5000 })
-  positiveNumber(issues, "memory.maxLoadedMemoriesPerOwner", config.memory?.maxLoadedMemoriesPerOwner, { min: 50, max: 5000 })
-  positiveNumber(issues, "memory.cacheEntries", config.memory?.cacheEntries, { min: 16, max: 5000 })
-  positiveNumber(issues, "memory.flushDelayMs", config.memory?.flushDelayMs, { min: 500, max: 300000 })
-  positiveNumber(issues, "memory.promptBudgetChars", config.memory?.promptBudgetChars, { min: 300, max: 20000 })
-  positiveNumber(issues, "memory.profileFactLimit", config.memory?.profileFactLimit, { min: 0 })
   const portrait = section(config.memory?.portrait)
   if (config.memory?.portrait) {
     if (!portrait.defaultType || findPortraitType(portrait.defaultType)?.id !== portrait.defaultType) add(issues, "error", "memory.portrait.defaultType", "默认画像类型必须为内置类型")

@@ -12,7 +12,6 @@ const runtimeRootEnvironmentVariable = "YUI_CHAT_RUNTIME_ROOT"
 const smokeRuntimeRootEnvironmentVariable = "YUI_CHAT_SMOKE_RUNTIME_ROOT"
 const pluginRootEnvironmentVariable = "YUI_CHAT_PLUGIN_ROOT"
 const productionRuntimePaths = {
-  configDir: path.join(pluginRoot, "config"),
   dataDir: path.join(yunzaiRoot, "data", "yui-chat"),
   cacheDir: path.join(pluginRoot, "cache"),
 }
@@ -253,15 +252,13 @@ async function checkSyntax() {
 }
 
 async function checkRuntimeIsolation() {
-  const { cacheDir, configBackupDir, configDir, configFile, dataDir, runtimeRoot, tempDir } = await import("../output/runtime/config/store.js")
+  const { cacheDir, configBackupDir, dataDir, runtimeRoot, tempDir } = await import("../output/runtime/config/store.js")
   assert(runtimeRoot === smokeRuntimeRoot, "config store should use the smoke runtime root")
-  assert(configDir === path.join(smokeRuntimeRoot, "config"), "smoke config directory should stay under the runtime root")
-  assert(configFile === path.join(configDir, "config.json"), "smoke config file should stay under the isolated config directory")
   assert(dataDir === path.join(smokeRuntimeRoot, "data", "yui-chat"), "smoke data should stay under the runtime root")
   assert(configBackupDir === path.join(dataDir, "backups"), "smoke config backups should stay under the isolated data directory")
   assert(cacheDir === path.join(smokeRuntimeRoot, "cache"), "smoke cache should stay under the runtime root")
   assert(tempDir === path.join(cacheDir, "temp"), "smoke temporary files should stay under the isolated cache")
-  for (const [name, runtimePath] of Object.entries({ configDir, configFile, configBackupDir, dataDir, cacheDir, tempDir })) {
+  for (const [name, runtimePath] of Object.entries({ configBackupDir, dataDir, cacheDir, tempDir })) {
     assert(pathInside(runtimePath, smokeRuntimeRoot), `${name} must stay inside the smoke runtime root`)
     assert(!Object.values(productionRuntimePaths).some(productionPath => pathsOverlap(runtimePath, productionPath)), `${name} must not overlap a production runtime path`)
   }
@@ -269,20 +266,19 @@ async function checkRuntimeIsolation() {
   const defaultPathProbe = await run("node", [
     "--input-type=module",
     "--eval",
-    "import('./output/runtime/config/store.js').then(({ cacheDir, configDir, dataDir, runtimeRoot }) => process.stdout.write(JSON.stringify({ cacheDir, configDir, dataDir, runtimeRoot })))",
+    "import('./output/runtime/config/store.js').then(({ cacheDir, dataDir, runtimeRoot }) => process.stdout.write(JSON.stringify({ cacheDir, dataDir, runtimeRoot })))",
   ], {
     cwd: pluginRoot,
     env: { [runtimeRootEnvironmentVariable]: "", YUI_CHAT_PLUGIN_ROOT: pluginRoot },
   })
   const defaults = JSON.parse(defaultPathProbe.stdout)
   assert(defaults.runtimeRoot === "", "production runtime root should remain disabled when the environment variable is absent")
-  assert(defaults.configDir === productionRuntimePaths.configDir, "production config directory should keep its original default")
   assert(defaults.dataDir === productionRuntimePaths.dataDir, "production data directory should keep its original default")
   assert(defaults.cacheDir === productionRuntimePaths.cacheDir, "production cache directory should keep its original default")
 }
 
 async function checkConfigSafety() {
-  const { cacheDir, configBackupDir, configDir, configFile, configStore, dataDir, extractConfigOverrides, pluginRoot, redactConfigSecrets, runtimeRoot, tempDir, yunzaiRoot } = await import("../output/runtime/config/store.js")
+  const { cacheDir, configBackupDir, configStore, dataDir, extractConfigOverrides, pluginRoot, redactConfigSecrets, runtimeRoot, tempDir, yunzaiRoot } = await import("../output/runtime/config/store.js")
   const { defaults, defaultPersonaRuntimePrompt } = await import("../output/runtime/config/defaults.js")
   const { getSchemaManifest, schema, schemaManifest } = await import("../output/runtime/config/schema.js")
   const { assertConfigValid, validateConfig } = await import("../output/runtime/config/validator.js")
@@ -294,9 +290,10 @@ async function checkConfigSafety() {
   assert(config.web?.loginInGroup === false, "loginInGroup must default false")
   assert(config.system?.backups?.maxFiles === 3, "backup retention should protect at least 3 packages by default")
   assert(config.system?.backups?.maxAgeDays === 30, "backup retention should protect packages for at least 30 days by default")
-  const localOverrides = JSON.parse(await fs.readFile(configFile, "utf8"))
-  assert(JSON.stringify(localOverrides) === JSON.stringify(extractConfigOverrides(config)), "config.json should persist only local overrides")
-  assert(!localOverrides.web && !localOverrides.logging && !localOverrides.system, "default-only config should not persist an automatically generated Web credential")
+  const { sqliteClient } = await import("../output/runtime/core/storage/sqlite/client.js")
+  const localOverrides = JSON.parse((await sqliteClient.get("SELECT overrides_json FROM runtime_config WHERE id=1")).overrides_json)
+  assert(JSON.stringify(localOverrides) === JSON.stringify(extractConfigOverrides(config)), "SQLite should persist only local overrides")
+  assert(!localOverrides.web && !localOverrides.logging && !localOverrides.system, "defaults should not persist an automatically generated Web credential")
   assert(config.security?.linkSafety?.allowPrivateHosts === true, "all user URL private-host access should default open in the centralized policy")
   assert(config.security?.linkSafety?.trustedPrivateDnsBypass === true, "trusted private-DNS bypass should default open in the centralized policy")
   assert(!("allowPrivateHosts" in config.mediaRecognition.remoteFetch), "media recognition must not keep a separate private-host switch")
@@ -402,7 +399,7 @@ async function checkConfigSafety() {
   assert(config.memory?.retrieval?.embeddingTokensPerDay === 200000 && config.knowledge?.indexing?.globalEmbeddingTokensPerDay === 2000000, "embedding budgets should have configurable, practical defaults")
   assert(config.mcp?.serverTemplate?.transport === "stdio", "MCP server template should expose the default stdio transport")
   assert(runtimeRoot === smokeRuntimeRoot, "config safety checks must use the isolated smoke runtime root")
-  assert(pathInside(configDir, runtimeRoot) && pathInside(configFile, runtimeRoot) && pathInside(configBackupDir, runtimeRoot), "config and backups must stay inside the isolated runtime root")
+  assert(pathInside(configBackupDir, runtimeRoot), "config backups must stay inside the isolated runtime root")
   assert(pathInside(dataDir, runtimeRoot), "dataDir must stay inside the isolated runtime root")
   assert(pathInside(cacheDir, runtimeRoot), "cacheDir must stay inside the isolated runtime root")
   assert(pathInside(tempDir, cacheDir), "tempDir must stay inside the isolated cache")
@@ -492,47 +489,19 @@ async function checkConfigSafety() {
 }
 
 async function checkConfigHotReload() {
-  const { configBackupDir, configDir, configFile, configStore } = await import("../output/runtime/config/store.js")
+  const { configBackupDir, configStore } = await import("../output/runtime/config/store.js")
+  const { sqliteClient } = await import("../output/runtime/core/storage/sqlite/client.js")
   const original = JSON.parse(JSON.stringify(await configStore.load()))
   const beforeBackups = new Set((await configStore.listBackups({ limit: 0 })).map(item => item.fileName))
   try {
     const beforeMeta = configStore.meta()
-    const unchanged = await configStore.reloadFromDisk({ keepCurrent: true })
-    assert(unchanged.reloaded === false, "unchanged config file should not trigger full reload")
-    assert(configStore.meta().lastReloadedAt === beforeMeta.lastReloadedAt, "unchanged reload should keep lastReloadedAt stable")
-
-    const edited = JSON.parse(JSON.stringify(original))
-    edited.persona.assistantLabel = `Smoke Reload ${Date.now()}`
-    await fs.writeFile(configFile, `${JSON.stringify(edited, null, 2)}\n`, "utf8")
-    await sleep(20)
-    const reloaded = await configStore.load()
-    assert(reloaded.persona.assistantLabel === edited.persona.assistantLabel, "load() should detect external config file changes")
-
-    const invalid = JSON.parse(JSON.stringify(edited))
-    invalid.mediaRecognition.recognitionModel = "missing-model"
-    await fs.writeFile(configFile, `${JSON.stringify(invalid, null, 2)}\n`, "utf8")
-    await sleep(20)
-    const kept = await configStore.load()
-    assert(kept.mediaRecognition.recognitionModel !== "missing-model", "invalid external config should not replace in-memory config")
-    assert(Boolean(configStore.meta().lastLoadError), "invalid external config should be recorded in config meta")
-
-    await configStore.save(original)
-    const sparseOriginal = JSON.parse(await fs.readFile(configFile, "utf8"))
-    assert(!sparseOriginal.web && !sparseOriginal.logging && !sparseOriginal.system, "ordinary saves should keep config.json sparse without generating a static Web credential")
-
     const beforeInvalidSave = JSON.stringify(configStore.get())
-    const beforeInvalidDisk = await fs.readFile(configFile, "utf8")
+    const beforeInvalidDisk = (await sqliteClient.get("SELECT overrides_json FROM runtime_config WHERE id=1")).overrides_json
     const invalidSave = JSON.parse(JSON.stringify(original))
     invalidSave.mediaRecognition.recognitionModel = "missing-model"
-    let invalidSaveRejected = false
-    try {
-      await configStore.save(invalidSave)
-    } catch {
-      invalidSaveRejected = true
-    }
-    assert(invalidSaveRejected, "invalid save candidate should be rejected")
+    await rejects(() => configStore.save(invalidSave))
     assert(JSON.stringify(configStore.get()) === beforeInvalidSave, "rejected save must not change the in-memory snapshot")
-    assert(await fs.readFile(configFile, "utf8") === beforeInvalidDisk, "rejected save must not change the config file")
+    assert((await sqliteClient.get("SELECT overrides_json FROM runtime_config WHERE id=1")).overrides_json === beforeInvalidDisk, "rejected save must not change SQLite")
 
     const retiredFilterConfig = JSON.parse(JSON.stringify(original))
     retiredFilterConfig.response.messageProcessing = { enabled: true, rules: [{ id: "retired-processor" }] }
@@ -726,21 +695,6 @@ async function checkConfigHotReload() {
       assert(err.message.includes("非法配置备份文件名"), "unsafe backup deletion should fail with a safe error")
     }
 
-    const invalidStartupSource = "{\n  \"broken\":\n"
-    await fs.writeFile(configFile, invalidStartupSource, "utf8")
-    configStore.loaded = false
-    configStore.configFileMtimeMs = 0
-    configStore.lastLoadError = null
-    const recovered = await configStore.reloadFromDisk({ force: true, keepCurrent: false, persistDefaults: true })
-    assert(recovered.fallbackDefault === true, "invalid startup config should fall back to defaults")
-    assert(Boolean(recovered.quarantinedFile), "invalid startup config should be quarantined before recovery")
-    assert(await fs.readFile(recovered.quarantinedFile, "utf8") === invalidStartupSource, "quarantine should preserve the invalid source verbatim")
-    assert(configStore.meta().lastLoadError?.quarantinedFile === recovered.quarantinedFile, "recovery metadata should expose the quarantined file")
-    assert(configStore.validate().ok, "recovered default config should validate")
-    JSON.parse(await fs.readFile(configFile, "utf8"))
-
-    const temporaryFiles = (await fs.readdir(configDir)).filter(name => name.startsWith(".config.json.") && name.endsWith(".tmp"))
-    assert(temporaryFiles.length === 0, "atomic config writes should not leave temporary files")
   } finally {
     await configStore.save(original)
     const afterBackups = await configStore.listBackups({ limit: 0 })
@@ -2837,91 +2791,14 @@ async function checkModelRoutingApi() {
 
 async function checkMemoryProfile() {
   const { memoryStore } = await import("../output/runtime/memory/store.js")
-  const { MemoryForgetTool, MemoryListTool, UserProfileReadTool, UserProfileWriteTool } = await import("../output/runtime/tools/builtins/memory.js")
-  const { cacheDir, configStore } = await import("../output/runtime/config/store.js")
-  const originalRoot = memoryStore.rootDir
-  await fs.mkdir(cacheDir, { recursive: true })
-  const tempRoot = await fs.mkdtemp(path.join(cacheDir, "smoke-memory-"))
-  const event = { isGroup: true, group_id: "20001", user_id: "10001", sender: { user_id: "10001" } }
-  try {
-    await memoryStore.resetForTest(tempRoot)
-    const write = await new UserProfileWriteTool().execute({
-      name: "小明",
-      interests: ["原神", "自动化"],
-      preferences: ["简洁回答"],
-      communicationStyle: "喜欢直接给结论",
-    }, { e: event })
-    assert(write.includes("小明") && write.includes("原神"), "user_profile_write should update structured profile")
-    const read = await new UserProfileReadTool().execute({}, { e: event })
-    assert(read.includes("用户 10001 画像") && read.includes("交流风格"), "user_profile_read should return profile summary")
-    const listed = await memoryStore.listProfiles({ limit: 5 })
-    assert(listed.some(item => item.userId === "10001" && item.summary.some(line => line.includes("小明"))), "memory profile list should expose summaries for Web UI")
-    const apiProfile = await memoryStore.setProfile("10002", { name: "小红", interests: ["渲染"] }, { save: false })
-    assert(apiProfile.userId === "10002" && apiProfile.profile.interests.includes("渲染"), "memory setProfile should update profiles by user id")
-    const editableFact = await memoryStore.addFact(event, "用户喜欢把复杂任务拆成步骤。")
-    const editedFact = await memoryStore.updateMemory("10001", editableFact.id, { text: "用户喜欢先看结论，再看步骤。" })
-    assert(editedFact.text.includes("先看结论") && editedFact.source === "manual-edit", "memory facts should support intuitive Web editing")
-    const managedGroupFact = await memoryStore.saveManagedMemory({ scopeType: "group", ownerId: "20001", text: "本群默认使用简短公告。", tags: ["群偏好"] })
-    const managedTargets = await memoryStore.listManagedScopes({ limit: 20 })
-    assert(managedTargets.some(item => item.scopeType === "user" && item.ownerId === "10001"), "memory manager should list user targets")
-    assert(managedTargets.some(item => item.scopeType === "group" && item.ownerId === "20001"), "memory manager should list group targets")
-    const managedGroup = await memoryStore.getManagedScope("group", "20001")
-    assert(managedGroup.items.some(item => item.id === managedGroupFact.id), "memory manager should load a single group scope")
-    const updatedGroupFact = await memoryStore.saveManagedMemory({ scopeType: "group", ownerId: "20001", id: managedGroupFact.id, text: "本群公告保持三句话以内。" })
-    assert(updatedGroupFact.text.includes("三句话以内"), "memory manager should edit group memories in place")
-    const memoryList = await new MemoryListTool().execute({ limit: 5 }, { e: event })
-    assert(memoryList.includes("先看结论") && memoryList.includes("id:"), "memory_list should expose remembered facts with ids")
-    const found = await memoryStore.search(event, "先看结论", 1)
-    assert(found[0]?.id, "memory search should return memory id")
-    const forgot = await new MemoryForgetTool().execute({ id: found[0].id }, { e: event })
-    assert(forgot.includes("已删除记忆"), "memory_forget should delete visible memory")
-    await memoryStore.addFact(event, "用户喜欢把复杂任务拆成步骤。")
-    const prompt = await memoryStore.buildPrompt(event, "怎么沟通")
-    assert(prompt.includes("用户画像") && prompt.includes("简洁回答"), "memory prompt should inject structured profile")
-    const targetUserEvent = { ...event, user_id: "10003", sender: { user_id: "10003", nickname: "被提问成员" } }
-    await memoryStore.addFact(targetUserEvent, "用户喜欢未定事件簿角色夏彦。", { source: "group-capture" })
-    const mentionEvent = {
-      ...event,
-      user_id: "10004",
-      sender: { user_id: "10004", nickname: "提问者" },
-      msg: "[CQ:at,qq=10003] 她喜欢什么",
-      raw_message: "[CQ:at,qq=10003] 她喜欢什么",
-      message: [
-        { type: "at", data: { qq: "10003" } },
-        { type: "text", data: { text: "她喜欢什么" } },
-      ],
-    }
-    const mentionedPrompt = await memoryStore.buildPrompt(mentionEvent, "喜欢")
-    assert(mentionedPrompt.includes("QQ 10003") && mentionedPrompt.includes("用户喜欢未定事件簿角色夏彦"), "memory prompt should inject and attribute a mentioned group member's fact in file fallback mode")
-    const unrelatedMentionPrompt = await memoryStore.buildPrompt(mentionEvent, "过来看看这个")
-    assert(!unrelatedMentionPrompt.includes("用户喜欢未定事件簿角色夏彦"), "ordinary at mentions should not inject the target member's memory in file fallback mode")
-    assert(memoryStore.stats().profiles === 2, "memory stats should count profiles")
-    assert(memoryStore.stats().storage?.format === "owner-files-v2", "memory should expose owner-file storage format")
-    assert(memoryStore.stats().storage?.boundedTailRead === true, "memory should expose bounded JSONL reads")
-
-    const tracked = await memoryStore.addFact(event, "用户希望持久命中记录能够落盘。")
-    const cachedCopies = (await memoryStore.listMemories(event, { limit: 200, includeCold: true })).filter(item => item.id === tracked.id)
-    assert(cachedCopies.length === 1, "new memory should not be duplicated in the in-memory cache")
-    await memoryStore.buildPrompt(event, "持久命中记录")
-    await memoryStore.flush()
-    await memoryStore.resetForTest(tempRoot)
-    const reloadedTracked = (await memoryStore.listMemories(event, { limit: 200, includeCold: true })).find(item => item.id === tracked.id)
-    assert(reloadedTracked?.hitCount >= 1 && reloadedTracked?.lastUsedAt, "memory hit metadata should survive cache reload")
-
-    const maxEpisodes = Number((await configStore.load()).memory.maxEpisodesPerScope)
-    for (let index = 0; index < maxEpisodes + 5; index++) {
-      await memoryStore.appendInteraction(event, `episode smoke ${index}`, `answer ${index}`)
-    }
-    await memoryStore.flush()
-    const episodeLines = (await fs.readFile(memoryStore.episodeFile(event), "utf8")).trim().split("\n").filter(Boolean)
-    assert(episodeLines.length === maxEpisodes, "episode JSONL should be compacted to the configured scope limit")
-    assert(JSON.parse(episodeLines[0]).prompt === "episode smoke 5", "episode compaction should retain the newest records")
-    assert(memoryStore.stats().episodeFiles === 1, "memory stats should report episode file count")
-    assert((await configStore.load()).tools.enabledTools.includes("memory_manage"), "default tools should include compact memory management")
-  } finally {
-    await memoryStore.resetForTest(originalRoot)
-    await fs.rm(tempRoot, { recursive: true, force: true })
-  }
+  const event = { isGroup: true, group_id: "9700201", user_id: "9700101", sender: { user_id: "9700101" } }
+  const profile = await memoryStore.updateProfile(event, { name: "小明", interests: ["原神", "自动化"] })
+  assert(profile.profile.name === "小明", "SQLite profile should preserve the name")
+  const fact = await memoryStore.addFact(event, "用户喜欢把复杂任务拆成步骤。")
+  assert((await memoryStore.search(event, "复杂任务", 5)).some(item => item.id === fact.id), "SQLite memory search should find a stored fact")
+  assert((await memoryStore.getProfile(event)).profile.interests.includes("自动化"), "SQLite profile should round-trip")
+  assert(memoryStore.stats().storage?.format === "sqlite", "memory must use SQLite")
+  assert((await memoryStore.forgetMemory(event, fact.id)).ok, "memory deletion should use SQLite")
 }
 
 // 具体的会话、记忆、群采集、知识、向量、日志、预算和配置包回归由
@@ -2938,7 +2815,7 @@ async function checkSqliteStorage() {
     const removed = await sqliteClient.get("SELECT name FROM sqlite_master WHERE type='table' AND name='knowledge_sources'")
     assert(!removed, "baseline state database should not recreate removed transitional tables")
   } finally {
-    await sqliteClient.close()
+    // 数据库由配置 Store 共用，留给后续 smoke 检查。
   }
 }
 
@@ -6761,6 +6638,27 @@ async function checkWebAndBoot() {
     const webTestDeleteResponse = await fetch(`http://127.0.0.1:${port}/api/chat/test/sessions/${encodeURIComponent(webTestSession.key)}`, { method: "DELETE", headers: { cookie } })
     const webTestDeletePayload = await webTestDeleteResponse.json()
     assert(webTestDeleteResponse.ok && webTestDeletePayload.cleared === 1, "web chat history API should delete one persisted SQLite transcript")
+    const { conversationStore } = await import("../output/runtime/core/chat/conversation-store.js")
+    const originalSessionRead = conversationStore.listWebTestSessions
+    try {
+      conversationStore.listWebTestSessions = async () => { throw new Error("injected history read failure") }
+      const response = await fetch(`http://127.0.0.1:${port}/api/chat/test`, {
+        method: "POST", headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ prompt: "请回复测试内容。", sessionId: "smoke-web-read-failure" }),
+      })
+      const payload = await response.json()
+      assert(response.ok && payload.result?.text && payload.historyUnavailable === true, "a failed history lookup should retain the generated reply and report the unavailable history")
+    } finally { conversationStore.listWebTestSessions = originalSessionRead }
+    const originalSessionSave = conversationStore.save
+    try {
+      conversationStore.save = async () => { throw new Error("injected history write failure") }
+      const response = await fetch(`http://127.0.0.1:${port}/api/chat/test`, {
+        method: "POST", headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ prompt: "请再次回复测试内容。", sessionId: "smoke-web-write-failure" }),
+      })
+      const payload = await response.json()
+      assert(response.ok && payload.result?.text && payload.result.historySaved === false, "a failed history write should retain the generated reply and report it was not saved")
+    } finally { conversationStore.save = originalSessionSave }
     const memoryGroupId = "web-memory-group"
     const memoryUserId = "web-memory-user"
     const captureConfigResponse = await fetch(`http://127.0.0.1:${port}/api/config`, {
@@ -7368,7 +7266,7 @@ async function checkDiagnostics() {
   const { runtimeRoot } = await import("../output/runtime/config/store.js")
   const { buildDiagnostics } = await import("../output/runtime/core/runtime/diagnostics.js")
   const result = await buildDiagnostics()
-  assert(pathInside(result.paths.configDir, runtimeRoot) && pathInside(result.paths.dataDir, runtimeRoot) && pathInside(result.paths.cacheDir, runtimeRoot) && pathInside(result.paths.tempDir, runtimeRoot), "diagnostics should report only isolated smoke runtime paths")
+  assert(pathInside(result.paths.dataDir, runtimeRoot) && pathInside(result.paths.cacheDir, runtimeRoot) && pathInside(result.paths.tempDir, runtimeRoot), "diagnostics should report only isolated smoke runtime paths")
   assert(!result.paths.tempInsidePluginCache, "diagnostics should identify that the smoke cache is intentionally outside the source plugin directory")
   assert(!result.paths.rootTempExists, "diagnostics should report root temp absent")
   assert(typeof result.safety.webAuthTokenConfigured === "boolean", "diagnostics should report whether optional static Web login is configured")

@@ -15,17 +15,4 @@ try {
 
 const runtime = await import(pathToFileURL(compiledEntry).href)
 
-// Smoke 会同时验证源码导入的命令模块；把它们的 ConfigStore 接到同一个编译产物
-// SQLite 单例，避免测试因 ESM URL 不同而创建两套运行态。生产不设置该标记。
-if (process.env.YUI_CHAT_SMOKE_RUNTIME_ROOT) {
-  const [{ configStore }, { sqliteClient }, { SqliteRuntimeConfigRepository }] = await Promise.all([
-    import("./output/runtime/config/store.js"),
-    import("./output/runtime/core/storage/sqlite/client.js"),
-    import("./output/runtime/core/storage/sqlite/runtime-config-repository.js"),
-  ])
-  if (sqliteClient.status.available) {
-    await configStore.attachRuntimeConfigRepository(new SqliteRuntimeConfigRepository(sqliteClient))
-  }
-}
-
 export const apps = runtime.apps

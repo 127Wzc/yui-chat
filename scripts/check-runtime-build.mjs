@@ -53,7 +53,6 @@ for (const relative of [
   "core/chat/conversation-request-executor.js",
   "memory/store.js",
   "memory/prompt.js",
-  "memory/file-store.js",
   "memory/write-policy.js",
   "memory/decay.js",
   "memory/retrieval.js",
