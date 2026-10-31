@@ -124,6 +124,7 @@ export interface ToolCommon {
 /** 工具执行时由运行时注入的取消、账本和可观测性上下文。 */
 export interface ToolExecutionContext {
   signal?: AbortSignal
+  artifacts?: import("./artifact-store.js").ArtifactContext
   agent?: {
     signal?: AbortSignal
     [key: string]: unknown

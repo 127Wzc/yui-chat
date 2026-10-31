@@ -160,6 +160,8 @@ export async function executeToolRound(options: {
         signal,
         invoke: async (args: UnknownRecord, attempt: number, executionContext: UnknownRecord) => {
           try {
+            const backgroundTrace = record(toolContext.observability).trace
+            const backgroundModelCallId = text(record(record(toolContext.observability).trace).currentModelCallId || record(toolContext.observability).modelCallId)
             const execution = {
               ...executionContext,
               runtime,
@@ -172,8 +174,8 @@ export async function executeToolRound(options: {
                 const taskText = runtime.formatToolContent(background.result || background.error || "后台任务已结束")
                 const taskStarted = number(background.startedAt, started)
                 const taskEnded = number(background.endedAt, Date.now())
-                modelLogStore.recordToolCall(record(toolContext.observability).trace, {
-                  modelCallId: text(record(record(toolContext.observability).trace).currentModelCallId || record(toolContext.observability).modelCallId),
+                modelLogStore.recordToolCall(backgroundTrace, {
+                  modelCallId: backgroundModelCallId,
                   parentToolId: text(call.id),
                   round,
                   callIndex: callIndex + 1,

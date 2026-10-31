@@ -37,12 +37,10 @@ export function isMemoryImageRequest(value: unknown): boolean {
   return true
 }
 
-export const MEMORY_IMAGE_HINT = "本轮要求依据记忆作图。直接调用 generate_image，prompt 只写绘图要求，不要先总结或复制记忆。工具会按真实请求者身份，将本人、主人指定成员、本群成员或全部用户范围内的全部有效个人记忆按来源附上全文；逐个指定超过5位时只使用前5位，不单独提示。选中范围内的记忆正文不用 memory_manage 分页，不提炼、不截断。无权限、对象不明或读取不完整时会明确失败，不能声称已使用全部记忆或已画好。"
+export const MEMORY_IMAGE_HINT = "本轮要求依据记忆作图。若当前会话已有符合要求的记忆引用，可直接复用；否则先调用 memory_manage 的 reference 操作准备所选成员的记忆引用。将 ref 放进 generate_image 的 referenceMaterials；prompt 只写绘图要求，不要总结或复制记忆。真实身份和范围由工具校验，最多使用前5位成员，不单独提示。无权限、对象不明或读取不完整时不能声称已画好。"
 
-/** 主人身份只取宿主事件；群管不因此获得他人的全量记忆读取权限。 */
-export function assertMemoryImageSelection(event: UnknownRecord, selection: MemoryImageSelection): void {
-  const caller = userKey(event)
-  if (!caller || caller === "unknown") throw new Error("无法识别当前用户，未读取绘图参考记忆。")
+/** 验证已保存的范围；权限仍由真实请求事件单独校验。 */
+export function validateMemoryImageSelection(selection: MemoryImageSelection): void {
   if (!["self", "user", "users", "group", "all"].includes(selection.scope)) throw new Error("绘图记忆范围无效。")
   if (selection.scope !== "user" && selection.userId !== undefined) throw new Error("指定用户时请使用 user 范围，不能覆盖本人或群体身份。")
   if (selection.scope !== "users" && selection.userIds !== undefined) throw new Error("指定多个用户时请使用 users 范围，不能覆盖本人或群体身份。")
@@ -51,6 +49,13 @@ export function assertMemoryImageSelection(event: UnknownRecord, selection: Memo
     if (!Array.isArray(selection.userIds) || !selection.userIds.length || selection.userIds.some(id => !/^[a-zA-Z0-9_.:-]{1,100}$/u.test(String(id || "")))) throw new Error("请指定有效的记忆所属用户。")
     if (selection.userIds.length > MAX_MEMORY_IMAGE_USERS) throw new Error(`一次最多指定 ${MAX_MEMORY_IMAGE_USERS} 位成员的记忆作图。`)
   }
+}
+
+/** 主人身份只取宿主事件；群管不因此获得他人的全量记忆读取权限。 */
+export function assertMemoryImageSelection(event: UnknownRecord, selection: MemoryImageSelection): void {
+  const caller = userKey(event)
+  if (!caller || caller === "unknown") throw new Error("无法识别当前用户，未读取绘图参考记忆。")
+  validateMemoryImageSelection(selection)
   const ownSelection = selection.scope === "self" || (selection.scope === "user" && selection.userId === caller)
     || (selection.scope === "users" && selection.userIds?.every(id => id === caller))
   if (!ownSelection && event.isMaster !== true) throw new Error("只有主人可以使用他人、本群成员或全部用户的全量记忆作图。")

@@ -4,6 +4,7 @@ import { sqliteClient } from "../storage/sqlite/client.js"
 import type { UnknownRecord } from "../message/types.js"
 import { conversationScopeMatches, conversationStore, parseConversationKey } from "./conversation-store.js"
 import { scopeFor } from "./chat-support.js"
+import { artifactStore } from "../../tools/support/artifact-store.js"
 
 export interface ConversationEntry extends UnknownRecord {
   sessionId?: string
@@ -188,6 +189,8 @@ export class ConversationState {
           this.conversations.delete(key)
           clearedKeys.add(key)
         }
+        artifactStore.clearKeys(clearedKeys)
+        artifactStore.clearWhere(key => userIds.some(userId => this.scopeMatches(parseConversationKey(key), event, userId)))
         return clearedKeys.size
       } finally {
         this.cleanupGenerations({ scopeKeys })
@@ -203,6 +206,7 @@ export class ConversationState {
       const clearedKeys = new Set(await conversationStore.clearAllKeys())
       for (const key of this.conversations.keys()) clearedKeys.add(key)
       this.conversations.clear()
+      artifactStore.clear()
       return clearedKeys.size
     })
   }
@@ -216,6 +220,7 @@ export class ConversationState {
         for (const key of normalized) {
           if (this.conversations.delete(key)) clearedKeys.add(key)
         }
+        artifactStore.clearKeys(normalized)
         return clearedKeys.size
       } finally {
         this.cleanupGenerations({ keys: normalized })

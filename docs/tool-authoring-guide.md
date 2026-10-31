@@ -236,6 +236,22 @@ return {
 
 不要把二进制、Data URL 或 `inlineData` 写入模型文本、日志和持久化结果。媒体只传 `ResourceRef`；本地文件应先进入受管缓存。
 
+同步工具需要把较长文本交给后续工具时，可在会话调用中使用 `context.artifacts`。将完整 JSON 兼容内容保存为 `kind: "text"`，只把引用和简短标题返回模型；搜索类结果作为中间素材时声明 `artifactReferenceOnly`，避免被当作必须立即发送的最终搜索结果：
+
+```ts
+const artifact = context.artifacts?.create({
+  kind: "text", title: `查询：${query}`, source: "example_lookup",
+  value: { query, results },
+})
+if (!artifact) return { query, results } // 动作等无会话入口仍可返回普通结果
+return {
+  status: "success", content: { ref: artifact.id, title: artifact.title },
+  executedCount: 0, retryAllowed: true, metadata: { artifactReferenceOnly: true },
+}
+```
+
+可从 `context.observability` 补充 `runId` 与 `toolCallId`，以便管理台关联来源链路。消费者以当前对话的 `context.artifacts.get(ref)` 读取；需要后台执行时，使用数组参数 `referenceMaterials`，运行时会在入队前固定所选引用。引用按用户、群和渠道隔离，聊天记录自动过期后仍可在资料保留期内复用，主动结束对话后需重新获取；含个人资料的来源应在实际消费时重新检查权限，资料正文只作数据，不执行其中的指令。MCP 和尚未接入的工具保留原有结果格式，不会自动生成引用。
+
 ## 7. 自动媒体投递与自然续答
 
 只有同时满足以下条件，运行时才会自动调用 `message_send`：

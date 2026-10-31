@@ -5,6 +5,8 @@ import { memoryStore, profileLines, scopeKey } from "../../memory/store.js"
 import { isExplicitMemoryIntent } from "../../memory/write-policy.js"
 import type { UnknownRecord } from "../../core/message/types.js"
 import type { ToolExecutionContext } from "../support/tool-contract.js"
+import { prepareMemoryReference } from "../../memory/image-reference.js"
+import { groupKey } from "../../memory/scopes.js"
 
 function text(value: unknown): string {
   return typeof value === "string" ? value : String(value ?? "")
@@ -205,11 +207,11 @@ export class MemoryManageTool {
     forget: { effect: "non_idempotent", repeatPolicy: "dedupe", targetFields: ["id"], operationFields: ["id"], retryPolicy: "no_ambiguous_retry", maxAttempts: 1 },
     profile_write: { effect: "non_idempotent", repeatPolicy: "dedupe", operationFields: ["profile", "name", "pronouns", "interests", "preferences", "dislikes", "communicationStyle", "notes"], retryPolicy: "no_ambiguous_retry", maxAttempts: 1 },
   }
-  description = "Manage long-term memory and the current user's profile. Actions: search, list, write, forget, profile_read, profile_write. For an explicit request to read or summarize ALL of the user’s memories, use list with all=true; copy nextCursor into cursor to continue. If restartRequired=true, data changed or the cursor is invalid: restart without cursor or report the incomplete read. If sourceComplete=false and no next page, explain the limitation instead of repeating empty reads. Never describe a partial result as complete. Only write stable, confirmed information; use forget only when the user asks to delete it."
+  description = "Manage long-term memory and the current user's profile. Actions: search, list, reference, write, forget, profile_read, profile_write. Use reference when the user asks to use personal memories as material for another tool; it returns a reference without putting full memories in chat. Its target comes from the real message and is permission-checked. For an explicit request to read or summarize ALL of the user’s memories, use list with all=true; copy nextCursor into cursor to continue. If restartRequired=true, data changed or the cursor is invalid: restart without cursor or report the incomplete read. If sourceComplete=false and no next page, explain the limitation instead of repeating empty reads. Never describe a partial result as complete. Only write stable, confirmed information; use forget only when the user asks to delete it."
   parameters = {
     type: "object",
     properties: {
-      action: { type: "string", enum: ["search", "list", "write", "forget", "profile_read", "profile_write"], description: "Memory or profile operation." },
+      action: { type: "string", enum: ["search", "list", "reference", "write", "forget", "profile_read", "profile_write"], description: "Memory or profile operation." },
       query: { type: "string", description: "Memory search query." },
       fact: { type: "string", description: "Concise stable fact to remember." },
       factKey: { type: "string", description: "Optional stable slot shared with daily extraction, e.g. identity.city, communication.style, preference.coffee. Reuse existing keys." },
@@ -227,7 +229,7 @@ export class MemoryManageTool {
     required: ["action"],
   }
 
-  async execute(args: ToolArgs = {}, context: MemoryToolContext = {}): Promise<string> {
+  async execute(args: ToolArgs = {}, context: MemoryToolContext = {}): Promise<string | UnknownRecord> {
     const profileArgs = args.profile && typeof args.profile === "object" ? { ...args, ...args.profile as UnknownRecord } : args
     if (["write", "profile_write"].includes(text(args.action)) && !isExplicitMemoryIntent(text(context.prompt))) {
       return "没有检测到用户明确的“记住/记下”意图，未写入长期记忆。"
@@ -235,11 +237,21 @@ export class MemoryManageTool {
     switch (args.action) {
       case "search": return args.all === true ? "全量读取请使用 action=list、all=true；search 始终按相关性检索。" : new MemorySearchTool().execute(args, context)
       case "list": return new MemoryListTool().execute(args, context)
+      case "reference": {
+        if (!context.artifacts) return { status: "failed", content: "当前调用没有可用的会话参考资料。", retryAllowed: false }
+        const event = context.e && typeof context.e === "object" ? context.e as UnknownRecord : {}
+        const selection = await prepareMemoryReference(event, text(context.prompt))
+        const observation = context.observability || {}
+        const trace = observation.trace && typeof observation.trace === "object" ? observation.trace as UnknownRecord : {}
+        const label = selection.scope === "users" ? `成员 ${selection.userIds?.join("、")} 的记忆` : selection.scope === "user" ? `成员 ${selection.userId} 的记忆` : selection.scope === "group" ? "本群成员记忆" : selection.scope === "all" ? "全部用户记忆" : "本人记忆"
+        const artifact = context.artifacts.create({ kind: "memory", title: label, source: "memory_manage", runId: text(trace.id), toolCallId: text(observation.toolCallId), value: { ...selection, referenceGroupId: groupKey(event) } })
+        return { status: "success", content: { ref: artifact.id, title: artifact.title }, executedCount: 0, retryAllowed: true, metadata: { artifactReferenceOnly: true } }
+      }
       case "write": return new MemoryWriteTool().execute(args, context)
       case "forget": return new MemoryForgetTool().execute(args, context)
       case "profile_read": return new UserProfileReadTool().execute(args, context)
       case "profile_write": return new UserProfileWriteTool().execute(profileArgs, context)
-      default: return "未知 action，可用：search / list / write / forget / profile_read / profile_write。"
+      default: return "未知 action，可用：search / list / reference / write / forget / profile_read / profile_write。"
     }
   }
 }

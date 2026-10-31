@@ -24,7 +24,7 @@ export function directWebSearchSetupIssues(config: unknown, toolConfig: unknown,
 interface WebSearchContext extends ToolExecutionContext {
   toolConfig?: UnknownRecord
   config?: UnknownRecord
-  searchRouting?: { webSearch?: { strategy?: string } }
+  searchRouting?: { webSearch?: { strategy?: string; source?: string } }
   searchCapabilities?: {
     webSearch?: {
       hosted?: (query: string, args: UnknownRecord, context?: WebSearchContext) => Promise<{ text?: string; sources?: SearchResult[] }>
@@ -49,10 +49,26 @@ function sourceNodeText(result: SearchResult, index: number): string {
   ].filter(Boolean).join("\n")
 }
 
-function searchResultWithForwardSources(content: UnknownRecord, results: SearchResult[]): UnknownRecord {
+function searchResultWithForwardSources(content: UnknownRecord, results: SearchResult[], args: UnknownRecord, context: WebSearchContext): UnknownRecord {
+  let artifact
+  if (context.artifacts) {
+    const observation = context.observability || {}
+    const trace = record(observation.trace)
+    artifact = context.artifacts.create({ kind: "text", title: `搜索：${text(content.query)}`, source: "web_search", runId: text(trace.id), toolCallId: text(observation.toolCallId), value: content })
+  }
+  if (args.resultMode === "reference") {
+    if (!artifact) return { status: "failed", content: "当前调用没有可用的会话参考资料。", retryAllowed: false }
+    return {
+      status: "success",
+      content: { ref: artifact.id, title: artifact.title, results: results.map(item => ({ title: item.title, url: item.url, snippet: item.content.slice(0, 200) })) },
+      executedCount: 0,
+      retryAllowed: true,
+      metadata: { artifactReferenceOnly: true },
+    }
+  }
   return {
     status: "success",
-    content,
+    content: artifact ? { ...content, referenceMaterial: { ref: artifact.id, title: artifact.title } } : content,
     executedCount: 0,
     retryAllowed: true,
     metadata: {
@@ -204,7 +220,7 @@ export class WebSearchTool {
   source = "builtin"
   tags = ["search", "web", "realtime", "news"]
   execution = { effect: "read", repeatPolicy: "bounded", retryPolicy: "safe", maxAttempts: 2, parallelSafe: true }
-  description = "Search current web information through administrator-enabled providers. source=auto uses the configured order and falls back between Baidu AI Search and Tavily. Use this for current facts, news, or information that requires web retrieval. The runtime appends every returned source as merged-forward nodes to the following message_send; synthesize the answer as normal text and do not duplicate the source URLs in that text."
+  description = "Search current web information through administrator-enabled providers. source=auto uses the configured order and falls back between Baidu AI Search and Tavily. Use this for current facts, news, or information that requires web retrieval. Use resultMode=reference when search results are material for a subsequent tool; it returns a reusable ref and short source descriptions. Normal search appends sources to the following message_send."
   configSchema = {
     type: "object",
     properties: {
@@ -216,6 +232,7 @@ export class WebSearchTool {
     type: "object",
     properties: {
       query: { type: "string", description: "Complete natural-language search query." },
+      resultMode: { type: "string", enum: ["answer", "reference"], description: "Use reference for material to pass to a later tool; otherwise answer normally." },
       source: { type: "string", enum: ["auto", ...webSearchSourceIds], default: "auto", description: "Provider. auto follows administrator configuration and fallback." },
       searchMode: { type: "string", enum: ["auto", "fast", "balanced", "deep"], default: "auto", description: "Execution profile. deep searches all administrator-enabled channels in parallel; auto follows model and tool policy." },
       maxResults: { type: "number", description: "Maximum results to return. Defaults to configured value." },
@@ -235,16 +252,17 @@ export class WebSearchTool {
     if (!query) return "缺少网络搜索关键词。"
     const config = record(context.config || configStore.get())
     const cfg = { ...record(record(record(config.tools).builtin).webSearch), ...record(context.toolConfig) }
-    const enabled = (Array.isArray(cfg.enabledSources) ? cfg.enabledSources : webSearchSourceIds)
+    const hostedOnly = context.searchRouting?.webSearch?.source === "hosted"
+    const enabled = (hostedOnly ? [] : (Array.isArray(cfg.enabledSources) ? cfg.enabledSources : webSearchSourceIds))
       .map(item => text(item))
       .filter((item): item is WebSearchSourceId => webSearchSourceIds.includes(item as WebSearchSourceId))
-    if (!enabled.length) return "实时网络搜索没有启用任何渠道。"
+    if (!enabled.length && !context.searchCapabilities?.webSearch?.hosted) return "实时网络搜索没有启用任何渠道。"
     const requested = text(args.source || "auto").toLowerCase()
     if (requested !== "auto" && !enabled.includes(requested as WebSearchSourceId)) return `网络搜索渠道 ${requested} 未启用。`
     const configured = enabled.includes(text(cfg.defaultSource) as WebSearchSourceId) ? text(cfg.defaultSource) as WebSearchSourceId : enabled[0]
     const first = requested === "auto" ? configured : requested as WebSearchSourceId
-    const strategy = requested === "auto" ? searchStrategy(args, cfg, context) : "preferred"
-    const plan = strategy === "preferred" ? [first] : [first, ...enabled.filter(source => source !== first)]
+    const strategy = hostedOnly ? "preferred" : requested === "auto" ? searchStrategy(args, cfg, context) : "preferred"
+    const plan = first ? (strategy === "preferred" ? [first] : [first, ...enabled.filter(source => source !== first)]) : []
     const failures: UnknownRecord[] = []
     const channelResults: UnknownRecord[] = []
     let hostedDigest = ""
@@ -297,10 +315,10 @@ export class WebSearchTool {
           ...(hostedDigest ? { hostedDigest } : {}),
           results: rows,
           hint: "综合各渠道证据做一次最终回答；hostedDigest 是 OpenAI 上游已整理的证据摘要，只需使用一次，不要逐来源重复。相同链接已合并，运行时会把来源以合并转发节点追加到随后的 message_send。",
-        }, rows)
+        }, rows, args, context)
       }
       if (hostedDigest) {
-        return {
+        const content = {
           query,
           source: "openai:web_search",
           strategy,
@@ -311,6 +329,7 @@ export class WebSearchTool {
           hostedDigest,
           hint: "上游返回了搜索摘要但没有结构化来源。请基于摘要作答，并明确说明当前代理没有转发来源字段。",
         }
+        return args.resultMode === "reference" ? searchResultWithForwardSources(content, [], args, context) : content
       }
       return { query, strategy, channelResults, results: [], failures, message: `网络搜索失败：${failures.map(item => `${item.source}: ${item.error}`).join("；")}` }
     }
@@ -326,10 +345,10 @@ export class WebSearchTool {
           ...(hostedDigest ? { hostedDigest } : {}),
           results,
           hint: "根据 OpenAI 托管搜索摘要和来源做一次最终回答；hostedDigest 只需使用一次，运行时会把来源以合并转发节点追加到随后的 message_send。",
-        }, results)
+        }, results, args, context)
       }
       if (hostedDigest) {
-        return {
+        const content = {
           query,
           source: "openai:web_search",
           strategy,
@@ -339,6 +358,7 @@ export class WebSearchTool {
           hostedDigest,
           hint: "上游返回了搜索摘要但没有结构化来源。请基于摘要作答，并明确说明当前代理没有转发来源字段。",
         }
+        return args.resultMode === "reference" ? searchResultWithForwardSources(content, [], args, context) : content
       }
       if (strategy === "preferred") {
         return { query, strategy, channelResults, results: [], failures, message: `网络搜索失败：${failures.map(item => `${item.source}: ${item.error}`).join("；")}` }
@@ -356,7 +376,7 @@ export class WebSearchTool {
           results,
           hint: "根据这些实时搜索结果整理正文；运行时会把全部来源以合并转发节点追加到随后的 message_send，正文无需重复罗列 URL。需要阅读全文可继续调用 website_fetch。",
         }
-        return searchResultWithForwardSources(content, results)
+        return searchResultWithForwardSources(content, results, args, context)
       }
     }
     return { query, strategy, channelResults, results: [], failures, message: `网络搜索失败：${failures.map(item => `${item.source}: ${item.error}`).join("；")}` }

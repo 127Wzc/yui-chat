@@ -321,7 +321,7 @@ export class ToolRegistry {
     if (execution.effect !== toolExecutionEffects.read && execution.dispatchMarking !== "deferred") {
       context.execution?.markDispatched?.()
     }
-    const invoke = async (runContext: RegistryExecutionContext = context): Promise<unknown> => {
+    const invoke = async (runContext: RegistryExecutionContext): Promise<unknown> => {
       await runContext.execution?.beforeInvoke?.()
       const activeConfig = runContext.execution?.beforeInvoke ? configStore.get() : config
       const activeToolConfig = runContext.execution?.beforeInvoke ? resolveToolRuntimeConfig(tool, activeConfig) : toolConfig
@@ -407,6 +407,11 @@ export class ToolRegistry {
     }
     if (execution.background && context.execution?.background !== false) {
       const queue = resolveBackgroundQueue(tool, toolArgs, context, config, toolConfig)
+      const materialRefs = Array.isArray(toolArgs.referenceMaterials) ? toolArgs.referenceMaterials.map(text) : []
+      if (materialRefs.length && !context.artifacts) throw new Error("当前调用没有可用的会话参考资料。")
+      // 任务入队后可能立即开始，也可能晚于本轮会话结束；只交给它选中的资料。
+      const taskArtifacts = materialRefs.length ? context.artifacts?.snapshot(materialRefs) : undefined
+      const taskContext = { ...context, artifacts: taskArtifacts }
       const task = backgroundTaskService.submit({
         name,
         runId: traceId(context),
@@ -418,11 +423,11 @@ export class ToolRegistry {
         retentionMs: queue.retentionMs,
         limitsProvider: queue.limitsProvider,
         execute: signal => invoke({
-          ...context,
+          ...taskContext,
           ...(queue.channelId ? { backgroundChannelId: text(queue.channelId) } : {}),
-          agent: { ...record(context.agent), signal },
+          agent: { ...record(taskContext.agent), signal },
           signal,
-          execution: { ...context.execution, background: false },
+          execution: { ...taskContext.execution, background: false },
         }),
         onComplete: context.execution?.onBackgroundComplete,
       })

@@ -597,6 +597,36 @@
 .logs-model-response pre, .logs-run-response pre { max-height: 360px; margin: 0; padding: 10px; overflow: auto; border-top: 1px solid var(--border); color: var(--foreground); font: 11px/1.55 var(--mono); white-space: pre-wrap; word-break: break-word; }
 .logs-rich-content, .chat-rich-content { min-width: 0; color: var(--foreground); line-height: 1.65; overflow-wrap: anywhere; }
 .logs-rich-content { max-height: 420px; padding: 10px; overflow: auto; }
+.artifact-source-list { display: grid; gap: 8px; margin: 12px 0; }
+.artifact-source { padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--muted); overflow-wrap: anywhere; }
+.artifact-source p { margin: 6px 0; white-space: pre-wrap; }
+.artifact-detail { display: grid; gap: 20px; min-width: 0; }
+.artifact-detail-heading { display: flex; align-items: flex-start; gap: 12px; min-width: 0; }
+.artifact-detail-heading > div { min-width: 0; }
+.artifact-detail-heading h3 { margin: 7px 0 4px; font-size: 15px; overflow-wrap: anywhere; }
+.artifact-detail-heading p, .artifact-section-heading p { margin: 0; color: var(--muted-foreground); font-size: 11.5px; line-height: 1.6; overflow-wrap: anywhere; }
+.artifact-detail-icon { display: grid; flex: 0 0 40px; place-items: center; height: 40px; border-radius: 11px; color: var(--primary); background: var(--primary-weak); }
+.artifact-detail-meta { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; margin: 0; padding: 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--muted); }
+.artifact-detail-meta > div { min-width: 0; }
+.artifact-detail-meta dt { color: var(--muted-foreground); font-size: 11px; }
+.artifact-detail-meta dd { margin: 5px 0 0; font-size: 12px; overflow-wrap: anywhere; }
+.artifact-detail-wide { grid-column: 1 / -1; }
+.artifact-detail-meta .artifact-id { font: 11px/1.5 var(--mono); }
+.artifact-detail-section { min-width: 0; padding-top: 18px; border-top: 1px solid var(--border); }
+.artifact-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.artifact-section-heading h3 { display: flex; align-items: center; gap: 7px; margin: 0 0 4px; font-size: 13px; }
+.artifact-note { display: flex; gap: 8px; align-items: flex-start; margin: 0 0 14px; padding: 10px 12px; border-radius: 8px; color: var(--muted-foreground); background: var(--muted); font-size: 11px; line-height: 1.65; }
+.artifact-note .icon { flex: 0 0 auto; margin-top: 1px; }
+.artifact-memory-list, .artifact-usage-list { display: grid; gap: 8px; }
+.artifact-memory-card { min-width: 0; padding: 11px 12px; border: 1px solid var(--border); border-radius: 9px; background: var(--card); }
+.artifact-memory-card header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.artifact-memory-card p { margin: 8px 0 0; font-size: 12px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.artifact-raw-content { max-height: 420px; margin: 0; padding: 12px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--muted); font: 11.5px/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.artifact-usage-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 11px; border: 1px solid var(--border); border-radius: 8px; }
+.artifact-usage-row > div { display: flex; gap: 4px; flex-direction: column; min-width: 0; }
+.artifact-usage-row b { font-size: 12px; overflow-wrap: anywhere; }
+.artifact-usage-row span { color: var(--muted-foreground); font-size: 11px; }
+@media (max-width: 480px) { .artifact-detail-meta { grid-template-columns: 1fr; } .artifact-detail-wide { grid-column: auto; } }
 .logs-rich-content > :first-child, .chat-rich-content > :first-child { margin-top: 0; }
 .logs-rich-content > :last-child, .chat-rich-content > :last-child { margin-bottom: 0; }
 .logs-rich-content h1, .logs-rich-content h2, .logs-rich-content h3, .logs-rich-content h4, .chat-rich-content h1, .chat-rich-content h2, .chat-rich-content h3, .chat-rich-content h4 { margin: 12px 0 7px; color: var(--foreground); line-height: 1.3; }

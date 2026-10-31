@@ -1,6 +1,9 @@
 import { requireWebAuth as auth } from "../auth.js"
 import { handleRoute } from "../route-handler.js"
 import { modelLogStore } from "../../../core/observability/model-log.js"
+import { artifactStore } from "../../../tools/support/artifact-store.js"
+import { parseConversationKey } from "../../../core/chat/conversation-store.js"
+import { previewMemoryReference } from "../../../memory/image-reference.js"
 import type { UnknownRecord } from "../../../core/message/types.js"
 
 interface WebRequest {
@@ -12,6 +15,7 @@ interface WebRequest {
 interface WebResponse {
   json(payload: UnknownRecord): unknown
   status(code: number): WebResponse
+  setHeader(name: string, value: string): unknown
 }
 
 interface WebApp {
@@ -64,6 +68,51 @@ function missingRunError(): Error & { statusCode: number } {
 
 /** 注册日志查询与清理接口；日志详情只读，清理仍通过统一存储队列执行。 */
 export function registerObservabilityRoutes(app: WebApp): void {
+  app.get("/api/artifacts", auth, handleRoute(async (_rawRequest, rawResponse) => {
+    const res = response(rawResponse)
+    res.setHeader("Cache-Control", "no-store")
+    res.json({ ok: true, items: artifactStore.list() })
+  }))
+
+  app.get("/api/artifacts/:id", auth, handleRoute(async (rawRequest, rawResponse) => {
+    const req = request(rawRequest)
+    const res = response(rawResponse)
+    res.setHeader("Cache-Control", "no-store")
+    const item = artifactStore.get(String(req.params?.id || ""))
+    if (!item) throw Object.assign(new Error("参考资料不存在或已过期"), { statusCode: 404 })
+    res.json({ ok: true, item })
+  }))
+
+  app.get("/api/artifacts/:id/memory", auth, handleRoute(async (rawRequest, rawResponse) => {
+    const req = request(rawRequest)
+    const res = response(rawResponse)
+    res.setHeader("Cache-Control", "no-store")
+    const item = artifactStore.get(String(req.params?.id || ""))
+    if (!item) throw Object.assign(new Error("参考资料不存在或已过期"), { statusCode: 404 })
+    if (item.kind !== "memory") throw Object.assign(new Error("这份资料不是记忆引用"), { statusCode: 400 })
+    const scope = parseConversationKey(item.conversationKey)
+    if (scope.type === "unknown" || !scope.userId || scope.userId !== item.userId) throw new Error("无法识别参考资料的对话归属。")
+    const value = record(item.value)
+    const groupId = typeof value.referenceGroupId === "string" ? value.referenceGroupId : scope.type === "group" ? scope.groupId || "" : ""
+    const items = await previewMemoryReference(item.value, scope.userId, groupId)
+    res.json({ ok: true, items })
+  }))
+
+  app.post("/api/artifacts/:id/delete", auth, handleRoute(async (rawRequest, rawResponse) => {
+    const req = request(rawRequest)
+    const res = response(rawResponse)
+    if (!artifactStore.delete(String(req.params?.id || ""))) throw Object.assign(new Error("参考资料不存在或已过期"), { statusCode: 404 })
+    res.json({ ok: true })
+  }))
+
+  app.post("/api/artifacts/clear", auth, handleRoute(async (rawRequest, rawResponse) => {
+    const req = request(rawRequest)
+    const res = response(rawResponse)
+    if (record(req.body).all !== true) throw new Error("请明确指定清空全部参考资料。")
+    artifactStore.clear()
+    res.json({ ok: true })
+  }, { errorStatus: 400 }))
+
   app.get("/api/logs/summary", auth, handleRoute(async (rawRequest, rawResponse) => {
     const req = request(rawRequest)
     const res = response(rawResponse)

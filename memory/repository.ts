@@ -4,7 +4,7 @@ import crypto from "node:crypto"
 import { sqliteClient } from "../core/storage/sqlite/client.js"
 import type { SqliteOperation } from "../core/storage/types.js"
 import { vectorRecall } from "./vector-recall.js"
-import type { MemoryImageSelection } from "./image-request.js"
+import { MAX_MEMORY_IMAGE_USERS, type MemoryImageSelection } from "./image-request.js"
 
 type UnknownRecord = Record<string, unknown>
 
@@ -333,10 +333,13 @@ export class MemoryRepository {
       )) OR (scope_type='user_group' AND group_id=?))`
       params.push(groupId, groupId, caller, groupId)
     }
-    const rows = await sqliteClient.all<MemoryItem>(`SELECT * FROM memory_items WHERE ${scope}
-      AND type IN ('fact','episode') AND NOT (type='episode' AND source='interaction')
-      AND status IN ('active','warm','cold') AND (expires_at=0 OR expires_at>?)
-      ORDER BY owner_id, scope_type, group_id, id`, [...params, Date.now()])
+    const condition = `${scope} AND type IN ('fact','episode') AND NOT (type='episode' AND source='interaction')
+      AND status IN ('active','warm','cold') AND (expires_at=0 OR expires_at>?)`
+    const limitOwners = selection.scope === "group" || selection.scope === "all"
+    const now = Date.now()
+    const rows = await sqliteClient.all<MemoryItem>(`SELECT * FROM memory_items WHERE ${condition}
+      ${limitOwners ? `AND owner_id IN (SELECT owner_id FROM memory_items WHERE ${condition} GROUP BY owner_id ORDER BY owner_id LIMIT ${MAX_MEMORY_IMAGE_USERS})` : ""}
+      ORDER BY owner_id, scope_type, group_id, id`, limitOwners ? [...params, now, ...params, now] : [...params, now])
     return rows.filter(row => ["active", "warm", "cold"].includes(statusFor(row))).map(row => ({ ...row, tags: parse(row.tags_json) }))
   }
 

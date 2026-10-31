@@ -12,6 +12,7 @@ import { applyInputFilters, type MessageFilterResult } from "../../filters/messa
 import { conversationStore } from "./conversation-store.js"
 import { modelLogStore } from "../observability/model-log.js"
 import type { UnknownRecord } from "../message/types.js"
+import { artifactStore } from "../../tools/support/artifact-store.js"
 import {
   addUsage,
   emptyUsage,
@@ -245,6 +246,14 @@ export async function sendConversation(
 
     const sessionId = text(conversation.sessionId) || crypto.randomUUID()
     if (trace && typeof trace === "object") (trace as unknown as UnknownRecord).sessionId = sessionId
+    const artifacts = artifactStore.open({
+      key,
+      sessionId,
+      userId: text(record(event).user_id),
+      groupId: text(record(event).group_id),
+      maxScopes: number(chat.maxConversationScopes, 1000),
+      isCurrent: () => runtime.conversationVersionCurrent(conversationVersion),
+    })
 
     await recentContextStore.buildPromptWithHistory(event)
     if (media && mediaEnabled) {
@@ -301,6 +310,7 @@ export async function sendConversation(
       extraSystemPrompt: text(options.extraSystemPrompt),
       disableTools: options.disableTools === true,
       trace,
+      artifacts,
     })
     const stepResults = [record(result)]
     if (result.status === "error") {

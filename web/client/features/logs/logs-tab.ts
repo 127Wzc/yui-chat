@@ -5,6 +5,7 @@ import { asRecord, errorMessage, type UnknownRecord } from "../../shared/data.js
 import { renderRichContent } from "../../shared/rich-content.js"
 import { modelMessagesImageCount } from "./log-media-display.js"
 import { LogContextView } from "./log-context-display.js"
+import { ArtifactPanel } from "./artifact-panel.js"
 
 interface ModelRef extends UnknownRecord {
   id?: string
@@ -543,7 +544,7 @@ function lineageLabel(value: unknown = ""): string {
 
 export const LogsTab = {
   name: "LogsTab",
-  components: { LogContextView },
+  components: { LogContextView, ArtifactPanel },
   setup() {
     const state = reactive<LogState>({
       summary: null,
@@ -948,6 +949,7 @@ export const LogsTab = {
       </section>
       <div v-if="state.error" class="slice-error-banner"><Icon name="alert" :size="17" /><p>{{ state.error }}</p></div>
 
+      <ArtifactPanel @open-run="openRun({ id: $event })" />
       <Panel title="运行链路日志" icon="list">
         <template #actions><span class="muted tiny">{{ state.runs.length }} 条当前结果</span></template>
         <div class="logs-filter-scroll">
