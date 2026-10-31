@@ -320,7 +320,11 @@ export class MemoryRepository {
     if (selection.scope === "self" || selection.scope === "user") return this.listOwnMemories(selection.userId || caller, groupId)
     const params: unknown[] = []
     let scope = "scope_type IN ('user','user_group')"
-    if (selection.scope === "group") {
+    if (selection.scope === "users") {
+      const userIds = selection.userIds || []
+      scope = `owner_id IN (${userIds.map(() => "?").join(",")}) AND ((scope_type='user' AND group_id='') OR (scope_type='user_group' AND group_id=? AND ?<>''))`
+      params.push(...userIds, groupId, groupId)
+    } else if (selection.scope === "group") {
       // 与管理端成员目录相同：本群有已采集发言或个人本群记忆的成员；不扫描其他群。
       scope = `((scope_type='user' AND group_id='' AND owner_id IN (
         SELECT sender_id FROM group_memory_messages WHERE group_id=?

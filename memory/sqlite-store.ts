@@ -1,5 +1,5 @@
 import { FULL_MEMORY_READ_HINT, isFullOwnMemoryRequest } from "./full-read.js"
-import { assertMemoryImageSelection, isMemoryImageRequest, MEMORY_IMAGE_HINT } from "./image-request.js"
+import { assertMemoryImageSelection, isMemoryImageRequest, limitMemoryImageSelection, MEMORY_IMAGE_HINT } from "./image-request.js"
 import type { MemoryImageRead, MemoryImageSelection } from "./image-request.js"
 import { configStore } from "../config/store.js"
 import { sqliteClient } from "../core/storage/sqlite/client.js"
@@ -389,10 +389,11 @@ export class SqliteMemoryStore {
   }
 
   async listImageMemories(e: UnknownRecord, selection: MemoryImageSelection): Promise<MemoryImageRead> {
-    assertMemoryImageSelection(e, selection)
+    const limited = limitMemoryImageSelection(selection)
+    assertMemoryImageSelection(e, limited)
     if (record(configStore.get().memory).enabled === false) throw new Error("记忆功能未启用")
     await this.load()
-    return { items: (await memoryRepository.listImageMemories(selection, userKey(e), groupKey(e))).map(toLegacy), complete: true }
+    return { items: (await memoryRepository.listImageMemories(limited, userKey(e), groupKey(e))).map(toLegacy), complete: true }
   }
 
   async listMemories(e: UnknownRecord, opts: StoreOptions = {}): Promise<UnknownRecord[]> {
