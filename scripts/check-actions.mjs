@@ -22,8 +22,8 @@ let server, sqliteClient, modelLogStore, sourceFixture
 try {
   const { configStore } = await import("../output/runtime/config/store.js")
   const { parseAction, parseActions, figurineAction, matchAction, actionRule } = await import("../output/runtime/core/actions/contract.js")
-  const { bindActionArguments, runAction, actionAccess, defaultActionRole } = await import("../output/runtime/core/actions/execution.js")
-  const { formatActionReply, extractActionResult } = await import("../output/runtime/core/actions/reply.js")
+  const { bindActionArguments, runAction, actionAccess, defaultActionRole, resolveActionTool } = await import("../output/runtime/core/actions/execution.js")
+  const { formatActionReply, formatImageActionReply, extractActionResult } = await import("../output/runtime/core/actions/reply.js")
   const { normalizeToolResult } = await import("../output/runtime/tools/support/execution-runtime.js")
   const { WebSearchTool, directWebSearchSetupIssues } = await import("../output/runtime/tools/builtins/web-search.js")
   const { actionParameterFields, parameterInputValue, parseParameterInput, updateParameterValue } = await import("../output/runtime/web/client/features/actions/parameter-fields.js")
@@ -84,6 +84,28 @@ try {
     assert.equal(listing.body.prefix, "#yui")
     assert.equal(listing.body.roles.length, 4)
     assert.equal(listing.body.examples.length, 2)
+    assert.deepEqual(listing.body.templateGroups.map(group => [group.id, group.items.length]), [["drawing",1],["lookup",1],["entertainment",1],["project",1]])
+    assert(listing.body.templateGroups.flatMap(group => group.items).every(item => item.enabled === false), "templates do not enable or register actions")
+    assert.equal(listing.body.templateGroups[0].items[0].minRole, defaultActionRole(toolRegistry.get("generate_image")), "template drafts inherit the current tool role")
+    assert.equal(listing.body.templateGroups[2].items[0].minRole, "master", "unavailable tools do not default to public access")
+    const sourceTemplate = listing.body.templateGroups[3].items[0]
+    assert.equal(sourceTemplate.minRole, defaultActionRole(resolveActionTool(sourceTemplate)), "source drafts inherit their actual execution policy")
+    assert.equal(Object.keys(configStore.get().actions.items).length, 2, "listing templates does not modify configuration")
+    const imageTemplate = listing.body.templateGroups[0].items[0]
+    assert.equal(imageTemplate.textTemplate, "", "the generic drawing template adds no fixed prompt")
+    assert.equal(imageTemplate.input.mode, "text")
+    assert.equal(imageTemplate.input.requireImage, false)
+    assert.equal(imageTemplate.input.avatarFallback, false)
+    const genericPreview = await api("/api/actions/preview", "POST", {action:imageTemplate,message:"#yui画图 雨中的橘猫",imageCount:0})
+    assert.equal(genericPreview.status, 200)
+    assert.equal(genericPreview.body.preview.arguments.prompt, "雨中的橘猫", "ordinary command text becomes the drawing prompt")
+    assert.deepEqual(genericPreview.body.preview.arguments.referenceImages, [], "drawing works without a reference or automatic avatar")
+    const originalActions = structuredClone(configStore.get().actions.items)
+    const savedDrawing = await api("/api/actions", "POST", {action:imageTemplate})
+    assert.equal(savedDrawing.status, 200)
+    assert.equal(configStore.get().actions.items[savedDrawing.body.id].enabled, false)
+    for (const [id, action] of Object.entries(originalActions)) assert.deepEqual(configStore.get().actions.items[id], action, "creating a template does not alter saved actions")
+    await configStore.update(config=>{delete config.actions.items[savedDrawing.body.id]})
     assert.deepEqual(listing.body.examples.map(item=>item.kind), ["tool", "source"])
     assert(listing.body.examples.every(item=>item.enabled === false))
     const exampleDraft = listing.body.examples[0]
@@ -115,6 +137,7 @@ try {
     const parameterSchema = { type:"object", properties:{ query:{type:"string"}, tags:{type:"array",items:{type:"string"}}, options:{type:"object"}, count:{type:"integer",enum:[1,2],default:1,minimum:1,maximum:2}, active:{type:"boolean"} }, required:["query","tags"] }
     const editorAction = {...base,textParam:"query",textTemplate:"{{text}}"}
     assert.deepEqual(actionEditorIssues(editorAction,'{"tags":["ok"]}',parameterSchema,[],[]),[])
+    assert.deepEqual(actionEditorIssues({...editorAction,name:""},'{"tags":["ok"]}',parameterSchema,[],[]),[],"a command does not need a separate name")
     assert(actionEditorIssues({...editorAction,textTemplate:"{{unknown}}"},'{"tags":[]}',parameterSchema,[],[]).some(issue=>issue.step===2 && issue.message.includes("unknown")))
     assert(actionEditorIssues(editorAction,'{"tags":[1]}',parameterSchema,[],[]).some(issue=>issue.message.includes("tags[0]")))
     assert(actionEditorIssues(editorAction,'{}',parameterSchema,[],[]).some(issue=>issue.message.includes("必填参数 tags")))
@@ -164,6 +187,31 @@ try {
     await configStore.update(config=>{config.tools.builtin.webSearch=oldSearchConfig;delete config.tools.runtimeVariables.web_search})
     assert.equal(matchAction(base, "#yui回声 hello"), "hello")
     assert.equal(matchAction(base, "#yui回声词"), null)
+    const noteAction = parseAction({ ...base, name:"", command:"简洁回声", description:"这是一条备注" })
+    assert.equal(noteAction.name, "简洁回声", "the command supplies the internal name when omitted")
+    assert.equal(parseAction({ ...base, name:undefined }).name, "回声")
+    assert.throws(() => parseAction({ ...base, name:42 }), /名称必须是文字/)
+    assert.equal(matchAction(noteAction, "#yui简洁回声 hello"), "hello")
+    assert.equal(matchAction(noteAction, "#yui这是一条备注"), null, "remarks never become triggers")
+    assert.equal(matchAction({ ...noteAction, name:"历史展示名" }, "#yui历史展示名"), null, "display names never become triggers")
+    const createdNote = await api("/api/actions", "POST", { action:{...noteAction,name:"",enabled:false} })
+    assert.equal(createdNote.status, 200)
+    const storedNote = configStore.get().actions.items[createdNote.body.id]
+    assert.equal(storedNote.name, "简洁回声")
+    assert.equal(storedNote.description, "这是一条备注")
+    await configStore.update(config=>{delete config.actions.items[createdNote.body.id]})
+    assert.equal(base.ignorePrefix, false, "existing actions require the configured prefix")
+    assert.equal(matchAction(base, "回声 hello"), null)
+    const noPrefix = parseAction({ ...base, aliases: ["复述", "再说"], ignorePrefix: true })
+    for (const [message, expected] of [["回声", ""], ["#yui回声 hello", "hello"], ["回声 hello", "hello"], ["复述 测试", "测试"], ["#yui复述 测试", "测试"], ["再说 内容", "内容"]]) {
+      assert.equal(matchAction(noPrefix, message), expected, `optional prefix supports ${message}`)
+      assert(new RegExp(actionRule(noPrefix)).test(message), "the host rule matches the same forms")
+    }
+    for (const message of ["回声词", "复述一下", "请复述 测试", "#其他复述 测试"]) assert.equal(matchAction(noPrefix, message), null, "a command must be complete and at the start")
+    const literal = parseAction({ ...noPrefix, command: "回声.+", aliases: [] })
+    assert.equal(matchAction(literal, "回声.+ 内容"), "内容")
+    assert.equal(matchAction(literal, "回声XX 内容"), null, "command text is escaped before constructing rules")
+    assert.throws(() => parseAction({ ...base, ignorePrefix: "true" }), /开关/)
     assert.throws(() => parseAction({ ...base, command: "面板" }), /保留/)
     assert.throws(() => parseAction({ ...base, minRole: "superuser" }), /无效/)
     assert.throws(() => parseAction({ ...base, defaults: { token: "secret" } }), /不允许/)
@@ -178,11 +226,128 @@ try {
     assert.doesNotThrow(() => parseActions({ categories: [{id:"lookup",name:"查询"}], items: { echo: base, dupe: {...aliasConflict, enabled:false} } }))
     const rejectedDuplicate = await api("/api/actions", "POST", {action:aliasConflict})
     assert.equal(rejectedDuplicate.status, 400, "save rejects aliases owned by another active action")
-    const copy = parseAction({ ...base, id: "copy", command: "回声二" })
+    const copy = parseAction({ ...base, id: "copy", command: "回声二", aliases: ["再说"], ignorePrefix: true })
     copy.defaults.count = 2
     assert.equal(base.defaults.count, 1)
     assert.equal(copy.tool, base.tool)
     const event = { user_id: "user-1", isGroup: true, group_id: "group-1", sender: { nickname: "小明", role: "member" }, reply: async () => {} }
+    const savedFree = await api("/api/actions", "POST", { action: { ...base, name:"免前缀验证", command:"直接回声", description:"旧动作备注", aliases:["直说"], ignorePrefix:true, minRole:"master" } })
+    assert.equal(savedFree.status, 200)
+    const freeItem = (await api("/api/actions")).body.items.find(item => item.id === savedFree.body.id)
+    assert.equal(freeItem.ignorePrefix, true, "the setting is persisted and returned by the API")
+    const freePreview = await api("/api/actions/preview", "POST", { action:freeItem, message:"直说 测试", role:"user" })
+    assert.equal(freePreview.body.preview.matched, true)
+    assert.equal(freePreview.body.preview.access.allowed, false, "unprefixed previews retain the action's permissions")
+    assert.equal(freePreview.body.preview.arguments.text, "你好 10001：测试")
+    const freeEntry = createActionEntries(configStore.get()).find(item => item.name.includes("免前缀验证"))
+    assert(freeEntry.plugin.rule[0].reg.test("直接回声 测试"))
+    assert(freeEntry.plugin.rule[0].reg.test("直说 测试"))
+    const freeReplies = [], callsBeforeFree = calls
+    const deniedFree = new freeEntry.class()
+    deniedFree.e = { ...event, msg:"直说 测试", message_id:"free-denied", reply:async value => freeReplies.push(value) }
+    await deniedFree.run()
+    assert.equal(calls, callsBeforeFree, "unprefixed commands do not bypass authorization")
+    assert(freeReplies.some(value => String(value).includes("权限")))
+    const acceptedFree = new freeEntry.class()
+    acceptedFree.e = { ...event, isMaster:true, msg:"直接回声 测试", message_id:"free-allowed", reply:async value => freeReplies.push(value) }
+    await acceptedFree.run()
+    assert.equal(calls, callsBeforeFree + 1, "the registered command executes after authorization")
+    assert.equal(lastArgs.text, "你好 小明：测试")
+    const helpFree = actionHelp({ ...event, isMaster:true, msg:"#yui指令说明 免前缀验证" })
+    assert(helpFree.includes("#yui直说") && helpFree.includes("可省略前缀") && helpFree.includes("备注：旧动作备注"), "help explains the alias, remark and optional prefix")
+    const prefixRequired = await api("/api/actions/" + freeItem.id, "PUT", { action:{...freeItem,ignorePrefix:false,description:"修改后的备注"}, version:freeItem.version })
+    assert.equal(prefixRequired.status, 200)
+    assert.equal(configStore.get().actions.items[freeItem.id].name, "免前缀验证", "editing a remark preserves a legacy display name")
+    assert.equal(configStore.get().actions.items[freeItem.id].description, "修改后的备注")
+    const updatedEntry = createActionEntries(configStore.get()).find(item => item.name.includes("免前缀验证"))
+    assert.equal(updatedEntry.plugin.rule[0].reg.test("直说 测试"), false, "updated host rules require the prefix again")
+    const staleFree = new freeEntry.class()
+    staleFree.e = { ...event, isMaster:true, msg:"直说 测试", message_id:"free-stale", reply:async value => freeReplies.push(value) }
+    assert.equal(await staleFree.run(), false, "a stale host entry rechecks the saved prefix setting")
+    assert.equal(calls, callsBeforeFree + 1)
+    await configStore.update(config=>{delete config.actions.items[savedFree.body.id]})
+
+    // 用真实编辑器状态和本地 HTTP 路由验证新动作与旧展示名的保存、复制和预览。
+    const originalFetch = global.fetch, originalLocation = global.location, originalStorage = global.localStorage
+    global.location = { pathname:"/yui-chat", hash:"#actions", search:"" }
+    global.localStorage = { getItem() { return null } }
+    global.fetch = (url, options) => originalFetch(new URL(String(url), origin), options)
+    const uiIds = []
+    let editorApp
+    try {
+      const { createRenderer, h, compile } = await import("vue")
+      const clientModule = new URL("../output/runtime/web/client/features/actions/actions-tab.js", import.meta.url)
+      const storeSpecifier = (await fs.readFile(clientModule, "utf8")).match(/from "([^"]+store\/store\.js[^"]*)"/)?.[1]
+      assert(storeSpecifier)
+      const { store:clientStore } = await import(new URL(storeSpecifier, clientModule).href)
+      const { ActionsTab } = await import(clientModule.href)
+      compile(ActionsTab.template, { onError(error) { throw error } })
+      clientStore.token = "actions-test-local"
+      clientStore.actions = (await api("/api/actions")).body
+      const renderer = createRenderer({ createElement:tag=>({tag}), createComment:()=>({}), createText:()=>({}), patchProp(){}, insert(){}, remove(){}, setElementText(){}, setText(){}, parentNode(){return null}, nextSibling(){return null} })
+      let editor
+      editorApp = renderer.createApp({ setup() { editor = ActionsTab.setup(); return () => h("div") } })
+      editorApp.mount({})
+      await editor.open()
+      editor.draft.command = "空白动作"
+      editor.selectTool("action_echo")
+      editor.draft.enabled = false
+      await editor.save()
+      assert.equal(editor.editorError.value, "")
+      const blankId = editor.editingId.value
+      uiIds.push(blankId)
+      assert.equal(configStore.get().actions.items[blankId].name, "空白动作", "blank actions also need no separately entered name")
+      assert.equal(configStore.get().actions.items[blankId].description, "")
+      await editor.close()
+      await editor.fromTemplate(clientStore.actions.templateGroups[0].items[0])
+      editor.draft.command = "画图甲"
+      editor.draft.description = ""
+      await editor.save()
+      assert.equal(editor.editorError.value, "")
+      const newId = editor.editingId.value
+      uiIds.push(newId)
+      assert.equal(configStore.get().actions.items[newId].name, "画图甲", "new template drafts need no separately entered name")
+      await editor.close()
+      await editor.open(clientStore.actions.items.find(item=>item.id===newId))
+      editor.draft.command = "画图乙"
+      editor.replyStage.value = "start"
+      await editor.previewReply()
+      assert(editor.replyPreview.value.message.includes("画图乙"), "new replies follow a changed command before saving")
+      await editor.save()
+      assert.equal(editor.editorError.value, "")
+      assert.equal(configStore.get().actions.items[newId].name, "画图乙", "new names continue to follow an edited command")
+      await editor.close()
+
+      const legacyCreated = await api("/api/actions", "POST", {action:{...imageTemplate,name:"历史展示名",command:"旧画图",description:"旧备注",enabled:false}})
+      assert.equal(legacyCreated.status, 200)
+      const legacyId = legacyCreated.body.id
+      uiIds.push(legacyId)
+      clientStore.actions = (await api("/api/actions")).body
+      await editor.open(clientStore.actions.items.find(item=>item.id===legacyId))
+      assert.equal(editor.preserveLegacyName.value, true)
+      editor.draft.command = "更新的画图"
+      editor.draft.description = "更新的备注"
+      editor.replyStage.value = "start"
+      await editor.previewReply()
+      assert(editor.replyPreview.value.message.includes("历史展示名"), "legacy reply previews keep the saved display name")
+      await editor.save()
+      assert.equal(editor.editorError.value, "")
+      assert.equal(configStore.get().actions.items[legacyId].name, "历史展示名", "editing a legacy command preserves its display name")
+      assert.equal(configStore.get().actions.items[legacyId].description, "更新的备注")
+      await editor.close()
+      await editor.open(clientStore.actions.items.find(item=>item.id===legacyId), true)
+      const copyCommandName = editor.draft.command
+      await editor.save()
+      assert.equal(editor.editorError.value, "")
+      const copyId = editor.editingId.value
+      uiIds.push(copyId)
+      assert.equal(configStore.get().actions.items[copyId].name, copyCommandName, "a copied action uses its own command as its name")
+      assert.equal(configStore.get().actions.items[legacyId].name, "历史展示名")
+    } finally {
+      editorApp?.unmount()
+      global.fetch = originalFetch; global.location = originalLocation; global.localStorage = originalStorage
+      if (uiIds.length) await configStore.update(config=>{for (const id of uiIds) delete config.actions.items[id]})
+    }
     assert.equal(actionAccess(base, event, configStore.get()).allowed, true)
     for (const [minRole, role, isMaster, allowed] of [["groupAdmin","member",false,false],["groupAdmin","admin",false,true],["groupOwner","admin",false,false],["groupOwner","owner",false,true],["master","owner",false,false],["master","member",true,true]]) {
       assert.equal(actionAccess({ ...base, minRole }, { ...event, isMaster, sender: {role} }, configStore.get()).allowed, allowed)
@@ -224,6 +389,9 @@ try {
     assert.equal(calls, beforePreview)
     const missing = await api("/api/actions/preview", "POST", { action: figurineAction(), imageCount: 0 })
     assert(missing.body.preview.issues.some(value => value.includes("参考图片")))
+    const avatarPreview = await api("/api/actions/preview", "POST", { action: {...figurineAction(),input:{images:"current-and-quote",requireImage:true,avatarFallback:true}}, imageCount:0 })
+    assert(!avatarPreview.body.preview.issues.some(value => value.includes("参考图片")))
+    assert.match(avatarPreview.body.preview.arguments.referenceImages[0], /nk=10001/, "preview shows the configured avatar fallback")
     await assert.rejects(runAction(figurineAction(), "", event), /图片/)
     assert.equal(calls, beforePreview)
     const current = "https://example.com/current.png", quoted = "https://example.com/quote.png"
@@ -231,6 +399,32 @@ try {
     assert.deepEqual(lastArgs.referenceImages, [current])
     await runAction(figurineAction(), "", { ...event, img: [quoted], source: { message_id: "quoted" }, getMsg: async () => ({message_id:"quoted", message:[{type:"image",url:quoted}]}) })
     assert.deepEqual(lastArgs.referenceImages, [quoted], "quoted image is used by default without host duplicates")
+    const mergedDrawing = parseAction({...figurineAction(),input:{images:"current-and-quote",requireImage:true,avatarFallback:true}})
+    await configStore.update(config=>{config.actions.items.figurine=mergedDrawing})
+    await runAction(mergedDrawing, "", { ...event, message: [{type:"image",url:current}], source: { message_id:"quoted" }, getMsg: async () => ({message_id:"quoted", message:[{type:"image",url:quoted}]}) })
+    assert.deepEqual(lastArgs.referenceImages, [current,quoted], "drawing templates merge current and quoted images")
+    await runAction(mergedDrawing, "", { ...event, user_id:"12345", message:[{type:"at",qq:"23456"}] })
+    assert.match(lastArgs.referenceImages[0], /nk=23456/, "avatar fallback uses the real mention")
+    await configStore.update(config=>{config.actions.items.figurine=figurineAction()})
+    const presetInputAction = parseAction({...figurineAction(),id:"preset-input",command:"预设演示",aliases:[],input:{mode:"image-preset",images:"current-and-quote",requireImage:true,avatarFallback:true},textTemplate:"目标：{{nickname}}（{{qq}}），群：{{group_name}}，发起人：{{sender_nickname}}"})
+    await configStore.update(config=>{config.actions.items[presetInputAction.id]=presetInputAction})
+    const presetEvent = {...event,user_id:"12345",group_name:"测试群",message:[{type:"at",qq:"23456"}],group:{pickMember:()=>({info:{card:"群名片"}})}}
+    await runAction(presetInputAction,"@23456 名字=小星 -p 蓝色背景",presetEvent)
+    assert.equal(lastArgs.prompt,"目标：小星（23456），群：测试群，发起人：小明\n\n用户追加要求：\n蓝色背景")
+    assert.match(lastArgs.referenceImages[0],/nk=23456/,"the actual mention supplies the target avatar")
+    await runAction(presetInputAction,"qq=34567 -p 加底座",presetEvent)
+    assert(lastArgs.prompt.includes("目标：群名片（34567）"), "the explicit target and current group card feed prompt variables")
+    assert.match(lastArgs.referenceImages[0],/nk=34567/,"explicit QQ takes precedence over the real mention")
+    await runAction(presetInputAction,"-p 海边",{...presetEvent,message:[]})
+    assert(lastArgs.prompt.includes("目标：小明（12345）") && lastArgs.prompt.endsWith("用户追加要求：\n海边"), "prompt-only input uses the real sender")
+    const callsBeforeInvalidPreset = calls
+    await assert.rejects(runAction(presetInputAction,"-p",presetEvent), /-p 后/)
+    assert.equal(calls,callsBeforeInvalidPreset,"an empty prompt option must not run the tool")
+    const presetPreview = await api("/api/actions/preview","POST",{action:presetInputAction,message:"#yui预设演示 qq=34567 name=小花 -p 水彩"})
+    assert.equal(presetPreview.status,200)
+    assert(presetPreview.body.preview.arguments.prompt.includes("目标：小花（34567）"))
+    assert.match(presetPreview.body.preview.arguments.referenceImages[0],/nk=34567/)
+    await configStore.update(config=>{delete config.actions.items[presetInputAction.id]})
     let replies = []
     const entries = createActionEntries(configStore.get())
     const entry = entries.find(row => row.name.includes("回声"))
@@ -266,6 +460,7 @@ try {
     let catalog = (await api("/api/actions")).body
     const saved = catalog.items.find(item => item.id === copyId)
     assert.equal(saved.defaults.count, 2)
+    assert.equal(saved.ignorePrefix, true)
     assert.equal((await api(`/api/actions/${copyId}`, "PUT", {action:{...saved,name:"改名"},version:"stale"})).status, 409)
     const disabled = await api(`/api/actions/${copyId}`, "PUT", {action:{...saved,enabled:false},version:saved.version})
     assert.equal(disabled.status, 200)
@@ -280,8 +475,10 @@ try {
     assert(String(tested.body.result.result).includes("测试"))
     const exported = (await api(`/api/actions/export?id=${copyId}`)).body.bundle
     assert.equal(exported.items.length, 1)
+    assert.equal(exported.items[0].ignorePrefix, true, "export preserves the prefix option")
     const importedPreview = await api("/api/actions/import", "POST", {bundle:exported})
     assert.equal(importedPreview.body.preview[0].enabled, false)
+    assert.equal(importedPreview.body.preview[0].ignorePrefix, true, "import preserves the prefix option while disabling the action")
     assert.equal((await api("/api/actions")).body.items.length, 3)
     assert.equal((await api("/api/actions/import", "POST", {bundle:exported,apply:true})).status, 200)
     catalog = (await api("/api/actions")).body
@@ -395,6 +592,94 @@ try {
     const imageResult = await runAction(imageHandler,"https://example.com/generated.png",event)
     assert.equal(imageResult.delivery.status,"success")
     assert.equal(delivered.parts[0].source.value,"https://example.com/generated.png")
+
+    const sample = { chain:[{type:"image",source:{kind:"base64",value:"aGVsbG8=",mimeType:"image/png"}}], metadata:{model:"actual-model",provider:"test",durationMs:1200,imageCount:1} }
+    const replyName = parseAction({...imageTemplate,name:"历史展示名",command:"新的指令",reply:{image:{start:"",running:"",success:"{{actionName}} {{image}}",failure:""}}})
+    assert(formatImageActionReply(replyName,event,"success",sample).message.includes("历史展示名"), "saved reply templates keep their legacy display name")
+    const replyCommand = parseAction({...replyName,name:""})
+    assert(formatImageActionReply(replyCommand,event,"success",sample).message.includes("新的指令"), "new unnamed actions use their command in reply templates")
+    const formatted = formatImageActionReply(imageTemplate, event, "success", sample)
+    assert.equal(formatted.parts.filter(part => part.type === "image").length, 1)
+    assert(formatted.message.includes("actual-model"))
+    assert.throws(() => parseAction({...imageTemplate,reply:{image:{start:"",success:"{{image}}{{image}}",failure:""}}}), /只能插入一次/)
+    const previewImage = await api("/api/actions/reply-preview", "POST", {action:imageTemplate,stage:"success",sample})
+    assert.equal(previewImage.status,200)
+    assert.equal(previewImage.body.preview.parts.filter(part => part.type === "image").length,1)
+
+    const { GenerateImageTool } = await import("../output/runtime/tools/builtins/image-generation.js")
+    const { adapterRegistry } = await import("../output/runtime/models/adapters/registry.js")
+    const realImage = new GenerateImageTool()
+    const imageProvider = {name:"image-test",type:"openai-images",baseURL:"https://example.invalid",apiKey:"",authType:"none",headers:{},query:{}}
+    const imageModel = name => ({name,modelIdentifier:`${name}-upstream`,apiProvider:"image-test",adapter:"openai-images",purpose:"image",image:{protocol:"openai-images"},params:{}})
+    const drawing = parseAction({...imageTemplate,id:"draw-test",command:"绘图试验",enabled:true,textTemplate:"画一只猫",defaults:{model:"image-b",count:1},input:{images:"none"}})
+    await configStore.update(config => {
+      config.apiProviders.push(imageProvider)
+      config.models.push(imageModel("image-a"),imageModel("image-b"))
+      config.modelTasks.imageGeneration.modelList = ["image-a"]
+      config.actions.items[drawing.id] = drawing
+    })
+    const queue = realImage.backgroundQueue({model:"image-b"},{config:configStore.get()})
+    assert.equal(queue.channelId,"image-b")
+    assert.equal(queue.queueKey,"generate_image:image-b")
+    toolRegistry.tools.delete("generate_image")
+    toolRegistry.register(realImage)
+    const originalGenerateImages = adapterRegistry.generateImages
+    const imageRequests = []
+    const imageDeliveries = []
+    adapterRegistry.generateImages = async request => { imageRequests.push(request.channel.id); return {images:[{data:"data:image/png;base64,aGVsbG8=",mimeType:"image/png"}],text:"绘制完成"} }
+    toolRegistry.tools.delete("message_send")
+    toolRegistry.register({...echo,name:"message_send",parameters:{type:"object",properties:{parts:{type:"array",items:{type:"object"}}},required:["parts"]},execute:async args=>{imageDeliveries.push(args.parts);return {kind:"delivery",chain:[],receipt:{status:"sent"},isError:false,issues:[]}}})
+    try {
+      const drawingEvent = {...event, user_id:"12345", isMaster:true, reply:async () => { throw new Error("图片动作不应直接重复回复") }}
+      const submitted = await runAction(drawing,"",drawingEvent)
+      assert.equal(submitted.status,"accepted")
+      assert.match(submitted.message, /生成中.*执行中 1\/1/, "the accepted message shows actual queue state")
+      for (let i=0;i<100 && !imageDeliveries.length;i++) await new Promise(resolve=>setTimeout(resolve,10))
+      assert.deepEqual(imageRequests,["image-b"],"selected model reaches the image adapter")
+      assert.equal(imageDeliveries.length,1,"custom result is delivered exactly once")
+      assert.equal(imageDeliveries[0].filter(part=>part.type==="image").length,1)
+      assert(imageDeliveries[0].some(part=>part.type==="text" && part.text.includes("image-b-upstream")))
+
+      const missing = parseAction({...drawing,defaults:{model:"missing-image-model"}})
+      await configStore.update(config=>{config.actions.items[drawing.id]=missing})
+      const failed = await runAction(missing,"",drawingEvent)
+      assert.equal(failed.status,"accepted")
+      for (let i=0;i<100 && imageDeliveries.length<2;i++) await new Promise(resolve=>setTimeout(resolve,10))
+      assert.deepEqual(imageRequests,["image-b"],"unavailable explicit model must not fall back")
+      assert(imageDeliveries[1].some(part=>String(part.text || "").includes("图片模型不可用")))
+
+      let releaseFirst, notifyFirstStarted
+      const firstStarted = new Promise(resolve=>{notifyFirstStarted=resolve})
+      const firstWait = new Promise(resolve=>{releaseFirst=resolve})
+      let generated = 0
+      adapterRegistry.generateImages = async () => { if (generated++ === 0) { notifyFirstStarted(); await firstWait } return {images:[{data:"data:image/png;base64,aGVsbG8=",mimeType:"image/png"}]} }
+      await configStore.update(config=>{config.actions.items[drawing.id]=drawing})
+      const first = await runAction(drawing,"",drawingEvent)
+      await firstStarted
+      const second = await runAction(drawing,"",{...drawingEvent,user_id:"23456"})
+      assert.match(second.message,/排队中/)
+      releaseFirst()
+      for (let i=0;i<100 && imageDeliveries.length<5;i++) await new Promise(resolve=>setTimeout(resolve,10))
+      assert.equal(backgroundTaskService.get(first.taskId)?.status,"ok")
+      assert.equal(backgroundTaskService.get(second.taskId)?.status,"ok")
+      assert.equal(imageDeliveries.slice(2).filter(parts=>parts.some(part=>String(part.text || "").includes("已开始生成"))).length,1,"only a waiting task sends the running notification")
+      assert.equal(imageDeliveries.length,5,"two results and one running notification are delivered once")
+
+      let releaseImage, notifyImageStarted
+      const imageStarted = new Promise(resolve=>{notifyImageStarted=resolve})
+      const imageWait = new Promise(resolve=>{releaseImage=resolve})
+      adapterRegistry.generateImages = async () => { notifyImageStarted(); await imageWait; return {images:[{data:"data:image/png;base64,aGVsbG8=",mimeType:"image/png"}]} }
+      await configStore.update(config=>{config.actions.items[drawing.id]=drawing})
+      const pending = await runAction(drawing,"",drawingEvent)
+      await imageStarted
+      const waiting = await runAction(drawing,"",{...drawingEvent,user_id:"23456"})
+      assert.match(waiting.message, /排队中.*任务 2 个.*执行中 1\/1/, "queued messages show the real active and waiting totals")
+      await configStore.update(config=>{config.actions.items[drawing.id].enabled=false})
+      releaseImage()
+      for (let i=0;i<100 && ["queued","running"].includes(backgroundTaskService.get(pending.taskId)?.status);i++) await new Promise(resolve=>setTimeout(resolve,10))
+      for (let i=0;i<100 && ["queued","running"].includes(backgroundTaskService.get(waiting.taskId)?.status);i++) await new Promise(resolve=>setTimeout(resolve,10))
+      assert.equal(imageDeliveries.length,5,"revoked actions cannot send running notices or completed images")
+    } finally { adapterRegistry.generateImages = originalGenerateImages }
     clearResponseState()
     const logCount = await sqliteClient.get("SELECT COUNT(*) AS count FROM ai_runs")
     assert.equal(logCount.count,0,"local actions must not fabricate model runs")

@@ -3,8 +3,9 @@ import crypto from "node:crypto"
 import { configStore, redactConfigSecrets } from "../../../config/store.js"
 import type { JsonValue } from "../../../core/message-chain/types.js"
 import { actionRecord as record, actionCommand, figurineAction, actionExamples, matchAction, parseAction, parseActions, type ActionDefinition } from "../../../core/actions/contract.js"
+import { actionTemplateGroups } from "../../../core/actions/templates.js"
 import { actionAccess, bindActionArguments, runAction, validateActionArguments, resolveActionTool, defaultActionRole } from "../../../core/actions/execution.js"
-import { formatActionReply } from "../../../core/actions/reply.js"
+import { formatActionReply, formatImageActionReply } from "../../../core/actions/reply.js"
 import { normalizeToolResult } from "../../../tools/support/execution-runtime.js"
 import { resolveToolRuntimeConfig } from "../../../extensions/runtime-config.js"
 import { directWebSearchSetupIssues } from "../../../tools/builtins/web-search.js"
@@ -17,6 +18,9 @@ import { backgroundTaskService } from "../../../core/scheduling/background-task-
 import { requireWebAuth as auth } from "../auth.js"
 import { handleRoute, type RouteApp } from "../route-handler.js"
 import { updateConfigAndApply } from "../runtime-config.js"
+import { providerResolver } from "../../../models/routing/provider-resolver.js"
+import { avatarUrl } from "../../../core/message/media-context.js"
+import { prepareImagePresetInput } from "../../../core/actions/image-preset-input.js"
 
 const applyOptions = { reinitTools: false, reinitFilters: false, restartInitiativeGreeting: false, restartScheduleTasks: false }
 function version(value: unknown): string { return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 20) }
@@ -26,6 +30,11 @@ function newId(prefix = "action"): string { return `${prefix}-${crypto.randomUUI
 
 function setupIssues(name: string, args: Record<string, unknown> = {}): string[] {
   const tool = toolRegistry.get(name)
+  if (name === "generate_image" && args.model) {
+    const config = configStore.get()
+    const model = (Array.isArray(config.models) ? config.models : []).map(record).find(item => item.name === args.model)
+    return model && providerResolver.buildChannel(model, config).purpose === "image" ? [] : ["指定的图片模型不可用，请重新选择。"]
+  }
   if (name !== "web_search" || !tool || getToolCommon(tool).source !== "builtin") return []
   const config = configStore.get()
   return directWebSearchSetupIssues(config, resolveToolRuntimeConfig(tool, config), args)
@@ -49,11 +58,16 @@ function checkDefinition(action: ActionDefinition): void {
 export function actionCatalog() {
   const config = configStore.get()
   const actions = parseActions(config.actions)
+  const templateGroups = actionTemplateGroups().map(group => ({ ...group, items: group.items.map(item => {
+    const tool = resolveActionTool(item)
+    return { ...item, minRole: tool ? defaultActionRole(tool, config) : "master" }
+  }) }))
   return {
     prefix: PLUGIN_COMMAND_PREFIX, enabled: actions.enabled, categories: actions.categories, categoriesVersion: version(actions.categories), runtime: { ...actionCommandStatus },
     roles: boundaryRoles.map(value => ({ value, label: boundaryRoleLabels[value] })),
     items: Object.values(actions.items).map(item => ({ ...item, setupIssues: item.kind === "tool" ? setupIssues(item.tool, item.defaults) : [], version: version(item), fullCommand: actionCommand(item), access: Object.fromEntries(boundaryRoles.map(role => [role, actionAccess(item, { ...previewToolEvent(role), ...(item.scope === "private" ? { isGroup: false, group_id: undefined, sender: {} } : {}) }, config)])) })),
-    template: figurineAction(), examples: actionExamples(),
+    template: figurineAction(), examples: actionExamples(), templateGroups,
+    imageModels: (Array.isArray(config.models) ? config.models : []).map(record).map(model => providerResolver.buildChannel(model, config)).filter(model => model.purpose === "image").map(model => ({ id: model.id, model: model.model, provider: String(record(model.provider).name || model.apiProvider || "") })),
   }
 }
 
@@ -67,9 +81,12 @@ export function registerActionRoutes(app: RouteApp): void {
     res.json({ ok: true, ...actionCatalog(), tools })
   }))
   app.post("/api/actions/reply-preview", auth, handleRoute((req, res) => {
-    const action = parseAction({ ...record(req.body.action), kind: "tool", tool: "preview" })
+    const raw = record(req.body.action)
+    const imageReply = raw.tool === "generate_image" && Boolean(record(raw.reply).image)
+    const action = parseAction({ ...raw, kind: "tool", tool: imageReply ? "generate_image" : "preview" })
     const value = req.body.sample
-    const preview = formatActionReply({ ...normalizeToolResult(value), value }, action.reply)
+    const stage = ["start", "running", "success", "failure"].includes(String(req.body.stage)) ? String(req.body.stage) as "start" | "running" | "success" | "failure" : "success"
+    const preview = imageReply ? formatImageActionReply(action, { user_id: "preview", sender: { nickname: "小明" } }, stage, value) : formatActionReply({ ...normalizeToolResult(value), value }, action.reply)
     const fields: string[] = []
     function visit(value: unknown, path = "", depth = 0) {
       if (depth > 5 || fields.length >= 60 || !value || typeof value !== "object") return
@@ -86,7 +103,7 @@ export function registerActionRoutes(app: RouteApp): void {
     visit(parsed)
     res.json({ ok: true, preview, fields })
   }, { errorStatus: 400 }))
-  app.post("/api/actions/preview", auth, handleRoute((req, res) => {
+  app.post("/api/actions/preview", auth, handleRoute(async (req, res) => {
     const action = parseAction(req.body.action)
     checkDefinition(action)
     const message = String(req.body.message || actionCommand(action))
@@ -94,12 +111,15 @@ export function registerActionRoutes(app: RouteApp): void {
     const role = String(req.body.role || "user")
     if (!(boundaryRoles as readonly string[]).includes(role)) throw new Error("角色无效")
     const event = { ...previewToolEvent(role), ...(req.body.scope === "private" ? { isGroup: false, group_id: undefined, sender: {} } : {}) }
+    const preset = action.input.mode === "image-preset" ? await prepareImagePresetInput(action, input || "", event) : null
     const imageCount = Math.max(0, Math.min(3, Number(req.body.imageCount) || 0))
     const images = Array.from({ length: imageCount }, (_, index) => `https://preview.invalid/image-${index + 1}.png`)
-    const args = bindActionArguments(action, input || "", event, action.input.images === "none" ? undefined : images)
+    const previewUserId = preset?.targetId || record(event).user_id
+    if (!images.length && action.input.images !== "none" && action.input.avatarFallback && /^\d+$/.test(String(previewUserId || ""))) images.push(avatarUrl(previewUserId))
+    const args = bindActionArguments(action, preset?.text ?? input ?? "", event, action.input.images === "none" ? undefined : images, preset?.variables)
     const issues: string[] = action.kind === "tool" ? setupIssues(action.tool, args) : []
     if (input === null) issues.push("示例消息未命中当前动作")
-    if (action.input.requireImage && !imageCount) issues.push("缺少必需的参考图片")
+    if (action.input.requireImage && !images.length) issues.push("缺少必需的参考图片")
     try { validateActionArguments(action, args) } catch (error) { issues.push(error instanceof Error ? error.message : String(error)) }
     const config = configStore.get()
     const access = actionAccess(action, event, { ...config, actions: asJson({ ...parseActions(config.actions), items: { [action.id]: action } }) })
@@ -197,8 +217,13 @@ export function registerActionRoutes(app: RouteApp): void {
     if (!task || task.parentToolId !== `action:${req.params.id}`) throw new Error("任务不存在或已过期")
     const action = parseActions(configStore.get().actions).items[req.params.id]
     let reply: unknown = null
-    if (action && task.status === "ok") {
-      try { reply = formatActionReply({ ...normalizeToolResult(task.result), value: task.result }, action.reply) } catch (error) { reply = { message: error instanceof Error ? error.message : String(error), parts: [], note: "回复配置需要调整" } }
+    if (action && ["ok", "error", "canceled"].includes(task.status)) {
+      try {
+        const image = action.tool === "generate_image" && action.reply.image
+        const result = record(task.result)
+        const elapsedMs = Math.max(0, task.endedAt - task.createdAt)
+        reply = image ? formatImageActionReply(action, { user_id: "web-action-test" }, task.status === "ok" ? "success" : "failure", task.status === "ok" ? { ...result, metadata: { ...record(result.metadata), elapsedMs } } : { reason: task.error || "任务已取消", metadata: { elapsedMs } }) : task.status === "ok" ? formatActionReply({ ...normalizeToolResult(task.result), value: task.result }, action.reply) : null
+      } catch (error) { reply = { message: error instanceof Error ? error.message : String(error), parts: [], note: "回复配置需要调整" } }
     }
     res.json({ ok: true, task: redactConfigSecrets({ ...task, reply }) })
   }, { errorStatus: 400 }))

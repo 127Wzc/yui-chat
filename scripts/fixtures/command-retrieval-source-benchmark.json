@@ -19,8 +19,8 @@
     },
     {
       "file": "plugins/yui-chat/core/message/command-prefixes.ts",
-      "sha256": "5d82b3d4255ae14a4e58e8f56f1417497bfbacf8547e02feae5c764c9964a660",
-      "lines": 57
+      "sha256": "bed7409241b13154ef54a060b1f63cece7e05e867f40476ed06c76542386ee4c",
+      "lines": 58
     },
     {
       "file": "plugins/genshin/apps/dailyNote.js",

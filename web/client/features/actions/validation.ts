@@ -7,7 +7,6 @@ export function actionEditorIssues(value: unknown, defaultsText: string, schema:
   const action = asRecord(value), input = asRecord(action.input), source = asRecord(action.source), reply = asRecord(action.reply)
   const issues: ActionIssue[] = []
   const add = (step: number, message: string) => issues.push({step, message})
-  if (!String(action.name || "").trim()) add(0, "请填写动作名称。")
   for (const name of [String(action.command || ""), ...aliases]) {
     if (!name.trim() || /[\s#/$@]/.test(name) || name.length > 40) add(0, "指令和别名应为 1–40 个字符，不带前缀、空格或 # / $ @。")
   }
@@ -26,12 +25,15 @@ export function actionEditorIssues(value: unknown, defaultsText: string, schema:
     for (const match of text.matchAll(/\{\{([^{}]*)\}\}/g)) if (!allowed.includes(match[1].trim())) add(step, `不支持占位符 ${match[0]}；可用：${allowed.map(key=>`{{${key}}}`).join("、")}。`)
     if (/\{\{|\}\}/.test(text.replace(/\{\{[^{}]*\}\}/g,""))) add(step, "占位符的大括号未配对，请使用 {{变量名}}。")
   }
-  template(String(action.textTemplate || ""), ["text","userName","userId","groupId"], 2)
+  template(String(action.textTemplate || ""), ["text","userName","userId","groupId", ...(input.mode === "image-preset" && action.tool === "generate_image" ? ["nickname","name","qq","user_id","group_name","group_id","sender_nickname","sender_qq"] : [])], 2)
+  if (input.mode === "image-preset" && (action.kind !== "tool" || action.tool !== "generate_image" || action.textParam !== "prompt")) add(2, "绘图预设输入需要绑定绘图工具的提示词参数。")
   if (action.textTemplate && !action.textParam) add(2, "填写默认要求后，请选择“把指令后的文字填到”的参数。")
   if (input.requireImage && input.images === "none") add(2, "要求必须提供图片时，请选择图片来源。")
+  if (input.avatarFallback && input.images === "none") add(2, "使用头像回退时，请选择图片来源。")
   if (input.images !== "none" && !input.imageParam) add(2, "请选择接收图片的参数。")
   if (action.textTemplate && overrides.includes(String(action.textParam))) add(2, "已绑定默认要求的文字参数，不能同时开放用户覆盖。")
   if (input.images !== "none" && overrides.includes(String(input.imageParam))) add(2, "已绑定图片的参数，不能同时开放用户覆盖。")
+  if (action.tool === "generate_image" && overrides.includes("model")) add(2, "绘图模型由管理员配置，不能由指令覆盖。")
   const definition = asRecord(schema), properties = asRecord(definition.properties)
   let args: Record<string, unknown> = {}
   if (defaultsText.length > 24000) { add(2, "默认参数不能超过 24,000 个字符。"); return issues }
@@ -62,5 +64,14 @@ export function actionEditorIssues(value: unknown, defaultsText: string, schema:
   }
   if (reply.path && (!/^[A-Za-z0-9_$-]+(?:\.[A-Za-z0-9_$-]+|\[\d+\])*$/.test(String(reply.path)) || /(?:^|\.)(?:__proto__|constructor|prototype)(?:\.|\[|$)/.test(String(reply.path)))) add(3, "结果字段格式不正确，请使用 data.text 或 data.images[0].url。")
   template(String(reply.template || ""), ["value"], 3)
+  if (reply.image) {
+    if (action.kind !== "tool" || action.tool !== "generate_image") add(3, "绘图回复模板仅适用于绘图工具。")
+    const image = asRecord(reply.image)
+    template(String(image.start || ""), ["actionName", "userName", "status", "queueTotal", "queueActive", "queueWaiting", "queueLimit", "queuePosition"], 3)
+    template(String(image.running || ""), ["actionName", "userName", "status", "queueTotal", "queueActive", "queueWaiting", "queueLimit", "queuePosition"], 3)
+    template(String(image.success || ""), ["actionName", "userName", "model", "provider", "duration", "elapsed", "count", "modelText", "image"], 3)
+    template(String(image.failure || ""), ["actionName", "userName", "elapsed", "reason"], 3)
+    if ((String(image.success || "").match(/\{\{\s*image\s*\}\}/g) || []).length > 1) add(3, "生成图片只能插入一次。")
+  }
   return issues.filter((issue,index)=>issues.findIndex(other=>other.step === issue.step && other.message === issue.message) === index)
 }

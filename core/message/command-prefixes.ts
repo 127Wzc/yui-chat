@@ -14,9 +14,10 @@ export const PLUGIN_COMMAND_PREFIX_PATTERN = /^#yui/
 /** 从唯一前缀正则派生可展示文本，避免再维护一份字符串常量。 */
 export const PLUGIN_COMMAND_PREFIX = PLUGIN_COMMAND_PREFIX_PATTERN.source.replace(/^\^/, "")
 
-/** 生成 Yunzai rule 使用的完整正则字符串。 */
-export function pluginCommandRule(suffixPattern = ""): string {
-  return `${PLUGIN_COMMAND_PREFIX_PATTERN.source}${suffixPattern}$`
+/** 生成 Yunzai rule 使用的完整正则字符串；仅显式配置的动作允许省略前缀。 */
+export function pluginCommandRule(suffixPattern = "", options: { optionalPrefix?: boolean } = {}): string {
+  const prefixPattern = options.optionalPrefix ? `^(?:${PLUGIN_COMMAND_PREFIX_PATTERN.source.replace(/^\^/, "")})?` : PLUGIN_COMMAND_PREFIX_PATTERN.source
+  return `${prefixPattern}${suffixPattern}$`
 }
 
 /** 生成回复、帮助和管理台展示使用的完整指令。 */

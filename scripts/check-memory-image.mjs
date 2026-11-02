@@ -41,6 +41,8 @@ try {
   await configStore.update(cfg => {
     cfg.memory.enabled = true
     cfg.tools.boundaryAccess.roles.user.allowedTools.push("generate_image")
+    cfg.models.push({ name: "test-image", modelIdentifier: "test-image", apiProvider: "mock", adapter: "openai-images", purpose: "image", image: { protocol: "openai-images" }, params: {} })
+    cfg.modelTasks.imageGeneration.modelList = ["test-image"]
   })
   // 直接执行真实路由中间件，验证无认证访问与管理操作，无需监听网络端口。
   const { registerObservabilityRoutes } = await import("../output/runtime/web/http/routes/observability.js")

@@ -1,10 +1,39 @@
-import { actionRecord as record, type ActionReply } from "./contract.js"
+import { actionRecord as record, type ActionDefinition, type ActionReply } from "./contract.js"
 import { serializeExecutionResult } from "../../extensions/testing/execution-runtime.js"
 import type { ToolExecutionResult } from "../../tools/support/execution-runtime.js"
 import { extractMessageChain } from "../message-chain/inbound.js"
 
 type Result = Pick<ToolExecutionResult, "value" | "content" | "metadata" | "status">
 export interface ActionReplyPreview { message: string; parts: unknown[]; note: string }
+
+/** 绘图结果保留为真实消息段，图片不会被展开为模板文字。 */
+export function formatImageActionReply(action: ActionDefinition, event: unknown, stage: "start" | "running" | "success" | "failure", value: unknown = {}): ActionReplyPreview {
+  const template = action.reply.image?.[stage] || ""
+  if (!template) return { message: "", parts: [], note: "此阶段未设置回复" }
+  const result = record(value)
+  const metadata = record(result.metadata)
+  const queue = record(metadata.queue)
+  const sender = record(record(event).sender)
+  const variables: Record<string, string> = {
+    actionName: action.name,
+    userName: String(sender.card || sender.nickname || record(event).user_id || ""),
+    model: String(metadata.model || ""), provider: String(metadata.provider || ""),
+    duration: (Number(metadata.durationMs || 0) / 1000).toFixed(2), elapsed: (Number(metadata.elapsedMs ?? metadata.durationMs ?? 0) / 1000).toFixed(2), count: String(metadata.imageCount || 0),
+    modelText: String(metadata.modelText || ""), reason: String(result.reason || "任务未完成"),
+    status: metadata.backgroundStatus === "queued" ? "排队中" : metadata.backgroundStatus === "running" ? "生成中" : "已受理",
+    queueTotal: String(Number(queue.active || 0) + Number(queue.waiting || 0)),
+    queueActive: String(queue.active ?? ""), queueWaiting: String(queue.waiting ?? ""),
+    queueLimit: String(queue.maxConcurrent ?? ""), queuePosition: String(queue.position ?? ""),
+  }
+  const images = Array.isArray(result.chain) ? result.chain.filter(part => record(part).type === "image") : []
+  const parts: unknown[] = []
+  for (const piece of template.split(/(\{\{\s*image\s*\}\})/g)) {
+    if (/^\{\{\s*image\s*\}\}$/.test(piece)) { parts.push(...images); continue }
+    const text = piece.replace(/\{\{\s*(actionName|userName|model|provider|duration|elapsed|count|modelText|reason|status|queueTotal|queueActive|queueWaiting|queueLimit|queuePosition)\s*\}\}/g, (_match, key: string) => variables[key])
+    if (text) parts.push({ type: "text", text })
+  }
+  return { message: parts.filter(part => record(part).type === "text").map(part => String(record(part).text || "")).join(""), parts, note: "按绘图回复模板回传" }
+}
 
 export function extractActionResult(value: unknown, path: string): unknown {
   if (!path) return value

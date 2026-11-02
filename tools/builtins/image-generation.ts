@@ -109,8 +109,11 @@ function bounded(value: unknown, fallback: number, min: number, max: number): nu
 
 function resolveImageChannel(config: UnknownRecord, channelId = ""): ModelChannel | null {
   if (channelId) {
-    const configured = providerResolver.resolveCandidateChannels({ channelId, config })[0]
-    if (configured) return configured
+    // 只从当前模型配置解析明确选择，避免同名渠道或路由回退替换目标。
+    const model = (Array.isArray(config.models) ? config.models : []).map(record).find(item => text(item.name) === channelId)
+    if (!model) return null
+    const configured = providerResolver.buildChannel(model, config)
+    return configured.purpose === "image" ? configured : null
   }
   const channels = providerResolver.resolveCandidateChannels({ taskName: "imageGeneration", config })
   return channels.find(item => item.purpose === "image" || ["openai-images", "openai-chat-completions", "gemini-images"].includes(item.type)) || null
@@ -212,7 +215,7 @@ export class GenerateImageTool {
   execution = {
     effect: "non_idempotent",
     repeatPolicy: "dedupe",
-    operationFields: ["prompt", "referenceImages", "referenceMaterials", "count", "size", "quality", "aspectRatio", "imageSize", "background"],
+    operationFields: ["prompt", "referenceImages", "referenceMaterials", "model", "count", "size", "quality", "aspectRatio", "imageSize", "background"],
     retryPolicy: "no_ambiguous_retry",
     dispatchMarking: "deferred",
     maxAttempts: 1,
@@ -236,15 +239,16 @@ export class GenerateImageTool {
   }
 
   /** 为后台调度声明图片模型独立队列；限额由工具运行变量统一控制。 */
-  backgroundQueue = (_args: ToolArgs = {}, context: ImageToolContext = {}): UnknownRecord => {
+  backgroundQueue = (args: ToolArgs = {}, context: ImageToolContext = {}): UnknownRecord => {
     const config = record(context.config || configStore.get())
-    const channel = resolveImageChannel(config)
+    const requestedModel = text(args.model).trim()
+    const channel = resolveImageChannel(config, requestedModel)
     const runtime = Object.keys(record(context.toolConfig)).length
       ? record(context.toolConfig)
       : record(resolveToolRuntimeConfig(this, config))
     return {
-      queueKey: imageQueueKey(channel),
-      ...(channel?.id ? { channelId: channel.id } : {}),
+      queueKey: channel ? imageQueueKey(channel) : requestedModel ? `generate_image:unavailable:${requestedModel}`.slice(0, 120) : imageQueueKey(null),
+      ...(channel?.id || requestedModel ? { channelId: channel?.id || requestedModel } : {}),
       maxConcurrent: bounded(runtime.maxConcurrent, 1, 1, 32),
       maxQueue: bounded(runtime.maxQueue, 3, 0, 1000),
       // 新任务提交或管理台刷新时读取最新快照，已在队列中的任务不需要重建。
@@ -264,6 +268,7 @@ export class GenerateImageTool {
     type: "object",
     properties: {
       prompt: { type: "string", minLength: 1, maxLength: 4000, description: "Drawing or editing instructions; do not copy reference material here." },
+      model: { type: "string", maxLength: 200, description: "Optional configured image model ID. Omit to follow the image-generation task." },
       referenceImages: { type: "array", maxItems: 3, description: "Optional image URLs or data URLs. Omit to use an image attached to the current message; use [] to force text-to-image.", items: { type: "string" } },
       referenceMaterials: { type: "array", maxItems: 20, description: "Optional reference IDs returned by memory_manage or another tool in this conversation. Omit when no material is requested.", items: { type: "string" } },
       count: { type: "integer", minimum: 1, description: "Optional target image count. It is honored only for the bot owner or configured allowlisted users; other users are always limited to one image." },
@@ -287,8 +292,9 @@ export class GenerateImageTool {
       let prompt = text(args.prompt).trim()
       if (!prompt) throw new Error("请提供图片描述")
       const taskName = "imageGeneration"
-      const channel = resolveImageChannel(config, text(context.backgroundChannelId).trim())
-      if (!channel) throw new Error("尚未配置可用的图片模型，请先在模型服务中添加用途为“图片生成”的模型")
+      const selectedModel = text(context.backgroundChannelId || args.model).trim()
+      const channel = resolveImageChannel(config, selectedModel)
+      if (!channel) throw new Error(selectedModel ? "指定的图片模型不可用，请检查模型配置" : "尚未配置可用的图片模型，请先在模型服务中添加用途为“图片生成”的模型")
       const modelImage = record(record(channel.modelConfig).image)
       const modelImageParams = record(modelImage.params)
       // 参数优先级：本次工具调用 > 工具运行变量 > 图片模型配置。
@@ -382,12 +388,13 @@ export class GenerateImageTool {
       const imageParts = imageBuilder.build()
       if (!imageParts.length) throw new Error("图片模型返回了无法投递的结果")
       const modelName = text(channel.model).trim() || text(channel.id).trim() || "unknown"
+      const actionManaged = context.execution?.actionImageReply === true && Boolean(context.actionId)
       const builder = new MessageChainBuilder()
-      builder.text(`✅ 图片生成完成（${(generationDurationMs / 1000).toFixed(2)}s）\n🤖 模型：${modelName}`)
+      if (!actionManaged) builder.text(`✅ 图片生成完成（${(generationDurationMs / 1000).toFixed(2)}s）\n🤖 模型：${modelName}`)
       builder.concat(imageParts)
       const chain = builder.build()
       stage = "投递生成图片"
-      const delivery = canDeliverToCurrentChat(context)
+      const delivery = !actionManaged && canDeliverToCurrentChat(context)
         ? await sendWithMessageTool(chain, context, "complete")
         : { status: "generated", partCount: chain.length, sentCount: 0, failedCount: 0 }
       const imageCount = chain.filter(part => part.type === "image").length
@@ -408,6 +415,8 @@ export class GenerateImageTool {
           ...(memoryMetadata.length ? { memoryReferences: memoryMetadata } : {}),
           ...(materialRefs.length ? { referenceMaterials: materialRefs } : {}),
           model: channel.model,
+          provider: text(record(channel.provider).name || channel.provider || channel.apiProvider),
+          modelText: redactErrorText(text(result.text)).slice(0, 2000),
           adapter: channel.type,
           deliveryStatus: delivery.status,
           sentCount: delivery.sentCount,
@@ -418,7 +427,7 @@ export class GenerateImageTool {
       const diagnostics = { yuiTool: { stage, elapsedMs: Math.max(0, Date.now() - startedAt) } }
       // 普通 Error 保留原类型、code 与堆栈；只对不可附加字段的错误包装 cause。
       const failure = Object.assign(error instanceof Error && Object.isExtensible(error) ? error : new Error(message, { cause: error }), diagnostics)
-      await sendFailureNotice(`图片生成失败：${message}`, context)
+      if (!(context.execution?.actionImageReply === true && context.actionId)) await sendFailureNotice(`图片生成失败：${message}`, context)
       throw failure
     }
   }

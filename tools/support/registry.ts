@@ -31,6 +31,7 @@ export interface RegistryExecutionContext extends ToolExecutionContext, ToolAcce
   config?: RuntimeConfigObject
   excludeDeliveryModes?: string[]
   execution?: ToolExecutionContext["execution"] & {
+    onBackgroundStart?: (task: PublicBackgroundTask, signal: AbortSignal) => Promise<unknown> | unknown
     onBackgroundComplete?: (task: PublicBackgroundTask) => Promise<unknown> | unknown
   }
 }
@@ -422,6 +423,7 @@ export class ToolRegistry {
         maxQueue: queue.maxQueue,
         retentionMs: queue.retentionMs,
         limitsProvider: queue.limitsProvider,
+        onStart: context.execution?.onBackgroundStart,
         execute: signal => invoke({
           ...taskContext,
           ...(queue.channelId ? { backgroundChannelId: text(queue.channelId) } : {}),
@@ -451,6 +453,7 @@ export class ToolRegistry {
           background: true,
           taskId: task.id,
           backgroundStatus: task.status,
+          queue: backgroundTaskService.queueStatus(task.id),
           parentToolId: task.parentToolId,
           ...(autoSendBackgroundMessage && typeof record(context.e).reply === "function"
             ? { messageSendPlan: { parts: [{ type: "text", text: backgroundMessage }] } }

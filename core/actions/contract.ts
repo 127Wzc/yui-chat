@@ -3,7 +3,8 @@ import { escapeRegExp, pluginCommand, pluginCommandRule } from "../message/comma
 import { boundaryRoles, type BoundaryRole } from "../../tools/access/roles.js"
 
 export type ActionRecord = Record<string, unknown>
-export interface ActionReply { mode: "auto" | "text" | "json" | "image" | "message" | "silent"; path: string; template: string }
+export interface ImageActionReply { start: string; running: string; success: string; failure: string }
+export interface ActionReply { mode: "auto" | "text" | "json" | "image" | "message" | "silent"; path: string; template: string; image?: ImageActionReply }
 export interface ActionSource { frameworkResources: { target: string }; exportName: string; method: string; callStyle: "function" | "plugin" | "resource"; risk: "low" | "medium" | "high" | "external"; useInputAsMessage: boolean }
 export interface ActionDefinition {
   kind: "tool" | "source"
@@ -17,6 +18,7 @@ export interface ActionDefinition {
   enabled: boolean
   command: string
   aliases: string[]
+  ignorePrefix: boolean
   stage: "rule" | "accept"
   priority: number
   minRole: BoundaryRole
@@ -26,7 +28,7 @@ export interface ActionDefinition {
   textParam: string
   textTemplate: string
   overridable: string[]
-  input: { mode: "text" | "parameters"; images: "none" | "current-or-quote" | "current" | "quote"; imageParam: string; requireImage: boolean }
+  input: { mode: "text" | "parameters" | "image-preset"; images: "none" | "current-or-quote" | "current-and-quote" | "current" | "quote"; imageParam: string; requireImage: boolean; avatarFallback: boolean }
 }
 export interface ActionsConfig { enabled: boolean; categories: Array<{ id: string; name: string }>; items: Record<string, ActionDefinition> }
 
@@ -89,12 +91,28 @@ export function parseAction(value: unknown, id?: string): ActionDefinition {
   const reference = boundedText(actionRecord(source.frameworkResources).target, "源码文件", 500)
   if (kind === "source" && (!/^(?:plugin:[^/\\]+\/|yunzai:)[^\\]+$/.test(reference) || reference.split("/").some(part => part === ".." || part.startsWith(".")) || /(?:^plugin:|\/)(?:chatgpt-plugin)(?:\/|$)/.test(reference))) fail("请选择允许的项目资源文件，不支持绝对路径或旧 chatgpt-plugin")
   const reply = actionRecord(raw.reply)
+  const imageReply = reply.image === undefined || reply.image === null ? null : actionRecord(reply.image)
+  if (reply.image !== undefined && reply.image !== null && (!reply.image || typeof reply.image !== "object" || Array.isArray(reply.image))) fail("绘图回复设置必须是对象")
+  const imageTemplates = imageReply && {
+    start: boundedText(imageReply.start, "受理回复", 1000),
+    running: boundedText(imageReply.running, "开始生成回复", 1000),
+    success: boundedText(imageReply.success, "成功回复", 4000),
+    failure: boundedText(imageReply.failure, "失败回复", 1000),
+  }
+  if (imageTemplates) {
+    for (const [stage, template] of Object.entries(imageTemplates)) {
+      const allowed = stage === "success" ? ["actionName", "userName", "model", "provider", "duration", "elapsed", "count", "modelText", "image"] : stage === "failure" ? ["actionName", "userName", "elapsed", "reason"] : ["actionName", "userName", "status", "queueTotal", "queueActive", "queueWaiting", "queueLimit", "queuePosition"]
+      for (const match of template.matchAll(/\{\{([^{}]+)\}\}/g)) if (!allowed.includes(match[1].trim())) fail(`未知绘图回复变量：${match[1]}`)
+      if (/\{\{|\}\}/.test(template.replace(/\{\{[^{}]+\}\}/g, ""))) fail("绘图回复变量的大括号未配对")
+      if ((template.match(/\{\{\s*image\s*\}\}/g) || []).length > 1) fail("生成图片只能插入一次")
+    }
+  }
   const replyPath = boundedText(reply.path, "结果字段", 200)
   if (replyPath && (!/^[A-Za-z0-9_$-]+(?:\.[A-Za-z0-9_$-]+|\[\d+\])*$/.test(replyPath) || /(?:^|\.)(?:__proto__|constructor|prototype)(?:\.|\[|$)/.test(replyPath))) fail("结果字段请使用 data.text 或 data.images[0].url 这样的路径")
   const key = boundedText(id ?? raw.id, "动作 ID", 64)
   if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(key) || unsafeKeys.test(key)) fail("动作 ID 无效")
-  const name = boundedText(raw.name, "名称", 80)
-  if (!name) fail("请填写动作名称")
+  const trigger = command(raw.command)
+  const name = boundedText(raw.name, "名称", 80) || trigger
   const defaults = raw.defaults === undefined ? {} : raw.defaults
   if (!defaults || typeof defaults !== "object" || Array.isArray(defaults)) fail("默认参数必须是 JSON 对象")
   if (JSON.stringify(defaults).length > 24000) fail("默认参数不能超过 24,000 个字符")
@@ -104,34 +122,39 @@ export function parseAction(value: unknown, id?: string): ActionDefinition {
   const priority = raw.priority ?? 1137
   if (typeof priority !== "number" || !Number.isSafeInteger(priority) || priority < -99999 || priority > 99999) fail("优先级必须是 -99999 至 99999 的整数")
   const textTemplate = boundedText(raw.textTemplate, "提示词模板", 8000)
+  const promptVariables = ["text", "userName", "userId", "groupId", ...(input.mode === "image-preset" && raw.tool === "generate_image" ? ["nickname", "name", "qq", "user_id", "group_name", "group_id", "sender_nickname", "sender_qq"] : [])]
   for (const match of textTemplate.matchAll(/\{\{([^{}]+)\}\}/g)) {
-    if (!["text", "userName", "userId", "groupId"].includes(match[1].trim())) fail(`未知模板变量：${match[1]}`)
+    if (!promptVariables.includes(match[1].trim())) fail(`未知模板变量：${match[1]}`)
   }
   const result: ActionDefinition = {
     kind,
     source: kind === "source" ? { frameworkResources: { target: reference }, exportName: param(source.exportName, "导出名称", "default"), method: param(source.method, "方法名称"), callStyle: choice(source.callStyle, ["function", "plugin", "resource"], "function"), risk: choice(source.risk, ["low", "medium", "high", "external"], "medium"), useInputAsMessage: flag(source.useInputAsMessage, false) } : null,
-    reply: { mode: choice(reply.mode, ["auto", "text", "json", "image", "message", "silent"], "auto"), path: replyPath, template: boundedText(reply.template, "回复模板", 4000) },
+    reply: { mode: choice(reply.mode, ["auto", "text", "json", "image", "message", "silent"], "auto"), path: replyPath, template: boundedText(reply.template, "回复模板", 4000), ...(imageTemplates ? { image: imageTemplates } : {}) },
     id: key, name, description: boundedText(raw.description, "说明", 500),
     categoryId: boundedText(raw.categoryId, "分类", 64), tags: strings(raw.tags, "标签"),
-    enabled: flag(raw.enabled, true), command: command(raw.command), aliases: strings(raw.aliases, "别名").map(command),
+    enabled: flag(raw.enabled, true), command: trigger, aliases: strings(raw.aliases, "别名").map(command), ignorePrefix: flag(raw.ignorePrefix, false),
     stage: choice(raw.stage, ["rule", "accept"], "rule"), priority,
     minRole: choice(raw.minRole, boundaryRoles, "user"), scope: choice(raw.scope, ["all", "group", "private"], "all"),
     tool: param(raw.tool, "工具"), defaults: cloneJsonValue(defaults as ActionRecord),
     textParam: param(raw.textParam, "文字参数"), textTemplate,
     overridable: strings(raw.overridable, "可覆盖参数").map(name => param(name, "可覆盖参数")),
     input: {
-      mode: choice(input.mode, ["text", "parameters"], "text"),
-      images: choice(input.images, ["none", "current-or-quote", "current", "quote"], "none"),
-      imageParam: param(input.imageParam, "图片参数", "referenceImages"), requireImage: flag(input.requireImage, false),
+      mode: choice(input.mode, ["text", "parameters", "image-preset"], "text"),
+      images: choice(input.images, ["none", "current-or-quote", "current-and-quote", "current", "quote"], "none"),
+      imageParam: param(input.imageParam, "图片参数", "referenceImages"), requireImage: flag(input.requireImage, false), avatarFallback: flag(input.avatarFallback, false),
     },
   }
   if (kind === "tool" && !result.tool) fail("请选择关联工具")
+  if (result.input.mode === "image-preset" && (kind !== "tool" || result.tool !== "generate_image" || result.textParam !== "prompt")) fail("绘图预设输入需要绑定绘图工具的提示词参数")
   if (kind === "source") result.tool = `action_source_${key.replaceAll("-", "_")}`
   if (result.source?.callStyle === "plugin" && !result.source.method) fail("请填写插件方法名")
   if (result.textTemplate && !result.textParam) fail("使用提示词模板时必须指定文字参数")
   if (result.textTemplate && result.overridable.includes(result.textParam)) fail("模板绑定的文字参数不能同时开放覆盖")
   if (result.input.requireImage && result.input.images === "none") fail("必需图片时请选择图片来源")
+  if (result.input.avatarFallback && result.input.images === "none") fail("头像回退需要选择图片来源")
+  if (result.reply.image && (kind !== "tool" || result.tool !== "generate_image")) fail("绘图回复模板仅适用于绘图工具")
   if (result.input.images !== "none" && !result.input.imageParam) fail("请选择图片参数")
+  if (result.tool === "generate_image" && result.overridable.includes("model")) fail("绘图模型由管理员配置，不能由指令覆盖")
   if (result.overridable.includes(result.input.imageParam) && result.input.images !== "none") fail("图片绑定参数不能由文字参数覆盖")
   return result
 }
@@ -170,7 +193,7 @@ export function parseActions(value: unknown): ActionsConfig {
 }
 
 export function actionRule(action: ActionDefinition): string {
-  return pluginCommandRule(`(?:${[action.command, ...action.aliases].map(escapeRegExp).join("|")})(?:\\s+([\\s\\S]*))?`)
+  return pluginCommandRule(`(?:${[action.command, ...action.aliases].map(escapeRegExp).join("|")})(?:\\s+([\\s\\S]*))?`, { optionalPrefix: action.ignorePrefix })
 }
 export function matchAction(action: ActionDefinition, message: unknown): string | null {
   const matched = String(message ?? "").trim().match(new RegExp(actionRule(action)))

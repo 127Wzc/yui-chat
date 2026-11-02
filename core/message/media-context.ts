@@ -118,7 +118,7 @@ function pushAttachment(list: MediaAttachment[], attachment: MediaAttachment): v
   if (!list.some(item => `${item.kind}:${item.url || item.text}:${item.source || ""}` === key)) list.push(attachment)
 }
 
-function avatarUrl(qq: unknown): string {
+export function avatarUrl(qq: unknown): string {
   return `https://q1.qlogo.cn/g?b=qq&nk=${encodeURIComponent(text(qq))}&s=640`
 }
 

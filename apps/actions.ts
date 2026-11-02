@@ -74,9 +74,12 @@ export function actionHelp(event: Record<string, unknown>): string {
   if (!items.length) return "没有找到当前可用的动作。"
   if (detail && items.length === 1) {
     const item = items[0]
-    return `${item.name}\n${item.description}\n指令：${actionCommand(item)}${item.input.mode === "text" ? " [补充要求]" : " [参数=值]"}\n${item.input.requireImage ? "需要发送或引用图片。\n" : ""}${item.overridable.length ? `可填写：${item.overridable.join("、")}\n` : ""}分类：${categoryName(item)}`
+    return `指令：${actionCommand(item)}${item.input.mode === "image-preset" ? " [@成员或QQ号] [昵称] [-p 追加要求]" : item.input.mode === "text" ? " [补充要求]" : " [参数=值]"}\n${item.description ? `备注：${item.description}\n` : ""}${item.name !== item.command ? `展示名：${item.name}\n` : ""}${item.aliases.length ? `别名：${item.aliases.map(alias => pluginCommand(alias)).join("、")}\n` : ""}${item.ignorePrefix ? "指令和别名均可省略前缀。\n" : ""}${item.input.requireImage ? item.input.avatarFallback ? "可发送、引用图片，或使用头像。\n" : "需要发送或引用图片。\n" : ""}${item.overridable.length ? `可填写：${item.overridable.join("、")}\n` : ""}分类：${categoryName(item)}`
   }
-  return `动作中心（${items.length}）\n${items.slice(0, 40).map(item => `${actionCommand(item)} · ${item.name}［${categoryName(item)}］`).join("\n")}\n用 ${pluginCommand("指令说明")} <名称> 查看用法。`
+  return `动作中心（${items.length}）\n${items.slice(0, 40).map(item => {
+    const note = item.description || (item.name !== item.command ? item.name : "")
+    return `${actionCommand(item)}${item.ignorePrefix ? "（可省略前缀）" : ""}${note ? ` · ${note.length > 60 ? `${note.slice(0, 60)}…` : note}` : ""}［${categoryName(item)}］`
+  }).join("\n")}\n用 ${pluginCommand("指令说明")} <指令或备注> 查看用法。`
 }
 
 /** 每次宿主重新加载插件时重建动作条目；自身不注册消息规则。 */

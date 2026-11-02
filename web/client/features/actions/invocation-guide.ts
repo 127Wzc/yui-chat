@@ -1,7 +1,7 @@
 export const InvocationGuide = {
   props: { kind: String, callStyle: String, prefix: String },
   template: `
-    <details class="actions-fold" open>
+    <details class="actions-fold">
       <summary>调用流程示例<span>演示配置，不会实际执行</span><Icon name="chevron-down" :size="13" /></summary>
       <ol class="actions-call-guide">
         <template v-if="kind==='tool'">

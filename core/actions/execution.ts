@@ -10,12 +10,15 @@ import { validateToolArguments } from "../../tools/support/contract.js"
 import { executeDirectTool } from "../../tools/support/direct-execution.js"
 import { normalizeToolResult, type ToolExecutionResult } from "../../tools/support/execution-runtime.js"
 import { parseTestArguments } from "../../extensions/testing/execution-runtime.js"
-import { resolveMediaContext } from "../message/media-context.js"
+import { avatarUrl, resolveMediaContext } from "../message/media-context.js"
 import { preflight, releasePreflight } from "../chat/response-pipeline.js"
 import { isGroupEvent } from "../message/event-scope.js"
 import { actionSourceTool } from "./source-tool.js"
-import { formatActionReply } from "./reply.js"
+import { formatActionReply, formatImageActionReply } from "./reply.js"
 import { checkAccess } from "../chat/access-control.js"
+import { redactErrorText } from "../shared/error-details.js"
+import { prepareImagePresetInput } from "./image-preset-input.js"
+import { backgroundTaskService } from "../scheduling/background-task-service.js"
 
 export function resolveActionTool(action: ActionDefinition) { return action.kind === "source" ? actionSourceTool(action) : toolRegistry.get(action.tool) }
 
@@ -33,7 +36,7 @@ export function actionAccess(action: ActionDefinition, e: ActionRecord, config: 
   return explainToolPolicy(tool, { e, config, actionId: action.id })
 }
 
-export function bindActionArguments(action: ActionDefinition, text: string, e: ActionRecord, images?: string[]): ActionRecord {
+export function bindActionArguments(action: ActionDefinition, text: string, e: ActionRecord, images?: string[], extraVariables: Record<string, string> = {}): ActionRecord {
   if (text.length > 8000) throw new Error("动作输入最多 8,000 个字符")
   const args = cloneJsonValue(action.defaults)
   if (action.input.mode === "parameters" && text) {
@@ -43,26 +46,33 @@ export function bindActionArguments(action: ActionDefinition, text: string, e: A
       args[key] = value
     }
   }
-  if (action.textParam && (action.input.mode === "text" || action.textTemplate)) {
-    const variables: Record<string, string> = { text: action.input.mode === "text" ? text : "", userId: String(e.user_id || ""), groupId: String(e.group_id || ""), userName: String(actionRecord(e.sender).card || actionRecord(e.sender).nickname || e.user_id || "") }
+  if (action.textParam && (action.input.mode !== "parameters" || action.textTemplate)) {
+    const variables: Record<string, string> = { text: action.input.mode !== "parameters" ? text : "", userId: String(e.user_id || ""), groupId: String(e.group_id || ""), userName: String(actionRecord(e.sender).card || actionRecord(e.sender).nickname || e.user_id || ""), ...extraVariables }
     args[action.textParam] = action.textTemplate
-      ? action.textTemplate.replace(/\{\{\s*(text|userName|userId|groupId)\s*\}\}/g, (_match, key: string) => variables[key]).trim()
+      ? action.textTemplate.replace(/\{\{\s*([a-zA-Z][a-zA-Z0-9_]*)\s*\}\}/g, (match, key: string) => variables[key] ?? match).trim()
       : text || args[action.textParam] || ""
   }
-  if (action.textParam && action.textTemplate && action.input.mode === "text" && text && !/\{\{\s*text\s*\}\}/.test(action.textTemplate)) args[action.textParam] += `\n${text}`
+  if (action.textParam && action.textTemplate && action.input.mode !== "parameters" && text && !/\{\{\s*text\s*\}\}/.test(action.textTemplate)) args[action.textParam] += action.input.mode === "image-preset" ? `\n\n用户追加要求：\n${text}` : `\n${text}`
   if (action.input.images !== "none" && images !== undefined) args[action.input.imageParam] = images
   return args
 }
 
-async function actionImages(action: ActionDefinition, e: ActionRecord, config: RuntimeConfigObject): Promise<string[]> {
+async function actionImages(action: ActionDefinition, e: ActionRecord, config: RuntimeConfigObject, targetId = ""): Promise<string[]> {
   if (action.input.images === "none") return []
   // 固定媒体选择语义，不让附加提示词中的“头像”等字样扩大输入来源。
   const media = await resolveMediaContext(e, "参考图片", config, { quoteAsCurrent: true })
   const quoted = media.attachments.filter(item => item.kind === "image" && item.source === "quote")
   const quoteUrls = new Set((media.quote?.attachments || []).filter(item => item.kind === "image").map(item => String(item.url || "")))
   const current = media.attachments.filter(item => item.kind === "image" && item.source !== "quote" && !String(item.source).includes("avatar") && !quoteUrls.has(String(item.url || "")) && !(item.source === "yunzai-img" && media.quote?.status === "unavailable"))
-  const chosen = action.input.images === "quote" ? quoted : action.input.images === "current" ? current : current.length ? current : quoted
+  const chosen = action.input.images === "quote" ? quoted : action.input.images === "current" ? current : action.input.images === "current-and-quote" ? [...current, ...quoted] : current.length ? current : quoted
   const images = [...new Set(chosen.map(item => String(item.url || "")).filter(Boolean))].slice(0, 3)
+  if (!images.length && action.input.avatarFallback) {
+    const bot = actionRecord(e.bot)
+    const botIds = new Set([String(e.self_id || ""), String(bot.uin || "")])
+    const mentioned = media.base.mentions.find(item => /^\d+$/.test(item.qq) && !botIds.has(item.qq))?.qq
+    const target = targetId || mentioned || String(e.user_id || "")
+    if (/^\d+$/.test(target)) images.push(avatarUrl(target))
+  }
   if (action.input.requireImage && !images.length) throw new Error("请发送一张图片，或引用图片后再使用这个动作。")
   return images
 }
@@ -86,15 +96,17 @@ async function actionOutput(action: ActionDefinition, result: Pick<ToolExecution
 }
 
 export async function runAction(action: ActionDefinition, text: string, e: ActionRecord, options: { web?: boolean; images?: string[] } = {}) {
+  const startedAt = Date.now()
   const config = configStore.get()
   const gate = await preflight(e, text, config)
   if (!gate.ok) throw Object.assign(new Error(gate.message || "当前会话不可使用此动作"), { silent: !options.web && gate.silent === true })
   try {
     const decision = actionAccess(action, e, config)
     if (!decision.allowed) throw new Error(decision.reason)
-    const images = options.web ? options.images || [] : await actionImages(action, e, config)
+    const preset = action.input.mode === "image-preset" ? await prepareImagePresetInput(action, text, e) : null
+    const images = options.web ? options.images || [] : await actionImages(action, e, config, preset?.targetId)
     if (action.input.requireImage && !images.length) throw new Error("请提供参考图片后再试跑")
-    const args = bindActionArguments(action, text, e, action.input.images === "none" ? undefined : images)
+    const args = bindActionArguments(action, preset?.text ?? text, e, action.input.images === "none" ? undefined : images, preset?.variables)
     validateActionArguments(action, args)
     let toolReplied = false
     const executionEvent = typeof e.reply === "function" ? { ...e, reply: async (...parts: unknown[]) => {
@@ -102,14 +114,42 @@ export async function runAction(action: ActionDefinition, text: string, e: Actio
       toolReplied = true
       return value
     } } : e
+    const sendImageReply = async (stage: "running" | "success" | "failure", value: unknown, signal?: AbortSignal) => {
+      if (typeof e.reply !== "function") return
+      const latest = configStore.get()
+      const current = parseActions(latest.actions).items[action.id]
+      if (!current || current.tool !== action.tool || !checkAccess(e, latest).ok || !actionAccess(current, e, latest).allowed) return
+      const output = formatImageActionReply(action, e, stage, value)
+      if (!output.parts.length) return
+      const beforeInvoke = () => {
+        const now = configStore.get()
+        const saved = parseActions(now.actions).items[action.id]
+        if (!saved || saved.tool !== action.tool || !checkAccess(e, now).ok || !actionAccess(saved, e, now).allowed) throw Object.assign(new Error("动作授权已变化"), { permissionDenied: true })
+      }
+      const delivery = await executeDirectTool("message_send", { parts: output.parts }, { e, config: latest, signal, source: "action-delivery", actionId: action.id, actionDelivery: true, execution: { beforeInvoke } })
+      const after = configStore.get()
+      if (stage !== "running" && !["success", "accepted", "denied"].includes(delivery.status) && checkAccess(e, after).ok && actionAccess(current, e, after).allowed) await e.reply("动作已执行，但结果投递失败。")
+    }
     const registry = action.kind === "source" ? new ToolRegistry() : toolRegistry
     if (action.kind === "source") registry.register(actionSourceTool(action))
     const result = await executeDirectTool(action.tool, args, {
       e: executionEvent, config, actionId: action.id, observability: { toolCallId: `action:${action.id}` }, source: options.web ? "action-web-test" : "action-command",
       execution: {
+        actionImageReply: action.tool === "generate_image" && Boolean(action.reply.image),
+        onBackgroundStart: options.web ? undefined : async (task, signal) => {
+          if (action.tool !== "generate_image" || !action.reply.image?.running) return
+          await sendImageReply("running", { metadata: { backgroundStatus: task.status, queue: backgroundTaskService.queueStatus(task.id) } }, signal)
+        },
         onBackgroundComplete: options.web ? undefined : async task => {
           if (typeof e.reply !== "function") return
           if (!checkAccess(e, configStore.get()).ok) return
+          if (action.tool === "generate_image" && action.reply.image) {
+            const result = actionRecord(task.result)
+            const elapsedMs = Math.max(0, task.endedAt - startedAt)
+            const value = task.status === "ok" ? { ...result, metadata: { ...actionRecord(result.metadata), elapsedMs } } : { reason: task.error || "任务已取消", metadata: { elapsedMs } }
+            await sendImageReply(task.status === "ok" ? "success" : "failure", value)
+            return
+          }
           if (task.status !== "ok") {
             if (!toolReplied) await e.reply(`动作未完成：${task.error || "任务已取消"}`)
             return
@@ -121,12 +161,23 @@ export async function runAction(action: ActionDefinition, text: string, e: Actio
         beforeInvoke: () => {
           const latest = configStore.get()
           const current = parseActions(latest.actions).items[action.id]
-          if (!current || current.tool !== action.tool || JSON.stringify(current.source) !== JSON.stringify(action.source) || !checkAccess(e, latest).ok || !actionAccess(current, e, latest).allowed) throw Object.assign(new Error("动作或工具权限已变化，任务已停止"), { permissionDenied: true })
+          const selectedModel = String(args.model || "")
+          const modelChanged = action.tool === "generate_image" && (String(current?.defaults.model || "") !== String(action.defaults.model || "") || (selectedModel !== String(action.defaults.model || "") && !current?.overridable.includes("model")))
+          if (!current || current.tool !== action.tool || JSON.stringify(current.source) !== JSON.stringify(action.source) || modelChanged || !checkAccess(e, latest).ok || !actionAccess(current, e, latest).allowed) throw Object.assign(new Error("动作或工具权限已变化，任务已停止"), { permissionDenied: true })
         },
       },
     }, registry)
     const metadata = actionRecord(result.metadata)
-    const { message, delivery, parts, note } = await actionOutput(action, result, e, options.web, toolReplied)
+    const customImageReply = action.tool === "generate_image" && Boolean(action.reply.image)
+    const { message, delivery, parts, note } = customImageReply && result.status === "accepted"
+      ? { ...formatImageActionReply(action, e, "start", { metadata }), delivery: null }
+      : customImageReply && ["failed", "denied", "canceled", "ambiguous"].includes(result.status)
+        ? { ...formatImageActionReply(action, e, "failure", { reason: redactErrorText(String(result.content || "任务未完成")), metadata: { elapsedMs: Date.now() - startedAt } }), delivery: null }
+        : await actionOutput(action, result, e, options.web, toolReplied)
     return { status: result.status, result: result.value ?? result.content, message, delivery, reply: { message, parts, note }, taskId: metadata.taskId || "" }
+  } catch (error) {
+    if (action.tool !== "generate_image" || !action.reply.image || (error && typeof error === "object" && "silent" in error && error.silent === true)) throw error
+    const output = formatImageActionReply(action, e, "failure", { reason: redactErrorText(error instanceof Error ? error.message : String(error)), metadata: { elapsedMs: Date.now() - startedAt } })
+    return { status: "failed", result: null, message: output.message, delivery: null, reply: output, taskId: "" }
   } finally { releasePreflight(gate) }
 }

@@ -6,6 +6,7 @@ type UnknownRecord = Record<string, unknown>
 export type BackgroundTaskStatus = "queued" | "running" | "ok" | "error" | "canceled"
 export type BackgroundTaskExecutor = (signal: AbortSignal) => Promise<unknown> | unknown
 export type BackgroundTaskCompletion = (task: PublicBackgroundTask) => Promise<unknown> | unknown
+export type BackgroundTaskStart = (task: PublicBackgroundTask, signal: AbortSignal) => Promise<unknown> | unknown
 export interface BackgroundTaskLimits {
   enabled: boolean
   maxConcurrent: number
@@ -20,6 +21,7 @@ export interface BackgroundTaskInput {
   parentToolId?: string
   config?: unknown
   execute?: BackgroundTaskExecutor
+  onStart?: BackgroundTaskStart | null
   onComplete?: BackgroundTaskCompletion | null
   /** 同一队列内按 maxConcurrent/maxQueue 调度；未提供时使用 default。 */
   queueKey?: unknown
@@ -47,6 +49,8 @@ interface BackgroundTask extends PublicBackgroundTask {
   queueKey: string
   controller: AbortController
   execute: BackgroundTaskExecutor
+  onStart: BackgroundTaskStart | null
+  wasQueued: boolean
   onComplete: BackgroundTaskCompletion | null
 }
 
@@ -80,6 +84,7 @@ const releasedExecutor: BackgroundTaskExecutor = () => undefined
 
 function releaseCallbacks(task: BackgroundTask): void {
   task.execute = releasedExecutor
+  task.onStart = null
   task.onComplete = null
 }
 
@@ -195,6 +200,8 @@ export class BackgroundTaskService {
       errorDetails: {},
       controller: new AbortController(),
       execute: input.execute,
+      onStart: input.onStart || null,
+      wasQueued: queue.active >= limits.maxConcurrent,
       onComplete: input.onComplete || null,
     }
     this.tasks.set(task.id, task)
@@ -228,6 +235,11 @@ export class BackgroundTaskService {
     task.status = "running"
     task.startedAt = now()
     try {
+      if (task.wasQueued && task.onStart) {
+        try { await task.onStart(this.public(task), task.controller.signal) }
+        catch (error) { hostRuntime.logger?.warn?.(`[yui-chat] 后台任务开始通知失败：${task.name}`, redactErrorText(errorMessage(error))) }
+      }
+      task.controller.signal.throwIfAborted()
       task.result = await task.execute(task.controller.signal)
       task.status = task.controller.signal.aborted ? "canceled" : "ok"
     } catch (error) {
@@ -269,6 +281,15 @@ export class BackgroundTaskService {
 
   get(id: unknown): PublicBackgroundTask | null {
     return this.public(this.tasks.get(text(id)))
+  }
+
+  /** 只公开当前队列的数量，不暴露其他任务或用户。 */
+  queueStatus(id: unknown): { active: number; waiting: number; maxConcurrent: number; position: number } | null {
+    const task = this.tasks.get(text(id))
+    const queue = task && this.queues.get(task.queueKey)
+    if (!task || !queue) return null
+    const index = queue.queue.findIndex(item => item.id === task.id)
+    return { active: queue.active, waiting: queue.queue.length, maxConcurrent: this.safeLimits(queue).maxConcurrent, position: index < 0 ? 0 : index + 1 }
   }
 
   list(options: { limit?: unknown } = {}): PublicBackgroundTask[] {
