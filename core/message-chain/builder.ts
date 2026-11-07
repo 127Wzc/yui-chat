@@ -1,4 +1,5 @@
 import type {
+  MessageChain,
   AudioPart,
   ContentPart,
   ExtensionPart,
@@ -13,8 +14,32 @@ import type {
   ResourcePart,
   ResourceRef,
   VideoPart,
+  MediaInput,
 } from "./types.js"
 import { isJsonValue } from "./types.js"
+
+/** 将插件已经取得的媒体值表达为资源引用；不下载、不创建宿主消息段。 */
+export function mediaResourceFromValue(value: unknown): ResourceRef {
+  if (Buffer.isBuffer(value) || value instanceof Uint8Array) return { kind: "bytes", value: Buffer.from(value).toString("base64") }
+  if (value && typeof value === "object" && "kind" in value && "value" in value) return { ...value } as ResourceRef
+  const uri = String(value ?? "").trim()
+  const data = uri.match(/^data:([^;,]+);base64,([\s\S]*)$/i)
+  if (data) return { kind: "bytes", value: data[2], mimeType: data[1] }
+  if (/^base64:\/\//i.test(uri)) return { kind: "bytes", value: uri.slice(9) }
+  return { kind: /^https?:\/\//i.test(uri) ? "url" : "path", value: uri }
+}
+
+/** 原生命令入口允许文字简写；结构化消息必须显式使用内部片段。 */
+export function messageChainFromReply(value: unknown): MessageChain {
+  if (!value) return []
+  if (typeof value === "string") return [{ type: "text", text: value }]
+  if (!Array.isArray(value)) throw new Error("结构化回复请使用 MessageChain 数组，媒体使用 source 资源引用。")
+  return value.flatMap(item => {
+    if (typeof item === "string") return item ? [{ type: "text" as const, text: item }] : []
+    if (!item || typeof item !== "object" || typeof item.type !== "string") throw new Error("回复片段必须使用 MessageChain 格式。")
+    return [item as ContentPart]
+  })
+}
 
 /**
  * 消息链构造器。
@@ -60,9 +85,12 @@ export class MessageChainBuilder {
     return this
   }
 
+  dice(): this { this.parts.push({ type: "dice" }); return this }
+  rps(value: number): this { this.parts.push({ type: "rps", value }); return this }
+
   /** 追加图片资源引用。资源本体不在消息链中复制。 */
-  image(source: ResourceRef, options: Omit<ImagePart, "type" | "source"> = {}): this {
-    this.parts.push({ type: "image", source, ...options })
+  image(source: MediaInput, options: Omit<ImagePart, "type" | "source"> = {}): this {
+    this.parts.push({ type: "image", source: mediaResourceFromValue(source), ...options })
     return this
   }
 
@@ -84,20 +112,20 @@ export class MessageChainBuilder {
   }
 
   /** 追加语音资源引用。 */
-  audio(source: ResourceRef, options: Omit<AudioPart, "type" | "source"> = {}): this {
-    this.parts.push({ type: "audio", source, ...options })
+  audio(source: MediaInput, options: Omit<AudioPart, "type" | "source"> = {}): this {
+    this.parts.push({ type: "audio", source: mediaResourceFromValue(source), ...options })
     return this
   }
 
   /** 追加视频资源引用。 */
-  video(source: ResourceRef, options: Omit<VideoPart, "type" | "source"> = {}): this {
-    this.parts.push({ type: "video", source, ...options })
+  video(source: MediaInput, options: Omit<VideoPart, "type" | "source"> = {}): this {
+    this.parts.push({ type: "video", source: mediaResourceFromValue(source), ...options })
     return this
   }
 
   /** 追加文件资源引用。 */
-  file(source: ResourceRef, options: Omit<FilePart, "type" | "source"> = {}): this {
-    this.parts.push({ type: "file", source, ...options })
+  file(source: MediaInput, options: Omit<FilePart, "type" | "source"> = {}): this {
+    this.parts.push({ type: "file", source: mediaResourceFromValue(source), ...options })
     return this
   }
 

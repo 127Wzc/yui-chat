@@ -1,4 +1,5 @@
 import { hostRuntime } from "../runtime/host-runtime.js"
+import type { MessageChain, ContentPart } from "../message-chain/types.js"
 
 type UnknownRecord = Record<string, unknown>
 type SegmentValue = string | UnknownRecord
@@ -52,48 +53,42 @@ export function findUnsupportedMediaCQCodes(text: unknown = ""): Array<{ type: s
  * 普通字符串交给 `reply()`，否则用户会看到 `[CQ:at,...]`。统一退回 OneBot
  * 兼容的对象形态，让宿主适配器继续负责最终协议编码。
  */
+/** @deprecated 仅保留公开兼容出口；插件内部使用 mention 片段。 */
 export function createNativeAtSegment(userId: string, adapter?: SegmentAdapter): UnknownRecord {
-  const segment = adapter || (hostRuntime as typeof hostRuntime & { segment?: SegmentAdapter }).segment
-  if (typeof segment?.at === "function") {
-    const generated = segment.at(userId)
-    if (generated && typeof generated === "object" && !Array.isArray(generated)) return generated as UnknownRecord
-  }
-  return { type: "at", qq: userId }
+  return hostRuntime.messageSegment({ type: "mention", userId }, "", adapter) as UnknownRecord
 }
 
 /** 只转换受支持的 @ CQ 码；未知 CQ 默认移除，防止模型伪造宿主适配器片段。 */
-export function convertCQCodes(text: unknown = "", options: CqCodeOptions = {}): string | SegmentValue[] {
+export function textMessageChain(text: unknown = "", options: Pick<CqCodeOptions, "removeUnsupported"> = {}): MessageChain {
   const source = String(text || "")
-  const runtimeSegment = (hostRuntime as typeof hostRuntime & { segment?: SegmentAdapter }).segment
-  const segment = options.segment || runtimeSegment
-  const removeUnsupported = options.removeUnsupported !== false
-  const parts: SegmentValue[] = []
+  const parts: ContentPart[] = []
   let lastIndex = 0
   let needsSpaceAfterAt = false
-
-  const appendText = (value: unknown): void => {
+  const appendText = (value: string): void => {
     if (!value) return
-    let output = String(value)
-    if (needsSpaceAfterAt && !/^\s/.test(output)) output = ` ${output}`
+    const output = needsSpaceAfterAt && !/^\s/.test(value) ? ` ${value}` : value
     needsSpaceAfterAt = false
     const last = parts.at(-1)
-    if (typeof last === "string") parts[parts.length - 1] = last + output
-    else parts.push(output)
+    if (last?.type === "text") last.text += output
+    else parts.push({ type: "text", text: output })
   }
-
   for (const match of source.matchAll(CQ_CODE)) {
     appendText(source.slice(lastIndex, match.index ?? lastIndex))
     const params = parseCQParams(match[2])
     if (isAtCode(match[1], params)) {
-      const userId = String(params.id || params.qq)
-      parts.push(createNativeAtSegment(userId, segment))
+      parts.push({ type: "mention", userId: String(params.id || params.qq) })
       needsSpaceAfterAt = true
-    } else if (!removeUnsupported) appendText(match[0])
+    } else if (options.removeUnsupported === false) appendText(match[0])
     lastIndex = (match.index ?? lastIndex) + match[0].length
   }
   appendText(source.slice(lastIndex))
-  const compact = parts.filter(item => typeof item !== "string" || item)
-  return compact.some(item => typeof item !== "string") ? compact : compact.join("")
+  return parts
+}
+
+/** @deprecated 仅保留公开兼容出口；插件内部使用 textMessageChain。 */
+export function convertCQCodes(text: unknown = "", options: CqCodeOptions = {}): string | SegmentValue[] {
+  const parts = textMessageChain(text, options).map(part => part.type === "mention" ? createNativeAtSegment(part.userId, options.segment) : part.type === "text" ? part.text : "")
+  return parts.some(part => typeof part !== "string") ? parts : parts.join("")
 }
 
 /** 移除不支持的 CQ 码，同时保留最终阶段可转换的 @ 码。 */

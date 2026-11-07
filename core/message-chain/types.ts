@@ -3,14 +3,13 @@ export type JsonPrimitive = string | number | boolean | null
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue }
 
 /** 资源引用的来源类别，不代表当前已经获得投递权限。 */
-export type ResourceKind = "url" | "file" | "cache" | "base64" | "platform"
+export type ResourceKind = "url" | "path" | "bytes"
 
 /**
  * 资源引用。
  *
- * `value` 只表示 URL、缓存键或平台资源标识；MCP 内联正文只能短暂放在
- * `inlineData`，进入模型、日志或持久化前必须由序列化器移除，进入投递层前
- * 则应先物化到媒体缓存。这样资源定位和资源正文不会混为一谈。
+ * `value` 为 HTTP 链接、本地路径或 Base64 字节正文。字节输入在构造时统一
+ * 编码，进入模型文本或持久化结果前移除正文；文件路径统一检查允许的目录。
  */
 export interface ResourceRef {
   kind: ResourceKind
@@ -19,9 +18,10 @@ export interface ResourceRef {
   name?: string
   size?: number
   sourceUri?: string
-  /** 仅供归一化/媒体物化阶段使用，禁止直接发送给模型或写入日志。 */
-  inlineData?: string
 }
+
+/** 代码构造消息时允许的媒体输入；进入消息链后统一为 ResourceRef。Buffer 属于 Uint8Array。 */
+export type MediaInput = string | Uint8Array | ResourceRef
 
 /** 普通文本片段。 */
 export interface TextPart {
@@ -47,6 +47,10 @@ export interface ReplyPart {
   messageId: string
   selectedText?: string
 }
+
+/** 平台互动消息仍使用内部片段，只在投递边界调用宿主工厂。 */
+export interface DicePart { type: "dice" }
+export interface RpsPart { type: "rps"; value: number }
 
 /** 所有媒体/资源片段共享的描述字段。 */
 export interface ResourcePartBase {
@@ -108,6 +112,8 @@ export type ForwardNodePart =
   | VideoPart
   | FilePart
   | MusicPart
+  | DicePart
+  | RpsPart
 
 /** 平台无关的合并转发节点，投递边界再转换成 OneBot/Yunzai node。 */
 export interface ForwardNode {
@@ -137,6 +143,8 @@ export type ContentPart =
   | JsonPart
   | MentionPart
   | ReplyPart
+  | DicePart
+  | RpsPart
   | ImagePart
   | AudioPart
   | VideoPart
@@ -149,8 +157,18 @@ export type ContentPart =
 /** 唯一的内部消息表示；输入、模型和宿主输出都通过它交换有序内容。 */
 export type MessageChain = readonly ContentPart[]
 
+/** 插件内部的确定投递目标；不包含宿主发送函数或原生消息段。 */
+export interface MessageDestination {
+  type: "group" | "user"
+  id: string
+  accountId?: string
+}
+
 /** 平台适配器允许直接投递给用户的内容子集。 */
 export type OutboundPart = Exclude<ContentPart, JsonPart | ResourcePart | ExtensionPart>
+
+/** 发送校验和工具 Schema 共用的类型列表，转发节点支持其中除 forward 外的类型。 */
+export const outboundPartTypes = ["text", "mention", "reply", "image", "audio", "video", "file", "music", "forward", "dice", "rps"] as const satisfies readonly OutboundPart["type"][]
 
 /** 工具结果的生命周期语义。 */
 export type ToolOutputKind = "observation" | "delivery" | "action" | "error"
@@ -181,6 +199,8 @@ export interface DeliveryReceipt {
   messageIds?: readonly string[]
   target?: DeliveryTarget
   error?: string
+  blocked?: boolean
+  filterTraces?: readonly Record<string, unknown>[]
 }
 
 export interface ToolOutput {

@@ -1,7 +1,9 @@
+import { replyMessageChain } from "../message-chain/delivery.js"
 import { configStore } from "../../config/store.js"
 import { chatService } from "../chat/chat-service.js"
 import { isEmptyResponse, normalizeResponseText } from "../chat/response-pipeline.js"
 import { hostRuntime } from "../runtime/host-runtime.js"
+import type { MessageDestination } from "../message-chain/types.js"
 import type { UnknownRecord } from "../message/types.js"
 
 const fallbackGreetings = [
@@ -15,7 +17,7 @@ const fallbackGreetings = [
 interface GreetingTarget {
   groupId: string
   label: string
-  send(payload: unknown): Promise<unknown>
+  destination?: MessageDestination
 }
 
 interface GreetingPreview extends UnknownRecord {
@@ -68,23 +70,14 @@ async function groupTarget(event: UnknownRecord, groupId = ""): Promise<Greeting
   const targetId = text(groupId).trim()
   if (!targetId) {
     if (event.isGroup !== true) throw new Error("当前不是群聊，请指定群号。")
-    const reply = event.reply
-    if (typeof reply !== "function") throw new Error("当前事件不支持群消息发送。")
+    if (!hostRuntime.canSendMessage(event)) throw new Error("当前事件不支持群消息发送。")
     const currentId = text(event.group_id)
-    return { groupId: currentId, label: `群 ${currentId}`, send: payload => (reply as (value: unknown, quote?: unknown) => Promise<unknown>).call(event, payload, false) }
+    return { groupId: currentId, label: `群 ${currentId}` }
   }
-  return {
-    groupId: targetId,
-    label: `群 ${targetId}`,
-    async send(payload: unknown): Promise<unknown> {
-      const bot = record(event.bot || hostRuntime.bot)
-      const pickGroup = bot.pickGroup
-      const group = typeof pickGroup === "function" ? record(await pickGroup.call(event.bot || hostRuntime.bot, Number(targetId), true)) : {}
-      const sendMsg = group.sendMsg
-      if (typeof sendMsg !== "function") throw new Error(`无法获取群 ${targetId}，请确认机器人在该群。`)
-      return sendMsg.call(group, payload)
-    },
-  }
+  const destination: MessageDestination = { type: "group", id: targetId }
+  await hostRuntime.requireMessageDestination(destination, event)
+  return { groupId: targetId, label: `群 ${targetId}`, destination }
+
 }
 
 export async function generateInitiativeGreeting(event: unknown, config: unknown): Promise<string> {
@@ -120,7 +113,7 @@ export async function sendInitiativeGreeting(event: unknown, options: UnknownRec
     msg: cfg.prompt,
     raw_message: cfg.prompt,
   }, config)
-  await target.send(value)
+  await replyMessageChain([{ type: "text", text: text(value) }], { e: record(event), config: record(config), destination: target.destination, quote: false, recordImages: false })
   return { target: target.label, text: text(value) }
 }
 

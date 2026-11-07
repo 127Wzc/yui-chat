@@ -3,15 +3,15 @@ import { applyOutputFilters } from "../../filters/message/message-filter-service
 import { userSettingsStore } from "../../user/settings.js"
 import { stripForSpeech, synthesizeSpeech } from "../media/tts-service.js"
 import { hostRuntime } from "../runtime/host-runtime.js"
-import { convertCQCodes } from "../message/cq-code.js"
-import { deliverMessageChain } from "../message-chain/delivery.js"
+import { textMessageChain } from "../message/cq-code.js"
+import { deliverMessageChain, replyMessageChain } from "../message-chain/delivery.js"
+import { mediaResourceFromValue } from "../message-chain/builder.js"
 import type { ForwardNode, MessageChain } from "../message-chain/types.js"
 import type { UnknownRecord } from "../message/types.js"
 import { armConversationContinuation } from "../persona/conversation-continuation.js"
 import { stickerExpressionCoordinator } from "../persona/sticker-expression-coordinator.js"
 import { buildReplyPayload, isEmptyResponse, normalizeResponseText } from "./response-pipeline.js"
 
-type ReplyMethod = (payload: unknown, quote?: unknown, options?: UnknownRecord) => unknown | Promise<unknown>
 type SegmentationOptions = UnknownRecord & {
   maxParts?: unknown
   minChars?: unknown
@@ -41,14 +41,8 @@ function number(value: unknown, fallback = 0): number {
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
-function replyMethod(event: unknown): ReplyMethod {
-  const reply = record(event).reply
-  if (typeof reply !== "function") throw new Error("当前事件不支持回复消息")
-  return reply as ReplyMethod
-}
-
-async function sendReply(event: unknown, payload: unknown, quote: unknown, options: UnknownRecord): Promise<unknown> {
-  return replyMethod(event).call(event, payload, quote, options)
+async function sendReply(event: unknown, chain: MessageChain, quote: unknown, options: UnknownRecord, config: unknown): Promise<unknown> {
+  return replyMessageChain(chain, { e: record(event), config: record(config), quote: Boolean(quote), replyOptions: options, textFiltered: true, quoteStandalone: true })
 }
 
 function markReplied(event: unknown): void {
@@ -59,9 +53,6 @@ function responseConfig(config: unknown): UnknownRecord {
   return record(record(config).response)
 }
 
-function segmentFactory(): YuiChatHostSegmentFactory | undefined {
-  return hostRuntime.segment
-}
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
@@ -166,9 +157,9 @@ async function sendConfiguredSplitText(event: unknown, value: string, config: un
   const parts = splitConfiguredReply(value, segmentation)
   const quoteReply = response.quoteReply
   const removeUnsupported = response.removeCQCode !== false
-  if (parts.length <= 1) return sendReply(event, convertCQCodes(value, { removeUnsupported }), quoteReply, replyOptions)
+  if (parts.length <= 1) return sendReply(event, textMessageChain(value, { removeUnsupported }), quoteReply, replyOptions, config)
   for (const [index, part] of parts.entries()) {
-    await sendReply(event, convertCQCodes(part, { removeUnsupported }), index === 0 ? quoteReply : false, replyOptions)
+    await sendReply(event, textMessageChain(part, { removeUnsupported }), index === 0 ? quoteReply : false, replyOptions, config)
     if (index < parts.length - 1) {
       const delayMs = configuredSegmentationDelayMs(segmentation, part.length)
       if (delayMs > 0) await sleep(delayMs)
@@ -327,10 +318,11 @@ async function finishOutputDelivery(event: unknown, result: UnknownRecord, confi
   return delivered
 }
 
-async function sendRecordDelivery(event: unknown, data: unknown, quote: unknown, replyOptions: UnknownRecord): Promise<void> {
-  const recordFactory = segmentFactory()?.record
-  if (typeof recordFactory === "function") await sendReply(event, recordFactory(data), quote, replyOptions)
-  else await sendReply(event, "[语音已生成，但当前适配器不支持 segment.record]", quote, replyOptions)
+async function sendRecordDelivery(event: unknown, data: unknown, quote: unknown, replyOptions: UnknownRecord, config: unknown): Promise<void> {
+  const chain: MessageChain = hostRuntime.supportsMessagePart("audio")
+    ? [{ type: "audio", source: mediaResourceFromValue(data) }]
+    : [{ type: "text", text: "[语音已生成，但当前适配器不支持 segment.record]" }]
+  await sendReply(event, chain, quote, replyOptions, config)
 }
 
 /** 将模型结果、过滤器交付物和用户选择的输出模式统一投递到宿主。 */
@@ -352,7 +344,7 @@ export async function sendChatOutput(event: unknown, result: unknown, config: un
 
   const source = text(options.source || resultValue.source)
   const processed = await applyOutputFilters(outputText, { event, e: event, config: rootConfig, result: resultValue, source })
-  for (const delivery of processed.deliveries) await sendRecordDelivery(event, delivery.data, response.quoteReply, replyOptions)
+  for (const delivery of processed.deliveries) await sendRecordDelivery(event, delivery.data, response.quoteReply, replyOptions, rootConfig)
   const displayText = formatHostedSearchCitations(processed.text, resultValue.hostedSearchSources)
   if (!displayText) {
     markReplied(event)
@@ -378,7 +370,7 @@ export async function sendChatOutput(event: unknown, result: unknown, config: un
       return null
     })
     if (audio) {
-      await sendRecordDelivery(event, audio, response.quoteReply, replyOptions)
+      await sendRecordDelivery(event, audio, response.quoteReply, replyOptions, rootConfig)
       if (record(response.tts).alsoSendText !== true) {
         return finishOutputDelivery(event, resultValue, rootConfig, source, displayText, options, true)
       }
@@ -386,13 +378,11 @@ export async function sendChatOutput(event: unknown, result: unknown, config: un
   }
 
   if (payload.asImage) {
-    const imageFactory = segmentFactory()?.image
-    const delivered = await sendReply(event, typeof imageFactory === "function" ? imageFactory(payload.image) : payload.image, response.quoteReply, replyOptions)
-    await recentContextStore.recordDeliveredImages(event, delivered, 1)
+    const delivered = await sendReply(event, [{ type: "image", source: mediaResourceFromValue(payload.image) }], response.quoteReply, replyOptions, rootConfig)
     return finishOutputDelivery(event, resultValue, rootConfig, source, displayText, options, delivered)
   }
   if (payload.chunks) {
-    for (const chunk of payload.chunks) await sendReply(event, convertCQCodes(chunk, { removeUnsupported: response.removeCQCode !== false }), response.quoteReply, replyOptions)
+    for (const chunk of payload.chunks) await sendReply(event, textMessageChain(chunk, { removeUnsupported: response.removeCQCode !== false }), response.quoteReply, replyOptions, rootConfig)
     return finishOutputDelivery(event, resultValue, rootConfig, source, displayText, options, true)
   }
 
@@ -401,6 +391,6 @@ export async function sendChatOutput(event: unknown, result: unknown, config: un
     const delivered = await sendConfiguredSplitText(event, payload.text, rootConfig, replyOptions)
     return finishOutputDelivery(event, resultValue, rootConfig, source, displayText, options, delivered)
   }
-  const delivered = await sendReply(event, convertCQCodes(payload.text, { removeUnsupported: response.removeCQCode !== false }), response.quoteReply, replyOptions)
+  const delivered = await sendReply(event, textMessageChain(payload.text, { removeUnsupported: response.removeCQCode !== false }), response.quoteReply, replyOptions, rootConfig)
   return finishOutputDelivery(event, resultValue, rootConfig, source, displayText, options, delivered)
 }

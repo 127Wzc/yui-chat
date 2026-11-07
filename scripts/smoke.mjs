@@ -13,7 +13,7 @@ const smokeRuntimeRootEnvironmentVariable = "YUI_CHAT_SMOKE_RUNTIME_ROOT"
 const pluginRootEnvironmentVariable = "YUI_CHAT_PLUGIN_ROOT"
 const productionRuntimePaths = {
   dataDir: path.join(yunzaiRoot, "data", "yui-chat"),
-  cacheDir: path.join(pluginRoot, "cache"),
+  cacheDir: path.join(yunzaiRoot, "data", "yui-chat", "cache"),
 }
 let smokeRuntimeRoot = ""
 let removeSmokeRuntimeRoot = false
@@ -256,7 +256,7 @@ async function checkRuntimeIsolation() {
   assert(runtimeRoot === smokeRuntimeRoot, "config store should use the smoke runtime root")
   assert(dataDir === path.join(smokeRuntimeRoot, "data", "yui-chat"), "smoke data should stay under the runtime root")
   assert(configBackupDir === path.join(dataDir, "backups"), "smoke config backups should stay under the isolated data directory")
-  assert(cacheDir === path.join(smokeRuntimeRoot, "cache"), "smoke cache should stay under the runtime root")
+  assert(cacheDir === path.join(dataDir, "cache"), "runtime caches should stay under the isolated plugin data directory")
   assert(tempDir === path.join(cacheDir, "temp"), "smoke temporary files should stay under the isolated cache")
   for (const [name, runtimePath] of Object.entries({ configBackupDir, dataDir, cacheDir, tempDir })) {
     assert(pathInside(runtimePath, smokeRuntimeRoot), `${name} must stay inside the smoke runtime root`)
@@ -274,7 +274,7 @@ async function checkRuntimeIsolation() {
   const defaults = JSON.parse(defaultPathProbe.stdout)
   assert(defaults.runtimeRoot === "", "production runtime root should remain disabled when the environment variable is absent")
   assert(defaults.dataDir === productionRuntimePaths.dataDir, "production data directory should keep its original default")
-  assert(defaults.cacheDir === productionRuntimePaths.cacheDir, "production cache directory should keep its original default")
+  assert(defaults.cacheDir === productionRuntimePaths.cacheDir, "production cache directory should stay under data/yui-chat")
 }
 
 async function checkConfigSafety() {
@@ -350,7 +350,7 @@ async function checkConfigSafety() {
   assert(config.response?.render?.mediaThumbnail?.enabled === true, "media thumbnail compression must default enabled")
   assert(config.response?.render?.mediaThumbnail?.format === "jpeg", "media thumbnail compression must default to jpeg")
   assert(config.response?.render?.delivery?.allowTargetSend === false, "render cross-target delivery must default false")
-  assert(config.response?.render?.delivery?.allowFilePathImages === false, "render local file image delivery must default false")
+  assert(Array.isArray(config.response?.render?.delivery?.allowedLocalPaths) && config.response.render.delivery.allowedLocalPaths.length === 0, "additional local media directories must default empty")
   assert(!("allowPrivateHosts" in config.response.render.delivery), "media delivery must not keep a separate private-host switch")
   assert(!("enabled" in config.response.render.html) && config.response.render.url.enabled === false, "HTML follows render_image; URL screenshot must default disabled")
   assert(!("allowPrivateHosts" in config.response.render.html) && !("allowedUrlHosts" in config.response.render.html), "HTML render config must not keep separate link-safety controls")
@@ -1225,7 +1225,7 @@ async function checkExtensions() {
   const newMediaActionResult = await messageSendContract.execute({
     parts: [
       { type: "text", text: "新格式" },
-      { type: "image", source: { kind: "base64", value: "aGVsbG8=", mimeType: "image/png" } },
+      { type: "image", source: { kind: "bytes", value: "aGVsbG8=", mimeType: "image/png" } },
     ],
   }, {
     e: { isGroup: true, group_id: "smoke", reply: async payload => mediaActionPayloads.push(payload) },
@@ -1353,14 +1353,14 @@ async function checkExtensions() {
   const unknownMediaMcpResult = await mcpAdapter.execute({ mode: "unknown-media" }, { signal: mcpAbortController.signal })
   assert(unknownMediaMcpResult.content?.[0]?.uri === "https://example.test/archive.bin", "MCP resource links should reach the model verbatim")
   const parsedDataUrlChain = extractMessageChain({ raw_message: "看图[CQ:image,file=data:image/png;base64,aGVsbG8=]" })
-  assert(parsedDataUrlChain.find(part => part.type === "image")?.source.value === "data:image/png;base64,aGVsbG8=", "CQ data URLs should keep their unescaped comma inside the media value")
+  assert(parsedDataUrlChain.find(part => part.type === "image")?.source.kind === "bytes" && parsedDataUrlChain.find(part => part.type === "image")?.source.value === "aGVsbG8=", "CQ data URLs should preserve their complete body when normalized as bytes")
   const qqImageUrl = "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=smoke&rkey=token"
   const parsedQqImageChain = extractMessageChain({ raw_message: `看图[CQ:image,file=${qqImageUrl},file_size=2106380]` })
   assert(parsedQqImageChain.find(part => part.type === "image")?.source.value === qqImageUrl, "CQ image URLs should not absorb the following file_size attribute")
   const deliveredPayloads = []
   const deliveryReceipt = await deliverMessageChain([
     { type: "text", text: "结果" },
-    { type: "image", source: { kind: "base64", value: "aGVsbG8=", mimeType: "image/png" } },
+    { type: "image", source: { kind: "bytes", value: "aGVsbG8=", mimeType: "image/png" } },
   ], {
     e: { isGroup: true, group_id: "smoke", reply: async payload => deliveredPayloads.push(payload) },
     config: { response: { render: { delivery: { quoteReply: false } } } },
@@ -2241,6 +2241,7 @@ async function checkAdapterToolProtocol() {
     assert(responsesRequest.tools.some(tool => tool.type === "web_search") && responsesRequest.tools.some(tool => tool.type === "file_search" && tool.vector_store_ids?.[0] === "vs_smoke"), "Responses request should include configured hosted search tools")
     assert(responsesRequest.tools.some(tool => tool.type === "tool_search") && responsesRequest.tools.some(tool => tool.type === "function" && tool.name === "command_search" && tool.defer_loading === true), "Responses request should expose deferred local functions through hosted tool search")
     const deferredCommand = responsesRequest.tools.find(tool => tool.type === "function" && tool.name === "command_search")
+    assert(deferredCommand.strict === false, "Responses must explicitly preserve optional fields for deferred local tools")
     assert(deferredCommand.description.includes("Do not") && deferredCommand.description.includes("read-only"), "Responses functions should receive decision-oriented descriptions with non-use guidance and side-effect semantics")
     assert(!responsesRequest.tools.some(tool => tool.type === "function" && ["tool_search", "web_search"].includes(tool.name)), "Responses request should not duplicate hosted tools as local functions")
     assert(responsesRequest.tool_choice === undefined && responsesRequest.include.includes("reasoning.encrypted_content"), "Responses request should request stateless reasoning replay data without forcing an unrelated function")
@@ -3086,8 +3087,8 @@ async function checkMedia() {
     const downloaded = await tool.execute({ keyword: "跳舞的随便就行", pick: "first" }, bilibiliContext)
     const downloadedContent = downloaded.content
     const downloadedParts = downloaded.metadata?.messageSendPlan?.parts || []
-    assert(downloadedContent.source?.kind === "cache" && downloadedContent.source.value.endsWith(".mp4"), "direct-send Bilibili media should return a local video cache path")
-    assert(downloadedContent.coverSource?.kind === "cache" && downloadedContent.coverSource.value.endsWith("_cover.png"), "direct-send Bilibili media should also return a local cover cache path")
+    assert(downloadedContent.source?.kind === "path" && downloadedContent.source.value.endsWith(".mp4"), "direct-send Bilibili media should return a local video cache path")
+    assert(downloadedContent.coverSource?.kind === "path" && downloadedContent.coverSource.value.endsWith("_cover.png"), "direct-send Bilibili media should also return a local cover cache path")
     assert(downloadedParts[1]?.source?.value === downloadedContent.coverSource.value && downloadedParts[2]?.source?.value === downloadedContent.source.value, "Bilibili media should preserve caption, cover, and video correspondence in its delivery plan")
     assert(downloadedContent.bytes === 11 && downloadedContent.cached === false && !sentBilibiliPayloads.length, "bilibili_media should prepare a plan without bypassing message_send")
     // 同一个视频再次请求时命中缓存，不重复下载。
@@ -3126,7 +3127,7 @@ async function checkMedia() {
     cachedImageConfig.tools.builtin.imageSearch.cacheSelectedImages = true
     const cachedImageDelivery = await imageTool.execute({ query: "猫", count: 2, limit: 2 }, { config: cachedImageConfig })
     const cachedImageParts = cachedImageDelivery.metadata?.messageSendPlan?.parts || []
-    assert(cachedImageDelivery.content.cacheSelectedImages === true && cachedImageParts.every(part => part.source?.kind === "cache" && part.source?.value?.includes("media-cache/image_")), "image_media should download selected images only when local caching is explicitly enabled")
+    assert(cachedImageDelivery.content.cacheSelectedImages === true && cachedImageParts.every(part => part.source?.kind === "path" && part.source?.value?.includes("media-cache/image_")), "image_media should download selected images only when local caching is explicitly enabled")
     const imageConfig = JSON.parse(JSON.stringify(await configStore.load()))
     imageConfig.tools.builtin.imageSearch.enabledSources = ["pixiv"]
     imageConfig.tools.builtin.imageSearch.defaultSource = "pixiv"
@@ -3830,11 +3831,11 @@ async function checkCommandRules() {
       receivedArgs = { name, args }
       return { ok: true }
     }
-    masterApp.reply = async text => { replies.push(String(text)); return true }
-    masterApp.e = { isMaster: true, isGroup: false, user_id: "smoke-master", msg: "#yui面板" }
+    const captureReply = async text => { replies.push(String(text)); return true }
+    masterApp.e = { isMaster: true, isGroup: false, user_id: "smoke-master", msg: "#yui面板", reply: captureReply }
     await masterApp.webLogin()
     assert(/\?quick=[A-Za-z0-9_-]+/.test(replies.at(-1)) && replies.at(-1).includes("3 分钟内有效") && replies.at(-1).includes("只能使用一次"), "#yui面板 should be the owner-facing quick-code issuance path")
-    masterApp.e = { isMaster: true, msg: "#yui测试工具 demo_echo city=上海 days=3" }
+    masterApp.e = { isMaster: true, msg: "#yui测试工具 demo_echo city=上海 days=3", reply: captureReply }
     await masterApp.testToolCommand()
     assert(receivedArgs?.name === "demo_echo" && receivedArgs.args.city === "上海" && receivedArgs.args.days === 3, "tool command should parse key=value shortcuts")
     masterApp.e.msg = "#yui工具参数 demo_echo"
@@ -4930,7 +4931,7 @@ async function checkConversations() {
           timeoutMs: 1000,
         },
       })
-      assert(imageInitialToolChoice?.name === "image_media" && imageInitialResponsesRuntime?.webSearchAllowed === false && imageInitialResponsesRuntime?.toolSearchAllowed === false, "explicit image search should force image_media and suppress overlapping hosted web/tool search for that request")
+      assert(imageInitialToolChoice?.name === "image_media" && imageInitialResponsesRuntime?.webSearchAllowed === false && imageInitialResponsesRuntime?.toolSearchAllowed === true, "explicit image search should force image_media while retaining deferred tool discovery")
       assert(imageMediaCalls.length === 1 && imageMediaCalls[0].action === "send", "the runtime should merge direct-send intent into image_media when action is omitted")
       assert(imageDeliveries[0]?.parts?.length === 2 && imageDeliveries[0].parts.every(part => part.type === "image"), "image_media automatic delivery should contain image resources only")
       assert(imageMediaResult.toolChain.map(item => item.name).join(",") === "image_media,message_send" && imageMediaResult.toolRounds === 1, "image_media should search and deliver in one model-led round")
@@ -4967,15 +4968,15 @@ async function checkConversations() {
           content: {
             id: "BV1Selected",
             title: "跳舞候选",
-            coverSource: { kind: "cache", value: bilibiliCoverPath, mimeType: "image/jpeg" },
-            source: { kind: "cache", value: bilibiliVideoPath, mimeType: "video/mp4" },
+            coverSource: { kind: "path", value: bilibiliCoverPath, mimeType: "image/jpeg" },
+            source: { kind: "path", value: bilibiliVideoPath, mimeType: "video/mp4" },
           },
           metadata: {
             messageSendPlan: {
               parts: [
                 { type: "text", text: "跳舞候选" },
-                { type: "image", source: { kind: "cache", value: bilibiliCoverPath, mimeType: "image/jpeg" } },
-                { type: "video", source: { kind: "cache", value: bilibiliVideoPath, mimeType: "video/mp4" } },
+                { type: "image", source: { kind: "path", value: bilibiliCoverPath, mimeType: "image/jpeg" } },
+                { type: "video", source: { kind: "path", value: bilibiliVideoPath, mimeType: "video/mp4" } },
               ],
             },
           },
@@ -7267,7 +7268,7 @@ async function checkDiagnostics() {
   const { buildDiagnostics } = await import("../output/runtime/core/runtime/diagnostics.js")
   const result = await buildDiagnostics()
   assert(pathInside(result.paths.dataDir, runtimeRoot) && pathInside(result.paths.cacheDir, runtimeRoot) && pathInside(result.paths.tempDir, runtimeRoot), "diagnostics should report only isolated smoke runtime paths")
-  assert(!result.paths.tempInsidePluginCache, "diagnostics should identify that the smoke cache is intentionally outside the source plugin directory")
+  assert(result.paths.tempInsideDataCache, "diagnostics should validate that isolated cache and temp directories stay under the plugin data directory")
   assert(!result.paths.rootTempExists, "diagnostics should report root temp absent")
   assert(typeof result.safety.webAuthTokenConfigured === "boolean", "diagnostics should report whether optional static Web login is configured")
   assert(typeof result.summary.customTools === "number" && typeof result.summary.markdownSkills === "number", "diagnostics should expose current extension counts")

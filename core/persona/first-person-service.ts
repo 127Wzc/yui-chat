@@ -1,3 +1,4 @@
+import { replyMessageChain } from "../message-chain/delivery.js"
 import { configStore } from "../../config/store.js"
 import { isCommandMessage } from "../message/command-prefixes.js"
 import { hostRuntime } from "../runtime/host-runtime.js"
@@ -27,11 +28,10 @@ function modelFailureMessage(config: unknown, error: unknown): string {
 }
 
 async function replyDirectTriggerFailure(event: UnknownRecord, config: unknown, trigger: UnknownRecord, error: unknown): Promise<boolean> {
-  const reply = event.reply
-  if (!["direct-name", "direct-at"].includes(text(trigger.reason)) || typeof reply !== "function") return false
+  if (!["direct-name", "direct-at"].includes(text(trigger.reason)) || !hostRuntime.canSendMessage(event)) return false
   try {
     event.__yuiChatReplied = true
-    await (reply as (value: unknown, quote?: unknown) => Promise<unknown>).call(event, modelFailureMessage(config, error), record(record(config).response).quoteReply)
+    await replyMessageChain([{ type: "text", text: modelFailureMessage(config, error) }], { e: event, config: record(config), quote: record(record(config).response).quoteReply === true, textFiltered: true })
     return true
   } catch (replyError) {
     hostRuntime.logger?.warn?.("[yui-chat] 第一人称失败提示发送失败", replyError)

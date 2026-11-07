@@ -21,7 +21,7 @@
 | `image_media` | 搜索、获取图片 |
 | `music_play` | 搜索歌曲并发送音乐卡片和音频 |
 | `generate_image` | 图片生成与编辑 |
-| `message_send` | 发送文本、图片、音频等消息 |
+| `message_send` | 发送文字、提及、引用、媒体、音乐、骰子、猜拳和合并转发；格式见[工具开发](tool-authoring-guide.md#7-自动媒体投递与自然续答) |
 | `render_image` | 自动识别 Markdown、HTML、数学公式，或选择文本卡片、Mermaid、思维导图，使用统一主题生成图片 |
 | `render_url_screenshot` | 网页截图 |
 | `query_userinfo` | 查询用户信息 |
@@ -59,6 +59,8 @@ Responses 的 `file_search` 是供应商托管能力，需配置 Vector Store；
 ## 日常定格渠道
 
 日常定格通过 Tool Registry 调用内置、MCP 或 Custom 图库工具，并使用声明式适配器：把 `keyword`、`tags`、`count` 映射到渠道入参，把返回结果映射为图片候选。表达意图、概率、冷却、去重、候选选择和投递仍由人格协调器统一处理。
+
+页面提供「历史记录」和「状态详情」入口，查询与保留范围见[用量与诊断](architecture.md#用量与诊断)。
 
 默认提供停用的 `imagTag-mcp` 模板，只开放 `search_images`；MCP 总开关也默认关闭。启用并授权后，可选择 `mcp_imagTag-mcp_search_images` 作为渠道。默认适配器传入 `match: "semantic"`、`sort: "relevance"`，从 `structuredContent.images` 读取候选；地址和参数以 `config/defaults.ts` 及管理台配置为准。
 

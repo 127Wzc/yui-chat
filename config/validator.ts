@@ -7,6 +7,7 @@ import { isToolDeliveryMode, isToolExecutionEffect, isToolRepeatPolicy, isToolRe
 import type { UnknownRecord } from "../core/message/types.js"
 import { isValidAllowedHostPattern, parseHttpUrl } from "../core/network/link-safety-policy.js"
 import { parseCronExpression } from "../core/scheduling/cron.js"
+import path from "node:path"
 
 export type ValidationLevel = "error" | "warn"
 
@@ -919,6 +920,8 @@ function validateRuntimeNumbers(config: ConfigRecord, issues: ValidationIssue[])
           else if (ids.has(id)) add(issues, "error", `${path}.id`, "过滤器 ID 不能重复")
           else ids.add(id)
           if (!["input", "output"].includes(stage)) add(issues, "error", `${path}.stage`, "stage 只支持 input（模型前）或 output（回复后）")
+          if (filter.target !== undefined && !["text", "media"].includes(String(filter.target))) add(issues, "error", `${path}.target`, "处理对象只支持 text（正文）或 media（媒体链接）")
+          if (filter.target === "media" && stage !== "output") add(issues, "error", `${path}.target`, "媒体链接只支持回复发送前处理")
           if (!Number.isInteger(priority) || priority < -10000 || priority > 10000) {
             add(issues, "error", `${path}.priority`, "priority 必须是 -10000 到 10000 之间的整数")
           }
@@ -969,6 +972,9 @@ function validateRuntimeNumbers(config: ConfigRecord, issues: ValidationIssue[])
   const renderDelivery = render.delivery
   if (renderDelivery !== undefined && !isObject(renderDelivery)) {
     add(issues, "error", "response.render.delivery", "response.render.delivery 必须是对象")
+  }
+  if (isObject(renderDelivery) && renderDelivery.allowedLocalPaths !== undefined && (!Array.isArray(renderDelivery.allowedLocalPaths) || renderDelivery.allowedLocalPaths.some(value => typeof value !== "string" || !path.isAbsolute(value)))) {
+    add(issues, "error", "response.render.delivery.allowedLocalPaths", "本地媒体允许目录必须是绝对路径数组")
   }
   if (render.url !== undefined && !isObject(render.url)) add(issues, "error", "response.render.url", "URL 截图配置必须是对象")
   const renderHtml = render.html

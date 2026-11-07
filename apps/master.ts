@@ -22,8 +22,8 @@ export class YuiChatMaster extends YuiChatCommandHandlers {
       const originalText = hostRuntime.inboundMessage(this.e)?.text.trim() || ""
       const progress = stripPluginCommand(originalText, "扩展进度")
       const cancel = stripPluginCommand(originalText, "扩展取消")
-      if (progress !== String(originalText)) return this.reply(JSON.stringify(installationSummary(await installationInstaller.get(progress.trim(), actor))), true)
-      if (cancel !== String(originalText)) return this.reply(JSON.stringify(installationSummary(await installationInstaller.cancel(cancel.trim(), actor))), true)
+      if (progress !== String(originalText)) return this.sendText(JSON.stringify(installationSummary(await installationInstaller.get(progress.trim(), actor))), true)
+      if (cancel !== String(originalText)) return this.sendText(JSON.stringify(installationSummary(await installationInstaller.cancel(cancel.trim(), actor))), true)
       if (stripPluginCommand(originalText, "扩展安装") === originalText) throw new Error("需要当前主人原始消息中的扩展安装指令")
       const tokens = stripPluginCommand(originalText, "扩展安装").trim().split(/\s+/)
       const input: SourceInput = { source: tokens.shift() || "", kind: "skill" }
@@ -41,16 +41,16 @@ export class YuiChatMaster extends YuiChatCommandHandlers {
         input.mcp = { id: serviceId, url: input.source, transport }
       } else if (serviceId || transport !== "streamableHttp") throw new Error("Skill 不接受 MCP 参数")
       const task = await installationInstaller.submit(input, actor)
-      return this.reply(`已受理扩展安装：${task.id}\n安装后保持停用；进度与补充输入请在 Web 安装记录中查看。`, true)
-    } catch (error) { return this.reply(error instanceof Error ? error.message : "安装请求失败", true) }
+      return this.sendText(`已受理扩展安装：${task.id}\n安装后保持停用；进度与补充输入请在 Web 安装记录中查看。`, true)
+    } catch (error) { return this.sendText(error instanceof Error ? error.message : "安装请求失败", true) }
   }
 
   async personaPunishmentList() {
-    if (this.e.isMaster !== true) return this.reply("仅主人可查看处罚列表。", true)
+    if (this.e.isMaster !== true) return this.sendText("仅主人可查看处罚列表。", true)
     const rows = await listPersonaPunishments()
-    if (!rows.length) return this.reply("当前没有生效或待核实的人物处罚。", true)
+    if (!rows.length) return this.sendText("当前没有生效或待核实的人物处罚。", true)
     const page = Math.max(1, Math.min(Math.ceil(rows.length / 20), Number(stripPluginCommand(this.e.msg, "处罚列表")) || 1))
-    return this.reply([
+    return this.sendText([
       `第 ${page}/${Math.ceil(rows.length / 20)} 页。人物处罚 ${rows.length} 条（QQ 禁言状态为执行记录，外部人工变更需在群管理中核实）：`,
       ...rows.slice((page - 1) * 20, page * 20).map(row => `${row.id}\n用户 ${row.userId}｜${row.groupId ? `群 ${row.groupId}` : "私聊"}｜机器人 ${row.botId}\n${row.kind === "ignore" ? "暂停回复" : "禁言"}｜${row.status === "uncertain" ? "结果待核实" : "生效中"}｜剩余 ${Math.max(1, Math.ceil((row.until - Date.now()) / 1000))} 秒\n原因：${row.reason}`),
       `提前解除：${pluginCommand("解除处罚 [记录编号]")}`,
@@ -58,11 +58,11 @@ export class YuiChatMaster extends YuiChatCommandHandlers {
   }
 
   async personaPunishmentRelease() {
-    if (this.e.isMaster !== true) return this.reply("仅主人可使用此指令。", true)
+    if (this.e.isMaster !== true) return this.sendText("仅主人可使用此指令。", true)
     try {
       const result = await toolRegistry.execute("persona_punishment_release", { id: stripPluginCommand(this.e.msg, "解除处罚") }, { e: this.e, allowDisabledTool: true })
-      return this.reply(String(result), true)
-    } catch (error) { return this.reply(error instanceof Error ? error.message : "解除失败，请稍后重试。", true) }
+      return this.sendText(String(result), true)
+    } catch (error) { return this.sendText(error instanceof Error ? error.message : "解除失败，请稍后重试。", true) }
   }
 
   constructor() {

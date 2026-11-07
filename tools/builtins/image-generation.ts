@@ -63,14 +63,14 @@ function resourceForImage(image: { data?: string; url?: string; mimeType?: strin
   const dataUrl = value.match(/^data:([^;,]+)(?:;[^,]*)?;base64,(.+)$/i)
   if (dataUrl) {
     return {
-      kind: "base64",
+      kind: "bytes",
       value: dataUrl[2],
       mimeType: image.mimeType || dataUrl[1] || "image/png",
       name: `generated-${index + 1}`,
     }
   }
   return {
-    kind: /^https?:\/\//i.test(value) ? "url" : "base64",
+    kind: /^https?:\/\//i.test(value) ? "url" : "bytes",
     value,
     ...(image.mimeType ? { mimeType: image.mimeType } : {}),
     name: `generated-${index + 1}`,
@@ -80,7 +80,7 @@ function resourceForImage(image: { data?: string; url?: string; mimeType?: strin
 function canDeliverToCurrentChat(context: ImageToolContext): boolean {
   // 生图完成通知本身就是显式的媒体投递；不受模型轮次中“当前会话即时发送”
   // 的抑制开关影响，避免后台任务完成后只记日志却没有图片。
-  return typeof record(context.e).reply === "function"
+  return hostRuntime.canSendMessage(context.e)
 }
 
 function imageErrorText(error: unknown): string {

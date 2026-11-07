@@ -204,7 +204,7 @@ export const schema: SchemaGroup[] = [
       { path: "response.render.mediaThumbnailMaxCount", label: "媒体缩略图最多张数", type: "number" },
       { path: "response.render.mediaThumbnailMaxDataUrlChars", label: "媒体缩略图最大 Data URL 字符", type: "number" },
       { path: "response.render.mediaThumbnail", label: "媒体缩略图压缩策略", type: "json" },
-      { path: "response.render.delivery", label: "图片与媒体交付策略", type: "json" },
+      { path: "response.render.delivery", label: "图片与媒体交付策略", type: "json", description: "allowedLocalPaths 可追加本地媒体允许目录（绝对路径）；插件临时目录默认允许" },
       { path: "response.render", label: "图片渲染服务配置", type: "json" },
       { path: "response.tts", label: "语音输出配置", type: "json" },
       { path: "response.drawHandoff", label: "绘图转交配置", type: "json" },

@@ -1,8 +1,9 @@
+import { replyMessageChain } from "../message-chain/delivery.js"
 import path from "node:path"
 import { dataDir } from "../../config/store.js"
 import { AtomicJsonRepository } from "../storage/atomic-json-repository.js"
 import { hostRuntime } from "../runtime/host-runtime.js"
-import { convertCQCodes } from "../message/cq-code.js"
+import { textMessageChain } from "../message/cq-code.js"
 import { estimateCronIntervalMinutes, matchesCronExpression } from "./cron.js"
 
 type UnknownRecord = Record<string, unknown>
@@ -53,15 +54,6 @@ interface ScheduleRepository {
   update(mutator: (current: TaskStore) => TaskStore | void | Promise<TaskStore | void>): Promise<TaskStore>
 }
 
-interface SendTarget {
-  sendMsg?: (payload: unknown) => Promise<unknown> | unknown
-}
-
-interface ScheduleBot {
-  pickGroup?: (id: number, noCache?: boolean) => Promise<SendTarget | null> | SendTarget | null
-  pickUser?: (id: number, noCache?: boolean) => Promise<SendTarget | null> | SendTarget | null
-  pickFriend?: (id: number, noCache?: boolean) => Promise<SendTarget | null> | SendTarget | null
-}
 
 interface ScheduleServiceOptions {
   repository?: ScheduleRepository
@@ -295,20 +287,14 @@ function markOneTimeFailure(row: TaskRow, currentTime: number): void {
 
 /** 定时任务的宿主投递适配器；任务存储和 cron 状态机不直接依赖 Yunzai 全局对象。 */
 export async function sendTaskMessage(row: TaskRow, config: unknown = {}): Promise<void> {
-  const bot = hostRuntime.bot as unknown as ScheduleBot | undefined
   const response = record(record(config).response)
   const reminder = normalizeReminderContent(row.content, { userId: row.userId })
-  const content = convertCQCodes(reminder, { removeUnsupported: response.removeCQCode !== false })
+  const content = textMessageChain(reminder, { removeUnsupported: response.removeCQCode !== false })
   if (row.scopeType === "group") {
-    const group = await bot?.pickGroup?.(Number(row.groupId), true)
-    if (!group?.sendMsg) throw new Error(`无法获取群 ${text(row.groupId)}`)
-    const at = typeof hostRuntime.segment?.at === "function" ? hostRuntime.segment.at(Number(row.userId)) : `@${text(row.userId)}`
-    await group.sendMsg([at, " 到时间啦～\n", ...(Array.isArray(content) ? content : [content])])
+    await replyMessageChain([{ type: "mention", userId: text(row.userId) }, { type: "text", text: " 到时间啦～\n" }, ...content], { config: record(config), quote: false, destination: { type: "group", id: text(row.groupId) }, recordImages: false })
     return
   }
-  const user = await bot?.pickUser?.(Number(row.userId), true) || await bot?.pickFriend?.(Number(row.userId), true)
-  if (!user?.sendMsg) throw new Error(`无法获取用户 ${text(row.userId)}`)
-  await user.sendMsg(["到时间啦～\n", ...(Array.isArray(content) ? content : [content])])
+  await replyMessageChain([{ type: "text", text: "到时间啦～\n" }, ...content], { config: record(config), quote: false, destination: { type: "user", id: text(row.userId) }, recordImages: false })
 }
 
 export class ScheduleTaskService {

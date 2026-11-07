@@ -1,4 +1,4 @@
-import { computed, onMounted, ref } from "vue"
+import { computed, onMounted, reactive, ref } from "vue"
 import { confirmAction, request, toast } from "../../app/store/store.js"
 import { asRecord, asRecords, errorMessage, type UnknownRecord } from "../../shared/data.js"
 
@@ -35,20 +35,42 @@ export const ArtifactPanel = {
     const items = ref<Artifact[]>([])
     const query = ref("")
     const loading = ref(false)
+    const error = ref("")
+    const page = ref(1)
+    const pageSize = ref(20)
+    const total = ref(0)
+    const totalAll = ref(0)
+    const moreFilters = ref(false)
+    const filters = reactive({ kind: "", source: "", from: "", to: "", userId: "", groupId: "" })
+    let appliedFilters = { ...filters, query: "" }
+    const sourcesOptions = ref<Array<{ value: string; label: string }>>([])
+    const kindOptions = ref<Array<{ value: string; label: string }>>([])
+    let listRequest = 0
     const selected = ref<Artifact | null>(null)
     const memoryRecords = ref<MemoryRecord[]>([])
     const memoryLoading = ref(false)
     const memoryError = ref("")
-    const filtered = computed(() => {
-      const term = query.value.trim().toLowerCase()
-      return items.value.filter(item => !term || [item.title, item.source, item.userId, item.groupId, item.sessionId, item.id].some(value => String(value || "").toLowerCase().includes(term)))
-    })
-    async function refresh() {
+    async function refresh(target = page.value) {
+      const requestId = ++listRequest
       loading.value = true
-      try { items.value = asRecords<Artifact>(asRecord(await request("/api/artifacts")).items) }
-      catch (error) { toast(errorMessage(error)) }
-      finally { loading.value = false }
+      error.value = ""
+      const params = new URLSearchParams({ ...appliedFilters, page: String(target), pageSize: String(pageSize.value) })
+      try {
+        const response = asRecord(await request(`/api/artifacts?${params}`))
+        if (requestId !== listRequest) return
+        items.value = asRecords<Artifact>(response.items)
+        total.value = Number(response.total) || 0
+        totalAll.value = Number(response.totalAll) || 0
+        page.value = Number(response.page) || 1
+        sourcesOptions.value = [{ value: "", label: "全部来源" }, ...(Array.isArray(response.sources) ? response.sources : []).map(value => ({ value: String(value), label: String(value) }))]
+        const labels: Record<string, string> = { memory: "记忆引用", text: "文本" }
+        kindOptions.value = [{ value: "", label: "全部类型" }, ...(Array.isArray(response.kinds) ? response.kinds : []).map(value => ({ value: String(value), label: labels[String(value)] || String(value) }))]
+      }
+      catch (failure) { if (requestId === listRequest) error.value = errorMessage(failure) }
+      finally { if (requestId === listRequest) loading.value = false }
     }
+    function applyFilters() { appliedFilters = { ...filters, query: query.value }; return refresh(1) }
+    function resetFilters() { query.value = ""; Object.assign(filters, { kind: "", source: "", from: "", to: "", userId: "", groupId: "" }); return applyFilters() }
     async function show(item: Artifact) {
       try {
         const detail = asRecord<Artifact>(asRecord(await request(`/api/artifacts/${encodeURIComponent(item.id)}`)).item)
@@ -86,7 +108,7 @@ export const ArtifactPanel = {
       } catch (error) { toast(errorMessage(error)) }
     }
     async function clear() {
-      const accepted = await confirmAction({ title: "清空全部参考资料？", message: `将清除当前 ${items.value.length} 份临时资料。`, detail: "不会删除原始记忆、搜索记录或已提交的后台任务。", confirmText: "清空资料", tone: "danger", icon: "trash" })
+      const accepted = await confirmAction({ title: "清空全部参考资料？", message: `将清除全部 ${totalAll.value} 份临时资料（包含其他页和筛选外资料）。`, detail: "不会删除原始记忆、搜索记录或已提交的后台任务。", confirmText: "清空资料", tone: "danger", icon: "trash" })
       if (!accepted) return
       try {
         await request("/api/artifacts/clear", { method: "POST", body: JSON.stringify({ all: true }) })
@@ -121,17 +143,19 @@ export const ArtifactPanel = {
       return item.groupId ? `群 ${item.groupId} 的记忆` : "群聊记忆"
     }
     onMounted(() => { void refresh() })
-    return { items, query, loading, selected, filtered, content, sources, digest, memoryScope, memoryLocation, memoryRecords, memoryLoading, memoryError, time, refresh, show, loadMemory, copy, remove, clear, openRun }
+    return { items, query, loading, error, page, pageSize, total, totalAll, moreFilters, filters, sourcesOptions, kindOptions, applyFilters, resetFilters, selected, content, sources, digest, memoryScope, memoryLocation, memoryRecords, memoryLoading, memoryError, time, refresh, show, loadMemory, copy, remove, clear, openRun }
   },
   template: `
     <Panel title="中间产物" icon="file">
-      <template #actions><button class="btn small outline" type="button" :disabled="loading" @click="refresh">刷新</button><button class="btn small outline" type="button" :disabled="!items.length" @click="clear">清空</button></template>
+      <template #actions><button class="btn small ghost" type="button" :disabled="loading" @click="refresh()"><Icon name="refresh" :size="13" />刷新</button><button class="btn small ghost" type="button" :disabled="!totalAll || loading" @click="clear">清空全部</button></template>
       <p class="muted small">参考资料按用户、群和渠道隔离，默认生成 30 天后失效；结束对话、重启或缓存淘汰时也会清理。</p>
-      <Field v-model="query" label="筛选资料" placeholder="标题、来源、用户、群或会话" />
+      <div class="logs-artifact-filters"><SearchInput v-model="query" placeholder="搜索标题、引用或会话" @keyup.enter="applyFilters" /><Field v-model="filters.kind" label="类型" type="select" :options="kindOptions" /><Field v-model="filters.source" label="来源" type="select" :options="sourcesOptions" /><div class="logs-filter-actions"><button class="btn small ghost" type="button" :aria-expanded="moreFilters" @click="moreFilters = !moreFilters">更多条件</button><button class="btn small ghost" type="button" @click="resetFilters">重置</button><button class="btn small outline" type="button" :disabled="loading" @click="applyFilters">查询</button></div></div>
+      <div v-if="moreFilters" class="logs-extra-filters"><Field v-model="filters.from" label="开始日期" type="date" /><Field v-model="filters.to" label="结束日期" type="date" /><Field v-model="filters.userId" label="用户" placeholder="精确用户 ID" @enter="applyFilters" /><Field v-model="filters.groupId" label="群" placeholder="精确群 ID" @enter="applyFilters" /></div>
+      <p v-if="error" class="text-danger" role="alert">{{ error }}</p>
       <div class="table-wrap"><table class="data-table"><thead><tr><th>资料</th><th>来源</th><th>用户 / 群</th><th>创建时间</th><th>操作</th></tr></thead><tbody>
-        <tr v-for="item in filtered.slice(0, 100)" :key="item.id"><td><div class="cell-title">{{ item.title }}</div><span class="muted tiny" :title="item.id">{{ item.id.slice(0, 12) }}…</span></td><td>{{ item.source }}<small v-if="item.useCount" class="table-subvalue">已使用 {{ item.useCount }} 次</small></td><td class="muted tiny">{{ item.userId || '-' }}<span v-if="item.groupId"> / {{ item.groupId }}</span></td><td class="muted tiny">{{ time(item.createdAt) }}</td><td><button class="btn small outline" type="button" @click="show(item)">查看</button> <button class="btn small outline" type="button" @click="copy(item)">复制引用</button> <button class="btn small outline" type="button" @click="remove(item)">删除</button></td></tr>
-      </tbody></table><div v-if="!filtered.length" class="logs-empty compact">{{ loading ? '正在加载…' : '没有匹配的参考资料' }}</div></div>
-      <p v-if="filtered.length > 100" class="muted tiny">显示前 100 条，请使用筛选查找其他资料。</p>
+        <tr v-for="item in items" :key="item.id"><td><div class="cell-title">{{ item.title }}</div><span class="muted tiny" :title="item.id">{{ item.id.slice(0, 12) }}…</span></td><td>{{ item.source }}<small v-if="item.useCount" class="table-subvalue">已使用 {{ item.useCount }} 次</small></td><td class="muted tiny">{{ item.userId || '-' }}<span v-if="item.groupId"> / {{ item.groupId }}</span></td><td class="muted tiny">{{ time(item.createdAt) }}</td><td><button class="btn small outline" type="button" @click="show(item)">查看</button> <button class="btn small ghost" type="button" @click="copy(item)">复制引用</button> <button class="btn small ghost" type="button" @click="remove(item)">删除</button></td></tr>
+      </tbody></table><div v-if="!items.length" class="logs-empty compact">{{ loading ? '正在加载…' : '没有匹配的参考资料' }}</div></div>
+      <div class="pager"><span class="pager-info">共 {{ total }} 份 · 第 {{ page }} / {{ Math.max(1, Math.ceil(total / pageSize)) }} 页</span><div class="pager-controls"><select v-model.number="pageSize" aria-label="资料每页条数" :disabled="loading" @change="applyFilters"><option :value="20">20 条 / 页</option><option :value="50">50 条 / 页</option><option :value="100">100 条 / 页</option></select><button class="icon-btn sm" type="button" aria-label="上一页资料" :disabled="loading || page <= 1" @click="refresh(page - 1)"><Icon name="chevron-left" :size="15" /></button><button class="icon-btn sm" type="button" aria-label="下一页资料" :disabled="loading || page * pageSize >= total" @click="refresh(page + 1)"><Icon name="chevron-right" :size="15" /></button></div></div>
     </Panel>
     <SideDrawer :open="!!selected" title="参考资料详情" subtitle="查看内容、来源和使用记录" icon="file" width="720px" @close="selected = null">
       <div v-if="selected" class="artifact-detail">

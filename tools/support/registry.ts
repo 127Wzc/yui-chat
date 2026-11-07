@@ -455,7 +455,7 @@ export class ToolRegistry {
           backgroundStatus: task.status,
           queue: backgroundTaskService.queueStatus(task.id),
           parentToolId: task.parentToolId,
-          ...(autoSendBackgroundMessage && typeof record(context.e).reply === "function"
+          ...(autoSendBackgroundMessage && hostRuntime.canSendMessage(context.e)
             ? { messageSendPlan: { parts: [{ type: "text", text: backgroundMessage }] } }
             : {}),
         },

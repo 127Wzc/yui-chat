@@ -10,7 +10,7 @@ import { matchPluginCommand, pluginCommand } from "../../core/message/command-pr
 
 interface CommandOptions {
   e: UnknownRecord
-  reply: (...args: unknown[]) => unknown
+  sendText: (value: string, quote?: boolean) => unknown
 }
 
 function record(value: unknown): UnknownRecord {
@@ -53,7 +53,7 @@ function parseDynamicPanelPayload(input: UnknownRecord = {}): UnknownRecord {
   }
 }
 
-export async function runRenderImageCommand({ e, reply }: CommandOptions): Promise<unknown> {
+export async function runRenderImageCommand({ e, sendText }: CommandOptions): Promise<unknown> {
   const config = await configStore.load()
   const renderConfig = withRenderScope(config, "system")
   const input = parseRenderPayload(e?.msg)
@@ -77,7 +77,7 @@ export async function runRenderImageCommand({ e, reply }: CommandOptions): Promi
     }, renderConfig)
     return deliverRenderedImage(image, { e, config: renderConfig }, { label: "渲染工具说明图" })
   }
-  if (!input.body) return reply(["请输入要渲染的内容：", `${pluginCommand("渲染Markdown")} 标题`, "# 一级标题", "", pluginCommand("渲染帮助菜单"), `${pluginCommand("chat")} 帮我总结一下 - 发起 AI 对话`, "", `${pluginCommand("渲染思维导图")} 标题`, "# 根节点", "## 分支", "", `${pluginCommand("渲染词云")} 标题`, "工具 渲染 配置 知识库 工具 渲染", "", `${pluginCommand("渲染动态")} 状态`, "工具=7", "模式=即时生成", "动态状态图片渲染正常"].join("\n"), true)
+  if (!input.body) return sendText(["请输入要渲染的内容：", `${pluginCommand("渲染Markdown")} 标题`, "# 一级标题", "", pluginCommand("渲染帮助菜单"), `${pluginCommand("chat")} 帮我总结一下 - 发起 AI 对话`, "", `${pluginCommand("渲染思维导图")} 标题`, "# 根节点", "## 分支", "", `${pluginCommand("渲染词云")} 标题`, "工具 渲染 配置 知识库 工具 渲染", "", `${pluginCommand("渲染动态")} 状态`, "工具=7", "模式=即时生成", "动态状态图片渲染正常"].join("\n"), true)
   if (input.type === "markdown") {
     const markdownInput = { title: input.title || "Markdown 渲染", markdown: input.content || input.body, footer: "Yui Chat · Command Render" }
     const image = await renderImageByConfiguredEngine("markdown", markdownInput, renderConfig)
@@ -90,27 +90,27 @@ export async function runRenderImageCommand({ e, reply }: CommandOptions): Promi
   }
   if (input.type === "词云") return renderAndDeliverImage("word-cloud", { title: input.title || "词云", text: input.content || input.body }, { e, config: renderConfig }, { label: "词云图片" })
   if (input.type === "动态" || input.type === "面板") return renderAndDeliverImage("dynamic-panel", parseDynamicPanelPayload(input), { e, config: renderConfig }, { label: "动态面板图片" })
-  return reply(`未知渲染类型，请使用 ${pluginCommand("渲染帮助")} 查看。`, true)
+  return sendText(`未知渲染类型，请使用 ${pluginCommand("渲染帮助")} 查看。`, true)
 }
 
-export async function runUrlScreenshotCommand({ e, reply }: CommandOptions): Promise<unknown> {
+export async function runUrlScreenshotCommand({ e, sendText }: CommandOptions): Promise<unknown> {
   const url = String(matchPluginCommand(e?.msg, "截图URL\\s+([\\s\\S]+)")?.[1] || "").trim()
   const config = await configStore.load()
   const renderConfig = withRenderScope(config, "system")
   const urlConfig = record(record(record(record(renderConfig).response).render).url)
   const linkSafety = linkSafetyConfig(renderConfig)
-  if (urlConfig.enabled !== true) return reply("URL 截图后端默认关闭。请在 response.render.url.enabled 开启后再使用；链接范围由 security.linkSafety 统一控制。", true)
-  if (!linkSafety.screenshotAllowedHosts.length) return reply("URL 截图尚未配置允许域名，请先设置 security.linkSafety.screenshotAllowedHosts。", true)
+  if (urlConfig.enabled !== true) return sendText("URL 截图后端默认关闭。请在 response.render.url.enabled 开启后再使用；链接范围由 security.linkSafety 统一控制。", true)
+  if (!linkSafety.screenshotAllowedHosts.length) return sendText("URL 截图尚未配置允许域名，请先设置 security.linkSafety.screenshotAllowedHosts。", true)
   try {
     const image = await renderUrlToPng(url, {}, renderConfig)
     return deliverRenderedImage(image, { e, config: renderConfig }, { label: "URL 截图" })
   } catch (err) {
     hostRuntime.logger?.warn?.("[yui-chat] URL 截图失败", err)
-    return reply(`URL 截图失败：${errorMessage(err)}`, true)
+    return sendText(`URL 截图失败：${errorMessage(err)}`, true)
   }
 }
 
-export async function runHtmlScreenshotCommand({ e, reply }: CommandOptions): Promise<unknown> {
+export async function runHtmlScreenshotCommand({ e, sendText }: CommandOptions): Promise<unknown> {
   const html = String(matchPluginCommand(e?.msg, "截图HTML\\s+([\\s\\S]+)")?.[1] || "").trim()
   const config = await configStore.load()
   const renderConfig = withRenderScope(config, "system")
@@ -119,6 +119,6 @@ export async function runHtmlScreenshotCommand({ e, reply }: CommandOptions): Pr
     return deliverRenderedImage(image, { e, config: renderConfig }, { label: "HTML 截图" })
   } catch (err) {
     hostRuntime.logger?.warn?.("[yui-chat] HTML 截图失败", err)
-    return reply(`HTML 截图失败：${errorMessage(err)}`, true)
+    return sendText(`HTML 截图失败：${errorMessage(err)}`, true)
   }
 }

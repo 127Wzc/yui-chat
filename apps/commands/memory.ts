@@ -1,3 +1,4 @@
+import { hostRuntime } from "../../core/runtime/host-runtime.js"
 import { deliverMessageChain } from "../../core/message-chain/delivery.js"
 import { isGroupEvent } from "../../core/message/event-scope.js"
 import { extractMessageContext } from "../../core/message/message-context.js"
@@ -133,7 +134,7 @@ export async function runMemoryCommand(e: UnknownRecord, master = false): Promis
         nodes.push({ nickname: `Yui · ${title}`, parts: [{ type: "text", text: `${title} · ${chunk[0].number}–${chunk.at(-1)!.number}\n━━━━━━━━━━━━\n${chunk.map(row => `[${row.number}] ${row.text}`).join("\n\n")}` }] })
       }
     }
-    if (typeof e.reply === "function") {
+    if (hostRuntime.canSendMessage(e)) {
       const receipt = await deliverMessageChain([{ type: "forward", nodes }], { e, config: configStore.get() })
       if (!["sent", "success", "accepted"].includes(String(receipt.status))) return "记忆转发未完整送达，请重试。"
       remember(key, rows)

@@ -450,8 +450,8 @@ try {
   const { YuiChatMaster } = await import('../output/runtime/apps/master.js')
   const masterApp = new YuiChatMaster()
   let listReply = ''
-  masterApp.e = {...masterEvent}
-  masterApp.reply = async value=>{listReply=value}
+  const captureReply = async value=>{listReply=value}
+  masterApp.e = {...masterEvent,reply:captureReply}
   await masterApp.personaPunishmentList()
   assert.match(listReply,/10001/)
   assert.match(listReply,/20003/)
@@ -459,11 +459,11 @@ try {
   assert.match(listReply,/解除处罚/)
   const { toolRegistry: sharedRegistry } = await import('../output/runtime/tools/support/registry.js')
   sharedRegistry.register(new PersonaPunishmentReleaseTool())
-  masterApp.e = {...privatePunished,isMaster:true,msg:`#yui解除处罚 ${privateRow.id}`}
+  masterApp.e = {...privatePunished,isMaster:true,msg:`#yui解除处罚 ${privateRow.id}`,reply:captureReply}
   await masterApp.personaPunishmentRelease()
   assert.match(listReply,/已解除/)
   assert.equal(checkAccess(privatePunished,selfConfig).ok,true)
-  masterApp.e = punishmentEvent
+  masterApp.e = {...punishmentEvent,reply:captureReply}
   await masterApp.personaPunishmentList()
   assert.match(listReply,/仅主人/)
 

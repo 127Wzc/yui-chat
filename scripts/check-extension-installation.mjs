@@ -199,7 +199,7 @@ try {
   assert.equal((await waitTask(cancel.id, ['canceled'])).status, 'canceled')
   await assert.rejects(issueOwnerInstallationActor({ isMaster: true, user_id: 1, self_id: 2, message_id: 3 }, 'owner_command'), /TRUSTED_OWNER/)
   await assert.rejects(new ExtensionInstallTool().execute({ action: 'install', source: 'https://example.com/x' }, { e: { isMaster: true }, agent: {} }), /TRUSTED_OWNER/)
-  const master = new YuiChatMaster(); let reply = ''; master.e = { msg: '#yui扩展安装 https://example.com/x', isMaster: true, user_id: 1 }; master.reply = value => { reply = String(value) }
+  const master = new YuiChatMaster(); let reply = ''; master.e = { msg: '#yui扩展安装 https://example.com/x', isMaster: true, user_id: 1, reply: value => { reply = String(value) } }
   await master.extensionInstallationCommand(); assert.match(reply, /TRUSTED_OWNER/)
   for (const entry of [{ name: '../escape' }, { name: '/absolute' }, { name: 'link', type: '2', link: '/tmp' }, { name: 'device', type: '3' }, { name: '.env', content: 'SECRET=x' }]) assert.throws(() => unpackPackage(tar([entry]), 'test.tar'), /UNSAFE|SENSITIVE|UNSUPPORTED/)
   assert.throws(() => unpackPackage(tar([{ name: 'A' }, { name: 'a' }]), 'test.tar'), /DUPLICATE/)
@@ -244,7 +244,7 @@ try {
   const message = text => { const e = { user_id: 1, self_id: 2, message_id: crypto.randomUUID(), msg: text, message: [{ type: 'text', text }] }; global.Bot.emit('message', e); return e }
   await configStore.update(config => { config.tools.enabled = false; config.tools.enabledTools = [] })
   const ownerEvent = message(`#yui扩展安装 ${origin}/mcp type=mcp id=owner-entry`)
-  const command = new YuiChatMaster(); command.e = ownerEvent; let accepted = ''; command.reply = value => { accepted = String(value) }
+  const command = new YuiChatMaster(); command.e = ownerEvent; let accepted = ''; ownerEvent.reply = value => { accepted = String(value) }
   await command.extensionInstallationCommand(); assert.match(accepted, /已受理/)
   const ownerId = accepted.match(/ins_[a-f0-9-]+/)[0]
   assert.equal((await waitTask(ownerId)).status, 'succeeded', 'owner command needs no model or model tool')
@@ -253,7 +253,7 @@ try {
   assert.equal((await installationStore.get(ownerId)).notification, 'sent')
   await assert.rejects(issueOwnerInstallationActor(ownerEvent, 'model', { observability: { source: 'chat' } }), /MODEL_INSTALL_DISABLED/)
   const synthetic = { ...ownerEvent }; await assert.rejects(issueOwnerInstallationActor(synthetic, 'owner_command'), /TRUSTED_OWNER/)
-  const changed = message('主人原始文字没有安装指令'); command.e = changed; changed.msg = ownerEvent.msg; await command.extensionInstallationCommand(); assert.match(accepted, /原始消息/)
+  const changed = message('主人原始文字没有安装指令'); changed.reply = ownerEvent.reply; command.e = changed; changed.msg = ownerEvent.msg; await command.extensionInstallationCommand(); assert.match(accepted, /原始消息/)
   await configStore.update(config => { config.tools.enabled = true; config.tools.enabledTools = ['extension_install'] })
   const modelEvent = message(`检查 ${origin}/mcp`)
   const modelContext = { e: modelEvent, observability: { source: 'chat' } }

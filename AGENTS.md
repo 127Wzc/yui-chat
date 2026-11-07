@@ -15,7 +15,7 @@
 - 插件唯一身份为 `yui-chat`：源码目录、包名、数据目录、Web 路由、请求头、Cookie、环境变量、日志前缀和 UI 品牌不得恢复 `chatgpt-next`。不保留旧名称、旧路径或旧命令兼容。
 - 除第一人称自然呼叫外，插件命令前缀只在 `core/message/command-prefixes.ts` 的 `PLUGIN_COMMAND_PREFIX_PATTERN` 定义；命令注册与服务端解析必须使用该模块的派生函数，不得在 `apps/` 另写前缀正则。默认前缀为 `#yui`，默认第一人称为“埋埋”。
 - 当前模型配置为 `apiProviders → models → modelTasks`。`workflows` 会在配置归一化时删除，禁止恢复旧 workflow 说明或入口。
-- SQLite 是必需的状态存储，用户配置和 Web Token 位于 `state.sqlite3/runtime_config`，完整默认值只在 `config/defaults.ts`。长期数据在 `data/yui-chat/`，缓存仅在插件 `cache/`。路径统一从 `config/store.ts` 导入。
+- SQLite 是必需的状态存储，用户配置和 Web Token 位于 `state.sqlite3/runtime_config`，完整默认值只在 `config/defaults.ts`。运行数据在 `data/yui-chat/`，运行缓存与临时文件分别在其 `cache/`、`cache/temp/`。路径统一从 `config/store.ts` 导入。
 - Web 挂载到 `/yui-chat`（可配置），宿主会跳过其鉴权；敏感 API 和 WebSocket 必须自行鉴权。管理 Token 只从请求头读取，浏览器使用 HttpOnly 短会话；凭证不得进入日志、浏览器存储或 URL。
 - 私网 URL 与 URL 截图域名策略统一由 `security.linkSafety` 配置，默认允许私网、可信资源私网 DNS 与全部截图域名；管理员可收紧为精确域名或 `*.example.com`。HTML/URL 截图功能本身、主动问候和子代理仍是独立功能开关；本机只签发一次性登录码，不得恢复整站免鉴权。
 - 业务源码以 TypeScript 为唯一实现；根目录 `index.js` 只接入 Yunzai，Custom 扩展和第三方静态资源是受控动态边界。不得新增同名 JS/TS 业务实现或迁移阶段兼容桥，运行产物统一由 `npm run build:runtime` 生成到 `output/runtime/`。
@@ -60,6 +60,7 @@
 - 新工具必须经 `toolRegistry`，声明 `category`、`risk`、`tags`、`policy`；不得直接调用工具实例。高风险动作保持最小权限。
 - Custom 跨插件资源只能经已声明的 `frameworkResources`，不得拼绝对路径。
 - 业务模块通过 `core/runtime/host-runtime.ts` 访问 `Bot`、`logger`、`segment` 和宿主 `plugin`，不得新增直接全局引用。
+- 插件输出统一表达为 `core/message-chain/types.ts` 的 `MessageChain`，发送前统一校验；业务命令使用插件 `send` / `sendText`，指定目标使用 `MessageDestination`，不得传宿主发送回调或拼装原生媒体段。原生 `reply` / `sendMsg` 与消息段工厂仅在宿主适配边界调用，原始事件只在入口接入。Custom 工具投递经 Registry 的 `message_send`，不得以直接调用宿主发送或伪造 delivery 结果绕过过滤、授权和回执。
 - 持久化用量日志只覆盖真正进入模型适配器的对话、生成和 embedding 调用；普通启动扫描、无模型运行和工具执行不得创建运行详情，embedding 预算同时使用独立日账本。
 - JSON 兼容深拷贝复用 `core/shared/json-values.ts`；空 `catch` 必须记录错误或写明允许降级的原因。
 - 图片渲染与投递分别经 `core/rendering/render-service.ts` 和 `core/rendering/render-delivery.ts`；引擎选择与渲染器注册由同目录的 `render-engine.ts`、`image-renderer-registry.ts` 负责，既有兼容导出保留在 `render-service.ts`。

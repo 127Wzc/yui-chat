@@ -201,6 +201,70 @@ readline.createInterface({input:process.stdin}).on('line', line => {
   const context = { config, e: { isMaster: true, user_id: 'tester' } }
   assert.equal((await toolRegistry.execute('mcp_gallery_search_images', {}, context)).content[0].text, 'ok')
   await assert.rejects(() => toolRegistry.execute('mcp_gallery_delete_image', {}, context), /not found/)
+  // Namespace changes discovery only: the existing Registry ID still reaches the local stdio client.
+  const { toolsForResponses, buildResponsesRequest, messagesForResponses, buildResponsesRecoveryRequest } = await import("../output/runtime/models/adapters/openai/responses/request-adapter.js")
+  const { parseResponsesStreamResponse } = await import("../output/runtime/models/adapters/openai/responses/response-adapter.js")
+  const { modelToolDefinition } = await import("../output/runtime/tools/support/contract.js")
+  const responsesChannel = { type: "openai-responses", model: "fixture", responsesRuntime: { stateMode: "local", toolSearchAllowed: true } }
+  const allowed = await toolRegistry.getAllowedTools(context)
+  const wireTools = toolsForResponses(allowed, responsesChannel)
+  const galleryNamespace = wireTools.find(tool => tool.type === "namespace")
+  assert(galleryNamespace)
+  assert.match(galleryNamespace.name, /^[a-zA-Z_][a-zA-Z0-9_]{0,63}$/)
+  assert.deepEqual(galleryNamespace.tools.map(tool => tool.name), ["mcp_gallery_search_images"], "closed MCP tools never enter namespace definitions")
+  assert.equal(galleryNamespace.tools[0].defer_loading, true)
+  assert.equal(galleryNamespace.tools[0].strict, false)
+  assert(wireTools.some(tool => tool.type === "tool_search"))
+  assert(!wireTools.some(tool => tool.type === "mcp"), "OpenAI does not connect to the MCP server")
+  assert.equal(modelToolDefinition(allowed[0]).function.name, "mcp_gallery_search_images", "other protocols retain the existing flat tool ID")
+  const deniedViews = await toolRegistry.getAllowedTools({ config, e: { user_id: "reader" } })
+  assert.equal(toolsForResponses(deniedViews, responsesChannel).length, 0, "role checks run before namespace grouping")
+  const collidingNames = ["gallery-other", "gallery_other"].map(name => normalizeTool(new McpToolAdapter(name, null, { name: "search_images", inputSchema: { type: "object" } })))
+  const groups = toolsForResponses([...allowed, ...collidingNames], responsesChannel).filter(tool => tool.type === "namespace")
+  assert.equal(new Set(groups.map(group => group.name)).size, 3, "namespace names remain distinct after character normalization")
+  assert.equal(new Set(groups.flatMap(group => group.tools.map(tool => tool.name))).size, 3)
+  const noSearch = toolsForResponses(allowed, { ...responsesChannel, responsesRuntime: { toolSearchAllowed: false } })
+  assert.equal(noSearch[0].type, "function")
+  assert.equal(noSearch[0].defer_loading, undefined)
+  const forcedMcp = buildResponsesRequest({ channel: responsesChannel, messages: [{ role: "user", content: "search" }], tools: [...allowed, ...collidingNames], toolChoice: { type: "function", name: "mcp_gallery_search_images" } })
+  assert.equal(forcedMcp.tool_choice.name, "mcp_gallery_search_images")
+  assert.equal(forcedMcp.tools.find(tool => tool.name === "mcp_gallery_search_images").defer_loading, undefined)
+  assert(forcedMcp.tools.some(tool => tool.type === "tool_search"))
+  assert(forcedMcp.tools.filter(tool => tool.type === "namespace").every(tool => tool.tools.every(child => child.defer_loading === true)), "unrelated MCP tools remain deferred")
+  const forcedWithoutSearch = toolsForResponses([...allowed, ...collidingNames], { ...responsesChannel, responsesRuntime: { toolSearchAllowed: false } }, "mcp_gallery_search_images")
+  assert.deepEqual(forcedWithoutSearch.map(tool => tool.name), ["mcp_gallery_search_images"], "without deferred search only the forced function is needed")
+
+  const namespaceOutput = [
+    { type: "tool_search_call", id: "ns-search", execution: "server", status: "completed", arguments: { paths: [galleryNamespace.name] } },
+    { type: "tool_search_output", id: "ns-loaded", execution: "server", status: "completed", tools: [galleryNamespace] },
+    { type: "function_call", id: "ns-item", call_id: "ns-call", namespace: galleryNamespace.name, name: "mcp_gallery_search_images", arguments: '{"keyword":"cat"}' },
+  ]
+  let capturedResponsesRequest
+  mcpHttpApp.post("/v1/responses", (req, res) => {
+    capturedResponsesRequest = req.body
+    res.json({ id: "ns-response", status: "completed", output: namespaceOutput })
+  })
+  const { adapterRegistry } = await import("../output/runtime/models/adapters/registry.js")
+  const parsedNamespace = await adapterRegistry.get("openai-responses").sendMessage({
+    channel: { ...responsesChannel, baseURL: `http://127.0.0.1:${mcpHttpServer.address().port}/v1`, authType: "none", timeoutMs: 5000 },
+    messages: [{ role: "user", content: "search" }], tools: allowed,
+  })
+  assert.deepEqual(capturedResponsesRequest.tools.find(tool => tool.type === "namespace"), galleryNamespace, "the real Responses transport sends namespace definitions")
+  assert(!capturedResponsesRequest.tools.some(tool => tool.type === "mcp"))
+  assert.deepEqual(parsedNamespace.hostedToolCalls.find(call => call.type === "tool_search_output").loadedTools, ["mcp_gallery_search_images"])
+  const namespaceCall = parsedNamespace.toolCalls[0]
+  assert.equal((await toolRegistry.execute(namespaceCall.name, namespaceCall.arguments, context)).content[0].text, "ok", "a namespaced model call still executes through Registry and the actual stdio MCP server")
+  const namespaceMessages = [{ role: "user", content: "search" }, { role: "assistant", content: "", protocol: parsedNamespace.protocol }, { role: "tool", toolCallId: namespaceCall.id, content: "ok" }]
+  assert.equal(messagesForResponses(namespaceMessages).find(item => item.type === "function_call").namespace, galleryNamespace.name)
+  const recoveredNamespace = buildResponsesRecoveryRequest({ channel: responsesChannel, messages: namespaceMessages, tools: allowed }, true)
+  assert.equal(recoveredNamespace.body.input.find(item => item.type === "function_call").namespace, galleryNamespace.name, "local recovery keeps the call namespace while removing encrypted protocol state")
+  const streamedNamespace = await parseResponsesStreamResponse(new Response([
+    `event: response.output_item.added\ndata: ${JSON.stringify({ type: "response.output_item.added", output_index: 0, item: { ...namespaceOutput[2], arguments: "" } })}\n\n`,
+    `event: response.function_call_arguments.delta\ndata: ${JSON.stringify({ type: "response.function_call_arguments.delta", item_id: "ns-item", delta: '{"keyword":"cat"}' })}\n\n`,
+    `event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: { id: "ns-stream", status: "completed" } })}\n\n`,
+  ].join(""), { headers: { "content-type": "text/event-stream" } }))
+  assert.equal(streamedNamespace.toolCalls[0].name, namespaceCall.name)
+  assert.equal(streamedNamespace.protocol.outputItems[0].namespace, galleryNamespace.name)
   // 断线只改变运行状态，不撤销已经注入的工具；下一次调用会按原工具对象自动恢复。
   config.mcp.servers.gallery.env = { MCP_FIXTURE_FAIL: "1" }
   await manager.init()
@@ -217,6 +281,7 @@ readline.createInterface({input:process.stdin}).on('line', line => {
   config.mcp.servers.gallery.allowedTools = []
   await assert.rejects(() => toolRegistry.execute('mcp_gallery_search_images', {}, { ...context, allowDisabledTool: true }), /注入已关闭/)
   assert.equal((await toolRegistry.searchAllowedTools('search_images', context, 10)).length, 0)
+  assert.equal(toolsForResponses(await toolRegistry.getAllowedTools(context), responsesChannel).length, 0, "revoked MCP tools disappear from namespace requests too")
   await manager.init()
   assert.equal(manager.getTools().length, 0)
   assert.equal(manager.status().catalog.length, 2)
@@ -282,7 +347,7 @@ readline.createInterface({input:process.stdin}).on('line', line => {
     assert.equal(response.status, 200)
     assert.deepEqual(response.body.config.servers.gallery.allowedTools, allowedTools)
   }
-  console.log('MCP selection checks passed (discovery, pagination, injection, revocation, config and HTTP)')
+  console.log('MCP selection checks passed (discovery, namespaces, local stdio execution, replay/SSE, pagination, permissions, revocation, config and HTTP)')
 } finally {
   if (server) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)) }
   if (mcpHttpServer) { mcpHttpServer.closeAllConnections(); await new Promise(resolve => mcpHttpServer.close(resolve)) }

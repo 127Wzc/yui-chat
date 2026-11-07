@@ -21,7 +21,7 @@ export const InvocationGuide = {
           <li><b>提取回复</b><p>若返回 {"data":{"text":"完成"}}，回复字段填 data.text，即发送“完成”。已自行回复时不再重复发送。</p></li>
         </template>
       </ol>
-      <p class="muted small">先在“测试”步骤预览当前动作的真实参数；只有“实际试跑”才会执行已保存且启用的动作。源码若已调用 context.e.reply()，系统不会再追加相同结果。</p>
+      <p class="muted small">先在“测试”步骤预览当前动作的真实参数；只有“实际试跑”才会执行已保存且启用的动作。媒体请返回带 source 的插件消息体，资源类型为 url、path 或 bytes。</p>
     </details>
   `,
 }

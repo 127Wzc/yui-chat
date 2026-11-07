@@ -324,6 +324,7 @@ function normalizeToolValue(value: unknown): string {
   try {
     return JSON.stringify(value, (key, nested: unknown) => {
       if (key === "inlineData") return "[inline media omitted]"
+      if (record(nested).kind === "bytes") return { ...record(nested), value: "[inline media omitted]" }
       if (typeof nested === "string" && /^(?:base64:\/\/|data:[^;,]+;base64,)/i.test(nested)) return "[inline media omitted]"
       return nested
     }) || ""

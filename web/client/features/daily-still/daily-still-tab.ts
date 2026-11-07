@@ -4,6 +4,7 @@ import { asRecord, asRecords, errorMessage, type UnknownRecord } from "../../sha
 import { DEFAULT_TOOL, buildConfig, initDraft, list, moodDraft, objectJson, parseObjectJson, text } from "./daily-still-draft.js"
 import { DailyStillMoodsPanel } from "./daily-still-moods-panel.js"
 import { DailyStillTriggers } from "./daily-still-triggers.js"
+import { LogsTab } from "../logs/logs-tab.js"
 
 const REASON_LABELS: Record<string, string> = {
   "model-selected": "适合发送",
@@ -37,7 +38,7 @@ const MODE_LABELS: Record<string, string> = { conversation: "对话", ambient: "
 
 export const DailyStillTab = {
   name: "DailyStillTab",
-  components: { DailyStillMoodsPanel, DailyStillTriggers },
+  components: { DailyStillMoodsPanel, DailyStillTriggers, LogsTab },
   setup() {
     const status = computed(() => asRecord(store.dailyStill))
     const defaultMoods = computed(() => Array.isArray(status.value.defaultMoods) ? status.value.defaultMoods as unknown[] : [])
@@ -45,6 +46,8 @@ export const DailyStillTab = {
     const draft = reactive(initDraft(asRecord(store.config), effectiveMoods.value))
     const saved = ref(JSON.stringify(buildConfig(draft, defaultMoods.value)))
     const busy = ref(false)
+    const historyOpen = ref(false)
+    const statusOpen = ref(false)
     const isDirty = computed(() => JSON.stringify(buildConfig(draft, defaultMoods.value)) !== saved.value)
     watch(isDirty, value => setDirtyScope("daily-still", value))
     // 状态接口晚于配置到达时，用服务端给出的分组补齐草稿，不覆盖已编辑内容。
@@ -155,7 +158,7 @@ export const DailyStillTab = {
     }
 
     return {
-      draft, busy, isDirty, save, refresh, scheduler, lastOutcome, defaultMoods, moodNames,
+      draft, busy, isDirty, save, refresh, scheduler, lastOutcome, defaultMoods, moodNames, historyOpen, statusOpen,
       channelOptions, fallbackOptions, decisionModels, decisionOptions, suggestedModel, decisionTest, testDecisionModel, usesDecision, usesImagePick,
       test, testResult, testDecision, testSelection, testImage, testProbabilities, testNotes, runTest,
       reasonLabel, percent, time, PICK_LABELS, TEST_MODE_OPTIONS, MODE_LABELS, openProviders: () => setTab("providers"),
@@ -169,6 +172,7 @@ export const DailyStillTab = {
           <Switch :model-value="draft.enabled" tip="总开关" @update:model-value="draft.enabled = $event" />
         </div>
         <div class="ds-header-actions">
+          <button class="btn ghost small" type="button" @click="historyOpen = true"><Icon name="activity" :size="14" />历史记录</button>
           <span v-if="isDirty" class="muted tiny">未保存</span>
           <button class="btn primary small" type="button" :disabled="busy || !isDirty" @click="save"><Icon name="save" :size="14" />{{ busy ? '保存中' : '保存' }}</button>
         </div>
@@ -265,10 +269,17 @@ export const DailyStillTab = {
         <StatusDot :state="scheduler.lastError ? 'bad' : draft.enabled ? 'on' : 'off'" :label="draft.enabled ? '运行中' : '未启用'" />
         <span>判断 {{ scheduler.attempts || 0 }} 次 · 发送 {{ scheduler.sent || 0 }} 张</span>
         <span v-if="lastOutcome.at">{{ time(lastOutcome.at) }} {{ MODE_LABELS[lastOutcome.mode] || '' }}：{{ lastOutcome.sent ? '已发送' : reasonLabel(lastOutcome.reason) }}<template v-if="lastOutcome.mood">（{{ lastOutcome.mood }}）</template></span>
-        <span v-if="scheduler.lastError" class="ds-error truncate" :data-tip="scheduler.lastError">{{ scheduler.lastError }}</span>
+        <button v-if="scheduler.lastError" class="btn ghost small ds-error" type="button" @click="statusOpen = true"><Icon name="alert" :size="13" />最近一次异常 · 查看详情</button>
         <span class="grow"></span>
+        <button class="btn ghost small" type="button" @click="statusOpen = true">状态详情</button>
         <IconButton icon="refresh" tip="刷新状态" tip-dir="tip-left" @click="refresh" />
       </footer>
+      <SideDrawer :open="statusOpen" title="最近运行状态" subtitle="当前进程的统计与最近一次结果" icon="activity" width="640px" @close="statusOpen = false">
+        <div class="stack"><dl class="ds-facts"><dt>判断次数</dt><dd>{{ scheduler.attempts || 0 }}</dd><dt>发送图片</dt><dd>{{ scheduler.sent || 0 }}</dd><dt>最近结果</dt><dd>{{ lastOutcome.sent ? '已发送' : reasonLabel(lastOutcome.reason) || '暂无记录' }}</dd></dl><section v-if="scheduler.lastError" class="ds-status-error"><h3>最近异常</h3><p>{{ scheduler.lastError }}</p></section><JsonBlock v-if="Object.keys(lastOutcome).length" title="最近结果详情" :value="lastOutcome" :open="true" /><button class="btn outline small" type="button" @click="statusOpen = false; historyOpen = true">查看历史模型日志<Icon name="chevron-right" :size="14" /></button></div>
+      </SideDrawer>
+      <SideDrawer :open="historyOpen" title="日常定格 · 历史记录" subtitle="按日期、状态与会话筛选，点击记录查看详情" icon="activity" width="1200px" @close="historyOpen = false">
+        <LogsTab v-if="historyOpen" embedded source-scope="dailyStill.decision" />
+      </SideDrawer>
     </div>
   `,
 }

@@ -1,3 +1,4 @@
+import { mediaResourceFromValue } from "./builder.js"
 import type { ContentPart, MessageChain, ResourceRef } from "./types.js"
 import { isJsonValue } from "./types.js"
 
@@ -22,21 +23,9 @@ function decodeCq(value: string): string {
   try { return decodeURIComponent(decoded) } catch { return decoded }
 }
 
-function resourceKind(value: string): ResourceRef["kind"] {
-  if (/^https?:\/\//i.test(value)) return "url"
-  if (/^(?:data:|base64:\/\/)/i.test(value)) return "base64"
-  if (/^file:/i.test(value) || value.startsWith("/") || /^[a-z]:[\\/]/i.test(value)) return "file"
-  return "platform"
-}
-
-function resource(value: unknown, mimeType?: unknown, sourceUri?: unknown): ResourceRef {
-  const uri = text(value).trim()
-  return {
-    kind: resourceKind(uri),
-    value: uri,
-    ...(text(mimeType).trim() ? { mimeType: text(mimeType).trim().toLowerCase() } : {}),
-    ...(text(sourceUri).trim() ? { sourceUri: text(sourceUri).trim() } : {}),
-  }
+function resource(value: unknown, mimeType?: unknown): ResourceRef {
+  const source = mediaResourceFromValue(text(value).trim())
+  return { ...source, ...(text(mimeType).trim() ? { mimeType: text(mimeType).trim().toLowerCase() } : {}) }
 }
 
 function urlFrom(data: UnknownRecord): string {
@@ -49,6 +38,14 @@ function extensionPart(namespace: string, name: string, value: UnknownRecord): C
 }
 
 function addRawPart(parts: ContentPart[], type: string, data: UnknownRecord): void {
+  // 宿主不透明文件 ID 仅保留为扩展信息，不冒充可投递路径。
+  if (["image", "record", "voice", "audio", "video", "file"].includes(type)) {
+    const value = urlFrom(data)
+    if (value && !/^(?:https?:\/\/|data:|base64:\/\/|file:|\/|[a-z]:[\\/])/i.test(value)) {
+      parts.push(extensionPart("host", type, data))
+      return
+    }
+  }
   switch (type) {
     case "text":
       if (text(data.text)) parts.push({ type: "text", text: text(data.text) })

@@ -72,6 +72,7 @@ try {
     return { status: response.status, body: await response.json(), headers: response.headers }
   }
   if (process.argv.includes("--serve")) {
+    await (await import("../output/runtime/filters/core/registry.js")).filterRegistry.init()
     console.log(`Actions preview: ${baseUrl}/#actions`)
     console.log("Use the isolated test credential actions-test-local. All tool executions are local mocks.")
     await new Promise(resolve => { process.once("SIGTERM", resolve); process.once("SIGINT", resolve) })
@@ -530,10 +531,19 @@ try {
     assert.equal(reply("普通文本").message,"普通文本")
     assert.equal(reply("https://example.com/page").message,"https://example.com/page")
     assert.equal(reply("https://example.com/a.png").parts[0].type,"image")
-    assert.equal(reply({type:"image",data:{file:"https://example.com/a.png"}}).parts[0].source.value,"https://example.com/a.png")
+    assert.throws(()=>reply({type:"image",data:{file:"https://example.com/a.png"}}), /source|宿主/)
+    for (const kind of ["url", "path", "bytes"]) {
+      const value = kind === "url" ? "https://example.com/a.png" : kind === "path" ? path.join(root, "data/yui-chat/cache/temp/a.png") : "aGVsbG8="
+      const image = {type:"image",source:{kind,value}}
+      assert.deepEqual(reply(image).parts,[image])
+      assert.deepEqual(reply({parts:[image]},{mode:"message"}).parts,[image])
+    }
+    for (const kind of ["file", "cache", "base64", "platform"]) assert.throws(()=>reply({type:"image",source:{kind,value:"legacy"}}),/source/)
+    assert.throws(()=>reply({parts:[{type:"forward",nodes:[{parts:[{type:"image",file:"https://example.com/a.png"}]}]}]},{mode:"message"}),/source/)
     assert.equal(reply({data:{text:"完成"}}, {mode:"text",path:"data.text",template:"结果：{{value}}"}).message,"结果：完成")
     assert.equal(reply('{"data":{"images":[{"url":"https://example.com/a.png"}]}}',{mode:"image",path:"data.images[0].url"}).parts[0].source.value,"https://example.com/a.png")
     assert.equal(reply({parts:[{type:"text",text:"消息体"}]},{mode:"message"}).message,"消息体")
+    assert.deepEqual(reply({parts:[{type:"mention"}]},{mode:"message"}).parts,[{type:"mention"}],"action previews retain message_send implicit-current-sender mentions")
     assert.equal(reply({kind:"delivery",chain:[],isError:false,issues:[]}).parts.length,0)
     assert.equal(reply({x:1},{mode:"json"}).message,'{\n  "x": 1\n}')
     assert.throws(()=>reply({data:{}},{mode:"text",path:"data.missing"}),/没有字段/)
@@ -593,7 +603,7 @@ try {
     assert.equal(imageResult.delivery.status,"success")
     assert.equal(delivered.parts[0].source.value,"https://example.com/generated.png")
 
-    const sample = { chain:[{type:"image",source:{kind:"base64",value:"aGVsbG8=",mimeType:"image/png"}}], metadata:{model:"actual-model",provider:"test",durationMs:1200,imageCount:1} }
+    const sample = { chain:[{type:"image",source:{kind:"bytes",value:"aGVsbG8=",mimeType:"image/png"}}], metadata:{model:"actual-model",provider:"test",durationMs:1200,imageCount:1} }
     const replyName = parseAction({...imageTemplate,name:"历史展示名",command:"新的指令",reply:{image:{start:"",running:"",success:"{{actionName}} {{image}}",failure:""}}})
     assert(formatImageActionReply(replyName,event,"success",sample).message.includes("历史展示名"), "saved reply templates keep their legacy display name")
     const replyCommand = parseAction({...replyName,name:""})

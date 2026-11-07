@@ -1,7 +1,8 @@
 import { actionRecord as record, type ActionDefinition, type ActionReply } from "./contract.js"
 import { serializeExecutionResult } from "../../extensions/testing/execution-runtime.js"
 import type { ToolExecutionResult } from "../../tools/support/execution-runtime.js"
-import { extractMessageChain } from "../message-chain/inbound.js"
+import { mediaResourceFromValue } from "../message-chain/builder.js"
+import { validateOutboundMessageChain } from "../message-chain/validation.js"
 
 type Result = Pick<ToolExecutionResult, "value" | "content" | "metadata" | "status">
 export interface ActionReplyPreview { message: string; parts: unknown[]; note: string }
@@ -51,11 +52,11 @@ function imagePart(value: unknown): unknown {
   const item = record(value)
   if (item.type === "image" && item.source) return item
   if (item.kind && typeof item.value === "string") return { type: "image", source: item }
-  if (Buffer.isBuffer(value)) return { type: "image", source: { kind: "base64", value: value.toString("base64"), mimeType: "image/png" } }
+  if (Buffer.isBuffer(value)) return { type: "image", source: { kind: "bytes", value: value.toString("base64"), mimeType: "image/png" } }
   const address = typeof value === "string" ? value : item.url || item.image || item.b64_json
   if (typeof address !== "string" || !address.trim()) throw new Error("图片结果应为图片地址、base64 或图片消息段")
   if (/^https?:\/\//i.test(address)) return { type: "image", source: { kind: "url", value: address } }
-  if (/^(?:data:image\/|base64:\/\/)/i.test(address) || item.b64_json) return { type: "image", source: { kind: "base64", value: address.replace(/^base64:\/\//, ""), mimeType: "image/png" } }
+  if (/^(?:data:image\/|base64:\/\/)/i.test(address) || item.b64_json) return { type: "image", source: mediaResourceFromValue(item.b64_json ? `base64://${address}` : address) }
   throw new Error("图片地址格式无法识别；本地图片请返回标准 source 消息体")
 }
 
@@ -93,12 +94,9 @@ export function formatActionReply(result: Result, reply: ActionReply, alreadyRep
     }
   }
   if (parts.length) {
-    parts = parts.flatMap(part => {
-      const item = record(part)
-      if (item.data || (["image", "audio", "record", "video", "file"].includes(String(item.type)) && !item.source)) return [...extractMessageChain({ message: [part] })]
-      return [part]
-    })
     parts = parts.map(part => record(part).type === "json" ? { type: "text", text: serializeExecutionResult(record(part).data) } : part)
+    const issues = validateOutboundMessageChain(parts, { allowImplicitMention: true })
+    if (issues.length) throw new Error(issues.join("；"))
     return { message: parts.filter(part => record(part).type === "text").map(part => String(record(part).text || "")).join("\n"), parts, note: "按消息体回传" }
   }
   let message = reply.mode === "json" ? serializeExecutionResult(typeof value === "string" ? (() => { try { return JSON.parse(value) } catch { return value } })() : value) : serializeExecutionResult(value)

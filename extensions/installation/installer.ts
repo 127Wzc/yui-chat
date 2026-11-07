@@ -1,3 +1,4 @@
+import { replyMessageChain } from "../../core/message-chain/delivery.js"
 import fs from "node:fs/promises"
 import path from "node:path"
 import crypto from "node:crypto"
@@ -364,10 +365,10 @@ export class InstallationInstaller {
     if (task.notification !== "pending") return
     task = await installationStore.change(task, { notification: "sending" }, { type: "notification_intent" })
     try {
-      const bot = hostRuntime.bot?.[task.origin.botId || ""] as { pickGroup?: (id: number) => { sendMsg: (text: string) => Promise<unknown> }; pickUser?: (id: number) => { sendMsg: (text: string) => Promise<unknown> } } | undefined
-      const destination = task.origin.groupId ? bot?.pickGroup?.(Number(task.origin.groupId)) : bot?.pickUser?.(Number(task.origin.id))
-      if (!destination) throw new Error("notification target unavailable")
-      await destination.sendMsg(`扩展安装任务：${task.id}\n状态：${task.status === "succeeded" ? "已安装，未启用" : task.status}\n运行验证：未执行\n请在 Web 安装记录中查看。`)
+      await replyMessageChain([{ type: "text", text: `扩展安装任务：${task.id}\n状态：${task.status === "succeeded" ? "已安装，未启用" : task.status}\n运行验证：未执行\n请在 Web 安装记录中查看。` }], {
+        destination: { type: task.origin.groupId ? "group" : "user", id: task.origin.groupId || task.origin.id, accountId: task.origin.botId || "" },
+        quote: false, textFiltered: true, recordImages: false,
+      })
       await installationStore.change(await installationStore.get(task.id), { notification: "sent" }, { type: "notification_sent" })
     } catch { await installationStore.change(await installationStore.get(task.id), { notification: "failed" }, { type: "notification_failed" }) }
     })

@@ -71,7 +71,11 @@ function hostedToolCalls(items: UnknownRecord[]): ModelHostedToolCall[] {
       .map(value => shortText(value))
       .filter(Boolean)
     const loadedTools = (Array.isArray(item.tools) ? item.tools : Array.isArray(item.loaded_tools) ? item.loaded_tools : [])
-      .map(value => shortText(record(value).name || value))
+      .flatMap(value => {
+        const tool = record(value)
+        if (tool.type === "namespace" && Array.isArray(tool.tools)) return tool.tools.map(child => shortText(record(child).name))
+        return [shortText(tool.name || value)]
+      })
       .filter(Boolean)
     const results = Array.isArray(item.results) ? item.results : Array.isArray(action.sources) ? action.sources : []
     const sources = searchSources([item])
@@ -144,6 +148,7 @@ export function parseResponsesResponse(data: unknown): ModelResponse {
     return { ...item, call_id: callId }
   })
   const upstreamResponseId = text(response.id).trim()
+  // namespace 仅分组，函数继续使用 Registry 全局 ID；原始 namespace 随 protocol 回放。
   const toolCalls = items
     .filter(item => item.type === "function_call")
     .map(item => ({

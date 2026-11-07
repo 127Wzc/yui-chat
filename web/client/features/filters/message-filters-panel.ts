@@ -22,6 +22,7 @@ interface MessageFilter extends UnknownRecord {
   name: string
   enabled: boolean
   stage: string
+  target?: "text" | "media"
   priority: number
   condition: FilterCondition
   implementation: FilterImplementationRef
@@ -62,6 +63,7 @@ interface FilterImplementation extends UnknownRecord {
   packageId?: string
   tags?: string[]
   effects?: string[]
+  resultKinds?: string[]
   enabled?: boolean
   parameters?: { properties?: Record<string, FieldSchema>; required?: string[] }
 }
@@ -122,6 +124,7 @@ function emptyFilter(): MessageFilter {
     name: "新的输出过滤器",
     enabled: false,
     stage: "output",
+    target: "text",
     priority: 100,
     condition: { minTextLength: 0 },
     implementation: { type: "filter", id: "", arguments: {} },
@@ -166,9 +169,10 @@ export const MessageFiltersPanel = {
     const dragState = reactive<DragState>({ id: "", stage: "", overId: "" })
 
     const selectedStage = computed<StageDefinition>(() => stages.value.find(stage => stage.id === editor.stage) || fallbackStages.find(stage => stage.id === editor.stage) || fallbackStages[1])
+    const selectedTextLabel = computed(() => editor.target === "media" ? "媒体链接" : selectedStage.value.textLabel)
     const stageOptions = computed(() => stages.value.map(stage => ({ value: stage.id, label: `${stage.shortLabel || stage.label}：${stage.label}` })))
     const selectableImplementations = computed(() => implementations.value.filter(implementation => {
-      return ["builtin", "custom"].includes(implementation.source || "") && (implementation.stages || []).includes(editor.stage)
+      return ["builtin", "custom"].includes(implementation.source || "") && (implementation.stages || []).includes(editor.stage) && (editor.target !== "media" || (!(implementation.effects || []).some(effect => effect !== "pure") && !(implementation.resultKinds || []).some(kind => kind !== "text")))
     }))
     const implementationSources = computed<ImplementationSource[]>(() => {
       const groups = new Map<string, ImplementationSource>()
@@ -220,6 +224,7 @@ export const MessageFiltersPanel = {
       const next = clone(filter)
       const implementation = next.implementation || { type: "filter", id: "", arguments: {} }
       Object.assign(editor, next, {
+        target: next.target || "text",
         priority: Number.isInteger(Number(next.priority)) ? Number(next.priority) : 100,
         condition: { minTextLength: Number(next.condition?.minTextLength ?? 0) },
         implementation: { type: "filter", id: implementation.id || "", arguments: { ...(implementation.arguments || {}) } },
@@ -238,6 +243,7 @@ export const MessageFiltersPanel = {
 
     function setStage(stage: string): void {
       editor.stage = stage
+      if (stage === "input") editor.target = "text"
       if (!selectableImplementations.value.some(implementation => implementation.id === editor.implementation.id)) {
         editor.implementation.id = ""
         editor.implementation.arguments = {}
@@ -245,6 +251,11 @@ export const MessageFiltersPanel = {
       }
       implementationSource.value = "all"
       ensureArguments()
+    }
+
+    function setTarget(target: string): void {
+      editor.target = target === "media" ? "media" : "text"
+      setStage(editor.stage)
     }
 
     function setImplementation(implementation: FilterImplementation): void {
@@ -561,6 +572,8 @@ export const MessageFiltersPanel = {
       updateBoundValue,
       setImplementation,
       setStage,
+      setTarget,
+      selectedTextLabel,
       editFilter,
       startFromTemplate,
       createFilter,
@@ -593,7 +606,7 @@ export const MessageFiltersPanel = {
           <span class="message-processing-hero-icon"><Icon name="filter" :size="20" /></span>
           <div class="message-processing-hero-copy">
             <div class="row-title"><h2>代码过滤器</h2><span class="badge" :class="enabled ? 'on' : 'risk-medium'">{{ enabled ? '运行中' : '已暂停' }}</span></div>
-            <p>像一条确定性流水线，在消息进入模型前或回复发出前，依次整理、拦截或转换正文。</p>
+            <p>像一条确定性流水线，在消息进入模型前或回复发出前，依次整理、拦截或转换正文或媒体链接。</p>
             <div class="message-processing-stats"><span><b>{{ activeFilterCount }}</b> 条规则生效</span><span><b>{{ implementationCount }}</b> 个代码实现可选</span></div>
           </div>
           <div class="message-processing-hero-actions"><label class="inline-switch"><Switch v-model="enabled" @update:modelValue="persist" /><span>{{ enabled ? '总开关已开启' : '总开关已关闭' }}</span></label></div>
@@ -611,7 +624,7 @@ export const MessageFiltersPanel = {
               <article v-for="(filter, groupIndex) in group.filters" :key="filter.id" class="message-rule-card" :class="{ disabled: !filter.enabled, dragging: dragState.id === filter.id, 'drag-over': dragState.overId === filter.id && dragState.id !== filter.id }" @dragenter.prevent="dragState.overId = filter.id" @dragover.prevent @drop.stop="dropOnFilter(filter)">
                 <button class="message-filter-drag" type="button" draggable="true" aria-label="拖动调整优先级" data-tip="拖动调整顺序" @dragstart="startFilterDrag(filter, $event)" @dragend="endFilterDrag"><Icon name="menu" :size="15" /></button>
                 <span class="message-rule-card-icon"><Icon :name="filter.stage === 'input' ? 'message' : 'sparkles'" :size="16" /></span>
-                <div class="message-rule-card-copy"><div class="row-title"><strong>{{ filter.name || filter.id }}</strong><span class="pill">优先级 {{ filter.priority ?? 100 }}</span></div><p><b>{{ implementationName(filter.implementation?.id) }}</b><span>·</span>{{ filter.condition?.minTextLength ? '满 ' + filter.condition.minTextLength + ' 字时执行' : '每条消息都执行' }}</p></div>
+                <div class="message-rule-card-copy"><div class="row-title"><strong>{{ filter.name || filter.id }}</strong><span class="pill">{{ filter.target === 'media' ? '媒体链接' : '正文' }}</span><span class="pill">优先级 {{ filter.priority ?? 100 }}</span></div><p><b>{{ implementationName(filter.implementation?.id) }}</b><span>·</span>{{ filter.condition?.minTextLength ? '满 ' + filter.condition.minTextLength + ' 字时执行' : '每条消息都执行' }}</p></div>
                 <div class="message-rule-card-actions"><button class="icon-btn" type="button" :disabled="groupIndex === 0 || saving" data-tip="上移" @click="moveFilter(filter, -1)"><Icon name="chevron-up" :size="14" /></button><button class="icon-btn" type="button" :disabled="groupIndex === group.filters.length - 1 || saving" data-tip="下移" @click="moveFilter(filter, 1)"><Icon name="chevron-down" :size="14" /></button><label class="inline-switch"><Switch :model-value="filter.enabled" @update:modelValue="value => toggleFilter(filterIndex(filter), value)" /><span>{{ filter.enabled ? '启用' : '停用' }}</span></label><button class="btn small outline" type="button" @click="editFilter(filter, filterIndex(filter))"><Icon name="pencil" :size="13" />编辑</button><button class="icon-btn danger" type="button" data-tip="删除过滤器" @click="removeFilter(filterIndex(filter))"><Icon name="trash" :size="14" /></button></div>
               </article>
             </div>
@@ -627,6 +640,7 @@ export const MessageFiltersPanel = {
         <div v-if="editorStep === 1" class="message-rule-step">
           <div class="message-rule-step-intro"><span>1</span><div><h3>这个规则在什么时候运行？</h3><p>多数回复整理、内容过滤和语音输出都选“回复发出前”。</p></div></div>
           <div class="message-stage-grid"><button v-for="stage in stages" :key="stage.id" type="button" :class="{ selected: editor.stage === stage.id }" @click="setStage(stage.id)"><span class="message-stage-icon"><Icon :name="stage.id === 'input' ? 'message' : 'sparkles'" :size="17" /></span><span><strong>{{ stage.shortLabel || stage.label }}</strong><small>{{ stage.label }} · {{ stage.description }}</small></span><Icon :name="editor.stage === stage.id ? 'check' : 'chevron-right'" :size="15" /></button></div>
+          <Field v-if="editor.stage === 'output'" label="处理对象" type="select" :model-value="editor.target || 'text'" @update:model-value="setTarget" :options="[{value:'text',label:'正文'},{value:'media',label:'媒体链接（图片、语音、视频、文件）'}]" tip="媒体链接在投递前处理，包含转发节点；本地文件和 Base64 不参与替换。" />
           <div class="message-filter-implementation-paths"><button type="button" @click="focusImplementationCatalog"><span class="processor-choice-icon builtin"><Icon name="dashboard" :size="16" /></span><span><strong>选择已有实现</strong><small>只显示内置代码与 Custom 代码过滤器</small></span></button><button type="button" @click="openImplementationBuilder('code')"><span class="processor-choice-icon custom"><Icon name="cpu" :size="16" /></span><span><strong>编写自定义代码</strong><small>创建独立的 createFilters 实现</small></span></button><button type="button" @click="openImplementationBuilder('resources')"><span class="processor-choice-icon custom"><Icon name="link" :size="16" /></span><span><strong>接入框架资源</strong><small>声明资源后，再用少量代码包装成过滤器</small></span></button></div>
           <div class="section-heading-row"><div><div class="section-title"><Icon name="dashboard" :size="13" />选择代码实现</div><p class="muted small">只显示支持“{{ selectedStage.label }}”的实现。</p></div><span class="filter-count">{{ filteredImplementations.length }}/{{ selectableImplementations.length }}</span></div>
           <div class="list-filter processor-catalog-filter"><div class="filter-search"><Icon name="search" :size="14" /><input v-model="implementationQuery" placeholder="搜索代码过滤器实现" /></div><div class="segmented processor-source-tabs" role="group" aria-label="过滤器实现来源筛选"><button v-for="source in implementationSources" :key="source.id" :class="{ active: implementationSource === source.id }" type="button" @click="implementationSource = source.id">{{ source.label }} <span>{{ source.count }}</span></button></div></div>
@@ -636,16 +650,16 @@ export const MessageFiltersPanel = {
 
         <div v-else-if="editorStep === 2" class="message-rule-step">
           <div class="message-rule-step-intro"><span>2</span><div><h3>命名并设置执行顺序</h3><p>新手保持优先级 100 即可；需要调整顺序时，数字越小越先执行。</p></div></div>
-          <div class="message-rule-basics"><Field label="过滤器名称" v-model="editor.name" placeholder="例如：长回复转语音" /><Field label="优先级" type="number" v-model="editor.priority" hint="数字越小越先执行；拖动后会自动按 100 递增" /><Field :label="selectedStage.textLabel + '至少多少字'" type="number" v-model="editor.condition.minTextLength" hint="0 表示每条消息" /><label class="field"><span class="field-label">保存后状态</span><span class="message-enable-choice"><Switch v-model="editor.enabled" /><span><b>{{ editor.enabled ? '立即启用' : '先保存，不启用' }}</b><small>{{ editor.enabled ? '保存后开始处理新消息' : '可稍后在规则链中开启' }}</small></span></span></label></div>
-          <div v-if="selectedImplementation" class="form-section message-parameter-section"><div class="section-heading-row"><div><div class="section-title"><Icon name="gear" :size="13" />{{ selectedImplementation.displayNameZh || selectedImplementation.displayName || selectedImplementation.id }} 的设置</div><p class="muted small">{{ selectedImplementation.description || '按需要补充固定处理参数。' }}</p></div><button class="btn small outline" type="button" @click="editorStep = 1">更换实现</button></div><div class="form-grid"><template v-for="field in selectedFields" :key="field.name"><Field v-if="field.schema.type === 'boolean'" :label="field.schema.title || field.name" type="select" :options="[{ value: 'false', label: '否' }, { value: 'true', label: '是' }]" :model-value="boundValue(field)" @update:model-value="value => updateBoundValue(field, value)" /><Field v-else-if="Array.isArray(field.schema.enum)" :label="field.schema.title || field.name" type="select" :options="field.schema.enum.map(value => ({ value, label: field.schema.enumLabels?.[value] || value }))" :model-value="boundValue(field)" @update:model-value="value => updateBoundValue(field, value)" /><Field v-else-if="field.name !== 'text'" :label="field.schema.title || field.name" :type="field.schema.type === 'number' ? 'number' : 'text'" :placeholder="field.schema.description || ''" :model-value="boundValue(field)" @update:model-value="value => updateBoundValue(field, value)" /><div v-else class="field"><span class="field-label">{{ field.schema.title || field.name }}</span><div class="field-readonly">自动使用{{ selectedStage.textLabel }}</div></div></template></div></div>
-          <div class="hint-banner ok"><Icon name="info" :size="14" /><span>代码过滤器和 AI Tool 的启用状态、角色权限彼此独立；正文由过滤链自动注入。</span></div>
+          <div class="message-rule-basics"><Field label="过滤器名称" v-model="editor.name" placeholder="例如：长回复转语音" /><Field label="优先级" type="number" v-model="editor.priority" hint="数字越小越先执行；拖动后会自动按 100 递增" /><Field :label="selectedTextLabel + '至少多少字'" type="number" v-model="editor.condition.minTextLength" hint="0 表示每条消息" /><label class="field"><span class="field-label">保存后状态</span><span class="message-enable-choice"><Switch v-model="editor.enabled" /><span><b>{{ editor.enabled ? '立即启用' : '先保存，不启用' }}</b><small>{{ editor.enabled ? '保存后开始处理新消息' : '可稍后在规则链中开启' }}</small></span></span></label></div>
+          <div v-if="selectedImplementation" class="form-section message-parameter-section"><div class="section-heading-row"><div><div class="section-title"><Icon name="gear" :size="13" />{{ selectedImplementation.displayNameZh || selectedImplementation.displayName || selectedImplementation.id }} 的设置</div><p class="muted small">{{ selectedImplementation.description || '按需要补充固定处理参数。' }}</p></div><button class="btn small outline" type="button" @click="editorStep = 1">更换实现</button></div><div class="form-grid"><template v-for="field in selectedFields" :key="field.name"><Field v-if="field.schema.type === 'boolean'" :label="field.schema.title || field.name" type="select" :options="[{ value: 'false', label: '否' }, { value: 'true', label: '是' }]" :model-value="boundValue(field)" @update:model-value="value => updateBoundValue(field, value)" /><Field v-else-if="Array.isArray(field.schema.enum)" :label="field.schema.title || field.name" type="select" :options="field.schema.enum.map(value => ({ value, label: field.schema.enumLabels?.[value] || value }))" :model-value="boundValue(field)" @update:model-value="value => updateBoundValue(field, value)" /><Field v-else-if="field.name !== 'text'" :label="field.schema.title || field.name" :type="field.schema.type === 'number' ? 'number' : 'text'" :placeholder="field.schema.description || ''" :model-value="boundValue(field)" @update:model-value="value => updateBoundValue(field, value)" /><div v-else class="field"><span class="field-label">{{ field.schema.title || field.name }}</span><div class="field-readonly">自动使用{{ selectedTextLabel }}</div></div></template></div></div>
+          <div class="hint-banner ok"><Icon name="info" :size="14" /><span>代码过滤器和 AI Tool 的启用状态、角色权限彼此独立；选定的正文或媒体链接由过滤链自动注入。</span></div>
         </div>
 
         <div v-else class="message-rule-step">
           <div class="message-rule-step-intro"><span>3</span><div><h3>最后检查一次，也可以先试跑</h3><p>试跑直接执行已选择的代码实现；网络或发送类实现会要求再次确认。</p></div></div>
-          <div class="message-rule-review"><div><span>规则</span><strong>{{ editor.name }}</strong></div><div><span>执行阶段</span><strong>{{ selectedStage.label }}</strong></div><div><span>实现</span><strong>{{ selectedImplementation ? (selectedImplementation.displayNameZh || selectedImplementation.displayName || selectedImplementation.id) : '' }}</strong></div><div><span>优先级</span><strong>{{ editor.priority }}（数字越小越先执行）</strong></div><div><span>触发条件</span><strong>{{ editor.condition.minTextLength ? selectedStage.textLabel + '满 ' + editor.condition.minTextLength + ' 字' : '每条消息' }}</strong></div><div><span>保存后</span><strong :class="{ 'good-text': editor.enabled }">{{ editor.enabled ? '立即启用' : '保持停用' }}</strong></div></div>
+          <div class="message-rule-review"><div><span>规则</span><strong>{{ editor.name }}</strong></div><div><span>执行阶段</span><strong>{{ selectedStage.label }}</strong></div><div><span>处理对象</span><strong>{{ editor.target === 'media' ? '媒体链接' : '正文' }}</strong></div><div><span>实现</span><strong>{{ selectedImplementation ? (selectedImplementation.displayNameZh || selectedImplementation.displayName || selectedImplementation.id) : '' }}</strong></div><div><span>优先级</span><strong>{{ editor.priority }}（数字越小越先执行）</strong></div><div><span>触发条件</span><strong>{{ editor.condition.minTextLength ? selectedTextLabel + '满 ' + editor.condition.minTextLength + ' 字' : '每条消息' }}</strong></div><div><span>保存后</span><strong :class="{ 'good-text': editor.enabled }">{{ editor.enabled ? '立即启用' : '保持停用' }}</strong></div></div>
           <div v-if="effectsNeedConfirmation" class="hint-banner warn"><Icon name="alert" :size="14" /><span>该实现可能访问网络或产生发送记录。测试时会执行真实逻辑，不是安全沙箱。</span></div>
-          <div class="form-section message-test-section"><div class="section-title"><Icon name="play" :size="13" />规则试跑</div><Field :label="'模拟' + selectedStage.textLabel" type="textarea" rows="4" v-model="testText" /><button class="btn small outline" type="button" :disabled="testRunning" @click="testFilter"><Icon name="play" :size="14" />{{ testRunning ? '试跑中…' : '运行一次测试' }}</button><JsonBlock v-if="testResult" title="测试结果" :value="testResult" :open="true" /></div>
+          <div class="form-section message-test-section"><div class="section-title"><Icon name="play" :size="13" />规则试跑</div><Field :label="editor.target === 'media' ? '模拟媒体链接' : '模拟' + selectedTextLabel" type="textarea" rows="4" v-model="testText" /><button class="btn small outline" type="button" :disabled="testRunning" @click="testFilter"><Icon name="play" :size="14" />{{ testRunning ? '试跑中…' : '运行一次测试' }}</button><JsonBlock v-if="testResult" title="测试结果" :value="testResult" :open="true" /></div>
         </div>
         <template #actions><button class="btn outline" type="button" @click="editorStep === 1 ? editorOpen = false : previousEditorStep()">{{ editorStep === 1 ? '取消' : '上一步' }}</button><span class="spacer"></span><button v-if="editorStep < 3" class="btn primary" type="button" @click="nextEditorStep">下一步<Icon name="chevron-right" :size="14" /></button><button v-else class="btn primary" type="button" :disabled="saving" @click="saveFilter"><Icon name="save" :size="14" />保存规则</button></template>
       </SideDrawer>

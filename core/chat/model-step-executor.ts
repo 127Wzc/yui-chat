@@ -650,11 +650,6 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
     && (searchIntentPattern.test(text(prompt)) || currentLookupIntentPattern.test(text(prompt)))
     && !isImageMediaSearchRequest(prompt)
     && !imageGenerationRequest
-  // 已经由运行时明确选择具体能力时，不再让托管 tool_search 重复发现同一个
-  // 函数。这样图片/网页搜索请求只保留真正执行搜索的工具链。
-  const nativeToolSearchEnabledForRequest = nativeToolSearchEnabled
-    && !preferLocalImageMedia
-    && !forceAggregatedWebSearch
   const nativeFileSearchEnabled = toolUseEnabled
     && adapter.supportsNativeToolSearch
     && record(responsesConfig.fileSearch).enabled === true
@@ -692,7 +687,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
     channel.responsesRuntime = {
       webSearchAllowed: nativeWebSearchEnabled,
       fileSearchAllowed: nativeFileSearchEnabled,
-      toolSearchAllowed: nativeToolSearchEnabledForRequest,
+      toolSearchAllowed: nativeToolSearchEnabled,
       stateMode: configuredResponsesStateMode,
       previousResponseId,
     }
@@ -730,7 +725,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
   recoveryMessages = hasSeparateRecoveryContext
     ? await budgeted(recoveryMessages, "responses-recovery-checkpoint")
     : messages
-  if (nativeToolSearchEnabledForRequest) {
+  if (nativeToolSearchEnabled) {
     enabledTools = enabledTools.filter(tool => tool.name !== "tool_search" && (!nativeWebSearchEnabled || tool.name !== "web_search"))
   } else {
     enabledTools = selectPromptTools(enabledTools, text(prompt), record(toolsConfig.promptSelection))

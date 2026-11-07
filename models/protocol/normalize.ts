@@ -178,10 +178,12 @@ export function contentPartToText(part: ContentPart): string {
     case "json": return JSON.stringify(part.data)
     case "mention": return `@${part.userId}`
     case "reply": return part.selectedText ? `引用：${part.selectedText}` : `回复消息：${part.messageId}`
-    case "image": return `[图片 ${part.source.value}]`
-    case "audio": return `[语音 ${part.source.value}]`
-    case "video": return `[视频 ${part.source.value}]`
-    case "file": return `[文件 ${part.source.value}]`
+    case "dice": return "[骰子]"
+    case "rps": return `[猜拳 ${part.value}]`
+    case "image": return `[图片 ${part.source.kind === "bytes" ? "字节资源" : part.source.value}]`
+    case "audio": return `[语音 ${part.source.kind === "bytes" ? "字节资源" : part.source.value}]`
+    case "video": return `[视频 ${part.source.kind === "bytes" ? "字节资源" : part.source.value}]`
+    case "file": return `[文件 ${part.source.kind === "bytes" ? "字节资源" : part.source.value}]`
     case "music": return part.platform === "custom"
       ? `[音乐 ${part.title || part.url || part.audio || "自定义卡片"}${part.singer ? ` - ${part.singer}` : ""}]`
       : `[音乐 ${part.platform}/${part.id}]`

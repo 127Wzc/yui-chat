@@ -33,17 +33,24 @@ export function extractMessageContext(event: unknown = {}, prompt: unknown = "")
     images: [], records: [], videos: [], files: [], mentions: [], replies: [], rawTypes: [],
   }
   for (const part of chain) {
-    if (part.type === "image" && part.source.value) {
-      if (!out.images.some(item => item.url === part.source.value)) out.images.push({ type: "image", url: part.source.value, source: "chain" })
+    // 宿主不透明媒体 ID 仅供回看派生视图使用，不成为可直接投递的资源。
+    const hostMedia = part.type === "extension" && part.namespace === "host" ? record(part.data) : {}
+    const mediaType = part.type === "extension" && part.namespace === "host" ? part.name : part.type
+    const source = "source" in part ? part.source : undefined
+    const mediaUrl = source?.kind === "bytes"
+      ? `data:${source.mimeType || (part.type === "image" ? "image/png" : "application/octet-stream")};base64,${source.value}`
+      : source?.value || String(hostMedia.url || hostMedia.file || hostMedia.path || hostMedia.src || "")
+    if (mediaType === "image" && mediaUrl) {
+      if (!out.images.some(item => item.url === mediaUrl)) out.images.push({ type: "image", url: mediaUrl, source: "chain" })
       out.rawTypes.push("image")
-    } else if (part.type === "audio" && part.source.value) {
-      if (!out.records.some(item => item.url === part.source.value)) out.records.push({ type: "record", url: part.source.value, source: "chain" })
+    } else if (["audio", "record", "voice"].includes(mediaType) && mediaUrl) {
+      if (!out.records.some(item => item.url === mediaUrl)) out.records.push({ type: "record", url: mediaUrl, source: "chain" })
       out.rawTypes.push("record")
-    } else if (part.type === "video" && part.source.value) {
-      if (!out.videos.some(item => item.url === part.source.value)) out.videos.push({ type: "video", url: part.source.value, source: "chain" })
+    } else if (mediaType === "video" && mediaUrl) {
+      if (!out.videos.some(item => item.url === mediaUrl)) out.videos.push({ type: "video", url: mediaUrl, source: "chain" })
       out.rawTypes.push("video")
-    } else if (part.type === "file" && part.source.value) {
-      if (!out.files.some(item => item.url === part.source.value)) out.files.push({ type: "file", url: part.source.value, source: "chain" })
+    } else if (mediaType === "file" && mediaUrl) {
+      if (!out.files.some(item => item.url === mediaUrl)) out.files.push({ type: "file", url: mediaUrl, source: "chain" })
       out.rawTypes.push("file")
     } else if (part.type === "mention") {
       if (!out.mentions.some(item => item.qq === part.userId)) out.mentions.push({ qq: part.userId, source: "chain" })

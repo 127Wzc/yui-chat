@@ -181,6 +181,9 @@
   outline: none;
   background: transparent;
 }
+.ui-search input:focus-visible {
+  outline: none;
+}
 .ui-search input::-webkit-search-cancel-button { display: none; }
 .ui-search-clear {
   display: grid;

@@ -1,8 +1,9 @@
+import crypto from "node:crypto"
 import { applyReasoningPayload } from "../../../configuration/reasoning.js"
 import { responsesUsesUpstreamState, type ResponsesStateMode } from "../../../configuration/responses-state.js"
 import { contentToText } from "../../base.js"
 import { enforcePromptBudgetDetailed, inputTokenLimit } from "../../../../core/chat/token-budget.js"
-import { responsesToolDefinition } from "../../../../tools/support/contract.js"
+import { getToolCommon, responsesToolDefinition } from "../../../../tools/support/contract.js"
 import type { ModelChannel, ModelMessage, ModelToolChoice } from "../../../protocol/types.js"
 import type { ToolDefinition } from "../../../../tools/support/tool-contract.js"
 
@@ -53,7 +54,7 @@ function responseContent(content: unknown, role: string): unknown {
     }
     if (part.type === "image") {
       const source = record(part.source)
-      const inline = text(source.inlineData)
+      const inline = source.kind === "bytes" ? text(source.value) : ""
       const imageUrl = inline ? `data:${text(source.mimeType || part.mimeType || "image/png")};base64,${inline}` : text(source.value)
       if (imageUrl) result.push({ type: "input_image", image_url: imageUrl })
       continue
@@ -98,6 +99,7 @@ export function messagesForResponses(messages: readonly ModelMessage[] = []): un
         type: "function_call",
         call_id: text(call.call_id || call.id),
         name: text(fn.name || call.name),
+        ...(text(fn.namespace || call.namespace) ? { namespace: text(fn.namespace || call.namespace) } : {}),
         arguments: typeof (fn.arguments ?? call.arguments) === "string"
           ? text(fn.arguments ?? call.arguments)
           : JSON.stringify(fn.arguments ?? call.arguments ?? {}),
@@ -190,20 +192,43 @@ export function nativeResponsesToolsEnabled(channel: ModelChannel): { webSearch:
 }
 
 /** 组合 Responses 原生 Built-in Tools 与本地统一 Function Tools。 */
-export function toolsForResponses(tools: readonly ToolDefinition[] = [], channel: ModelChannel): UnknownRecord[] {
+export function toolsForResponses(tools: readonly ToolDefinition[] = [], channel: ModelChannel, forcedFunctionName = ""): UnknownRecord[] {
   const settings = responsesSettings(channel)
   const enabled = nativeResponsesToolsEnabled(channel)
-  const localFunctions = tools
-    .filter(tool => !(enabled.toolSearch && tool.name === "tool_search"))
-    .filter(tool => !(enabled.webSearch && tool.name === "web_search"))
-    .map(tool => responsesToolDefinition(tool))
-    .map(tool => {
-      if (enabled.toolSearch || tool.defer_loading !== true) return tool
-      // defer_loading 只有与原生 tool_search 同时提供才合法；工具发现关闭时，
-      // 保留函数但改为直接加载，不能把无效组合交给上游。
-      const { defer_loading: _deferLoading, ...eager } = tool
-      return eager
-    })
+  const useSearch = enabled.toolSearch
+  const localTools: UnknownRecord[] = []
+  const namespaces = new Map<string, UnknownRecord & { tools: UnknownRecord[] }>()
+  let hasDeferred = false
+  for (const tool of tools) {
+    if (enabled.toolSearch && tool.name === "tool_search" || enabled.webSearch && tool.name === "web_search") continue
+    if (!useSearch && forcedFunctionName && tool.name !== forcedFunctionName) continue
+    const definition = responsesToolDefinition(tool)
+    // 只提前加载指定函数，其他工具继续按原有目录延迟发现。
+    const forced = tool.name === forcedFunctionName
+    if (!useSearch || forced) delete definition.defer_loading
+    if (definition.defer_loading === true) hasDeferred = true
+    const common = getToolCommon(tool)
+    const provenance = record(common.provenance)
+    const server = text(provenance.serverName).trim()
+    if (!useSearch || forced || common.source !== "mcp" || !server) {
+      localTools.push(definition)
+      continue
+    }
+    let namespace = namespaces.get(server)
+    if (!namespace) {
+      const slug = server.replace(/[^a-zA-Z0-9_]/g, "_").slice(0, 40)
+      const suffix = crypto.createHash("sha256").update(server).digest("hex").slice(0, 8)
+      namespace = {
+        type: "namespace", name: `mcp_${slug}_${suffix}`,
+        description: text(provenance.serverDescription || server).trim().slice(0, 200),
+        tools: [],
+      }
+      namespaces.set(server, namespace)
+      localTools.push(namespace)
+    }
+    // 保留 Registry 的全局工具 ID；namespace 只分组，不新增调用映射或执行入口。
+    namespace.tools.push(definition)
+  }
   const builtins: UnknownRecord[] = []
   if (enabled.webSearch) {
     const webSearch = record(settings.webSearch)
@@ -221,8 +246,8 @@ export function toolsForResponses(tools: readonly ToolDefinition[] = [], channel
       })
     }
   }
-  if (enabled.toolSearch && localFunctions.some(tool => tool.defer_loading === true)) builtins.push({ type: "tool_search" })
-  return [...builtins, ...localFunctions]
+  if (useSearch && hasDeferred) builtins.push({ type: "tool_search" })
+  return [...builtins, ...localTools]
 }
 
 function responsesToolChoice(choice: ModelToolChoice | undefined): unknown {
@@ -273,15 +298,8 @@ export function buildResponsesRequest(input: ResponsesRequestInput): UnknownReco
   }
   const choice = responsesToolChoice(input.toolChoice)
   const forcedFunctionName = record(choice).type === "function" ? text(record(choice).name).trim() : ""
-  // 指定函数已经是本轮明确目标，必须直接加载；继续携带 defer_loading 却不带
-  // tool_search 会被 Responses 拒绝，同时保留 tool_search 也只会产生多余发现步骤。
-  const tools = toolsForResponses(input.tools || [], channel)
-    .filter(tool => !(forcedFunctionName && tool.type === "tool_search"))
-    .map(tool => {
-      if (!forcedFunctionName || tool.type !== "function" || text(tool.name) !== forcedFunctionName) return tool
-      const { defer_loading: _deferLoading, ...eager } = tool
-      return eager
-    })
+  // 已指定的调用直接使用原工具 ID，省去 namespace 搜索和多余的发现步骤。
+  const tools = toolsForResponses(input.tools || [], channel, forcedFunctionName)
   if (tools.length) body.tools = tools
   if (choice !== undefined) body.tool_choice = choice
   const maxTokens = Math.max(0, Number(input.maxTokens) || 0)
@@ -305,7 +323,7 @@ export function buildResponsesRecoveryRequest(input: ResponsesRequestInput, loca
     const visibleMessages = replayMessages.map(message => {
       const { protocol, ...visible } = message
       const calls = Array.isArray(protocol?.outputItems) ? protocol.outputItems.map(record).filter(item => item.type === "function_call") : []
-      const localCalls = calls.length ? calls.map(call => ({ id: text(call.call_id), function: { name: text(call.name), arguments: call.arguments } })) : record(visible).tool_calls || visible.toolCalls
+      const localCalls = calls.length ? calls.map(call => ({ id: text(call.call_id), function: { name: text(call.name), ...(call.namespace ? { namespace: text(call.namespace) } : {}), arguments: call.arguments } })) : record(visible).tool_calls || visible.toolCalls
       return { ...visible, ...(localCalls ? { tool_calls: localCalls } : {}), ...(visible.toolCallId ? { tool_call_id: visible.toolCallId } : {}) }
     })
     const config = { chat: { inputTokenBudget: runtime.inputTokenBudget } }

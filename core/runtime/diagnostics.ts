@@ -138,7 +138,7 @@ export async function buildDiagnostics(): Promise<UnknownRecord> {
     mediaCacheDir: mediaCache.dir,
     rootTempDir,
     rootTempExists: await exists(rootTempDir),
-    tempInsidePluginCache: pathInside(tempDir, cacheDir) && pathInside(cacheDir, pluginRoot),
+    tempInsideDataCache: pathInside(tempDir, cacheDir) && pathInside(cacheDir, dataDir),
     dataInsideYunzaiData: pathInside(dataDir, path.join(yunzaiRoot, "data")),
   }
 
@@ -152,6 +152,7 @@ export async function buildDiagnostics(): Promise<UnknownRecord> {
     accessTokenTtlMs: numberValue(record(configValue.web).accessTokenTtlMs),
     linkAllowPrivateHosts: linkSafety.allowPrivateHosts,
     trustedPrivateDnsBypass: linkSafety.trustedPrivateDnsBypass,
+    additionalLocalMediaDirectoryCount: array(record(record(response.render).delivery).allowedLocalPaths).length,
     renderUrlEnabled: record(record(response.render).url).enabled === true,
     screenshotAllowedHostCount: linkSafety.screenshotAllowedHosts.length,
     boundaryAccessEnabled: true,
@@ -181,6 +182,7 @@ export async function buildDiagnostics(): Promise<UnknownRecord> {
     messageFiltersEnabled: messageFiltering.enabled !== false,
     messageFilters: messageFilters.length,
     messageFiltersActive: messageFilters.filter(filter => filter?.enabled === true).length,
+    mediaLinkFiltersActive: messageFilters.filter(filter => filter?.enabled === true && filter.stage === "output" && filter.target === "media").length,
     filterImplementations: filterImplementations.length,
   }
   const configRuntime = configStore.meta()
@@ -201,8 +203,8 @@ export async function buildDiagnostics(): Promise<UnknownRecord> {
   addIssue(issues, safety.initiativeGreetingScheduled && !safety.initiativeGreetingGroups, "warn", "persona", "主动打招呼定时已开启但没有配置群号")
   addIssue(issues, enabledTools.some(tool => tool.name === "web_search") && !hostedWebSearchCoversReplyTask && !safety.webSearchBaiduConfigured && !safety.webSearchTavilyConfigured, "warn", "web-search", "web_search 已启用，但百度 AI 与 Tavily 均未配置 API Key")
   addIssue(issues, safety.imageSearchPixivR18, "warn", "image-search", "Pixiv R18 图片搜索已开启，请确认当前会话与平台规则允许投递")
-  addIssue(issues, paths.rootTempExists, "warn", "paths", "根目录 temp/yui-chat 仍存在，应清理到插件内缓存目录")
-  addIssue(issues, !paths.tempInsidePluginCache, "error", "paths", "插件临时目录不在 plugins/yui-chat/cache 内")
+  addIssue(issues, paths.rootTempExists, "warn", "paths", "根目录 temp/yui-chat 仍存在，应清理到 data/yui-chat/cache 内")
+  addIssue(issues, !paths.tempInsideDataCache, "error", "paths", "运行缓存或临时目录不在 data/yui-chat/cache 内")
   addIssue(issues, !paths.dataInsideYunzaiData, "warn", "paths", "长期数据目录不在 Yunzai data 目录下")
   for (const item of array(toolRegistry.registryErrors)) {
     issues.push({ level: "warn", area: "tools", message: item.message || JSON.stringify(item) })

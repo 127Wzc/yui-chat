@@ -12,7 +12,7 @@ import { pluginCommand, stripPluginCommand } from "../../core/message/command-pr
 
 interface CommandOptions {
   e: UnknownRecord
-  reply: (...args: unknown[]) => unknown
+  sendText: (value: string, quote?: boolean) => unknown
 }
 
 function record(value: unknown): UnknownRecord {
@@ -41,17 +41,17 @@ function formatToolParameterGuide(tool: UnknownRecord = {}): string {
   })
 }
 
-export async function runToolTestCommand({ e, reply }: CommandOptions): Promise<unknown> {
+export async function runToolTestCommand({ e, sendText }: CommandOptions): Promise<unknown> {
   let payload
   try {
     payload = parseToolTestPayload(e?.msg)
   } catch (err) {
-    return reply(`工具测试参数错误：${errorMessage(err)}`, true)
+    return sendText(`工具测试参数错误：${errorMessage(err)}`, true)
   }
   if (!payload.name) {
     const tools = await toolRegistry.getAllowedTools({ e }) as UnknownRecord[]
     const names = tools.slice(0, 30).map(tool => text(tool.name))
-    return reply(
+    return sendText(
       names.length
         ? `可测试的已启用工具：${names.join("、")}\n参数说明：${pluginCommand("工具参数")} <工具名>\n测试：${pluginCommand("测试工具")} <工具名> 参数=值`
         : "当前没有可测试的已启用工具。请先在 AI 能力中启用一个工具。",
@@ -61,7 +61,7 @@ export async function runToolTestCommand({ e, reply }: CommandOptions): Promise<
   try {
     const config = await configStore.load()
     const tool = (await toolRegistry.getAllowedTools({ e }) as UnknownRecord[]).find(item => text(item.name) === payload.name)
-    if (!tool) return reply(`工具 ${payload.name} 当前未启用、不可见或没有权限。可先发送 ${pluginCommand("测试工具")} 查看可测试工具。`, true)
+    if (!tool) return sendText(`工具 ${payload.name} 当前未启用、不可见或没有权限。可先发送 ${pluginCommand("测试工具")} 查看可测试工具。`, true)
     const tested = await runExecutionTest({
       schema: record(getToolCommon(tool)).parameters,
       args: payload.args,
@@ -71,16 +71,16 @@ export async function runToolTestCommand({ e, reply }: CommandOptions): Promise<
         return { status: result.status, result: result.value ?? result.content }
       },
     })
-    return reply(`工具 ${payload.name} 测试结果（${tested.durationMs}ms）：\n${tested.serialized}`, true)
+    return sendText(`工具 ${payload.name} 测试结果（${tested.durationMs}ms）：\n${tested.serialized}`, true)
   } catch (err) {
-    return reply(`工具 ${payload.name} 测试失败：${errorMessage(err)}`, true)
+    return sendText(`工具 ${payload.name} 测试失败：${errorMessage(err)}`, true)
   }
 }
 
-export async function runToolParameterCommand({ e, reply }: CommandOptions): Promise<unknown> {
+export async function runToolParameterCommand({ e, sendText }: CommandOptions): Promise<unknown> {
   const name = stripPluginCommand(e?.msg, "工具参数")
-  if (!name) return reply(`用法：${pluginCommand("工具参数")} <工具名>\n例如：${pluginCommand("工具参数")} weather`, true)
+  if (!name) return sendText(`用法：${pluginCommand("工具参数")} <工具名>\n例如：${pluginCommand("工具参数")} weather`, true)
   const tool = (await toolRegistry.getAllowedTools({ e }) as UnknownRecord[]).find(item => text(item.name) === name)
-  if (!tool) return reply(`未找到可测试工具 ${name}。可先发送 ${pluginCommand("测试工具")} 查看已启用工具。`, true)
-  return reply(formatToolParameterGuide(tool), true)
+  if (!tool) return sendText(`未找到可测试工具 ${name}。可先发送 ${pluginCommand("测试工具")} 查看已启用工具。`, true)
+  return sendText(formatToolParameterGuide(tool), true)
 }

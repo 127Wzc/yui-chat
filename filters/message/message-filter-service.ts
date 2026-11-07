@@ -1,7 +1,9 @@
 import { hostRuntime } from "../../core/runtime/host-runtime.js"
 import type { UnknownRecord } from "../../core/message/types.js"
 import { filterRegistry } from "../core/registry.js"
-import { sortMessageFilters } from "./message-filter-contract.js"
+import { messageFilterTarget, sortMessageFilters, type MessageFilterTarget } from "./message-filter-contract.js"
+import type { MessageChain, ContentPart, ForwardNodePart } from "../../core/message-chain/types.js"
+import { mediaResourceFromValue } from "../../core/message-chain/builder.js"
 
 export interface MessageFilterDelivery extends UnknownRecord {
   kind: "record"
@@ -38,12 +40,12 @@ function priorityOf(filter: UnknownRecord): number {
   return Number.isFinite(value) ? value : defaultPriority
 }
 
-function filtersForStage(config: unknown, stage: string): UnknownRecord[] {
+function filtersForStage(config: unknown, stage: string, target: MessageFilterTarget): UnknownRecord[] {
   const filtering = filterConfig(config)
   if (filtering.enabled === false || !Array.isArray(filtering.filters)) return []
   return sortMessageFilters(filtering.filters)
     .map((filter, index) => ({ filter, index }))
-    .filter(({ filter }) => filter.enabled === true && filter.stage === stage)
+    .filter(({ filter }) => filter.enabled === true && filter.stage === stage && messageFilterTarget(filter) === target)
     .sort((left, right) => priorityOf(left.filter) - priorityOf(right.filter) || left.index - right.index)
     .slice(0, 30)
     .map(({ filter }) => filter)
@@ -103,10 +105,10 @@ function applyFilterResult(result: unknown, state: { text: string; deliveries: M
   throw new Error("过滤器实现返回了不支持的结果；可直接返回文本，或返回 { kind: 'text' }、{ kind: 'block' }、{ kind: 'record', data }")
 }
 
-async function applyFilterChain(value: unknown, context: UnknownRecord = {}, stage: "input" | "output"): Promise<MessageFilterResult> {
+async function applyFilterChain(value: unknown, context: UnknownRecord = {}, stage: "input" | "output", target: MessageFilterTarget = "text"): Promise<MessageFilterResult> {
   const state = { text: text(value), deliveries: [] as MessageFilterDelivery[], blocked: false, reason: "" }
   const traces: UnknownRecord[] = []
-  for (const filter of filtersForStage(context.config, stage)) {
+  for (const filter of filtersForStage(context.config, stage, target)) {
     if (!matches(filter, state.text)) continue
     const implementation = implementationOf(filter)
     const trace: UnknownRecord = { filterId: filter.id, priority: priorityOf(filter) }
@@ -115,11 +117,16 @@ async function applyFilterChain(value: unknown, context: UnknownRecord = {}, sta
       traces.push({ ...trace, status: "skipped", message: "引用的过滤器实现不存在或不支持当前阶段。" })
       continue
     }
+    if (target === "media" && (native.effects.some(effect => effect !== "pure") || native.resultKinds.some(kind => kind !== "text"))) {
+      traces.push({ ...trace, status: "skipped", message: "媒体链接只支持纯文本变换实现。" })
+      continue
+    }
     try {
       const runtimeContext: UnknownRecord = {
         ...context,
         source: "message-filter",
         stage,
+        target,
         filterId: filter.id,
         filterPriority: priorityOf(filter),
       }
@@ -142,6 +149,61 @@ export function applyInputFilters(value: unknown, context: UnknownRecord = {}): 
 }
 
 // 输出过滤器链支持文本变换、短路和可发送的交付内容；单个过滤器失败时继续传递当前文本。
-export function applyOutputFilters(value: unknown, context: UnknownRecord = {}): Promise<MessageFilterResult> {
-  return applyFilterChain(value, context, "output")
+export function applyOutputFilters(value: unknown, context: UnknownRecord = {}, target: MessageFilterTarget = "text"): Promise<MessageFilterResult> {
+  return applyFilterChain(value, context, "output", target)
+}
+
+/** 只遍历规范消息字段；不修改工具原结果，不检查任意 JSON 中的 URL。 */
+export async function applyOutputChainFilters(chain: MessageChain, context: UnknownRecord = {}, textFiltered = false): Promise<{ chain: MessageChain; blocked: boolean; reason: string; traces: UnknownRecord[] }> {
+  const traces: UnknownRecord[] = []
+  let blocked = false
+  let reason = ""
+  const apply = async (value: string, target: MessageFilterTarget, path: string): Promise<MessageFilterResult> => {
+    const result = await applyOutputFilters(value, context, target)
+    traces.push(...result.traces.map(trace => ({ ...trace, target, path })))
+    if (result.blocked) { blocked = true; reason = result.reason }
+    return result
+  }
+  const visit = async (parts: MessageChain, path: string): Promise<ContentPart[]> => {
+    const output: ContentPart[] = []
+    for (const [index, part] of parts.entries()) {
+      if (context.signal instanceof AbortSignal) context.signal.throwIfAborted()
+      if (blocked) break
+      const location = `${path}[${index}]`
+      if (part.type === "text" && !textFiltered) {
+        const result = await apply(part.text, "text", `${location}.text`)
+        for (const delivery of result.deliveries) output.push({ type: "audio", source: mediaResourceFromValue(delivery.data) })
+        if (result.text) output.push({ ...part, text: result.text })
+      } else if (part.type === "forward") {
+        const nodes = []
+        for (const [nodeIndex, node] of part.nodes.entries()) nodes.push({ ...node, parts: await visit(node.parts, `${location}.nodes[${nodeIndex}].parts`) as ForwardNodePart[] })
+        output.push({ ...part, nodes })
+      } else output.push(part)
+    }
+    return output
+  }
+  // 先处理正文产生的语音等资源，再统一处理媒体，避免某一路输出漏过规则。
+  const visitMedia = async (parts: MessageChain, path: string): Promise<ContentPart[]> => {
+    const output: ContentPart[] = []
+    for (const [index, part] of parts.entries()) {
+      if (context.signal instanceof AbortSignal) context.signal.throwIfAborted()
+      if (blocked) break
+      const location = `${path}[${index}]`
+      if (part.type === "forward") {
+        const nodes = []
+        for (const [nodeIndex, node] of part.nodes.entries()) nodes.push({ ...node, parts: await visitMedia(node.parts, `${location}.nodes[${nodeIndex}].parts`) as ForwardNodePart[] })
+        output.push({ ...part, nodes })
+      } else if (["image", "audio", "video", "file"].includes(part.type) && "source" in part && part.source?.kind === "url") {
+        const result = await apply(part.source.value, "media", `${location}.source.value`)
+        output.push({ ...part, source: { ...part.source, value: result.text } })
+      } else if (part.type === "music") {
+        const next = { ...part }
+        for (const key of ["audio", "image"] as const) if (/^https?:\/\//i.test(next[key] || "")) next[key] = (await apply(next[key]!, "media", `${location}.${key}`)).text
+        output.push(next)
+      } else output.push(part)
+    }
+    return output
+  }
+  const result = await visitMedia(await visit(chain, "parts"), "parts")
+  return { chain: blocked ? [] : result, blocked, reason, traces }
 }

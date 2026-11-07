@@ -77,6 +77,7 @@ function normalizeFilters(value: unknown): UnknownRecord[] {
       name: String(filter.name || "").trim(),
       enabled: filter.enabled === true,
       stage: String(filter.stage || "output"),
+      target: filter.target === undefined ? "text" : String(filter.target),
       priority: normalizePriority(filter.priority),
       condition: { minTextLength: Math.max(0, Number(condition.minTextLength || 0)) },
       implementation: { type: "filter", id: implementationId, arguments: normalizeArguments(implementation.arguments) },
@@ -93,6 +94,8 @@ function assertCallableFilters(filters: UnknownRecord[], implementations: Unknow
     const implementationId = String(filterImplementation.id || "")
     const implementation = availableFilters.get(implementationId)
     if (!implementation) throw new Error(`过滤器「${filter.name || filter.id}」引用的代码实现不存在或未启用：${implementationId}`)
+    if (filter.target !== "text" && filter.target !== "media") throw new Error("处理对象只支持正文或媒体链接")
+    if (filter.target === "media" && (filter.stage !== "output" || (implementation.effects as string[]).some(effect => effect !== "pure") || (implementation.resultKinds as string[]).some(kind => kind !== "text"))) throw new Error("媒体链接仅支持回复发送前的纯文本变换实现")
     const stages = Array.isArray(implementation.stages) ? implementation.stages.map(item => String(item)) : []
     if (!stages.includes(String(filter.stage))) {
       throw new Error(`代码过滤器 ${implementation.displayNameZh || implementation.displayName || implementation.id} 不支持 ${getMessageFilterStage(filter.stage)?.label || filter.stage} 阶段`)
@@ -191,11 +194,12 @@ const testFilter = handleRoute(async (req, res) => {
   }
   const filtered = draft.stage === "input"
     ? await applyInputFilters(text, context)
-    : await applyOutputFilters(text, context)
+    : await applyOutputFilters(text, context, draft.target === "media" ? "media" : "text")
   res.json({
     ok: true,
     result: {
       stage: draft.stage,
+      target: draft.target,
       priority: draft.priority,
       input: text,
       output: filtered.text,

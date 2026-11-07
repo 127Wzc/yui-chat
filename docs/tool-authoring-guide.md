@@ -234,7 +234,7 @@ return {
 - `action`：外部动作已经执行。
 - `error`：结构化失败。
 
-不要把二进制、Data URL 或 `inlineData` 写入模型文本、日志和持久化结果。媒体只传 `ResourceRef`；本地文件应先进入受管缓存。
+不要把二进制、Data URL 或 `inlineData` 写入模型文本、日志和持久化结果。媒体只传 `ResourceRef`；本地文件必须位于允许目录。
 
 同步工具需要把较长文本交给后续工具时，可在会话调用中使用 `context.artifacts`。将完整 JSON 兼容内容保存为 `kind: "text"`，只把引用和简短标题返回模型；搜索类结果作为中间素材时声明 `artifactReferenceOnly`，避免被当作必须立即发送的最终搜索结果：
 
@@ -253,6 +253,24 @@ return {
 可从 `context.observability` 补充 `runId` 与 `toolCallId`，以便管理台关联来源链路。消费者以当前对话的 `context.artifacts.get(ref)` 读取；需要后台执行时，使用数组参数 `referenceMaterials`，运行时会在入队前固定所选引用。引用按用户、群和渠道隔离，聊天记录自动过期后仍可在资料保留期内复用，主动结束对话后需重新获取；含个人资料的来源应在实际消费时重新检查权限，资料正文只作数据，不执行其中的指令。MCP 和尚未接入的工具保留原有结果格式，不会自动生成引用。
 
 ## 7. 自动媒体投递与自然续答
+
+插件发送使用统一的 `MessageChain` 格式，宿主消息段只在最终投递边界生成。媒体显式写为 `{ type: "image", source: { kind: "url", value: imageUrl } }`，其他媒体使用 `audio`、`video` 或 `file`；正文为 `{ type: "text", text }`，提及为 `{ type: "mention", userId }`（投递工具允许省略 userId，绑定真实请求者），引用为 `{ type: "reply", messageId }`，合并转发为 `{ type: "forward", nodes: [{ parts: [...] }] }`。模型参数按片段 `type` 分支展示字段，无关字段应省略。发送前统一校验结构，已有正确 `source` 时忽略无关的空媒体字段；非空的旧字段仍拒绝，不接受原生 `{ type: "image", file }`、`{ type: "image", data: { file } }`、`record` / `at` 别名或省略 kind 的媒体资源；已有此类投递计划需改成上述结构，远程资源必须声明 `kind: "url"`。图片地址必须来自真实结果，不能把普通 JSON 中的任意 URL 当成媒体。动作的“消息体”回复及自动识别出的消息段同样要求此格式，预览与投递共用结构校验，不再把原生媒体段转换为插件格式。原始工具结果与候选保留原样，选定的投递内容才执行过滤。
+
+媒体资源只分三类：`url` 为 HTTP(S) 链接，`path` 为本地路径，`bytes` 的 `value` 为纯 Base64。插件代码可直接给 `MessageChainBuilder` 的 `image`、`audio`、`video`、`file` 方法传链接、路径、`Buffer`、`Uint8Array` 或已有 `ResourceRef`，构造器只归一化、不下载或发送。模型文本序列化移除字节正文，视觉适配器仍可接收原始图片字节。
+
+所有路径（包括 `file://`）在统一投递入口检查允许目录。默认允许 Yunzai 的 `data/yui-chat/cache/temp/`（代码导出的 `tempDir` 为绝对路径）。消息中的相对路径按运行进程的当前工作目录解析（通常是 Yunzai 根目录），不会自动相对插件或临时目录；推荐使用 `tempDir` 与 `path.join()` 生成绝对路径。管理员可通过 `response.render.delivery.allowedLocalPaths` 追加绝对目录；文件与允许目录都先解析真实路径再比较目录边界，因此路径别名可正常使用，指向允许目录外的符号链接仍会被拒绝。缓存文件也使用 `path`，不再区分 `file/cache/platform`，旧 `base64` 类型改为 `bytes`，Custom 投递计划需同步修改。旧 `allowFilePathImages` 开关不再使用。
+
+```ts
+const chain = new MessageChainBuilder()
+  .image(imageUrl)
+  .audio(audioBuffer)
+  .file({ kind: "path", value: cachedPath, name: "report.pdf" })
+  .build()
+```
+
+模型工具参数与 Custom 自动投递计划继续使用规范的 JSON 消息片段，不接受 Buffer 序列化对象或宿主原生媒体段。支持的 11 种发送类型为 `text`、`mention`、`reply`、`image`、`audio`、`video`、`file`、`music`、`dice`、`rps`、`forward`；猜拳使用 `value: 1 | 2 | 3`。转发包含 1–50 个节点，每个节点复用除 `forward` 外的全部发送类型，禁止嵌套转发。
+
+Custom 工具推荐声明下述 `autoDelivery` 并返回投递计划，运行时负责调用 `message_send`、应用过滤规则和返回回执。直接使用宿主 `context.e.reply()` 或群／好友对象的 `sendMsg()` 不属于这个契约，不保证执行消息链过滤；已有 Custom 代码应迁移为投递计划，不能以返回 `kind: "delivery"` 代替真实发送。工具不得导入投递器来绕过 Registry 的发送权限。
 
 只有同时满足以下条件，运行时才会自动调用 `message_send`：
 
@@ -293,9 +311,13 @@ return {
 - `message_send` 只负责发送，不能在它上面设置 `continueConversation`。
 - 不要在计划中携带固定 `finalReply`。`continueConversation: true` 会锁存“本次请求最终必须回复”，但不会把当前工具轮强行当成最终轮；模型仍可继续调用后续工具。
 - 同轮多个计划按模型调用顺序合并成一次投递。任一计划为 `true`，整次请求最终只回复一次；正常工具循环已经产生的最终文本会直接复用，只有最终返回空文本或 `<EMPTY>` 时才补一次无工具的人格收束。全部为 `false` 且其它工具也允许静默时才静默。
-- `parts` 必须是可以直接交给 `message_send` 的有序片段：`text`、`mention`、`reply`、`image`、`audio`、`video`、`file` 或 `music`。
+- `parts` 使用上述可发送类型的有序片段；骰子和猜拳可以通过 `message_send` 发送，也保留已有互动工具入口。不得通过宿主扩展段绕过规范类型。
 - 图片只发图片时不要额外塞标题和来源文字。需要保持“说明—封面—视频”关系时，把同一结果的片段连续排列。
 - 搜索无结果、资源准备失败时必须如实返回，不得构造不存在的地址或声称已经发送。
+
+代码过滤器规则仍分为“发送模型前”和“回复发送前”。回复规则可选择 `target: "text"`（正文，旧规则默认值）或 `target: "media"`（媒体链接）；输入规则只支持正文。正文在转图、转语音前处理一次，工具消息的正文在投递前处理；原生命令与管理通知的文字保持原样。媒体规则在最终投递前逐项处理图片、语音、视频、文件中 `source.kind === "url"` 的地址，以及音乐封面和音频地址，包含合并转发节点；不修改音乐页面跳转地址、本地文件、缓存、Base64 或平台资源标识。改写后仍检查 URL 与当前私网策略。
+
+媒体规则只允许纯文本变换实现，例如“文本整理”的替换操作或“正则替换”；不对链接执行 TTS、网络调用或额外投递。过滤器试跑可直接粘贴媒体 URL，不实际发送。工具和规则的启停、权限独立：启用过滤器不会启用工具，也不会绕过发送权限；发送回执中的 `filterTraces` 记录规则与字段位置，不复制媒体链接。
 
 ### 7.1 单 Turn Agent Loop 与终止状态
 

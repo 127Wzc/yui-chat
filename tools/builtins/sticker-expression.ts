@@ -1,3 +1,4 @@
+import { mediaResourceFromValue } from "../../core/message-chain/builder.js"
 import { createHash } from "node:crypto"
 import { configStore } from "../../config/store.js"
 import type { RuntimeConfigObject } from "../../config/types.js"
@@ -91,10 +92,8 @@ function candidateId(value: unknown, url: string): string {
   return createHash("sha256").update(url).digest("hex").slice(0, 24)
 }
 
-export function stickerCandidateSource(url: string): { kind: "url" | "base64"; value: string } {
-  return /^https?:\/\//i.test(url)
-    ? { kind: "url", value: url }
-    : { kind: "base64", value: url.replace(/^base64:\/\//i, "") }
+export function stickerCandidateSource(url: string) {
+  return mediaResourceFromValue(url)
 }
 
 function candidateFrom(value: unknown): StickerCandidate | null {

@@ -166,7 +166,7 @@ export function contentToText(content: unknown): string {
     if (part.type === "image" || part.type === "audio" || part.type === "video" || part.type === "file") {
       const source = isRecord(part.source) ? part.source : {}
       const label = part.type === "image" ? "图片" : part.type === "audio" ? "语音" : part.type === "video" ? "视频" : "文件"
-      return `[${label}：${displayMediaUrl(source.value)}]`
+      return `[${label}：${source.kind === "bytes" ? "字节资源" : displayMediaUrl(source.value)}]`
     }
     if (part.type === "resource") return `[资源：${displayMediaUrl(part.uri || isRecord(part.source) && part.source.value)}]`
     if (part.type === "mention") return `@${String(part.userId || "")}`
@@ -186,7 +186,7 @@ export function contentForOpenAI(content: unknown): unknown {
     if (part.type === "image_url") return [part]
     if (part.type === "image") {
       const source = isRecord(part.source) ? part.source : {}
-      const inline = String(source.inlineData || "")
+      const inline = source.kind === "bytes" ? String(source.value || "") : ""
       const value = inline ? `data:${String(source.mimeType || part.mimeType || "image/png")};base64,${inline}` : String(source.value || "")
       return value ? [{ type: "image_url", image_url: { url: value } }] : []
     }

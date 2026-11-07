@@ -30,7 +30,9 @@ Responses 遇到明确的服务端压缩错误（含压缩参数不受支持）�
 
 ## 工具来源
 
-本地工具执行方式见 [内置工具](builtin-tools.md)。Responses 还支持供应商托管的搜索能力：
+本地工具执行方式见 [内置工具](builtin-tools.md)。本地 Function Tool 显式发送 `strict: false`，保留各工具的可选字段语义，参数仍由 Registry 和工具实现校验，避免 Responses 自动严格化后要求填写无关字段。启用原生工具发现时，MCP 工具按服务组织成 `namespace`，子函数继续使用现有 Registry 工具 ID，并按 `defer_loading` 延迟加载。分组前先按当前调用者和模型策略过滤工具，调用时仍由插件经 Registry 检查权限并连接 MCP；不向 OpenAI 传递 `type: "mcp"` 或 MCP 连接凭证。本地 stdio 与局域网 HTTP/SSE 的连接方式保持不变。强制调用时仅提前加载指定函数，其余工具保持既有延迟状态；关闭原生工具发现时采用平铺函数，若指定函数则只传该函数。其它模型协议维持原格式。namespace 和真实 `call_id` 随调用回放，断链恢复也保留 namespace。[协议说明](https://developers.openai.com/api/docs/guides/tools-tool-search)。
+
+Responses 还支持供应商托管的搜索能力：
 
 | 能力 | 配置 |
 | --- | --- |

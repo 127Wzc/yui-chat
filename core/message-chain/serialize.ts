@@ -6,6 +6,7 @@ function redactInlineMedia(value: JsonValue, key = ""): JsonValue {
   if (typeof value === "string") return key === "inlineData" || inlineMediaPattern.test(value) ? "[inline media omitted]" : value
   if (Array.isArray(value)) return value.map(item => redactInlineMedia(item, key))
   if (value && typeof value === "object") {
+    if (value.kind === "bytes") return { ...value, value: "[inline media omitted]" }
     return Object.fromEntries(Object.entries(value).map(([childKey, item]) => [childKey, redactInlineMedia(item, childKey)]))
   }
   return value

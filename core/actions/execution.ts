@@ -1,3 +1,5 @@
+import { hostRuntime } from "../runtime/host-runtime.js"
+import { replyMessageChain } from "../message-chain/delivery.js"
 import { configStore } from "../../config/store.js"
 import type { RuntimeConfigObject } from "../../config/types.js"
 import { actionRecord, parseActions, type ActionDefinition, type ActionRecord } from "./contract.js"
@@ -109,13 +111,9 @@ export async function runAction(action: ActionDefinition, text: string, e: Actio
     const args = bindActionArguments(action, preset?.text ?? text, e, action.input.images === "none" ? undefined : images, preset?.variables)
     validateActionArguments(action, args)
     let toolReplied = false
-    const executionEvent = typeof e.reply === "function" ? { ...e, reply: async (...parts: unknown[]) => {
-      const value = await (e.reply as (...parts: unknown[]) => unknown).apply(e, parts)
-      toolReplied = true
-      return value
-    } } : e
+    const executionEvent = hostRuntime.observeMessageSends(e, () => { toolReplied = true })
     const sendImageReply = async (stage: "running" | "success" | "failure", value: unknown, signal?: AbortSignal) => {
-      if (typeof e.reply !== "function") return
+      if (!hostRuntime.canSendMessage(e)) return
       const latest = configStore.get()
       const current = parseActions(latest.actions).items[action.id]
       if (!current || current.tool !== action.tool || !checkAccess(e, latest).ok || !actionAccess(current, e, latest).allowed) return
@@ -128,7 +126,7 @@ export async function runAction(action: ActionDefinition, text: string, e: Actio
       }
       const delivery = await executeDirectTool("message_send", { parts: output.parts }, { e, config: latest, signal, source: "action-delivery", actionId: action.id, actionDelivery: true, execution: { beforeInvoke } })
       const after = configStore.get()
-      if (stage !== "running" && !["success", "accepted", "denied"].includes(delivery.status) && checkAccess(e, after).ok && actionAccess(current, e, after).allowed) await e.reply("动作已执行，但结果投递失败。")
+      if (stage !== "running" && !["success", "accepted", "denied"].includes(delivery.status) && checkAccess(e, after).ok && actionAccess(current, e, after).allowed) await replyMessageChain([{ type: "text", text: "动作已执行，但结果投递失败。" }], { e, textFiltered: true })
     }
     const registry = action.kind === "source" ? new ToolRegistry() : toolRegistry
     if (action.kind === "source") registry.register(actionSourceTool(action))
@@ -141,7 +139,7 @@ export async function runAction(action: ActionDefinition, text: string, e: Actio
           await sendImageReply("running", { metadata: { backgroundStatus: task.status, queue: backgroundTaskService.queueStatus(task.id) } }, signal)
         },
         onBackgroundComplete: options.web ? undefined : async task => {
-          if (typeof e.reply !== "function") return
+          if (!hostRuntime.canSendMessage(e)) return
           if (!checkAccess(e, configStore.get()).ok) return
           if (action.tool === "generate_image" && action.reply.image) {
             const result = actionRecord(task.result)
@@ -151,12 +149,12 @@ export async function runAction(action: ActionDefinition, text: string, e: Actio
             return
           }
           if (task.status !== "ok") {
-            if (!toolReplied) await e.reply(`动作未完成：${task.error || "任务已取消"}`)
+            if (!toolReplied) await replyMessageChain([{ type: "text", text: `动作未完成：${task.error || "任务已取消"}` }], { e, textFiltered: true })
             return
           }
           const output = await actionOutput(action, { ...normalizeToolResult(task.result), value: task.result }, e, false, toolReplied)
-          if (!output.delivery && output.message) await e.reply(output.message)
-          else if (output.delivery && !["success", "accepted"].includes(String(actionRecord(output.delivery).status))) await e.reply("动作已执行，但结果投递失败。")
+          if (!output.delivery && output.message) await replyMessageChain([{ type: "text", text: output.message }], { e, textFiltered: true })
+          else if (output.delivery && !["success", "accepted"].includes(String(actionRecord(output.delivery).status))) await replyMessageChain([{ type: "text", text: "动作已执行，但结果投递失败。" }], { e, textFiltered: true })
         },
         beforeInvoke: () => {
           const latest = configStore.get()

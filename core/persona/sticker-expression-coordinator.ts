@@ -323,7 +323,7 @@ function ownEvent(event: UnknownRecord): boolean {
 
 async function syntheticGroupEvent(groupId: string, source: UnknownRecord = {}): Promise<UnknownRecord> {
   const bot = source.bot || hostRuntime.bot
-  return normalizeEventScope({
+  return normalizeEventScope(hostRuntime.messageEvent({
     isGroup: true,
     isPrivate: false,
     message_type: "group",
@@ -334,15 +334,7 @@ async function syntheticGroupEvent(groupId: string, source: UnknownRecord = {}):
     bot,
     msg: "",
     raw_message: "",
-    async reply(payload: unknown, _quote?: unknown): Promise<unknown> {
-      const picker = record(bot).pickGroup
-      if (typeof picker !== "function") throw new Error("宿主不支持按群号发送消息。")
-      const group = record(await (picker as (...args: unknown[]) => Promise<unknown>).call(bot, Number(groupId), true))
-      const send = group.sendMsg
-      if (typeof send !== "function") throw new Error(`无法获取群 ${groupId}，请确认机器人仍在群内。`)
-      return (send as (value: unknown) => Promise<unknown>).call(group, payload)
-    },
-  })
+  }, { type: "group", id: groupId }))
 }
 
 function stale(scope: string, version?: number): boolean {

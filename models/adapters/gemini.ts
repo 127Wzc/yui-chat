@@ -72,8 +72,8 @@ function toGeminiParts(content: unknown): UnknownRecord[] {
     }
     if (part.type === "image" || part.type === "audio" || part.type === "video") {
       const source = record(part.source)
-      const inline = stringValue(source.inlineData)
-      const inlineUrl = inline ? `data:${stringValue(source.mimeType || part.mimeType || "application/octet-stream")};base64,${inline}` : stringValue(source.value)
+      const inline = source.kind === "bytes" ? stringValue(source.value) : ""
+      const inlineUrl = inline ? `data:${stringValue(source.mimeType || part.mimeType || (part.type === "image" ? "image/png" : "application/octet-stream"))};base64,${inline}` : stringValue(source.value)
       const data = parseDataUrl(inlineUrl)
       if (data && (part.type === "image" || part.type === "audio")) {
         parts.push({ inlineData: { mimeType: data.mediaType, data: data.data } })

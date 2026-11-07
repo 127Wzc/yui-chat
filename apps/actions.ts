@@ -2,6 +2,8 @@ import { configStore, yunzaiRoot } from "../config/store.js"
 import { actionCommand, actionRule, matchAction, parseActions, type ActionDefinition } from "../core/actions/contract.js"
 import { actionAccess, runAction } from "../core/actions/execution.js"
 import { hostRuntime } from "../core/runtime/host-runtime.js"
+import { messageChainFromReply } from "../core/message-chain/builder.js"
+import { replyMessageChain } from "../core/message-chain/delivery.js"
 import type { HostCommandEntry } from "../core/runtime/host-command-registry.js"
 import { isGroupEvent } from "../core/message/event-scope.js"
 import { pluginCommand, stripPluginCommand } from "../core/message/command-prefixes.js"
@@ -26,6 +28,12 @@ export function createActionEntries(config: RuntimeConfigObject): HostCommandEnt
   if (!actions.enabled) return []
   return Object.values(actions.items).filter(item => item.enabled).map(definition => {
     class ActionCommand extends hostRuntime.Plugin {
+      async reply(...args: unknown[]): Promise<unknown> {
+        return replyMessageChain(messageChainFromReply(args[0]), { e: this.e, quote: Boolean(args[1]), replyOptions: args[2] as Record<string, unknown> | undefined, textFiltered: true })
+      }
+      async sendText(value: string, quote = false): Promise<unknown> {
+        return replyMessageChain([{ type: "text", text: value }], { e: this.e, quote, textFiltered: true })
+      }
       constructor() {
         super({ name: `Yui Chat · ${definition.name}`, dsc: definition.description, event: "message", priority: definition.priority,
           rule: definition.stage === "rule" ? [{ reg: new RegExp(actionRule(definition)), fnc: "run", log: false }] : [],
@@ -42,11 +50,11 @@ export function createActionEntries(config: RuntimeConfigObject): HostCommandEnt
         this.e.__yuiChatReplied = true
         try {
           const result = await runAction(current, input, this.e)
-          if (!result.delivery && result.message) await this.reply(result.message, true)
-          else if (result.delivery && ["failed", "denied", "ambiguous"].includes(String((result.delivery as Record<string, unknown>).status))) await this.reply("动作已执行，但结果投递失败。", true)
+          if (!result.delivery && result.message) await this.sendText(result.message, true)
+          else if (result.delivery && ["failed", "denied", "ambiguous"].includes(String((result.delivery as Record<string, unknown>).status))) await this.sendText("动作已执行，但结果投递失败。", true)
         } catch (error) {
           if (error && typeof error === "object" && "silent" in error && error.silent === true) return true
-          await this.reply(`动作未完成：${error instanceof Error ? error.message : String(error)}`, true)
+          await this.sendText(`动作未完成：${error instanceof Error ? error.message : String(error)}`, true)
         }
         return true
       }

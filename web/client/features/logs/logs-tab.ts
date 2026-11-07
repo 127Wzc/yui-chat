@@ -205,7 +205,7 @@ interface LogState {
   error: string
   detail: LogDetail | null
   settings: { detailRetentionDays: number; aggregateRetentionDays: number }
-  filters: { from: string; to: string; status: string; model: string; purpose: string; query: string }
+  filters: { from: string; to: string; status: string; model: string; purpose: string; source: string; userId: string; groupId: string; query: string }
 }
 
 interface CleanupResult extends UnknownRecord { modelCalls?: number; toolCalls?: number }
@@ -531,6 +531,8 @@ function sourceLabel(value: unknown = ""): string {
     rerank: "重排序调用",
     "group-memory-consolidation": "群聊记忆提炼",
     firstPerson: "第一人称对话",
+    "dailyStill.decision": "日常定格",
+    dailyStill: "日常定格",
     management: "管理任务",
     "memory-recall": "记忆召回",
     "memory-vector-index": "记忆向量",
@@ -563,7 +565,9 @@ function lineageLabel(value: unknown = ""): string {
 export const LogsTab = {
   name: "LogsTab",
   components: { LogContextView, ArtifactPanel },
-  setup() {
+  props: { embedded: Boolean, sourceScope: { type: String, default: "" } },
+  setup(props: { embedded?: boolean; sourceScope?: string } = {}) {
+    const defaultFilters = () => ({ from: dateValue(-6), to: dateValue(), status: "", model: "", purpose: "", source: props.sourceScope || "", userId: "", groupId: "", query: "" })
     const state = reactive<LogState>({
       summary: null,
       runs: [],
@@ -572,8 +576,15 @@ export const LogsTab = {
       error: "",
       detail: null,
       settings: { detailRetentionDays: 7, aggregateRetentionDays: 90 },
-      filters: { from: dateValue(-6), to: dateValue(), status: "", model: "", purpose: "", query: "" },
+      filters: defaultFilters(),
     })
+    const section = ref("logs")
+    const moreFilters = ref(false)
+    const page = ref(1)
+    const pageSize = ref(25)
+    const pageCursors = ref([""])
+    let appliedFilters = { ...state.filters }
+    let refreshRequest = 0
     const drawerOpen = ref(false)
     const timelineFilter = ref("all")
     const settingsDrawerOpen = ref(false)
@@ -605,51 +616,70 @@ export const LogsTab = {
       state.settings.aggregateRetentionDays = Number(history.aggregateRetentionDays || 90)
     }
 
-    function queryParams(includeCursor = true) {
+    function queryParams() {
       const params = new URLSearchParams()
-      for (const [key, value] of Object.entries(state.filters)) if (value !== "" && value !== null && value !== undefined) params.set(key, value)
-      if (!includeCursor) params.delete("cursor")
+      for (const [key, value] of Object.entries(appliedFilters)) if (value !== "" && value !== null && value !== undefined) params.set(key, value)
+      if (props.sourceScope) params.set("source", props.sourceScope)
       return params.toString()
     }
 
-    async function refresh({ append = false } = {}) {
-      if (state.loading) return
+    async function refresh() {
+      const requestId = ++refreshRequest
       state.loading = true
       state.error = ""
       try {
-        const summaryQuery = new URLSearchParams(queryParams(false))
-        const runsQuery = new URLSearchParams(queryParams(false))
-        if (append && state.nextCursor) runsQuery.set("cursor", state.nextCursor)
+        const summaryQuery = new URLSearchParams(queryParams())
+        const runsQuery = new URLSearchParams(queryParams())
+        runsQuery.set("limit", String(pageSize.value))
+        if (pageCursors.value[page.value - 1]) runsQuery.set("cursor", pageCursors.value[page.value - 1])
         const [summaryResponse, runsResponse] = await Promise.all([
           request(`/api/logs/summary?${summaryQuery}`),
           request(`/api/logs/runs?${runsQuery}`),
         ])
+        if (requestId !== refreshRequest) return
         const summary = asRecord<{ summary?: LogSummary }>(summaryResponse)
         const runs = asRecord<{ items?: LogRun[]; nextCursor?: string }>(runsResponse)
         state.summary = summary.summary || null
         const items = Array.isArray(runs.items) ? runs.items : []
-        state.runs = append ? [...state.runs, ...items] : items
+        state.runs = items
         state.nextCursor = String(runs.nextCursor || "")
         syncSettings()
       } catch (error) {
-        state.error = errorMessage(error)
+        if (requestId === refreshRequest) state.error = errorMessage(error)
       } finally {
-        state.loading = false
+        if (requestId === refreshRequest) state.loading = false
       }
     }
 
     function resetAndRefresh() {
+      appliedFilters = { ...state.filters }
+      page.value = 1
+      pageCursors.value = [""]
       state.nextCursor = ""
       return refresh()
     }
 
     function resetFilters() {
-      state.filters = { from: dateValue(-6), to: dateValue(), status: "", model: "", purpose: "", query: "" }
+      state.filters = defaultFilters()
       return resetAndRefresh()
     }
 
     async function applyFilters() {
       await resetAndRefresh()
+    }
+
+    function goPage(target: number) {
+      if (state.loading || target < 1) return
+      if (target > page.value) {
+        if (!state.nextCursor) return
+        pageCursors.value[target - 1] = state.nextCursor
+      }
+      page.value = target
+      void refresh()
+    }
+
+    function autoRefresh() {
+      if (!document.hidden && section.value === "logs" && page.value === 1 && !state.loading) void refresh()
     }
 
     function extractionState(item: LogModelCall | null | undefined): MemoryExtractionState | null {
@@ -908,12 +938,12 @@ export const LogsTab = {
           if (refreshTimer) clearInterval(refreshTimer)
           refreshTimer = null
         } else if (!refreshTimer) {
-          refresh()
-          refreshTimer = setInterval(() => refresh(), 5000)
+          autoRefresh()
+          refreshTimer = setInterval(autoRefresh, 5000)
         }
       }
       document.addEventListener("visibilitychange", visibilityHandler)
-      refreshTimer = setInterval(() => { if (!document.hidden) refresh() }, 5000)
+      refreshTimer = setInterval(autoRefresh, 5000)
     })
     onUnmounted(() => {
       if (refreshTimer) clearInterval(refreshTimer)
@@ -921,7 +951,7 @@ export const LogsTab = {
     })
 
     return {
-      state, drawerOpen, settingsDrawerOpen, timelineFilter,
+      state, drawerOpen, settingsDrawerOpen, timelineFilter, section, moreFilters, page, pageSize, goPage,
       store, toggleDeveloperMode,
       modelDetailOpen, modelDetailLoading, modelDetailError, modelDetail, modelDetailTab,
       conversationOpen, conversationLoading, conversationError, conversationDetail, conversationTurnId, conversationTurnLoading, conversationTurnError, conversationTurnDetail,
@@ -959,8 +989,8 @@ export const LogsTab = {
     }
   },
   template: `
-    <div class="stack logs-page">
-      <section class="logs-summary-row" aria-label="日志统计总量">
+    <div class="stack logs-page" :class="{ 'is-embedded': embedded }">
+      <section v-if="!embedded" class="logs-summary-row" aria-label="日志统计总量">
         <div class="logs-inline-summary">
           <div v-for="item in metrics" :key="item.label" class="logs-inline-metric" :title="item.tip || undefined"><span>{{ item.label }}</span><b>{{ item.value }}</b></div>
         </div>
@@ -968,23 +998,26 @@ export const LogsTab = {
       </section>
       <div v-if="state.error" class="slice-error-banner"><Icon name="alert" :size="17" /><p>{{ state.error }}</p></div>
 
-      <ArtifactPanel @open-run="openRun({ id: $event })" />
-      <Panel title="运行链路日志" icon="list">
-        <template #actions><span class="muted tiny">{{ state.runs.length }} 条当前结果</span></template>
+      <div v-if="!embedded" class="logs-section-nav"><RadioGroup v-model="section" :options="[{value:'logs',label:'运行日志',icon:'activity'},{value:'artifacts',label:'中间产物',icon:'file'}]" label="日志分栏" /></div>
+      <KeepAlive><ArtifactPanel v-if="section === 'artifacts' && !embedded" @open-run="openRun({ id: $event })" /></KeepAlive>
+      <Panel v-show="section === 'logs'" :title="embedded ? '判断记录' : '运行日志'" icon="list">
+        <template #actions><button class="btn small ghost" type="button" :disabled="state.loading" @click="refresh"><Icon name="refresh" :size="13" />刷新</button></template>
+        <p v-if="embedded" class="muted small logs-history-note">记录实际模型判断，可查看请求、返回与失败详情；本地关键词和未调用模型的触发不生成模型日志。</p>
         <div class="logs-filter-scroll">
           <div class="logs-filter-row">
             <Field class="logs-filter-field" v-model="state.filters.from" label="开始日期" type="date" />
             <Field class="logs-filter-field" v-model="state.filters.to" label="结束日期" type="date" />
             <Field class="logs-filter-field" v-model="state.filters.status" label="状态" type="select" :options="[{ value: '', label: '全部状态' }, { value: 'running', label: '进行中' }, { value: 'ok', label: '成功' }, { value: 'error', label: '失败' }, { value: 'ambiguous', label: '结果不确定' }, { value: 'denied', label: '拒绝' }, { value: 'blocked', label: '拦截' }, { value: 'skipped', label: '已跳过' }, { value: 'partial', label: '部分完成' }, { value: 'silent', label: '静默' }, { value: 'canceled', label: '取消' }]" />
             <Field class="logs-filter-field" v-model="state.filters.model" label="模型" type="select" :options="modelOptions" />
-            <Field class="logs-filter-field" v-model="state.filters.purpose" label="用途标签" placeholder="chat / image-generation / embedding" />
-            <Field class="logs-filter-field logs-filter-query" v-model="state.filters.query" label="关键词" placeholder="用户、工具、结果、来源或提炼输入" @enter="applyFilters" />
-            <button class="btn small outline" type="button" @click="resetFilters">重置</button>
-            <button class="btn small primary" type="button" @click="applyFilters"><Icon name="filter" :size="13" />筛选</button>
+            <Field v-if="!sourceScope" class="logs-filter-field" v-model="state.filters.source" label="来源" type="select" :options="[{value:'',label:'全部来源'},{value:'dailyStill.decision',label:'日常定格'},{value:'firstPerson',label:'第一人称对话'},{value:'group-memory-consolidation',label:'群聊记忆提炼'},{value:'memory-recall',label:'记忆召回'},{value:'memory-vector-index',label:'记忆向量'},{value:'knowledge-vector-index',label:'知识库向量'},{value:'management',label:'管理任务'}]" />
+            <Field class="logs-filter-field logs-filter-query" v-model="state.filters.query" label="关键词" placeholder="搜索正文、工具或错误信息" @enter="applyFilters" />
+            <div class="logs-filter-actions"><button class="btn small ghost" type="button" :aria-expanded="moreFilters" @click="moreFilters = !moreFilters"><Icon name="sliders" :size="13" />更多条件</button><button class="btn small ghost" type="button" @click="resetFilters">重置</button>
+            <button class="btn small outline" type="button" :disabled="state.loading" @click="applyFilters">查询</button></div>
           </div>
         </div>
-        <div class="table-wrap logs-run-table"><table class="data-table"><thead><tr><th>开始时间</th><th>来源 / 用途</th><th>渠道 / 模型 / 协议</th><th class="logs-status-cell">状态</th><th class="num">模型调用</th><th class="num">工具事件</th><th class="num">Token</th><th>用户 / 会话</th><th class="col-actions">操作</th></tr></thead><tbody><tr v-for="row in state.runs" :key="row.id"><td class="muted tiny">{{ time(row.started_at) }}</td><td><div class="cell-title">{{ sourceLabel(row.source) }}</div><span class="muted tiny">{{ purposeLabel(row.purpose) }}<span v-if="compactionLabel(row)"> · {{ compactionLabel(row) }}</span></span></td><td class="logs-model-cell"><div class="cell-title" :title="channelNamesLabel(row)">{{ channelNamesLabel(row) }}</div><span class="muted tiny" :title="modelNamesLabel(row)">{{ modelNamesLabel(row) }} · {{ modelProtocolsLabel(row) }} · {{ modelStreamsLabel(row) }}</span></td><td class="logs-status-cell"><span class="badge" :title="row.error_message || undefined" :class="row.status === 'ok' ? 'on' : (row.status === 'error' ? 'risk-high' : 'risk-medium')">{{ statusLabel(row.status) }}</span></td><td class="num">{{ number(row.model_calls) }}</td><td class="num">{{ number(row.tool_calls) }}<small v-if="row.failed_tools" class="table-subvalue">失败 {{ number(row.failed_tools) }}</small></td><td class="num">{{ number(row.total_tokens) }}</td><td class="muted tiny logs-session-cell"><span>{{ scopeLabel(row) }}</span><span v-if="row.session_id || row.conversation_key" class="logs-session-short" :title="row.session_id || row.conversation_key">sessionId {{ shortId(row.session_id || row.conversation_key) }}</span></td><td class="col-actions"><button class="btn small outline" type="button" @click="openRun(row)">查看详情</button></td></tr></tbody></table><div v-if="!state.runs.length" class="logs-empty"><Icon name="activity" :size="22" /><b>没有匹配的日志</b><span>调整筛选条件后再试一次。</span></div></div>
-        <div v-if="state.nextCursor" class="pager"><button class="btn small outline" type="button" @click="refresh({ append: true })">加载更多</button></div>
+        <div v-if="moreFilters" class="logs-extra-filters"><Field v-model="state.filters.userId" label="用户" placeholder="精确用户 ID" @enter="applyFilters" /><Field v-model="state.filters.groupId" label="群" placeholder="精确群 ID" @enter="applyFilters" /><Field v-model="state.filters.purpose" label="用途" placeholder="chat / decision / embedding" @enter="applyFilters" /><Field v-if="!sourceScope" v-model="state.filters.source" label="自定义来源" placeholder="完整来源标识" @enter="applyFilters" /></div>
+        <div class="table-wrap logs-run-table" :aria-busy="state.loading"><table class="data-table"><thead><tr><th>开始时间</th><th>来源 / 用途</th><th>渠道 / 模型 / 协议</th><th class="logs-status-cell">状态</th><th class="num">模型调用</th><th class="num">工具事件</th><th class="num">Token</th><th>用户 / 会话</th><th class="col-actions">操作</th></tr></thead><tbody><tr v-for="row in state.runs" :key="row.id"><td class="muted tiny">{{ time(row.started_at) }}</td><td><div class="cell-title">{{ sourceLabel(row.source) }}</div><span class="muted tiny">{{ purposeLabel(row.purpose) }}<span v-if="compactionLabel(row)"> · {{ compactionLabel(row) }}</span></span></td><td class="logs-model-cell"><div class="cell-title" :title="channelNamesLabel(row)">{{ channelNamesLabel(row) }}</div><span class="muted tiny" :title="modelNamesLabel(row)">{{ modelNamesLabel(row) }} · {{ modelProtocolsLabel(row) }} · {{ modelStreamsLabel(row) }}</span></td><td class="logs-status-cell"><span class="badge" :title="row.error_message || undefined" :class="row.status === 'ok' ? 'on' : (row.status === 'error' ? 'risk-high' : 'risk-medium')">{{ statusLabel(row.status) }}</span></td><td class="num">{{ number(row.model_calls) }}</td><td class="num">{{ number(row.tool_calls) }}<small v-if="row.failed_tools" class="table-subvalue">失败 {{ number(row.failed_tools) }}</small></td><td class="num">{{ number(row.total_tokens) }}</td><td class="muted tiny logs-session-cell"><span>{{ scopeLabel(row) }}</span><span v-if="row.session_id || row.conversation_key" class="logs-session-short" :title="row.session_id || row.conversation_key">sessionId {{ shortId(row.session_id || row.conversation_key) }}</span></td><td class="col-actions"><button class="btn small outline" type="button" @click="openRun(row)">查看详情</button></td></tr></tbody></table><div v-if="!state.runs.length" class="logs-empty"><Icon name="activity" :size="22" /><b>没有匹配的日志</b><span>调整筛选条件后再试一次。</span></div></div>
+        <div class="pager"><span class="pager-info">第 {{ page }} 页 · 本页 {{ state.runs.length }} 条</span><div class="pager-controls"><select v-model.number="pageSize" aria-label="日志每页条数" :disabled="state.loading" @change="resetAndRefresh"><option :value="25">25 条 / 页</option><option :value="50">50 条 / 页</option><option :value="100">100 条 / 页</option></select><button class="icon-btn sm" type="button" aria-label="上一页日志" :disabled="state.loading || page <= 1" @click="goPage(page - 1)"><Icon name="chevron-left" :size="15" /></button><span class="pager-page">{{ page }}</span><button class="icon-btn sm" type="button" aria-label="下一页日志" :disabled="state.loading || !state.nextCursor" @click="goPage(page + 1)"><Icon name="chevron-right" :size="15" /></button></div></div>
       </Panel>
 
       <SideDrawer :open="settingsDrawerOpen" title="日志设置" subtitle="管理持久化、保留周期和日志清理" icon="sliders" width="560px" @close="settingsDrawerOpen = false">

@@ -242,6 +242,8 @@ export function responsesToolDefinition(tool: unknown = {}): UnknownRecord {
     name: text(toolRecord.name),
     description: modelToolDescription(tool),
     parameters: normalizeParameters(common.parameters),
+    // 保留本地契约的可选字段语义，避免 Responses 自动把所有字段转为必填。
+    strict: false,
     ...(common.deferLoading === true ? { defer_loading: true } : {}),
   }
 }
@@ -266,6 +268,14 @@ function typeMatches(value: unknown, type: string): boolean {
 function validateSchemaValue(value: unknown, schemaValue: unknown, path: string, issues: string[]): void {
   const schema = record(schemaValue)
   if (!isRecord(schemaValue)) return
+  if (Array.isArray(schema.anyOf)) {
+    const matches = schema.anyOf.some(branch => {
+      const branchIssues: string[] = []
+      validateSchemaValue(value, branch, path, branchIssues)
+      return branchIssues.length === 0
+    })
+    if (!matches) { issues.push(`${path} 不符合任一允许的参数结构`); return }
+  }
   const schemaType = text(schema.type)
   if (schemaType && !typeMatches(value, schemaType)) { issues.push(`${path} 类型应为 ${schemaType}`); return }
   if (Array.isArray(schema.enum) && !schema.enum.some(item => JSON.stringify(item) === JSON.stringify(value))) issues.push(`${path} 不是允许的值`)

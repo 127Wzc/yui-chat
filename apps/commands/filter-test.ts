@@ -10,7 +10,7 @@ import { pluginCommand, stripPluginCommand } from "../../core/message/command-pr
 
 interface CommandOptions {
   e: UnknownRecord
-  reply: (...args: unknown[]) => unknown
+  sendText: (value: string, quote?: boolean) => unknown
 }
 
 function record(value: unknown): UnknownRecord {
@@ -64,17 +64,17 @@ function extractFilterTestInput(args: UnknownRecord = {}, filter: UnknownRecord 
   return { text: bodyText, stage, params: input }
 }
 
-export async function runFilterTestCommand({ e, reply }: CommandOptions): Promise<unknown> {
+export async function runFilterTestCommand({ e, sendText }: CommandOptions): Promise<unknown> {
   let payload
   try {
     payload = parseFilterPayload(e?.msg)
   } catch (err) {
-    return reply(`过滤器测试参数错误：${errorMessage(err)}`, true)
+    return sendText(`过滤器测试参数错误：${errorMessage(err)}`, true)
   }
   if (!payload.name) {
     const filters = await filterRegistry.list() as UnknownRecord[]
     const names = filters.filter(item => item.enabled !== false).slice(0, 30).map(item => text(item.id))
-    return reply(
+    return sendText(
       names.length
         ? `可测试的代码过滤器：${names.join("、")}\n参数说明：${pluginCommand("过滤器参数")} <过滤器名>\n测试：${pluginCommand("测试过滤器")} <过滤器名> text="测试正文"`
         : "当前没有可测试的代码过滤器。请先在代码过滤器中创建或启用一个实现。",
@@ -83,7 +83,7 @@ export async function runFilterTestCommand({ e, reply }: CommandOptions): Promis
   }
   try {
     const foundFilter = filterRegistry.get(payload.name)
-    if (!foundFilter) return reply(`未找到代码过滤器 ${payload.name}。AI Tool 请使用 ${pluginCommand("测试工具")}。`, true)
+    if (!foundFilter) return sendText(`未找到代码过滤器 ${payload.name}。AI Tool 请使用 ${pluginCommand("测试工具")}。`, true)
     const filter = record(foundFilter)
     const { text: bodyText, stage, params } = extractFilterTestInput(payload.args, filter)
     const config = await configStore.load()
@@ -104,16 +104,16 @@ export async function runFilterTestCommand({ e, reply }: CommandOptions): Promis
       },
       execute: context => filterRegistry.execute(text(filter.id), { text: bodyText, params }, context),
     })
-    return reply(`过滤器 ${filter.id} 试跑结果（${stage}，${tested.durationMs}ms）：\n${tested.serialized}`, true)
+    return sendText(`过滤器 ${filter.id} 试跑结果（${stage}，${tested.durationMs}ms）：\n${tested.serialized}`, true)
   } catch (err) {
-    return reply(`过滤器 ${payload.name} 测试失败：${errorMessage(err)}`, true)
+    return sendText(`过滤器 ${payload.name} 测试失败：${errorMessage(err)}`, true)
   }
 }
 
-export async function runFilterParameterCommand({ e, reply }: CommandOptions): Promise<unknown> {
+export async function runFilterParameterCommand({ e, sendText }: CommandOptions): Promise<unknown> {
   const name = stripPluginCommand(e?.msg, "过滤器参数")
-  if (!name) return reply(`用法：${pluginCommand("过滤器参数")} <过滤器名>\n例如：${pluginCommand("过滤器参数")} text_transform`, true)
+  if (!name) return sendText(`用法：${pluginCommand("过滤器参数")} <过滤器名>\n例如：${pluginCommand("过滤器参数")} text_transform`, true)
   const foundFilter = filterRegistry.get(name)
-  if (!foundFilter) return reply(`未找到代码过滤器 ${name}。AI Tool 请使用 ${pluginCommand("工具参数")}。`, true)
-  return reply(filterGuide(record(foundFilter)), true)
+  if (!foundFilter) return sendText(`未找到代码过滤器 ${name}。AI Tool 请使用 ${pluginCommand("工具参数")}。`, true)
+  return sendText(filterGuide(record(foundFilter)), true)
 }

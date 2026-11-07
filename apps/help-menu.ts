@@ -1,3 +1,4 @@
+import { replyMessageChain } from "../core/message-chain/delivery.js"
 import { configStore } from "../config/store.js"
 import { deliverRenderedImage } from "../core/rendering/render-delivery.js"
 import { hostRuntime } from "../core/runtime/host-runtime.js"
@@ -76,7 +77,7 @@ export async function sendPluginHelp(args: UnknownRecord = {}, context: UnknownR
     hostRuntime.logger?.warn?.("[yui-chat] 帮助图片不可用，回复文字菜单", error)
     const groups = Array.isArray(menu.groups) ? menu.groups : []
     const message = [menu.title,...groups.map(value=>{const group=record(value);return `${group.title}\n${(Array.isArray(group.commands)?group.commands:[]).map(value=>{const item=record(value);return `${item.command} · ${item.description}${item.permission==='master' && group.permission!=='master'?'（主人）':''}`}).join('\n')}`})].join('\n\n')
-    if (typeof e.reply === "function") await e.reply(message)
+    if (hostRuntime.canSendMessage(e)) await replyMessageChain([{ type: "text", text: message }], { e, config, textFiltered: true })
     return message
   }
 }

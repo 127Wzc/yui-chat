@@ -1,3 +1,5 @@
+import { hostRuntime } from "../../core/runtime/host-runtime.js"
+import { replyMessageChain } from "../../core/message-chain/delivery.js"
 import { commandObserver } from "../../knowledge/command-observer.js"
 import { configStore } from "../../config/store.js"
 import { knowledgeStore, BUILTIN_COMMANDS_ID } from "../../knowledge/store.js"
@@ -159,9 +161,8 @@ export class CommandHandoffTool {
     if (!command) return "缺少要转交的指令。"
     const shouldSend = args.send ?? handoff.allowSend
     if (shouldSend && context.delivery?.allowCurrentChat !== false && context.e) {
-      const reply = context.e.reply
-      if (typeof reply !== "function") return `建议使用指令：${command}`
-      await reply.call(context.e, command, response.quoteReply === true)
+      if (!hostRuntime.canSendMessage(context.e)) return `建议使用指令：${command}`
+      await replyMessageChain([{ type: "text", text: command }], { e: context.e, config, quote: response.quoteReply === true, textFiltered: true })
       return `已转交执行指令：${command}`
     }
     const note = shouldSend && context.delivery?.allowCurrentChat === false

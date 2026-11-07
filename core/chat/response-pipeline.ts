@@ -1,3 +1,4 @@
+import { replyMessageChain } from "../message-chain/delivery.js"
 import { loadPersonaPunishments } from "./persona-punishments.js"
 import { renderImageByConfiguredEngine, withRenderScope } from "../rendering/render-service.js"
 import { checkAccess } from "./access-control.js"
@@ -117,8 +118,7 @@ export async function sendConfirm(event: unknown, config: unknown): Promise<void
   const type = Number(response.replyConfirmType)
   if (!type) return
   try {
-    const reply = e.reply
-    if (type === -1 && typeof reply === "function") await (reply as (value: unknown, quote?: unknown) => Promise<unknown>).call(event, `${text(persona.firstPerson)}在哦`, true)
+    if (type === -1 && hostRuntime.canSendMessage(e)) await replyMessageChain([{ type: "text", text: `${text(persona.firstPerson)}在哦` }], { e, config: root, quote: true, textFiltered: true })
     else if (record(e.group).setEmojiLike && e.message_id) await (record(e.group).setEmojiLike as (messageId: unknown, type: number) => Promise<unknown>).call(e.group, e.message_id, type)
     else if (record(record(e.bot).adapter).setEmojiLike && e.message_id) await (record(record(e.bot).adapter).setEmojiLike as (event: unknown, messageId: unknown, type: number) => Promise<unknown>).call(record(e.bot).adapter, event, e.message_id, type)
   } catch (error) {

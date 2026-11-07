@@ -366,7 +366,7 @@ function redactValue(value: unknown, key = "", depth = 0, seen = new WeakSet<obj
   seen.add(value)
   if (Buffer.isBuffer(value)) return { type: "Buffer", bytes: value.length }
   if (Array.isArray(value)) return value.slice(0, 50).map(item => redactValue(item, "", depth + 1, seen))
-  return Object.fromEntries(Object.entries(value).slice(0, 60).map(([name, item]) => [name, redactValue(item, name, depth + 1, seen)]))
+  return Object.fromEntries(Object.entries(value).slice(0, 60).map(([name, item]) => [name, name === "value" && record(value).kind === "bytes" ? "[inline media omitted]" : redactValue(item, name, depth + 1, seen)]))
 }
 
 // 请求快照需要比普通元数据保留更多正文，才能在详情窗口还原模型实际看到的上下文；
@@ -384,7 +384,7 @@ function snapshotValue(value: unknown, key = "", depth = 0, seen = new WeakSet<o
   seen.add(value)
   if (Buffer.isBuffer(value)) return { type: "Buffer", bytes: value.length }
   if (Array.isArray(value)) return value.slice(0, 200).map(item => snapshotValue(item, "", depth + 1, seen))
-  return Object.fromEntries(Object.entries(value).slice(0, 100).map(([name, item]) => [name, snapshotValue(item, name, depth + 1, seen)]))
+  return Object.fromEntries(Object.entries(value).slice(0, 100).map(([name, item]) => [name, name === "value" && record(value).kind === "bytes" ? "[inline media omitted]" : snapshotValue(item, name, depth + 1, seen)]))
 }
 
 function hostedToolSummaries(value: unknown): unknown[] {
@@ -1641,8 +1641,8 @@ class ModelLogStore {
     if (groupId) { clauses.push("group_id = ?"); params.push(String(groupId)) }
     if (query) {
       const pattern = `%${String(query).slice(0, 80)}%`
-      clauses.push("(conversation_key LIKE ? OR user_id LIKE ? OR group_id LIKE ? OR source LIKE ? OR purpose LIKE ? OR id IN (SELECT run_id FROM model_call_events WHERE input_text LIKE ?) OR id IN (SELECT run_id FROM tool_call_events WHERE tool_name LIKE ? OR source LIKE ? OR category LIKE ? OR arguments_json LIKE ? OR result_text LIKE ? OR error_message LIKE ?))")
-      params.push(pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern)
+      clauses.push("(conversation_key LIKE ? OR user_id LIKE ? OR group_id LIKE ? OR source LIKE ? OR purpose LIKE ? OR prompt_text LIKE ? OR response_text LIKE ? OR json_extract(metadata_json, '$.error') LIKE ? OR id IN (SELECT run_id FROM model_call_events WHERE input_text LIKE ?) OR id IN (SELECT run_id FROM tool_call_events WHERE tool_name LIKE ? OR source LIKE ? OR category LIKE ? OR arguments_json LIKE ? OR result_text LIKE ? OR error_message LIKE ?))")
+      params.push(...Array(15).fill(pattern))
     }
     if (model) { clauses.push("id IN (SELECT run_id FROM model_call_events WHERE model_name = ?)"); params.push(String(model)) }
     return { sql: clauses.join(" AND "), params }
@@ -1655,7 +1655,7 @@ class ModelLogStore {
     for (const key of ["status", "purpose", "source"]) if (filters[key] && String(row[key]) !== String(filters[key])) return false
     if (filters.userId && String(row.user_id) !== String(filters.userId)) return false
     if (filters.groupId && String(row.group_id) !== String(filters.groupId)) return false
-    if (filters.query && !`${row.conversation_key} ${row.user_id} ${row.group_id} ${row.source} ${row.purpose} ${[...this.memoryModels.values()].filter(item => item.run_id === row.id).map(item => item.input_text || "").join(" ")} ${[...this.memoryTools.values()].filter(item => item.run_id === row.id).map(item => `${item.tool_name} ${item.source} ${item.category} ${item.arguments_json} ${item.result_text} ${item.error_message}`).join(" ")}`.includes(String(filters.query))) return false
+    if (filters.query && !`${row.conversation_key} ${row.user_id} ${row.group_id} ${row.source} ${row.purpose} ${row.prompt_text || ""} ${row.response_text || ""} ${row.error_message || parseJson(row.metadata_json).error || ""} ${[...this.memoryModels.values()].filter(item => item.run_id === row.id).map(item => item.input_text || "").join(" ")} ${[...this.memoryTools.values()].filter(item => item.run_id === row.id).map(item => `${item.tool_name} ${item.source} ${item.category} ${item.arguments_json} ${item.result_text} ${item.error_message}`).join(" ")}`.includes(String(filters.query))) return false
     if (filters.model && ![...this.memoryModels.values()].some(item => item.run_id === row.id && String(item.model_name) === String(filters.model))) return false
     return true
   }

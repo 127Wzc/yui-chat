@@ -1,17 +1,18 @@
 import crypto from "node:crypto"
 import { recentContextStore } from "../chat/recent-context.js"
 import path from "node:path"
+import fs from "node:fs/promises"
+import { fileURLToPath } from "node:url"
 import { configStore, tempDir } from "../../config/store.js"
 import { assertSafeHttpUrl, linkSafetyConfig } from "../network/link-safety-policy.js"
-import { hostRuntime, hostMessageIds } from "../runtime/host-runtime.js"
-import { createNativeAtSegment } from "../message/cq-code.js"
+import { yunzaiMessageAdapter } from "../runtime/host-runtime.js"
+import type { MessageAdapter, PreparedMessagePart } from "./adapter.js"
+import { applyOutputChainFilters } from "../../filters/message/message-filter-service.js"
+import { validateOutboundMessageChain } from "./validation.js"
 import type {
-  ContentPart,
   DeliveryReceipt,
-  ForwardNodePart,
-  ForwardPart,
   MessageChain,
-  MusicPart,
+  MessageDestination,
   OutboundPart,
   ResourceRef,
   PartDeliveryReceipt,
@@ -21,15 +22,23 @@ type UnknownRecord = Record<string, unknown>
 
 export interface MessageChainDeliveryContext {
   e?: UnknownRecord
+  /** 插件内部选定的发送实现；默认使用 Yunzai。 */
+  adapter?: MessageAdapter
   config?: UnknownRecord
   quote?: boolean
   operationId?: string
+  signal?: AbortSignal
+  replyOptions?: UnknownRecord
+  /** 正文已在转图/转语音前处理，投递时只执行媒体链接规则。 */
+  textFiltered?: boolean
+  /** 仅供已完成目标与权限检查的插件内部投递器提供。 */
+  destination?: MessageDestination
+  /** 原生回执仅供内部调用方消费，不放进持久化工具结果。 */
+  receipts?: unknown[]
+  recordImages?: boolean
+  quoteStandalone?: boolean
 }
 
-interface ResolvedSender {
-  label: string
-  send: (payload: unknown, quote?: boolean) => Promise<unknown> | unknown
-}
 
 function record(value: unknown): UnknownRecord {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value) ? value as UnknownRecord : {}
@@ -39,43 +48,35 @@ function text(value: unknown): string {
   return typeof value === "string" ? value : String(value ?? "")
 }
 
-function deliveryConfig(config: unknown): {
-  quoteReply: boolean
-  allowTargetSend: boolean
-  allowFilePathImages: boolean
-} {
+function deliveryConfig(config: unknown): { quoteReply: boolean; allowedLocalPaths: string[] } {
   const root = record(config)
   const delivery = record(record(record(root.response).render).delivery)
   return {
     quoteReply: delivery.quoteReply !== false,
-    allowTargetSend: delivery.allowTargetSend === true,
-    allowFilePathImages: delivery.allowFilePathImages === true,
+    allowedLocalPaths: Array.isArray(delivery.allowedLocalPaths) ? delivery.allowedLocalPaths.map(String) : [],
   }
 }
 
 function isWithin(base: string, candidate: string): boolean {
   const root = path.resolve(base)
   const resolved = path.resolve(candidate)
-  return resolved === root || resolved.startsWith(`${root}${path.sep}`)
+  return resolved === root || resolved.startsWith(root.endsWith(path.sep) ? root : `${root}${path.sep}`)
 }
 
-/**
- * 解析本地媒体路径。
- *
- * `cache` 是运行时自己产出的中间文件（比如下载好的视频），只要仍在插件
- * 媒体缓存目录内就允许发送；`file` 是模型/用户给出的任意路径，额外需要
- * 显式开启 allowFilePathImages。两者都不能逃出各自的允许目录。
- */
-function safeLocalPath(value: string, config: unknown, kind: ResourceRef["kind"]): string {
-  const file = value.replace(/^file:\/\//i, "")
-  const resolved = path.resolve(file)
-  if (kind === "cache") {
-    if (!isWithin(tempDir, resolved)) throw new Error("缓存媒体只能来自插件的缓存目录。")
-    return resolved
+/** 所有路径使用同一目录策略，缓存不再拥有另一种资源身份。 */
+async function safeLocalPath(value: string, config: unknown): Promise<string> {
+  const resolved = path.resolve(/^file:/i.test(value) ? fileURLToPath(value) : value)
+  const actual = await fs.realpath(resolved)
+  for (const root of [tempDir, ...deliveryConfig(config).allowedLocalPaths]) {
+    try {
+      const actualRoot = await fs.realpath(path.resolve(root))
+      if (isWithin(actualRoot, actual)) return actual
+    } catch (error) {
+      // 尚未创建或已经删除的允许目录不影响其他目录，读取异常仍向上报告。
+      if (!["ENOENT", "ENOTDIR"].includes(text(record(error).code))) throw error
+    }
   }
-  if (!deliveryConfig(config).allowFilePathImages) throw new Error("本地媒体路径未被允许发送。")
-  if (!isWithin(tempDir, resolved)) throw new Error("本地媒体只能来自插件临时缓存目录。")
-  return resolved
+  throw new Error("本地媒体的实际路径不在允许的目录内。")
 }
 
 async function resourceValue(source: ResourceRef, config: unknown): Promise<string> {
@@ -84,109 +85,18 @@ async function resourceValue(source: ResourceRef, config: unknown): Promise<stri
   if (source.kind === "url") {
     return assertSafeHttpUrl(value, { allowPrivateHosts: linkSafetyConfig(config).allowPrivateHosts })
   }
-  if (source.kind === "file" || source.kind === "cache") return safeLocalPath(value, config, source.kind)
-  if (source.kind === "base64") {
-    const data = source.inlineData || value.replace(/^base64:\/\//i, "")
-    if (/^data:/i.test(data)) return data
-    return `data:${source.mimeType || "application/octet-stream"};base64,${data}`
+  if (source.kind === "path") return safeLocalPath(value, config)
+  if (source.kind === "bytes") return `data:${source.mimeType || "application/octet-stream"};base64,${value}`
+  throw new Error("未知媒体资源类型。")
+}
+
+
+async function validateMusicResources(part: OutboundPart, config: unknown): Promise<void> {
+  if (part.type === "forward") {
+    for (const node of part.nodes) for (const item of node.parts) await validateMusicResources(item, config)
+  } else if (part.type === "music") {
+    for (const key of ["audio", "image"] as const) if (part[key]) await assertSafeHttpUrl(part[key], { allowPrivateHosts: linkSafetyConfig(config).allowPrivateHosts })
   }
-  return value
-}
-
-/** 按 OneBot music 段结构输出；平台歌曲用 id，自定义卡片用 url/audio。 */
-function musicSegment(part: MusicPart): unknown {
-  const data = part.platform === "custom"
-    ? {
-        type: "custom",
-        ...(part.url ? { url: part.url } : {}),
-        ...(part.audio ? { audio: part.audio } : {}),
-        ...(part.title ? { title: part.title } : {}),
-        ...(part.image ? { image: part.image } : {}),
-        ...(part.singer ? { singer: part.singer } : {}),
-      }
-    : { type: part.platform, id: text(part.id) }
-  return { type: "music", data }
-}
-
-function segmentFor(part: OutboundPart, value: string): unknown {
-  const factory = hostRuntime.segment
-  switch (part.type) {
-    case "text": return part.text
-    case "mention": return createNativeAtSegment(part.userId, factory)
-    case "reply": return typeof factory?.reply === "function" ? factory.reply(part.messageId) : `[CQ:reply,id=${part.messageId}]`
-    case "music": return musicSegment(part)
-    case "forward": throw new Error("合并转发必须通过节点投递边界处理。")
-    case "image":
-      if (typeof factory?.image !== "function") throw new Error("宿主未提供图片消息段能力。")
-      return factory.image(value)
-    case "audio":
-      if (typeof factory?.record !== "function") throw new Error("宿主未提供语音消息段能力。")
-      return factory.record(value)
-    case "video":
-      if (typeof factory?.video !== "function") throw new Error("宿主未提供视频消息段能力。")
-      return factory.video(value)
-    case "file":
-      if (typeof factory?.file !== "function") throw new Error("宿主未提供文件消息段能力。")
-      return factory.file(value)
-    default: throw new Error("消息链片段不支持直接投递。")
-  }
-}
-
-async function payloadsForParts(parts: readonly ForwardNodePart[], config: unknown): Promise<unknown[]> {
-  const payloads: unknown[] = []
-  for (let index = 0; index < parts.length; index++) {
-    const part = parts[index]
-    const value = "source" in part ? await resourceValue(part.source, config) : ""
-    if (part.type === "text" && parts[index - 1]?.type === "mention" && !/^\s/.test(part.text)) payloads.push(` ${part.text}`)
-    else payloads.push(segmentFor(part, value))
-  }
-  return payloads
-}
-
-async function forwardSegment(part: ForwardPart, context: MessageChainDeliveryContext, config: unknown): Promise<unknown> {
-  const event = record(context.e)
-  const defaultUserId = text(event.self_id || record(hostRuntime.bot).uin).trim() || "80000000"
-  const nodes = [] as UnknownRecord[]
-  for (const node of part.nodes) {
-    const payloads = await payloadsForParts(node.parts, config)
-    if (!payloads.length) continue
-    nodes.push({
-      message: payloads.length === 1 ? payloads[0] : payloads,
-      nickname: text(node.nickname).trim() || "网络搜索来源",
-      user_id: text(node.userId).trim() || defaultUserId,
-      ...(Number.isFinite(Number(node.time)) ? { time: Number(node.time) } : {}),
-    })
-  }
-  if (!nodes.length) throw new Error("合并转发中没有可发送的节点。")
-  const scope = event.isGroup ? record(event.group) : record(event.friend)
-  const scopeMaker = scope.makeForwardMsg
-  if (typeof scopeMaker === "function") return await scopeMaker.call(scope, nodes)
-  const bot = record(hostRuntime.bot)
-  const botMaker = bot.makeForwardMsg
-  if (typeof botMaker === "function") return await botMaker.call(hostRuntime.bot, nodes)
-  // Yunzai 的通用适配层识别 node 段；保留这个标准形态可覆盖没有暴露
-  // makeForwardMsg 方法、但仍支持合并转发的 OneBot 兼容适配器。
-  return { type: "node", data: nodes }
-}
-
-/**
- * 解析当前会话的发送方法。
- *
- * 只发当前会话：跨会话投递已经取消，谁触发就回给谁。这样也不存在
- * "模型猜一个目标 ID 结果发错群" 的可能。
- */
-async function resolveSender(context: MessageChainDeliveryContext): Promise<ResolvedSender> {
-  const event = record(context.e)
-  if (typeof event.reply !== "function") throw new Error("当前事件不支持消息投递。")
-  const reply = event.reply as (payload: unknown, quote?: boolean) => unknown
-  return {
-    label: event.isGroup ? `群 ${text(event.group_id)}` : `用户 ${text(event.user_id || record(event.sender).user_id)}`,
-    send: (payload, quote) => reply.call(event, payload, quote),
-  }
-}
-
-function partType(part: ContentPart): ContentPart["type"] {
-  return part.type
 }
 
 /**
@@ -198,61 +108,65 @@ function partType(part: ContentPart): ContentPart["type"] {
 export async function deliverMessageChain(chain: MessageChain, context: MessageChainDeliveryContext = {}): Promise<DeliveryReceipt> {
   const config = context.config || configStore.get() as unknown as UnknownRecord
   const receiptId = context.operationId || `delivery_${crypto.randomUUID()}`
+  context.signal?.throwIfAborted()
+  const issues = validateOutboundMessageChain(chain)
+  if (issues.length) {
+    const count = Array.isArray(chain) ? chain.length : 0
+    return { id: receiptId, status: "failed", partCount: count, sentCount: 0, failedCount: count, parts: [], error: issues.join("；") }
+  }
+  const filtered = await applyOutputChainFilters(chain, { e: context.e, config, signal: context.signal }, context.textFiltered)
+  context.signal?.throwIfAborted()
+  if (filtered.blocked || !filtered.chain.length) return {
+    id: receiptId, status: "failed", partCount: chain.length, sentCount: 0, failedCount: chain.length, parts: [],
+    blocked: true, error: filtered.reason || "过滤后没有可发送内容。", filterTraces: filtered.traces,
+  }
+  chain = filtered.chain
+  const adapter = context.adapter || yunzaiMessageAdapter
+  const adapterContext = { e: context.e, destination: context.destination, replyOptions: context.replyOptions, quoteStandalone: context.quoteStandalone }
   const parts: PartDeliveryReceipt[] = []
-  const prepared: Array<{ index: number; payload: unknown; standalone: boolean; forward: boolean }> = []
+  const prepared: Array<PreparedMessagePart & { index: number }> = []
   for (let index = 0; index < chain.length; index++) {
     const part = chain[index]
     try {
-      if (!["text", "mention", "reply", "image", "audio", "video", "file", "music", "forward"].includes(part.type)) throw new Error(`片段 ${part.type} 不能直接发送。`)
       const outbound = part as OutboundPart
-      const value = "source" in outbound ? await resourceValue(outbound.source, config) : ""
-      // 艾特后面紧跟文字时补一个空格：多数客户端不加空格会把 @昵称 和后续
-      // 文字连在一起渲染，甚至影响艾特本身的解析。文本 CQ 路径一直有这个
-      // 规范化，消息链路径必须保持一致。
-      if (outbound.type === "forward") {
-        prepared.push({ index, payload: await forwardSegment(outbound, context, config), standalone: true, forward: true })
-      } else if (outbound.type === "text" && chain[index - 1]?.type === "mention" && !/^\s/.test(outbound.text)) {
-        prepared.push({ index, payload: ` ${outbound.text}`, standalone: false, forward: false })
-      } else {
-        // 视频、音乐卡片和语音独立发送，避免宿主将它们作为图文链处理。
-        prepared.push({ index, payload: segmentFor(outbound, value), standalone: ["video", "music", "audio"].includes(outbound.type), forward: false })
-      }
-      parts.push({ index, type: partType(part), status: "sent" })
+      await validateMusicResources(outbound, config)
+      // 提及与紧随其后的正文保留可见间距；不修改调用方保存的消息链。
+      const spaced = outbound.type === "text" && chain[index - 1]?.type === "mention" && !/^\s/.test(outbound.text)
+        ? { ...outbound, text: ` ${outbound.text}` } : outbound
+      prepared.push({ index, ...await adapter.prepare(spaced, adapterContext, source => resourceValue(source, config)) })
+      parts.push({ index, type: part.type, status: "sent" })
     } catch (error) {
-      parts.push({ index, type: partType(part), status: "failed", error: text(record(error).message || error).slice(0, 300) })
+      parts.push({ index, type: part.type, status: "failed", error: text(record(error).message || error).slice(0, 300) })
     }
   }
   if (!prepared.length) {
     return { id: receiptId, status: "failed", partCount: chain.length, sentCount: 0, failedCount: parts.length || chain.length, parts, error: parts.map(item => item.error).filter(Boolean).join("；") || "没有可发送的消息链片段。" }
   }
-  const batches: Array<{ forward: boolean; standalone: boolean; items: typeof prepared }> = []
+  const batches: Array<{ standalone: boolean; items: typeof prepared }> = []
   for (const item of prepared) {
     const current = batches[batches.length - 1]
-    // OneBot 会把同一个 payload 中的 node 抽出并优先发送，视频也不能稳定地
-    // 与图文共存。两者都主动分批，严格保持 message_send 的原始顺序。
-    if (item.standalone || !current || current.standalone) batches.push({ forward: item.forward, standalone: item.standalone, items: [item] })
+    // 适配器决定哪些片段需要独立发送，投递器按原顺序分批。
+    if (item.standalone || !current || current.standalone) batches.push({ standalone: item.standalone, items: [item] })
     else current.items.push(item)
   }
   const messageIds: string[] = []
   let quotePending = context.quote ?? deliveryConfig(config).quoteReply
-  let sender: ResolvedSender
-  try {
-    sender = await resolveSender(context)
-  } catch (error) {
-    const message = text(record(error).message || error).slice(0, 500)
+  if (!adapter.canSend(adapterContext)) {
+    const message = "当前事件不支持消息投递。"
     for (const part of parts) if (part.status === "sent") { part.status = "failed"; part.error = message }
     return { id: receiptId, status: "failed", partCount: chain.length, sentCount: 0, failedCount: chain.length, parts, error: message }
   }
   for (const batch of batches) {
+    context.signal?.throwIfAborted()
     try {
       const payloads = batch.items.map(item => item.payload)
-      const result = await sender.send(payloads.length === 1 ? payloads[0] : payloads, batch.forward || batch.items.some(item => ["music", "record", "audio"].includes(text(record(item.payload).type))) ? false : quotePending)
-      if (result === false || record(result).error || record(result).status === "failed") throw new Error("宿主消息投递失败。")
+      const quote = batch.items.every(item => item.allowQuote) && quotePending
+      const { receipt: result, messageIds: sentIds } = await adapter.send(payloads.length === 1 ? payloads[0] : payloads, { ...adapterContext, quote })
+      context.receipts?.push(result)
       quotePending = false
-      const sentIds = hostMessageIds(result)
       const messageId = sentIds.length === 1 ? sentIds[0] : ""
       messageIds.push(...sentIds)
-      await recentContextStore.recordDeliveredImages(context.e, result, batch.items.filter(item => chain[item.index].type === "image").length)
+      if (context.recordImages !== false) await recentContextStore.recordDeliveredImages(context.e, result, batch.items.filter(item => chain[item.index].type === "image").length)
       for (const item of batch.items) {
         const receipt = parts.find(part => part.index === item.index)
         if (receipt && messageId) receipt.messageId = messageId
@@ -274,7 +188,17 @@ export async function deliverMessageChain(chain: MessageChain, context: MessageC
     sentCount,
     failedCount,
     parts,
+    filterTraces: filtered.traces,
     ...(messageIds.length ? { messageIds: [...new Set(messageIds)] } : {}),
     ...(failedCount ? { error: parts.map(item => item.error).filter(Boolean).join("；") || "部分消息链片段无法发送。" } : {}),
   }
+}
+
+/** 插件回复使用同一消息链投递，向已有调用方保留宿主的真实回执。 */
+export async function replyMessageChain(chain: MessageChain, context: MessageChainDeliveryContext = {}): Promise<unknown> {
+  if (!chain.length) return false
+  const receipts: unknown[] = []
+  const result = await deliverMessageChain(chain, { ...context, receipts })
+  if (result.status === "failed" || result.status === "partial") throw new Error(result.error || "消息投递失败。")
+  return receipts.length === 1 ? receipts[0] : { message_id: result.messageIds || [], data: receipts }
 }

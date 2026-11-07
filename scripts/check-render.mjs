@@ -11,6 +11,7 @@ const runtimeRoot = await fs.mkdtemp(path.join(root, 'cache', 'render-check-'))
 process.env.YUI_CHAT_RUNTIME_ROOT = runtimeRoot
 process.env.YUI_CHAT_PLUGIN_ROOT = root
 const realBrowser = process.env.YUI_CHAT_RENDER_BROWSER_QA === '1'
+globalThis.segment = { image: value => ({ type: "image", file: value }) }
 const captures = []
 let browser
 let failBrowser = false
@@ -499,7 +500,7 @@ async function checkBrowserRecovery(render, config) {
 
     assert(pages.every(page => page.closed), 'all successful and failed pages are cleaned up')
     assert(logs.some(log => log.args[0].includes('恢复成功')))
-    const htmlFiles = await fs.readdir(path.join(runtimeRoot, 'cache/temp/render-html'))
+    const htmlFiles = await fs.readdir(path.join(runtimeRoot, 'data/yui-chat/cache/temp/render-html'))
     assert.equal(htmlFiles.length, 0, 'recovery and fallback leave no temporary HTML files')
   } finally {
     globalThis.logger = previousLogger

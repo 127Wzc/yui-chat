@@ -476,6 +476,7 @@ try {
   const event = { isGroup: true, group_id: "runtime-p1-group", user_id: "runtime-p1-user" }
   const normalPrompt = "NORMAL_PROMPT_MUST_NOT_PERSIST api_key=NORMAL_PROMPT_SECRET"
   const normalResponse = "NORMAL_RESPONSE_MUST_NOT_PERSIST"
+  const byteBody = Buffer.from("INLINE_MEDIA_BODY_MUST_NOT_PERSIST").toString("base64")
   const normalTrace = modelLogStore.createTrace({
     event,
     source: "runtime-p1-chat",
@@ -494,9 +495,11 @@ try {
     tools: [{ name: "snapshot_tool", common: { description: "快照测试工具", parameters: { type: "object", properties: {} }, source: "builtin", category: "network" } }],
     metadata: {
       apiKey: "NORMAL_CALL_CREDENTIAL",
+      media: { kind: "bytes", value: byteBody, mimeType: "image/png" },
       context: { phase: "initial", total: { messageCount: 1, chars: 64, tokenEstimate: 16 } },
     },
     snapshotMetadata: {
+      media: { kind: "bytes", value: byteBody, mimeType: "image/png" },
       context: {
         phase: "initial",
         total: { messageCount: 1, chars: 64, tokenEstimate: 16 },
@@ -550,6 +553,8 @@ try {
   assert.equal(normalCallDetail.snapshot.tools[0].function.name, "snapshot_tool", "model call detail must expose the exact injected tool definition")
   assert(normalCallDetail.snapshot.messages[0].content.includes("NORMAL_CALL_INPUT_MUST_NOT_PERSIST") && !normalCallDetail.snapshot.messages[0].content.includes("NORMAL_COOKIE_SECRET"), "model call snapshots must redact secrets in context content")
   assert.equal(normalCallDetail.snapshot.request.metadata.context.sections[0].content, "SNAPSHOT_ONLY_CONTEXT_DETAIL", "model request detail must retain full context section content separately")
+  assert(!normalCallRow.metadata_json.includes(byteBody), "compact logs omit canonical byte bodies")
+  assert.equal(normalCallDetail.snapshot.request.metadata.media.value, "[inline media omitted]", "request snapshots omit canonical byte bodies")
   const normalConversation = await modelLogStore.getConversation(normalTrace.id)
   assert.equal(normalConversation.items.length, 1, "conversation detail must expose the current top-level turn")
   assert(normalConversation.items[0].prompt_text.includes("NORMAL_PROMPT_MUST_NOT_PERSIST"), "conversation detail must expose the turn prompt")

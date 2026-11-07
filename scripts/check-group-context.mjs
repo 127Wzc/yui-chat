@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 
 export async function checkGroupContext(image) {
+  const { mediaResourceFromValue } = await import("../output/runtime/core/message-chain/builder.js")
   const { configStore } = await import("../output/runtime/config/store.js")
   const { adapterRegistry } = await import("../output/runtime/models/adapters/registry.js")
   const { chatService } = await import("../output/runtime/core/chat/chat-service.js")
@@ -133,8 +134,8 @@ export async function checkGroupContext(image) {
     assert(recentContextStore.selectRecentImages(adjacent,"看看我刚发的图").images.every(item=>item.userId===a.user_id))
     const { deliverMessageChain } = await import("../output/runtime/core/message-chain/delivery.js")
     const delivered = await deliverMessageChain([
-      {type:"image",source:{kind:"base64",value:image}},
-      {type:"image",source:{kind:"base64",value:image}},
+      {type:"image",source:mediaResourceFromValue(image)},
+      {type:"image",source:mediaResourceFromValue(image)},
     ], {e:{...adjacent,reply:async()=>({message_id:"bot-image"})},config:next})
     assert.equal(delivered.status,"sent")
     const botImages = recentContextStore.selectRecentImages(adjacent,"玉玉你刚发的图是什么")
@@ -156,7 +157,7 @@ export async function checkGroupContext(image) {
       const wrappedEvent = {...a,group_id:`wrapped-image-${index}`,message_id:`wrapped-question-${index}`,
         reply:async()=>receipt,
         getMessage:async id=>({message_id:id,user_id:base.self_id,group_id:`wrapped-image-${index}`,message:[{type:"image",url:image}]})}
-      await deliverMessageChain([{type:"image",source:{kind:"base64",value:image}}],{e:wrappedEvent,config:next})
+      await deliverMessageChain([{type:"image",source:mediaResourceFromValue(image)}],{e:wrappedEvent,config:next})
       recentContextStore.recordAssistant(wrappedEvent,"图片已发送",receipt)
       const diagnostics = {}
       const reference = JSON.parse(recentContextStore.buildReference(wrappedEvent,"看看你最新发的图片",{
@@ -186,7 +187,7 @@ export async function checkGroupContext(image) {
     const privateImageEvent = { isGroup: false, self_id: base.self_id, user_id: "private-image-owner", message_id: "private-trigger",
       reply: async () => ({ message_id: "private-picture" }),
       getMessage: async id => ({ message_id: id, user_id: base.self_id, message: [{ type: "image", url: image }] }) }
-    await deliverMessageChain([{ type: "image", source: { kind: "base64", value: image } }], { e: privateImageEvent, config: next })
+    await deliverMessageChain([{ type: "image", source: mediaResourceFromValue(image) }], { e: privateImageEvent, config: next })
     recentContextStore.recordAssistant(privateImageEvent, "图片已发送", { message_id: "private-picture" })
     const privateSelection = recentContextStore.selectRecentImages(privateImageEvent, "你刚发的图是什么")
     assert.equal(privateSelection.images[0]?.messageId, "private-picture")
@@ -208,8 +209,8 @@ export async function checkGroupContext(image) {
     try {
       slowReceipt = await Promise.race([
         deliverMessageChain([
-          { type: "image", source: { kind: "base64", value: image } },
-          { type: "video", source: { kind: "base64", value: image } },
+          { type: "image", source: mediaResourceFromValue(image) },
+          { type: "video", source: mediaResourceFromValue(image) },
         ], { e: slowEvent, config: next }),
         new Promise((_, reject) => { testTimeout = setTimeout(() => reject(new Error("receipt observation blocked delivery")), 3000) }),
       ])

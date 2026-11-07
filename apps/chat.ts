@@ -24,6 +24,9 @@ import { listMutedScopes, muteScope, parseDuration, unmuteScope } from "../core/
 import { sendInitiativeGreeting } from "../core/persona/initiative-greeting.js"
 import { formatScheduleTaskList, scheduleTaskService } from "../core/scheduling/schedule-task-service.js"
 import { hostRuntime } from "../core/runtime/host-runtime.js"
+import { messageChainFromReply } from "../core/message-chain/builder.js"
+import { replyMessageChain } from "../core/message-chain/delivery.js"
+import type { MessageChain } from "../core/message-chain/types.js"
 import type { HostEvent } from "../core/runtime/host-runtime.js"
 import type { UnknownRecord } from "../core/message/types.js"
 import { errorDetails, errorSummary } from "../core/shared/error-details.js"
@@ -122,14 +125,27 @@ function targetUserIds(e: HostEvent = {}) {
 /** 公开入口和 Master 入口共用处理器；权限只在各自入口的 rule 中声明。 */
 export class YuiChatCommandHandlers extends hostRuntime.Plugin {
 
-  async actionsHelp() { return this.reply(actionHelp(this.e), true) }
+  /** 宿主回调保留在入口；插件业务使用 send / sendText。 */
+  async reply(...args: unknown[]): Promise<unknown> {
+    return this.send(messageChainFromReply(args[0]), Boolean(args[1]), record(args[2]))
+  }
+
+  async send(chain: MessageChain, quote = false, options: UnknownRecord = {}): Promise<unknown> {
+    return replyMessageChain(chain, { e: this.e, config: configStore.get(), quote, replyOptions: options, textFiltered: true })
+  }
+
+  async sendText(value: string, quote = false, options: UnknownRecord = {}): Promise<unknown> {
+    return this.send([{ type: "text", text: value }], quote, options)
+  }
+
+  async actionsHelp() { return this.sendText(actionHelp(this.e), true) }
 
   async chat() {
     const prompt = stripPluginCommand(this.e.msg, "chat")
-    if (!prompt) return this.reply(`请输入要发送给 AI 的内容，例如：${pluginCommand("chat")} 帮我介绍一下当前可用指令`, true)
+    if (!prompt) return this.sendText(`请输入要发送给 AI 的内容，例如：${pluginCommand("chat")} 帮我介绍一下当前可用指令`, true)
     const config = appConfig(await configStore.load())
     const gate = await preflight(this.e, prompt, config)
-    if (!gate.ok) return gate.silent ? false : this.reply(gate.message, true)
+    if (!gate.ok) return gate.silent ? false : this.sendText(gate.message || "当前无法开始对话。", true)
     try {
       recentContextStore.record(this.e)
       await sendConfirm(this.e, config)
@@ -138,7 +154,7 @@ export class YuiChatCommandHandlers extends hostRuntime.Plugin {
       return this.sendResult(result, config)
     } catch (err) {
       hostRuntime.logger?.error?.(`[yui-chat] 对话失败：${errorSummary(err)}`, errorDetails(err))
-      return this.reply(`Yui Chat 对话失败：${errorMessage(err)}`, true)
+      return this.sendText(`Yui Chat 对话失败：${errorMessage(err)}`, true)
     } finally {
       releasePreflight(gate)
     }
@@ -149,28 +165,28 @@ export class YuiChatCommandHandlers extends hostRuntime.Plugin {
   }
 
   async testToolCommand() {
-    return runToolTestCommand({ e: this.e, reply: (...args: unknown[]) => this.reply(...args) })
+    return runToolTestCommand({ e: this.e, sendText: (value: string, quote?: boolean) => this.sendText(value, quote) })
   }
 
   async toolParameterCommand() {
-    return runToolParameterCommand({ e: this.e, reply: (...args: unknown[]) => this.reply(...args) })
+    return runToolParameterCommand({ e: this.e, sendText: (value: string, quote?: boolean) => this.sendText(value, quote) })
   }
 
   async testFilterCommand() {
-    return runFilterTestCommand({ e: this.e, reply: (...args: unknown[]) => this.reply(...args) })
+    return runFilterTestCommand({ e: this.e, sendText: (value: string, quote?: boolean) => this.sendText(value, quote) })
   }
 
   async filterParameterCommand() {
-    return runFilterParameterCommand({ e: this.e, reply: (...args: unknown[]) => this.reply(...args) })
+    return runFilterParameterCommand({ e: this.e, sendText: (value: string, quote?: boolean) => this.sendText(value, quote) })
   }
 
-  async mentionMemoryCommand() { const message = await runMentionMemoryCommand(this.e); return message === false ? false : message ? this.reply(message, true) : true }
+  async mentionMemoryCommand() { const message = await runMentionMemoryCommand(this.e); return message === false ? false : message ? this.sendText(message, true) : true }
 
-  async memoryCommand() { const message = await runMemoryCommand(this.e); return message ? this.reply(message, true) : true }
-  async portraitCommand() { const message = await runPortraitCommand(this.e, this.e.isMaster === true); return message ? this.reply(message, true) : true }
-  async masterPortraitCommand() { const message = await runPortraitCommand(this.e, true); return message ? this.reply(message, true) : true }
+  async memoryCommand() { const message = await runMemoryCommand(this.e); return message ? this.sendText(message, true) : true }
+  async portraitCommand() { const message = await runPortraitCommand(this.e, this.e.isMaster === true); return message ? this.sendText(message, true) : true }
+  async masterPortraitCommand() { const message = await runPortraitCommand(this.e, true); return message ? this.sendText(message, true) : true }
 
-  async manageMemoryCommand() { const message = await runMemoryCommand(this.e, true); return message ? this.reply(message, true) : true }
+  async manageMemoryCommand() { const message = await runMemoryCommand(this.e, true); return message ? this.sendText(message, true) : true }
 
   async pluginHelp() { return sendPluginHelp({}, { e: this.e }) }
 
@@ -181,7 +197,7 @@ export class YuiChatCommandHandlers extends hostRuntime.Plugin {
     if (!query) return sendPluginHelp({}, { e: this.e })
     const recommendation = record(await commandObserver.recommendCommandsHybrid(query, { event: this.e }))
     const matches = records(recommendation.results)
-    if (!matches.length) return this.reply("没有找到匹配指令。可以换一种说法，或稍后等知识库完成扫描。", true)
+    if (!matches.length) return this.sendText("没有找到匹配指令。可以换一种说法，或稍后等知识库完成扫描。", true)
     if (renderConfig(renderConfigValue).enabled !== false) {
       try {
         const image = await renderCommandHelp({ query, matches, stats: commandObserver.stats(), config: renderConfigValue })
@@ -195,21 +211,21 @@ export class YuiChatCommandHandlers extends hostRuntime.Plugin {
       const nextSteps = Array.isArray(suggested.nextSteps) ? suggested.nextSteps.map(text) : []
       return `${index + 1}. ${text(item.pluginName)}：${text(item.description) || "无描述"}\n   建议：${text(suggested.command || item.suggestedCommand || item.example || item.fnc)}\n   理由：${text(suggested.reason || item.reason) || "匹配指令知识库"}\n   下一步：${nextSteps.join("；") || "直接尝试建议指令"}\n   权限：${text(item.permission)}；使用：${Number(item.usageCount) || 0} 次；置信度：${text(suggested.confidence) || "unknown"}`
     }).join("\n")
-    return this.reply(msg, true)
+    return this.sendText(msg, true)
   }
 
   async clear() {
     const targets = targetUserIds(this.e)
     const count = await chatService.clear(this.e, { userIds: targets })
     const label = targets.length ? `已结束 ${targets.join("、")} 的对话` : "已结束当前对话"
-    return this.reply(`${label}，清理会话 ${count} 个。请重新 ${pluginCommand("chat")} 开启新的对话。`, true)
+    return this.sendText(`${label}，清理会话 ${count} 个。请重新 ${pluginCommand("chat")} 开启新的对话。`, true)
   }
 
   async conversationList() {
     const config = appConfig(await configStore.load())
     const renderConfigValue = systemRenderConfig(config)
     const rows = chatService.listConversations({ limit: 20 })
-    if (!rows.length) return this.reply("当前没有 Yui Chat 活跃对话。", true)
+    if (!rows.length) return this.sendText("当前没有 Yui Chat 活跃对话。", true)
     if (renderConfig(renderConfigValue).enabled !== false) {
       try {
         const image = await renderConversationList(rows, renderConfigValue)
@@ -222,7 +238,7 @@ export class YuiChatCommandHandlers extends hostRuntime.Plugin {
       const scope = row.type === "group" ? `群 ${row.groupId} / 用户 ${row.userId}` : `私聊 ${row.userId}`
       return `${index + 1}. ${row.channel}｜${scope}｜${row.turns} 轮｜${row.lastSeenAt || "未知时间"}`
     })
-    return this.reply([
+    return this.sendText([
       `当前活跃对话 ${rows.length} 个（最多显示 20 个）：`,
       ...lines,
       "",
@@ -232,12 +248,12 @@ export class YuiChatCommandHandlers extends hostRuntime.Plugin {
 
   async scheduleTaskList() {
     const rows = await scheduleTaskService.list(this.e, "all")
-    return this.reply(formatScheduleTaskList(rows), true)
+    return this.sendText(formatScheduleTaskList(rows), true)
   }
 
   async allScheduleTaskList() {
     const rows = await scheduleTaskService.listAll("all")
-    return this.reply(formatScheduleTaskList(rows, {
+    return this.sendText(formatScheduleTaskList(rows, {
       title: "全部定时任务",
       emptyText: "当前没有任何定时任务。",
       showOwner: true,
@@ -249,7 +265,7 @@ export class YuiChatCommandHandlers extends hostRuntime.Plugin {
     const result = record(await endAllConversationsRuntime({ clearRecentContext: true }))
     const cleared = record(result.cleared)
     const response = record(cleared.response)
-    return this.reply(
+    return this.sendText(
       `已结束全部 Yui Chat 对话。\n会话：${Number(cleared.conversations) || 0} 个\n闭嘴记录：${Number(cleared.mutedScopes) || 0} 个\n限流桶：${Number(response.rateLimitBuckets) || 0} 个\n锁：${Number(response.locks) || 0} 个`,
       true,
     )
@@ -260,13 +276,13 @@ export class YuiChatCommandHandlers extends hostRuntime.Plugin {
     const modeMap: Record<string, string> = { 文本: "text", 图片: "picture", 语音: "voice" }
     const mode = modeMap[modeText] || "text"
     await userSettingsStore.set(this.e, { mode })
-    return this.reply(`Yui Chat 已切换为${modeText}模式。`, true)
+    return this.sendText(`Yui Chat 已切换为${modeText}模式。`, true)
   }
 
   async cleanupCache() {
     const all = Boolean(matchPluginCommand(this.e.msg, "清理全部缓存"))
     const media = await cleanupMediaCache({ mode: all ? "all" : "expired" })
-    return this.reply(
+    return this.sendText(
       `Yui Chat 媒体缓存清理完成。\n模式：${all ? "全部" : "过期"}\n媒体：${media.files} 个，${media.bytes} bytes`,
       true,
     )
@@ -283,7 +299,7 @@ export class YuiChatCommandHandlers extends hostRuntime.Plugin {
     const issues = records(result.issues).slice(0, 8).map(item =>
       `- [${text(item.level)}] ${text(item.area) || "runtime"}：${text(item.message)}`,
     )
-    return this.reply([
+    return this.sendText([
       `Yui Chat 诊断：${result.ok === true ? "通过" : "存在错误"}`,
       `问题：${Number(summary.errorCount) || 0} error / ${Number(summary.warnCount) || 0} warn`,
       `模型渠道：${Number(summary.providers) || 0} 个；工具：${Number(summary.enabledTools) || 0}/${Number(summary.tools) || 0} 个已启用`,
@@ -299,15 +315,15 @@ export class YuiChatCommandHandlers extends hostRuntime.Plugin {
   }
 
   async renderImageCommand() {
-    return runRenderImageCommand({ e: this.e, reply: (...args: unknown[]) => this.reply(...args) })
+    return runRenderImageCommand({ e: this.e, sendText: (value: string, quote?: boolean) => this.sendText(value, quote) })
   }
 
   async screenshotUrl() {
-    return runUrlScreenshotCommand({ e: this.e, reply: (...args: unknown[]) => this.reply(...args) })
+    return runUrlScreenshotCommand({ e: this.e, sendText: (value: string, quote?: boolean) => this.sendText(value, quote) })
   }
 
   async screenshotHtml() {
-    return runHtmlScreenshotCommand({ e: this.e, reply: (...args: unknown[]) => this.reply(...args) })
+    return runHtmlScreenshotCommand({ e: this.e, sendText: (value: string, quote?: boolean) => this.sendText(value, quote) })
   }
 
   muteTargetFromMessage() {
@@ -332,20 +348,20 @@ export class YuiChatCommandHandlers extends hostRuntime.Plugin {
       operatorId: this.e.user_id,
     }))
     const scope = row.type === "global" ? "全局" : `群 ${text(row.groupId)}`
-    return this.reply(`${text(config.persona.firstPerson)}已进入${scope}闭嘴状态，剩余 ${row.until === Infinity ? "长期" : listMutedScopes().find(item => item.key === row.key)?.remaining || ""}。`, true)
+    return this.sendText(`${text(config.persona.firstPerson)}已进入${scope}闭嘴状态，剩余 ${row.until === Infinity ? "长期" : listMutedScopes().find(item => item.key === row.key)?.remaining || ""}。`, true)
   }
 
   async unmuteChat() {
     const target = this.muteTargetFromMessage()
     const ok = unmuteScope(this.e, target)
     const scope = target.global ? "全局" : `群 ${target.groupId || this.e.group_id}`
-    return this.reply(ok ? `${scope}已恢复回复。` : `${scope}当前没有闭嘴记录。`, true)
+    return this.sendText(ok ? `${scope}已恢复回复。` : `${scope}当前没有闭嘴记录。`, true)
   }
 
   async muteList() {
     const rows = listMutedScopes()
-    if (!rows.length) return this.reply("当前没有 Yui Chat 闭嘴记录。", true)
-    return this.reply([
+    if (!rows.length) return this.sendText("当前没有 Yui Chat 闭嘴记录。", true)
+    return this.sendText([
       `当前闭嘴记录 ${rows.length} 条：`,
       ...rows.map((row, index) => `${index + 1}. ${row.type === "global" ? "全局" : `群 ${row.groupId}`}｜剩余 ${row.remaining}｜操作者 ${row.operatorId || "未知"}`),
     ].join("\n"), true)
@@ -361,14 +377,14 @@ export class YuiChatCommandHandlers extends hostRuntime.Plugin {
           respondToFirstPersonCall: enabled,
         }
       })
-      return this.reply(`第一人称呼叫回应已${enabled ? "开启" : "关闭"}。\n当前第一人称：${text(saved.persona.firstPerson)}`, true)
+      return this.sendText(`第一人称呼叫回应已${enabled ? "开启" : "关闭"}。\n当前第一人称：${text(saved.persona.firstPerson)}`, true)
     }
     const config = appConfig(await configStore.load())
     const persona = config.persona
     const trigger = persona.trigger || {}
     const ambient = trigger.ambient || {}
     const poke = trigger.poke || {}
-    return this.reply([
+    return this.sendText([
       `当前 AI 第一人称：${text(persona.firstPerson)}`,
       `AI 名称：${text(persona.assistantLabel)}`,
       `别名：${(persona.aliases || []).join("、") || "无"}`,
@@ -387,14 +403,14 @@ export class YuiChatCommandHandlers extends hostRuntime.Plugin {
 
   async initiativeGreeting() {
     const groupId = String(matchPluginCommand(this.e.msg, "打招呼(\\d+)?")?.[1] || "").trim()
-    if (!groupId && !this.e.isGroup) return this.reply(`请在群里使用 ${pluginCommand("打招呼")}，或指定群号：${pluginCommand("打招呼123456789")}。`, true)
+    if (!groupId && !this.e.isGroup) return this.sendText(`请在群里使用 ${pluginCommand("打招呼")}，或指定群号：${pluginCommand("打招呼123456789")}。`, true)
     try {
       const result = record(await sendInitiativeGreeting(this.e, { groupId }))
-      if (groupId) return this.reply(`已向${text(result.target)}打招呼：${text(result.text)}`, true)
+      if (groupId) return this.sendText(`已向${text(result.target)}打招呼：${text(result.text)}`, true)
       return true
     } catch (err) {
       hostRuntime.logger?.warn?.("[yui-chat] 主动打招呼失败", err)
-      return this.reply(`主动打招呼失败：${errorMessage(err)}`, true)
+      return this.sendText(`主动打招呼失败：${errorMessage(err)}`, true)
     }
   }
 
@@ -406,13 +422,13 @@ export class YuiChatCommandHandlers extends hostRuntime.Plugin {
     let durationMs = 0
     if (action === "概率") {
       percent = Number(tail.match(/\d+(?:\.\d+)?/)?.[0])
-      if (!Number.isFinite(percent)) return this.reply(`请输入 0-100 的概率，例如：${pluginCommand("第一人称概率20")}`, true)
+      if (!Number.isFinite(percent)) return this.sendText(`请输入 0-100 的概率，例如：${pluginCommand("第一人称概率20")}`, true)
     } else if (action === "冷却") {
       durationMs = parseDuration(tail)
-      if (durationMs === Infinity) return this.reply(`请输入冷却时长，例如：${pluginCommand("第一人称冷却30秒")} / ${pluginCommand("第一人称冷却5分钟")}`, true)
+      if (durationMs === Infinity) return this.sendText(`请输入冷却时长，例如：${pluginCommand("第一人称冷却30秒")} / ${pluginCommand("第一人称冷却5分钟")}`, true)
     }
     if ((action === "禁用本群" || action === "启用本群") && !this.e.isGroup) {
-      return this.reply("该命令只能在群聊中使用。", true)
+      return this.sendText("该命令只能在群聊中使用。", true)
     }
     const saved = await updateConfig(config => {
       const trigger: PersonaTriggerConfig = { ...(config.persona.trigger || {}) }
@@ -446,7 +462,7 @@ export class YuiChatCommandHandlers extends hostRuntime.Plugin {
       }
       config.persona = { ...config.persona, trigger }
     })
-    return this.reply([
+    return this.sendText([
       "第一人称触发策略已更新：",
       `随机旁路：${saved.persona.trigger?.ambient?.enabled ? "已开启" : "未开启"}${saved.persona.trigger?.ambient?.groupOnly !== false ? "（仅群聊）" : ""}`,
       `戳一戳：${saved.persona.trigger?.poke?.enabled === true ? "已开启" : "未开启"}；冷却：${Number(saved.persona.trigger?.poke?.cooldownMs) || 0}ms`,
@@ -459,7 +475,7 @@ export class YuiChatCommandHandlers extends hostRuntime.Plugin {
   async setFirstPerson() {
     const input = String(matchPluginCommand(this.e.msg, "设置(?:AI|ai)?第一人称(?:称谓)?([\\s\\S]*)")?.[1] || "").trim()
     if (!input || input === "帮助") {
-      return this.reply([
+      return this.sendText([
         "第一人称设置帮助：",
         "用于第一人称呼叫、人格链和语音/图片等输出文案。",
         `示例：${pluginCommand("设置AI第一人称埋埋")}`,
@@ -477,17 +493,17 @@ export class YuiChatCommandHandlers extends hostRuntime.Plugin {
         aliases: [...aliases].filter(Boolean).slice(0, 12),
       }
     })
-    return this.reply(`AI 的第一人称已设置为“${saved.persona.firstPerson}”，原称谓已保留为别名以便平滑触发。`, true)
+    return this.sendText(`AI 的第一人称已设置为“${saved.persona.firstPerson}”，原称谓已保留为别名以便平滑触发。`, true)
   }
 
   async toolPermissionGroups() {
-    return this.reply(`旧版“工具权限组”已移除，请改用 ${pluginCommand("面板")} -> 工具 -> 边界权限 进行角色与工具授权。`, true)
+    return this.sendText(`旧版“工具权限组”已移除，请改用 ${pluginCommand("面板")} -> 工具 -> 边界权限 进行角色与工具授权。`, true)
   }
 
   async webLogin() {
     const config = appConfig(await configStore.load())
     const userId = this.e.user_id
-    if (userId === undefined) return this.reply("无法确定当前用户身份，请稍后再试。", true)
+    if (userId === undefined) return this.sendText("无法确定当前用户身份，请稍后再试。", true)
     const quick = issueQuickLogin(userId)
     const addresses = await buildWebAddresses({ quickCode: quick.code })
     const message = [
@@ -499,16 +515,14 @@ export class YuiChatCommandHandlers extends hostRuntime.Plugin {
 
     if (this.e.isGroup && config.web.loginInGroup !== true) {
       try {
-        const privateTarget = hostRuntime.bot?.pickUser?.(userId)
-        if (!privateTarget?.sendMsg) throw new Error("当前宿主不支持私聊发送")
-        await privateTarget.sendMsg(message)
-        return this.reply("Yui Chat 面板地址已发送至主人私信。", true)
+        await replyMessageChain([{ type: "text", text: message }], { e: this.e, destination: { type: "user", id: String(userId) }, quote: false, textFiltered: true, recordImages: false })
+        return this.sendText("Yui Chat 面板地址已发送至主人私信。", true)
       } catch (err) {
         hostRuntime.logger?.warn?.("[yui-chat] 私发面板地址失败", err)
-        return this.reply(`私信发送失败，请私聊发送 ${pluginCommand("面板")} 获取登录地址。`, true)
+        return this.sendText(`私信发送失败，请私聊发送 ${pluginCommand("面板")} 获取登录地址。`, true)
       }
     }
-    return this.reply(message, true)
+    return this.sendText(message, true)
   }
 
   async firstPersonCall() {

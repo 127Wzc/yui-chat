@@ -183,7 +183,7 @@ export async function cacheImageCandidate(candidate: ImageCandidate, cfg: Unknow
   if (existing) {
     const file = path.join(mediaCacheDir, existing)
     const stat = await fs.stat(file).catch(() => null)
-    if (stat?.isFile() && stat.size > 0) return { kind: "cache", value: file, name: existing }
+    if (stat?.isFile() && stat.size > 0) return { kind: "path", value: file, name: existing }
   }
   const maxBytes = Math.max(1024 * 1024, Number(cfg.maxImageBytes) || 32 * 1024 * 1024)
   const response = await fetchSafeHttp(candidate.url, {
@@ -204,5 +204,5 @@ export async function cacheImageCandidate(candidate: ImageCandidate, cfg: Unknow
   if (!bytes.length) throw new Error("图片内容为空。")
   const file = path.join(mediaCacheDir, `image_${id}${extensionForMime(mimeType)}`)
   await fs.writeFile(file, bytes)
-  return { kind: "cache", value: file, mimeType, name: path.basename(file) }
+  return { kind: "path", value: file, mimeType, name: path.basename(file) }
 }

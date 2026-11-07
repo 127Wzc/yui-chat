@@ -458,7 +458,7 @@ export const defaults = {
       },
       delivery: {
         allowTargetSend: false,
-        allowFilePathImages: false,
+        allowedLocalPaths: [] as string[],
       },
       url: { enabled: false },
       html: {

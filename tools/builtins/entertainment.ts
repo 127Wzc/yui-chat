@@ -1,5 +1,7 @@
-import { EmojiLikeTool, GroupPokeTool } from "./group-admin.js"
 import { hostRuntime } from "../../core/runtime/host-runtime.js"
+import { EmojiLikeTool, GroupPokeTool } from "./group-admin.js"
+import { replyMessageChain } from "../../core/message-chain/delivery.js"
+import { MessageChainBuilder } from "../../core/message-chain/builder.js"
 import type { UnknownRecord } from "../../core/message/types.js"
 
 interface ReplyEvent extends UnknownRecord {
@@ -8,6 +10,7 @@ interface ReplyEvent extends UnknownRecord {
 
 interface EntertainmentContext {
   e?: ReplyEvent
+  config?: UnknownRecord
 }
 
 export class SendDiceTool {
@@ -37,12 +40,10 @@ export class SendDiceTool {
 
   async execute(args: UnknownRecord = {}, context: EntertainmentContext = {}): Promise<UnknownRecord> {
     const count = Math.max(1, Math.min(Number(args.count || 1), 5))
-    const payloads: unknown[] = []
-    for (let i = 0; i < count; i++) {
-      payloads.push(hostRuntime.segment?.dice ? hostRuntime.segment.dice() : `骰子：${Math.ceil(Math.random() * 6)}`)
-    }
-    if (!context.e?.reply) throw new Error("当前适配器不支持发送骰子消息。")
-    await context.e.reply(payloads, true)
+    const builder = new MessageChainBuilder()
+    for (let i = 0; i < count; i++) builder.dice()
+    if (!context.e || !hostRuntime.canSendMessage(context.e)) throw new Error("当前适配器不支持发送骰子消息。")
+    await replyMessageChain(builder.build(), { e: context.e, config: context.config, quote: true })
     return { status: "success", content: `已发送 ${count} 个骰子。`, executedCount: count, retryAllowed: false }
   }
 }
@@ -63,9 +64,8 @@ export class SendRpsTool {
 
   async execute(args: UnknownRecord = {}, context: EntertainmentContext = {}): Promise<UnknownRecord> {
     const value = [1, 2, 3].includes(Number(args.value)) ? Number(args.value) : Math.ceil(Math.random() * 3)
-    const payload = hostRuntime.segment?.rps ? hostRuntime.segment.rps(value) : `猜拳：${["石头", "剪刀", "布"][value - 1]}`
-    if (!context.e?.reply) throw new Error("当前适配器不支持发送猜拳消息。")
-    await context.e.reply(payload, true)
+    if (!context.e || !hostRuntime.canSendMessage(context.e)) throw new Error("当前适配器不支持发送猜拳消息。")
+    await replyMessageChain(new MessageChainBuilder().rps(value).build(), { e: context.e, config: context.config, quote: true })
     return { status: "success", content: `已发送猜拳 ${value}。`, executedCount: 1, retryAllowed: false }
   }
 }

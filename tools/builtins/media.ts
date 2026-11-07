@@ -1,3 +1,4 @@
+import { validateOutboundMessageChain } from "../../core/message-chain/validation.js"
 import { MusicPlayTool } from "./music.js"
 import fs from "node:fs/promises"
 import path from "node:path"
@@ -9,8 +10,7 @@ import type { UnknownRecord } from "../../core/message/types.js"
 import { adapterRegistry } from "../../models/adapters/registry.js"
 import { providerResolver, type ResolvedModelChannel } from "../../models/routing/provider-resolver.js"
 import type { ModelMessage } from "../../models/protocol/types.js"
-import { requireMethod } from "./shared.js"
-import { deliverMessageChain } from "../../core/message-chain/delivery.js"
+import { deliverMessageChain, replyMessageChain } from "../../core/message-chain/delivery.js"
 import { MessageChainBuilder } from "../../core/message-chain/builder.js"
 import type { ContentPart, ForwardNode, ForwardNodePart, MusicPart, ResourceRef, ToolOutput } from "../../core/message-chain/types.js"
 import { fetchBilibiliVideoBuffer, fetchBilibiliVideoDetail } from "./bilibili.js"
@@ -39,32 +39,13 @@ function text(value: unknown): string {
   return typeof value === "string" ? value : String(value ?? "")
 }
 
-function resourceKind(value: string): ResourceRef["kind"] {
-  if (/^https?:\/\//i.test(value)) return "url"
-  if (/^(?:data:|base64:\/\/)/i.test(value)) return "base64"
-  if (/^file:/i.test(value) || value.startsWith("/") || /^[a-z]:[\\/]/i.test(value)) return "file"
-  return "platform"
-}
-
-function mediaResource(value: unknown, item: UnknownRecord = {}): ResourceRef {
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    const source = record(value)
-    const sourceValue = text(source.value || source.url || source.path || source.file || source.src).trim()
-    if (sourceValue) return {
-      kind: typeof source.kind === "string" ? source.kind as ResourceRef["kind"] : resourceKind(sourceValue),
-      value: sourceValue,
-      ...(source.mimeType ? { mimeType: text(source.mimeType) } : {}),
-      ...(source.name ? { name: text(source.name) } : {}),
-      ...(source.inlineData ? { inlineData: text(source.inlineData) } : {}),
-    }
-  }
-  const scalarValue = value && typeof value === "object" ? "" : value
-  const uri = text(scalarValue || item.url || item.path || item.file || item.src).trim()
+function mediaResource(value: unknown): ResourceRef {
+  const source = record(value)
   return {
-    kind: resourceKind(uri),
-    value: uri,
-    ...(item.mimeType ? { mimeType: text(item.mimeType) } : {}),
-    ...(item.name ? { name: text(item.name) } : {}),
+    kind: source.kind as ResourceRef["kind"],
+    value: text(source.value).trim(),
+    ...(source.mimeType ? { mimeType: text(source.mimeType) } : {}),
+    ...(source.name ? { name: text(source.name) } : {}),
   }
 }
 
@@ -83,7 +64,7 @@ type MediaItemType = "image" | "audio" | "video" | "file"
 function normalizedMediaType(value: unknown): MediaItemType | null {
   const type = text(value).trim().toLowerCase()
   if (type === "image") return "image"
-  if (["audio", "record", "voice"].includes(type)) return "audio"
+  if (type === "audio") return "audio"
   if (type === "video") return "video"
   if (type === "file") return "file"
   return null
@@ -97,7 +78,7 @@ function normalizedMediaType(value: unknown): MediaItemType | null {
  * 而不是把一段垃圾字符串当作用户发出去。
  */
 function mentionUserId(item: UnknownRecord, context: MediaToolContext): string {
-  const requested = text(item.userId || item.qq || item.id).trim()
+  const requested = text(item.userId).trim()
   if (/^\d{5,12}$/.test(requested)) return requested
   const sender = record(context.e?.sender)
   return text(context.e?.user_id || sender.user_id || "").trim()
@@ -144,17 +125,11 @@ function mediaChain(items: unknown[] = [], context: MediaToolContext = {}, allow
   const builder = new MessageChainBuilder()
   const issues: string[] = []
   for (const [index, raw] of items.entries()) {
-    if (typeof raw === "string") {
-      const source = mediaResource(raw)
-      if (!source.value) issues.push(`媒体项 ${index + 1} 缺少资源。`)
-      else builder.image(source)
-      continue
-    }
     const item = record(raw)
     const requestedType = text(item.type).trim().toLowerCase()
-    const type = requestedType || "image"
+    const type = requestedType
     const mediaType = normalizedMediaType(type)
-    if (!mediaType && !["text", "mention", "at", "reply", "music"].includes(type) && !(allowForward && type === "forward")) {
+    if (!mediaType && !["text", "mention", "reply", "music", "dice", "rps"].includes(type) && !(allowForward && type === "forward")) {
       issues.push(`媒体项 ${index + 1} 的 type 不支持：${text(item.type)}`)
       continue
     }
@@ -162,14 +137,18 @@ function mediaChain(items: unknown[] = [], context: MediaToolContext = {}, allow
       const forward = forwardNodes(item.nodes, context)
       if (forward.issues.length) issues.push(...forward.issues.map(issue => `消息项 ${index + 1}：${issue}`))
       else builder.forward(forward.nodes)
+    } else if (type === "dice") {
+      builder.dice()
+    } else if (type === "rps") {
+      builder.rps(Number(item.value))
     } else if (type === "text") {
-      builder.text(item.text || item.content)
-    } else if (type === "mention" || type === "at") {
+      builder.text(item.text)
+    } else if (type === "mention") {
       const userId = mentionUserId(item, context)
       if (!userId) issues.push(`消息项 ${index + 1} 无法确定要艾特的用户。`)
       else builder.mention(userId)
     } else if (type === "reply") {
-      const messageId = text(item.messageId || item.id).trim()
+      const messageId = text(item.messageId).trim()
       if (!messageId) issues.push(`消息项 ${index + 1} 缺少 messageId。`)
       else builder.reply(messageId)
     } else if (type === "music") {
@@ -193,7 +172,7 @@ function mediaChain(items: unknown[] = [], context: MediaToolContext = {}, allow
         })
       }
     } else if (mediaType) {
-      const source = mediaResource(item.source || item.url || item.path || item.file || item.src, item)
+      const source = mediaResource(item.source)
       if (!source.value) {
         issues.push(`媒体项 ${index + 1} 缺少 source；请使用工具结果里给出的 url 或内联资源令牌。`)
       } else {
@@ -208,43 +187,19 @@ function mediaChain(items: unknown[] = [], context: MediaToolContext = {}, allow
   return { chain: builder.build(), issues }
 }
 
-function validateMessageItems(items: unknown[], context: MediaToolContext, prefix = "消息项", allowForward = true): string[] {
-  const issues: string[] = []
-  for (const [index, raw] of items.entries()) {
-    const label = `${prefix} ${index + 1}`
-    const item = record(raw)
-    const type = text(item.type).trim().toLowerCase()
-    if (!["text", "mention", "reply", "image", "audio", "video", "file", "music", ...(allowForward ? ["forward"] : [])].includes(type)) {
-      issues.push(`${label} 的 type 不支持：${text(item.type) || "空"}。`)
-      continue
-    }
-    if (type === "forward") {
-      if (!Array.isArray(item.nodes) || !item.nodes.length) {
-        issues.push(`${label} 缺少非空 nodes 数组。`)
-        continue
-      }
-      if (item.nodes.length > 50) issues.push(`${label} 最多支持 50 个节点。`)
-      for (const [nodeIndex, rawNode] of item.nodes.slice(0, 50).entries()) {
-        const node = record(rawNode)
-        if (!Array.isArray(node.parts) || !node.parts.length) issues.push(`${label} 的节点 ${nodeIndex + 1} 缺少非空 parts 数组。`)
-        else issues.push(...validateMessageItems(node.parts, context, `${label} 的节点 ${nodeIndex + 1} 消息项`, false))
-      }
-    } else if (type === "music") {
-      const platform = musicPlatform(item.platform)
-      if (platform === "custom" && !text(item.url).trim() && !text(item.audio).trim()) issues.push(`${label} 的自定义音乐卡片至少需要 url 或 audio。`)
-      else if (platform !== "custom" && !text(item.id).trim()) issues.push(`${label} 缺少音乐 id。`)
-    } else if (normalizedMediaType(type)) {
-      const source = mediaResource(item.source || item.url || item.path || item.file || item.src, item)
-      if (!source.value) issues.push(`${label} 缺少 source.value；请把最近工具结果中的完整 source 对象原样复制回来。`)
-      else if (type === "video" && isRemoteBilibiliVideoSource(source)) issues.push(`${label} 是 B 站页面或远程视频地址；请使用 bilibili_media(action=send) 返回的本地 source，再传入 kind=cache 的视频资源。`)
-    } else if (type === "mention" && !mentionUserId(item, context)) {
-      issues.push(`${label} 无法确定要艾特的用户。`)
-    } else if (type === "reply" && !text(item.messageId || item.id).trim()) {
-      issues.push(`${label} 缺少 messageId。`)
-    } else if (type === "text" && !text(item.text || item.content)) {
-      issues.push(`${label} 缺少 text。`)
+function validateMessageItems(items: unknown[], context: MediaToolContext): string[] {
+  const issues = validateOutboundMessageChain(items, { allowImplicitMention: true })
+  const visit = (parts: unknown[]): void => {
+    for (const raw of parts) {
+      const part = record(raw)
+      if (part.type === "forward" && Array.isArray(part.nodes)) {
+        for (const node of part.nodes) if (Array.isArray(record(node).parts)) visit(record(node).parts as unknown[])
+      } else if (part.type === "video" && isRemoteBilibiliVideoSource(mediaResource(part.source))) {
+        issues.push("B 站视频请使用 bilibili_media(action=send) 返回的本地 source，再传入 kind=path 的视频资源。")
+      } else if (part.type === "mention" && !mentionUserId(part, context)) issues.push("无法确定要艾特的用户。")
     }
   }
+  if (!issues.length) visit(items)
   return issues
 }
 
@@ -287,6 +242,7 @@ async function sendMessageChainAction(args: ToolArgs, context: MediaToolContext)
     config: context.config,
     quote: typeof context.delivery?.quote === "boolean" ? context.delivery.quote : undefined,
     operationId: text(context.execution?.operationId),
+    signal: context.agent?.signal || context.signal,
   })
   const failed = receipt.status === "failed"
   return {
@@ -302,7 +258,7 @@ async function sendMessageChainAction(args: ToolArgs, context: MediaToolContext)
     isError: failed,
     issues: receipt.error ? [receipt.error] : [],
     receipt,
-    metadata: { deliveryAttempted: true },
+    metadata: { deliveryAttempted: true, filterTraces: (receipt.filterTraces || []) as import("../../core/message-chain/types.js").JsonValue[] },
   }
 }
 
@@ -395,7 +351,7 @@ export class DrawHandoffTool {
     const command = `${text(drawHandoff.prefix)} ${text(drawHandoff.promptPrefix)}${prompt}`.trim()
     const shouldSend = args.sendCommand ?? drawHandoff.sendCommand
     if (shouldSend && context.delivery?.allowCurrentChat !== false && context.e) {
-      await requireMethod(context.e, "reply", "发送绘图命令")(command, response.quoteReply)
+      await replyMessageChain([{ type: "text", text: command }], { e: context.e, config, quote: response.quoteReply === true, textFiltered: true })
       return `已发送绘图命令：${command}`
     }
     const note = shouldSend && context.delivery?.allowCurrentChat === false
@@ -439,13 +395,13 @@ async function cacheBilibiliCover(item: UnknownRecord, videoId: string, context:
   await fs.mkdir(mediaCacheDir, { recursive: true })
   const cached = await fs.stat(file).catch(() => null)
   if (cached?.isFile() && cached.size > 0) {
-    return { kind: "cache", value: file, mimeType: type.mimeType, name: `${videoId}_cover${type.extension}` }
+    return { kind: "path", value: file, mimeType: type.mimeType, name: `${videoId}_cover${type.extension}` }
   }
   if (inline) {
     const bytes = Buffer.from(inline[2].replace(/\s+/g, ""), "base64")
     if (!bytes.length) throw new Error("B 站封面内容为空。")
     await fs.writeFile(file, toByteView(bytes))
-    return { kind: "cache", value: file, mimeType: type.mimeType, name: `${videoId}_cover${type.extension}` }
+    return { kind: "path", value: file, mimeType: type.mimeType, name: `${videoId}_cover${type.extension}` }
   }
   // B 站官方 CDN 只允许命中集中可信目标；私网 DNS 是否例外由统一策略决定。
   const trustedRequest = trustedResourceRequest("bilibili-cdn", url, context.config || configStore.get())
@@ -466,7 +422,7 @@ async function cacheBilibiliCover(item: UnknownRecord, videoId: string, context:
   const bytes = new Uint8Array(await response.arrayBuffer())
   if (!bytes.length) throw new Error("B 站封面内容为空。")
   await fs.writeFile(file, bytes)
-  return { kind: "cache", value: file, mimeType, name: `${videoId}_cover${type.extension}` }
+  return { kind: "path", value: file, mimeType, name: `${videoId}_cover${type.extension}` }
 }
 
 /** 下载 B 站封面和视频本体到插件临时目录，返回可直接交给 message_send 的本地资源。 */
@@ -508,7 +464,7 @@ export async function prepareBilibiliVideoResources(args: ToolArgs, context: Med
       ...details,
       bytes: cached.size,
       cached: true,
-      source: { kind: "cache", value: file, mimeType: "video/mp4" },
+      source: { kind: "path", value: file, mimeType: "video/mp4" },
       hint: "封面和视频均已准备为本地缓存资源。用 message_send 按顺序发送简介 text、coverSource 对应的 image、source 对应的 video；不要发送页面 URL 作为 video。",
     }
   }
@@ -522,10 +478,48 @@ export async function prepareBilibiliVideoResources(args: ToolArgs, context: Med
     ...details,
     bytes: buffer.length,
     cached: false,
-    source: { kind: "cache", value: file, mimeType: "video/mp4" },
+    source: { kind: "path", value: file, mimeType: "video/mp4" },
     hint: "封面和视频均已准备为本地缓存资源。用 message_send 按顺序发送简介 text、coverSource 对应的 image、source 对应的 video；不要发送页面 URL 作为 video。",
   }
 }
+
+// 按 type 展示各自的字段；转发节点复用基本片段，不复制一套混合字段表。
+const messagePartSchemas = [
+  { type: "object", properties: { type: { type: "string", enum: ["text"] }, text: { type: "string" } }, required: ["type", "text"] },
+  { type: "object", properties: { type: { type: "string", enum: ["mention"] }, userId: { type: "string", description: "Omit to mention the current sender." } }, required: ["type"] },
+  { type: "object", properties: { type: { type: "string", enum: ["reply"] }, messageId: { type: "string" } }, required: ["type", "messageId"] },
+  {
+    type: "object",
+    properties: {
+      type: { type: "string", enum: ["image", "audio", "video", "file"] },
+      source: {
+        type: "object",
+        // 完整性由消息校验返回可纠正错误，避免 Registry 提前耗尽发送机会。
+        properties: {
+          kind: { type: "string", enum: ["url", "path", "bytes"], description: "HTTP(S) URL, allowed local path, or Base64 bytes." },
+          value: { type: "string" }, mimeType: { type: "string" }, name: { type: "string" },
+        },
+      },
+      name: { type: "string" }, description: { type: "string" },
+    },
+    required: ["type", "source"],
+  },
+  {
+    type: "object",
+    properties: { type: { type: "string", enum: ["music"] }, platform: { type: "string", enum: ["qq", "163", "kugou", "migu", "kuwo"] }, id: { type: "string" } },
+    required: ["type", "platform", "id"],
+  },
+  {
+    type: "object",
+    properties: {
+      type: { type: "string", enum: ["music"] }, platform: { type: "string", enum: ["custom"] },
+      url: { type: "string" }, audio: { type: "string" }, title: { type: "string" }, singer: { type: "string" }, image: { type: "string" },
+    },
+    required: ["type", "platform"],
+  },
+  { type: "object", properties: { type: { type: "string", enum: ["dice"] } }, required: ["type"] },
+  { type: "object", properties: { type: { type: "string", enum: ["rps"] }, value: { type: "integer", enum: [1, 2, 3] } }, required: ["type", "value"] },
+]
 
 /**
  * 统一消息投递工具。
@@ -541,71 +535,41 @@ export class MessageSendTool {
   risk = "medium"
   delivery = "media"
   requiresFinalReply = false
-  execution = { effect: "non_idempotent", repeatPolicy: "dedupe", operationFields: ["parts", "target"], retryPolicy: "no_ambiguous_retry", maxAttempts: 1, dispatchMarking: "deferred" }
+  execution = { effect: "non_idempotent", repeatPolicy: "dedupe", operationFields: ["parts"], retryPolicy: "no_ambiguous_retry", maxAttempts: 1, dispatchMarking: "deferred" }
   tags = ["message", "media", "delivery"]
   description = [
-    "The only tool that delivers a message, always to the current chat. Send one ordered internal message chain. Text and images may share one OneBot message; every video is delivered as a separate message while preserving order.",
-    "Part shapes:",
-    "  {type:'text',text}",
-    "  {type:'mention'} — omit userId to @ whoever triggered the current message; that is the normal case",
-    "  {type:'reply',messageId}",
-    "  {type:'image'|'audio'|'video'|'file',source:{kind:'url'|'cache',value}} — copy the address exactly from a tool result, never invent one; when a video result has coverSource, add it first as a separate image part",
-    "  {type:'music',platform:'qq'|'163'|'kugou'|'migu'|'kuwo',id}",
-    "  {type:'music',platform:'custom',url,audio,title,singer,image}",
-    "  {type:'forward',nodes:[{nickname?,userId?,parts:[...message parts]}]} — batch multiple nodes into one merged-forward message; forward nodes cannot contain another forward",
-    "A successful send completes this delivery tool. Whether the conversation continues is controlled by the originating tool and runtime, not message_send.",
+    "Send ordered parts to the current chat. Use only fields for the selected type; omit unrelated fields.",
+    'Image example: {"parts":[{"type":"image","source":{"kind":"url","value":"https://example.com/image.gif"}}]}. Copy real resource addresses from tool results.',
+    "Forward nodes contain basic parts, never another forward. Put a video's cover image before its video. Music custom needs url or audio; rps value: 1=rock, 2=scissors, 3=paper.",
+    "Do not resend a successful delivery. The runtime controls conversation continuation.",
   ].join("\n")
   parameters = {
     type: "object",
     properties: {
       parts: {
-        type: "array",
-        minItems: 1,
-        description: "Ordered internal message-chain parts.",
+        type: "array", minItems: 1,
         items: {
-          type: "object",
-          required: ["type"],
-          properties: {
-            type: { type: "string", enum: ["text", "mention", "reply", "image", "audio", "video", "file", "music", "forward"] },
-            text: { type: "string", description: "Text when type=text." },
-            userId: { type: "string", description: "Numeric QQ id when type=mention. Omit it to mention whoever sent the current message — that is the normal case." },
-            messageId: { type: "string", description: "Quoted message id when type=reply." },
-            platform: { type: "string", enum: ["qq", "163", "kugou", "migu", "kuwo", "custom"], description: "Music platform when type=music. Use custom together with url/audio for a self-hosted card." },
-            id: { type: "string", description: "Song id when type=music and platform is not custom." },
-            url: { type: "string", description: "Jump url when type=music and platform=custom." },
-            audio: { type: "string", description: "Playable audio url when type=music and platform=custom." },
-            title: { type: "string", description: "Song title when type=music and platform=custom." },
-            singer: { type: "string", description: "Artist when type=music and platform=custom." },
-            image: { type: "string", description: "Cover image url when type=music and platform=custom." },
-            source: {
+          anyOf: [
+            ...messagePartSchemas,
+            {
               type: "object",
-              description: "Resource for media parts. Copy the address exactly as it appeared in a tool result.",
               properties: {
-                kind: { type: "string", enum: ["url", "file", "cache", "base64", "platform"] },
-                value: { type: "string" },
-                mimeType: { type: "string" },
-                name: { type: "string" },
-              },
-            },
-            name: { type: "string", description: "Optional media name." },
-            description: { type: "string", description: "Optional media description." },
-            nodes: {
-              type: "array",
-              minItems: 1,
-              maxItems: 50,
-              description: "Merged-forward nodes when type=forward. Each node has its own ordered parts array; nested forward parts are not allowed.",
-              items: {
-                type: "object",
-                required: ["parts"],
-                properties: {
-                  nickname: { type: "string", description: "Optional display name for this node." },
-                  userId: { type: "string", description: "Optional numeric sender id for this node." },
-                  time: { type: "number", description: "Optional Unix timestamp." },
-                  parts: { type: "array", minItems: 1, description: "Ordered text/media/mention/reply/music parts for this node. Nested forward is not allowed.", items: { type: "object" } },
+                type: { type: "string", enum: ["forward"] },
+                nodes: {
+                  type: "array", minItems: 1, maxItems: 50,
+                  items: {
+                    type: "object",
+                    properties: {
+                      nickname: { type: "string" }, userId: { type: "string" }, time: { type: "number" },
+                      parts: { type: "array", minItems: 1, items: { anyOf: messagePartSchemas } },
+                    },
+                    required: ["parts"],
+                  },
                 },
               },
+              required: ["type", "nodes"],
             },
-          },
+          ],
         },
       },
     },

@@ -68,10 +68,23 @@ function missingRunError(): Error & { statusCode: number } {
 
 /** 注册日志查询与清理接口；日志详情只读，清理仍通过统一存储队列执行。 */
 export function registerObservabilityRoutes(app: WebApp): void {
-  app.get("/api/artifacts", auth, handleRoute(async (_rawRequest, rawResponse) => {
+  app.get("/api/artifacts", auth, handleRoute(async (rawRequest, rawResponse) => {
+    const query = request(rawRequest).query || {}
     const res = response(rawResponse)
     res.setHeader("Cache-Control", "no-store")
-    res.json({ ok: true, items: artifactStore.list() })
+    const all = artifactStore.list()
+    const term = String(query.query || "").trim().slice(0, 160).toLowerCase()
+    const from = parseTime(query.from)
+    const to = parseTime(query.to, 0, true)
+    const matching = all.filter(item =>
+      (!query.kind || item.kind === query.kind) && (!query.source || item.source === query.source)
+      && (!query.userId || item.userId === query.userId) && (!query.groupId || item.groupId === query.groupId)
+      && (!from || item.createdAt >= from) && (!to || item.createdAt <= to)
+      && (!term || [item.title, item.source, item.userId, item.groupId, item.sessionId, item.id].some(value => String(value || "").toLowerCase().includes(term))))
+    const pageSize = Math.max(1, Math.min(100, Math.trunc(Number(query.pageSize) || 20)))
+    const total = matching.length
+    const page = Math.max(1, Math.min(Math.max(1, Math.ceil(total / pageSize)), Math.trunc(Number(query.page) || 1)))
+    res.json({ ok: true, items: query.pageSize === undefined ? matching : matching.slice((page - 1) * pageSize, page * pageSize), total, totalAll: all.length, page, pageSize, sources: [...new Set(all.map(item => item.source))], kinds: [...new Set(all.map(item => item.kind))] })
   }))
 
   app.get("/api/artifacts/:id", auth, handleRoute(async (rawRequest, rawResponse) => {

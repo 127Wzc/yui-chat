@@ -147,7 +147,10 @@
 .ds-bar b { display: block; height: 100%; background: var(--foreground); opacity: .7; }
 .ds-bar em { color: var(--muted-foreground); font-style: normal; text-align: right; }
 
-.ds-error { color: var(--bad); max-width: 360px; }
+.ds-error { color: var(--bad); }
+.ds-status-error { border:1px solid var(--border); border-radius:var(--radius); padding:14px; background:var(--muted); }
+.ds-status-error h3 { font-size:13px; margin:0 0 8px; }
+.ds-status-error p { margin:0; color:var(--bad); white-space:pre-wrap; overflow-wrap:anywhere; font:12px/1.7 var(--mono); }
 .ds-status { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; padding: 2px; color: var(--muted-foreground); font-size: 12px; }
 
 @media (max-width: 700px) {

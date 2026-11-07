@@ -52,7 +52,7 @@ const runtimeRootValue = String(process.env.YUI_CHAT_RUNTIME_ROOT || "").trim()
 export const runtimeRoot = runtimeRootValue ? path.resolve(runtimeRootValue) : ""
 export const dataDir = runtimeRoot ? path.join(runtimeRoot, "data/yui-chat") : path.join(yunzaiRoot, "data/yui-chat")
 export const configBackupDir = path.join(dataDir, "backups")
-export const cacheDir = runtimeRoot ? path.join(runtimeRoot, "cache") : path.join(pluginRoot, "cache")
+export const cacheDir = path.join(dataDir, "cache")
 export const tempDir = path.join(cacheDir, "temp")
 
 const backupMaxFilesFallback = 3
@@ -261,6 +261,7 @@ function normalizeMessageFilters(config: Config): Config {
       const implementation = filter.implementation as ConfigRecord
       return {
         ...filter,
+        target: filter.target === undefined ? "text" : filter.target,
         priority: filter.priority === undefined ? 100 : Number(filter.priority),
         condition: isObject(filter.condition) ? filter.condition : {},
         implementation: {
@@ -380,6 +381,7 @@ function normalizeConfig(config: Config): Config {
   // 输入预算改为"模型上下文窗口优先、全局预算回落"，分项预算无运行时消费，整体下线。
   if (isObject(config.chat)) delete config.chat.promptBudgets
   const response = isObject(config.response) ? config.response : null
+  if (response && isObject(response.render) && isObject(response.render.delivery)) delete response.render.delivery.allowFilePathImages
   if (response && isObject(response.segmentation)) delete response.segmentation.llmOnly
   // 渲染配置只保留当前结构；旧开关、细分系统引擎和缓存字段直接丢弃，不再迁移。
   if (response && isObject(response.render)) {

@@ -1,6 +1,11 @@
 import type { UnknownRecord } from "../../core/message/types.js"
 
 export type MessageFilterStageId = "input" | "output"
+export type MessageFilterTarget = "text" | "media"
+
+export function messageFilterTarget(filter: UnknownRecord): MessageFilterTarget {
+  return filter.target === "media" ? "media" : "text"
+}
 
 export interface MessageFilterStage {
   id: MessageFilterStageId
@@ -33,7 +38,7 @@ export const messageFilterStages: readonly MessageFilterStage[] = [
     id: "output",
     label: "回复发送前",
     shortLabel: "输出过滤器",
-    description: "在模型生成回复后、实际发送前改写、拦截或转换正文。",
+    description: "处理插件回复的正文或媒体链接；正文在转图、转语音前处理，媒体链接在投递前处理。",
     textBinding: "response.text",
     textLabel: "当前回复正文",
   },

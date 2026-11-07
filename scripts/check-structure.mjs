@@ -1,6 +1,7 @@
 import fs from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import ts from "typescript"
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const ignoredDirs = new Set([".git", ".superpowers", "cache", "node_modules", "output", "resources", "scripts", "vendor"])
@@ -83,7 +84,35 @@ for (const [file, source] of sources) {
   graph.set(file, dependencies)
 }
 
+const configFile = ts.readConfigFile(path.join(pluginRoot, "tsconfig.json"), ts.sys.readFile)
+const compilerConfig = ts.parseJsonConfigFileContent(configFile.config, ts.sys, pluginRoot)
+const program = ts.createProgram(files, compilerConfig.options)
+const checker = program.getTypeChecker()
+const builderFile = path.join(pluginRoot, "core/message-chain/builder.ts")
+const isBuilderReply = property => property.name.text === "reply" && checker.getSymbolAtLocation(property.name)?.declarations?.some(declaration => declaration.getSourceFile().fileName === builderFile)
 const errors = []
+// 业务发送只能使用 MessageChain；宿主调用留在原生适配边界。
+for (const [file, source] of sources) {
+  const name = relative(file)
+  if (!/^(apps|core|tools|extensions)\//u.test(name) || name === "core/runtime/host-runtime.ts") continue
+  const ast = program.getSourceFile(file)
+  const visit = node => {
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+      const property = node.expression
+      const method = property.name.text
+      const receiver = property.expression
+      const canonicalReply = isBuilderReply(property)
+      const rawCall = ["reply", "sendMsg"].includes(method) && !canonicalReply
+      const boundRawCall = ["call", "apply"].includes(method) && ts.isPropertyAccessExpression(receiver) && ["reply", "sendMsg"].includes(receiver.name.text) && !isBuilderReply(receiver)
+      if (rawCall || boundRawCall) {
+        const { line } = ast.getLineAndCharacterOfPosition(node.getStart(ast))
+        errors.push(`${name}:${line + 1} 不得直接调用宿主发送，请使用 MessageChain 投递入口`)
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(ast)
+}
 for (const cycle of findImportCycles(graph)) {
   errors.push(`静态导入循环：${cycle.map(relative).join(" -> ")}`)
 }

@@ -57,7 +57,7 @@ const navGroups = [
     tabs: [
       { id: "actions", label: "动作中心", icon: "sparkles", description: "将指令与能力连接，一键执行你的自定义动作" },
       { id: "tools", label: "AI 能力", icon: "wrench", description: "管理可供模型调用的工具、Skill 与 MCP 服务" },
-      { id: "filters", label: "代码过滤器", icon: "filter", description: "按顺序处理输入和输出正文" },
+      { id: "filters", label: "代码过滤器", icon: "filter", description: "按顺序处理正文和发送前的媒体链接" },
       { id: "tool-permissions", label: "使用权限", icon: "key", description: "设置不同角色可使用的能力范围" },
       { id: "logs", label: "日志与用量", icon: "activity", description: "查看大模型调用、Token 和费用" },
       { id: "advanced", label: "系统设置", icon: "sliders", description: "管理配置备份、运行维护和开发者设置" },
