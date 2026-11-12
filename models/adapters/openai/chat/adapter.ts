@@ -352,14 +352,14 @@ function imageResult(value: UnknownRecord, allowBareUrl = true): GeneratedImage 
     const payload = base64.replace(/\s+/g, "")
     if (/^[A-Za-z0-9+/=_-]+$/.test(payload)) return { data: `data:${mimeType};base64,${payload}`, mimeType, ...(value.revised_prompt ? { revisedPrompt: stringValue(value.revised_prompt) } : {}) }
   }
-  if (url) return { url, mimeType, ...(value.revised_prompt ? { revisedPrompt: stringValue(value.revised_prompt) } : {}) }
+  if (url) return { url, ...(value.mime_type || value.mimeType ? { mimeType } : {}), ...(value.revised_prompt ? { revisedPrompt: stringValue(value.revised_prompt) } : {}) }
   return null
 }
 
 function imageResultFromPart(value: unknown): GeneratedImage | null {
   const item = record(value)
   const type = stringValue(item.type || item.kind).toLowerCase()
-  const mimeType = stringValue(item.mime_type || item.mimeType || item.media_type || item.mediaType || "image/png") || "image/png"
+  const mimeType = stringValue(item.mime_type || item.mimeType || item.media_type || item.mediaType)
   if (type === "image_url" || item.image_url !== undefined || item.imageUrl !== undefined) {
     const imageValue = item.image_url !== undefined ? item.image_url : item.imageUrl
     const image = typeof imageValue === "string" ? { url: imageValue } : record(imageValue)
@@ -372,7 +372,7 @@ function imageResultFromPart(value: unknown): GeneratedImage | null {
     if (direct) return direct
     // 部分 OpenAI-compatible 网关把裸 Base64 放在 image.data 中，而不是 b64_json。
     const rawData = stringValue(item.data).replace(/\s+/g, "")
-    if (rawData && /^[A-Za-z0-9+/=_-]+$/.test(rawData) && !/^data:/i.test(rawData)) return { data: `data:${mimeType};base64,${rawData}`, mimeType }
+    if (rawData && /^[A-Za-z0-9+/=_-]+$/.test(rawData) && !/^data:/i.test(rawData)) return { data: `data:${mimeType || "image/png"};base64,${rawData}`, mimeType: mimeType || "image/png" }
   }
   return null
 }
@@ -416,13 +416,13 @@ function imageResultsFromText(value: unknown): GeneratedImage[] {
   for (const match of source.matchAll(markdown)) {
     const candidate = stringValue(match[1]).trim().replace(/^<|>$/g, "")
     if (/^data:image\//i.test(candidate)) images.push({ data: candidate, mimeType: candidate.match(/^data:([^;,]+)/i)?.[1] || "image/png" })
-    else if (/^https?:\/\//i.test(candidate)) images.push({ url: candidate, mimeType: "image/png" })
+    else if (/^https?:\/\//i.test(candidate)) images.push({ url: candidate })
   }
   const html = /<img\b[^>]*\bsrc\s*=\s*["']([^"']+)["'][^>]*>/gi
   for (const match of source.matchAll(html)) {
     const candidate = stringValue(match[1]).trim()
     if (/^data:image\//i.test(candidate)) images.push({ data: candidate, mimeType: candidate.match(/^data:([^;,]+)/i)?.[1] || "image/png" })
-    else if (/^https?:\/\//i.test(candidate)) images.push({ url: candidate, mimeType: "image/png" })
+    else if (/^https?:\/\//i.test(candidate)) images.push({ url: candidate })
   }
   return uniqueImages(images)
 }

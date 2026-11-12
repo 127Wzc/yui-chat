@@ -83,7 +83,7 @@ try {
   const { createSSRApp } = await import("vue")
   const { renderToString } = await import("vue/server-renderer")
   const { components } = await import("../output/runtime/web/client/ui/components.js")
-  const { LogsTab } = await import("../output/runtime/web/client/features/logs/logs-tab.js")
+  const { LogsTab, sourceLabel, purposeLabel, logSourceOptions, logPurposeOptions } = await import("../output/runtime/web/client/features/logs/logs-tab.js")
   const { DailyStillTab } = await import("../output/runtime/web/client/features/daily-still/daily-still-tab.js")
   const clientSource = await fs.readFile(path.join(root, "output/runtime/web/client/features/daily-still/daily-still-tab.js"), "utf8")
   const clientVersion = clientSource.match(/store\.js(\?v=[^"\']+)/)?.[1] || ""
@@ -95,6 +95,41 @@ try {
     for (const [name, value] of Object.entries(components)) app.component(name, name === "SideDrawer" ? { props: ["open"], template: '<div v-if="open"><slot /><slot name="actions" /></div>' } : value)
     return renderToString(app)
   }
+  for (const [key, label] of [
+    ["firstPersonContinuation", "自然续聊"], ["initiativeGreeting", "主动问候"],
+    ["memory-portrait", "聊天画像"], ["memory-maintenance", "记忆整理"],
+    ["knowledge-document-update", "知识库文档向量更新"], ["web-test", "网页对话测试"],
+    ["action-web-test", "网页动作测试"], ["subagent", "子代理任务"],
+  ]) {
+    assert.equal(sourceLabel(key), label)
+    assert.equal(logSourceOptions.find(option => option.value === key)?.label, label)
+    assert.equal(purposeLabel(key), label, "legacy purpose equal to source should also be localized")
+  }
+  assert.equal(purposeLabel("decision"), "决策判断")
+  assert.equal(purposeLabel("model-test"), "模型测试")
+  for (const option of [...logSourceOptions, ...logPurposeOptions]) assert(/[\u4e00-\u9fff]/u.test(option.label), "built-in filter labels must be Chinese")
+  assert.equal(sourceLabel("custom-extension"), "custom-extension", "custom identifiers remain distinguishable")
+  assert.equal(purposeLabel("custom-purpose"), "custom-purpose")
+  assert.equal(sourceLabel(), "-")
+  assert.equal(purposeLabel(), "-")
+  await sqliteClient.run("INSERT INTO ai_runs(id, source, purpose, status, started_at) VALUES(?,?,?,?,?)", ["continuation-fixture", "firstPersonContinuation", "chat", "ok", now])
+  const continuation = await get("/api/logs/runs?source=firstPersonContinuation&purpose=chat")
+  assert.equal(continuation.items.length, 1)
+  assert.equal(continuation.items[0].source, "firstPersonContinuation", "localized options must still query unchanged raw identifiers")
+  const localized = await render({ ...LogsTab, setup() {
+    const state = LogsTab.setup()
+    state.moreFilters.value = true
+    state.state.runs = [continuation.items[0], { id: "decision-fixture", source: "dailyStill.decision", purpose: "decision", status: "ok", started_at: now }]
+    state.drawerOpen.value = true
+    state.state.detail = { run: continuation.items[0], childRuns: [{ id: "child-fixture", source: "initiativeGreeting", status: "ok" }], modelCalls: [], toolCalls: [] }
+    return state
+  } })
+  assert(localized.includes('class="cell-title">自然续聊</div>'))
+  assert(localized.includes('class="muted tiny">决策判断'))
+  assert(localized.includes('value="firstPersonContinuation">自然续聊</option>'))
+  assert(localized.includes('value="decision">决策判断</option>'))
+  assert(localized.includes('class="badge">自然续聊</span>'), "run detail source")
+  assert(localized.includes("主动问候 · 成功"), "child run source")
   const main = await render(LogsTab)
   assert(main.includes("日志分栏") && !main.includes("参考资料按用户"), "the default log view must not render the artifact table")
   const embedded = await render(LogsTab, { embedded: true, sourceScope: "dailyStill.decision" })

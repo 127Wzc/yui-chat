@@ -110,7 +110,7 @@ try {
   const { selectPromptTools } = await import('../output/runtime/core/chat/token-budget.js')
   for (const [query, expected] of [
     ['画图', 'generate_image'], ['用画图工具画一个白发角色', 'generate_image'],
-    ['修改参考图片', 'generate_image'], ['draw an illustration', 'generate_image'],
+    ['修改参考图片', 'generate_image'], ['用画图工具把这张图做成哭哭的动态gif', 'generate_image'], ['draw an illustration', 'generate_image'],
     ['Markdown 数学公式排版', 'render_image'], ['HTML 表格转图片', 'render_image'],
     ['生成 Markdown 表格图片', 'render_image'],
   ]) {

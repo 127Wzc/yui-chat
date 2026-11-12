@@ -1,4 +1,5 @@
 import { reactive, computed, ref, watch } from "vue"
+import { accessListDraft, accessListValue } from "./access-list-editor.js"
 import { confirmAction, store, request, toast, saveConfigPatch, setDirtyScope } from "../../app/store/store.js"
 import { splitNames, parseJsonText, toJson, shortTime } from "../../shared/format.js"
 import { asRecord, errorMessage, type UnknownRecord } from "../../shared/data.js"
@@ -178,8 +179,8 @@ function initDraft(cfg: PersonaConfig = {}) {
     ttsMaxChars: tts.maxChars ?? 300,
     privateChatEnabled: cfg.chat?.access?.privateChatEnabled !== false,
     accessMasterBypass: cfg.chat?.access?.masterBypass !== false,
-    accessWhitelist: Array.isArray(cfg.chat?.access?.whitelist) ? cfg.chat.access.whitelist.join(", ") : (cfg.chat?.access?.whitelist || ""),
-    accessBlacklist: Array.isArray(cfg.chat?.access?.blacklist) ? cfg.chat.access.blacklist.join(", ") : (cfg.chat?.access?.blacklist || ""),
+    accessWhitelist: accessListDraft(cfg.chat?.access?.whitelist),
+    accessBlacklist: accessListDraft(cfg.chat?.access?.blacklist),
     contextRecentMessageCount: cfg.context?.recentMessageCount ?? 20,
     mediaEnabled: cfg.mediaRecognition?.enabled !== false,
     mediaRemoteFetch: cfg.mediaRecognition?.remoteFetch?.enabled !== false,
@@ -355,8 +356,8 @@ export const PersonaTab = {
           "response.tts.maxChars": Number(draft.ttsMaxChars || 300),
           "chat.access.privateChatEnabled": draft.privateChatEnabled,
           "chat.access.masterBypass": draft.accessMasterBypass,
-          "chat.access.whitelist": splitNames(draft.accessWhitelist),
-          "chat.access.blacklist": splitNames(draft.accessBlacklist),
+          "chat.access.whitelist": accessListValue(draft.accessWhitelist, "对话白名单"),
+          "chat.access.blacklist": accessListValue(draft.accessBlacklist, "对话黑名单"),
           "context.recentMessageCount": Number(draft.contextRecentMessageCount ?? 20),
           "mediaRecognition.enabled": draft.mediaEnabled,
           "mediaRecognition.remoteFetch.enabled": draft.mediaRemoteFetch,
@@ -553,9 +554,27 @@ export const PersonaTab = {
                           <div class="settings-toggle-item"><div><strong>允许私聊</strong><small>允许用户在私聊中发起对话。</small></div><Switch :model-value="draft.privateChatEnabled" @update:model-value="draft.privateChatEnabled = $event" /></div>
                           <div class="settings-toggle-item"><div><strong>主人绕过限制</strong><small>主人不受名单限制。</small></div><Switch :model-value="draft.accessMasterBypass" @update:model-value="draft.accessMasterBypass = $event" /></div>
                         </div>
+                        <p class="muted small">点击保存后，后续对话立即生效，无需重启。已有纯数字条目按群号显示；若原意是屏蔽用户，请移到用户 QQ 号栏。</p>
+                        <p v-if="draft.accessMasterBypass" class="muted small">当前已开启主人绕过限制，以上名单不会拦截主人账号。</p>
                         <div class="form-grid dense">
-                          <Field label="对话白名单" hint="逗号分隔" v-model="draft.accessWhitelist" tip="留空表示不启用。" />
-                          <Field label="对话黑名单" hint="逗号分隔" v-model="draft.accessBlacklist" />
+                          <div>
+                            <h4>对话白名单</h4>
+                            <p class="muted small">任意一项匹配即可进入对话；以下三栏全部留空表示不限制。</p>
+                            <Field label="允许的群号" hint="逗号或换行分隔" type="textarea" :rows="2" v-model="draft.accessWhitelist.groups" placeholder="填写群号，允许群内所有成员" />
+                            <Field label="允许的用户 QQ 号" hint="只填 QQ 号" type="textarea" :rows="2" v-model="draft.accessWhitelist.users" placeholder="填写 QQ 号，无需添加符号" tip="适用于所有群和私聊；私聊仍须开启“允许私聊”。" />
+                            <Collapse title="仅允许指定群成员" hint="按群限制用户">
+                              <Field label="群号与 QQ 号" hint="逗号或换行分隔" type="textarea" :rows="2" v-model="draft.accessWhitelist.groupUsers" placeholder="群号^QQ号，例如 123456^654321" />
+                            </Collapse>
+                          </div>
+                          <div>
+                            <h4>对话黑名单</h4>
+                            <p class="muted small">任意一项匹配即静默忽略，黑名单优先于白名单。</p>
+                            <Field label="屏蔽的群号" hint="逗号或换行分隔" type="textarea" :rows="2" v-model="draft.accessBlacklist.groups" placeholder="填写群号，屏蔽整个群" />
+                            <Field label="屏蔽的用户 QQ 号" hint="只填 QQ 号" type="textarea" :rows="2" v-model="draft.accessBlacklist.users" placeholder="填写 QQ 号，无需添加符号" tip="适用于所有群和私聊。" />
+                            <Collapse title="仅屏蔽指定群成员" hint="不影响其他群或私聊">
+                              <Field label="群号与 QQ 号" hint="逗号或换行分隔" type="textarea" :rows="2" v-model="draft.accessBlacklist.groupUsers" placeholder="群号^QQ号，例如 123456^654321" />
+                            </Collapse>
+                          </div>
                         </div>
                       </section>
                     </div>

@@ -524,37 +524,74 @@ function scopeLabel(row: LogRun = { id: "" }): string {
   return `用户 ${row.user_id || "-"}`
 }
 
-function sourceLabel(value: unknown = ""): string {
-  const labels: Record<string, string> = {
-    "knowledge-index-rebuild": "向量重建",
-    embedding: "嵌入调用",
-    rerank: "重排序调用",
-    "group-memory-consolidation": "群聊记忆提炼",
-    firstPerson: "第一人称对话",
-    "dailyStill.decision": "日常定格",
-    dailyStill: "日常定格",
-    management: "管理任务",
-    "memory-recall": "记忆召回",
-    "memory-vector-index": "记忆向量",
-    "knowledge-vector-index": "知识库向量",
-  }
-  const key = String(value || "")
-  return labels[key] || key || "-"
+const SOURCE_LABELS: Record<string, string> = {
+  chat: "指令对话",
+  firstPerson: "第一人称对话",
+  firstPersonContinuation: "自然续聊",
+  initiativeGreeting: "主动问候",
+  "dailyStill.decision": "日常定格",
+  dailyStill: "日常定格",
+  "web-test": "网页对话测试",
+  subagent: "子代理任务",
+  tool: "工具调用",
+  "action-command": "动作指令",
+  "action-web-test": "网页动作测试",
+  "action-delivery": "动作结果投递",
+  management: "管理任务",
+  "isolated-task": "独立生成任务",
+  "group-memory-consolidation": "群聊记忆提炼",
+  "memory-maintenance": "记忆整理",
+  "memory-portrait": "聊天画像",
+  "memory-recall": "记忆召回",
+  "memory-vector-index": "记忆向量",
+  "knowledge-vector-index": "知识库向量",
+  "knowledge-document-update": "知识库文档向量更新",
+  "knowledge-index-rebuild": "向量重建",
+  "knowledge-rerank": "知识库重排序",
+  embedding: "嵌入调用",
+  rerank: "重排序调用",
+  decision: "决策判断",
 }
 
-function purposeLabel(value: unknown = ""): string {
-  const labels: Record<string, string> = {
-    embedding_knowledge: "知识库向量",
-    embedding_memory: "记忆向量",
-    embedding: "嵌入调用",
-    rerank: "重排序调用",
-    chat: "对话",
-    "search-aggregate": "托管搜索子请求",
-    "memory-consolidation": "记忆提炼",
-    "image-generation": "图片生成",
-  }
+const PURPOSE_LABELS: Record<string, string> = {
+  chat: "对话",
+  decision: "决策判断",
+  embedding_knowledge: "知识库向量",
+  embedding_memory: "记忆向量",
+  embedding: "嵌入调用",
+  rerank: "重排序调用",
+  "knowledge-rerank": "知识库重排序",
+  subagent: "子代理任务",
+  "search-aggregate": "托管搜索子请求",
+  "memory-consolidation": "记忆提炼",
+  "memory-maintenance": "记忆整理",
+  "memory-portrait": "聊天画像",
+  "image-generation": "图片生成",
+  "isolated-generation": "独立生成",
+  "model-test": "模型测试",
+}
+
+export const logSourceOptions = [
+  { value: "", label: "全部来源" },
+  ...Object.entries(SOURCE_LABELS).map(([value, label]) => ({ value, label })),
+]
+export const logPurposeOptions = [
+  { value: "", label: "全部用途" },
+  ...Object.entries(PURPOSE_LABELS).map(([value, label]) => ({ value, label })),
+]
+
+export function sourceLabel(value: unknown = ""): string {
   const key = String(value || "")
-  return labels[key] || key || "-"
+  if (Object.hasOwn(SOURCE_LABELS, key)) return SOURCE_LABELS[key]!
+  if (Object.hasOwn(PURPOSE_LABELS, key)) return PURPOSE_LABELS[key]!
+  return key || "-"
+}
+
+export function purposeLabel(value: unknown = ""): string {
+  const key = String(value || "")
+  if (Object.hasOwn(PURPOSE_LABELS, key)) return PURPOSE_LABELS[key]!
+  // 旧日志可能直接以来源作为用途，继续使用同一套中文显示。
+  return sourceLabel(key)
 }
 
 function lineageLabel(value: unknown = ""): string {
@@ -956,7 +993,7 @@ export const LogsTab = {
       modelDetailOpen, modelDetailLoading, modelDetailError, modelDetail, modelDetailTab,
       conversationOpen, conversationLoading, conversationError, conversationDetail, conversationTurnId, conversationTurnLoading, conversationTurnError, conversationTurnDetail,
       totals, metrics, timeline, modelResponses, modelOptions, availableToolCount, actualToolCount, hostedToolCallCount, toolInvocationHint,
-      number, time, duration, categoryLabel, deliveryLabel, statusLabel, modelStopLabel, protocolLabel, protocolShortLabel, streamLabel, modelNamesLabel, modelProtocolsLabel, modelStreamsLabel, shortId, messagePreview, hostedToolCalls, responsesRecoveryLabel, scopeLabel, sourceLabel, purposeLabel, lineageLabel, modelRouteDetail, availableTools, renderRichContent, refresh, resetAndRefresh, resetFilters, applyFilters,
+      number, time, duration, categoryLabel, deliveryLabel, statusLabel, modelStopLabel, protocolLabel, protocolShortLabel, streamLabel, modelNamesLabel, modelProtocolsLabel, modelStreamsLabel, shortId, messagePreview, hostedToolCalls, responsesRecoveryLabel, scopeLabel, sourceLabel, purposeLabel, logSourceOptions, logPurposeOptions, lineageLabel, modelRouteDetail, availableTools, renderRichContent, refresh, resetAndRefresh, resetFilters, applyFilters,
       conversationScope, conversationTitle, promptPreview, toolGroupsForModel, unlinkedConversationTools,
       requestForDisplay, rawRequests, rawResponse, responseMedia, usageSourceLabel, modelTokenCounters, modelCacheCounter, channelNamesLabel, compactionLabel,
       openRun, openModelDetail, openModelDetailById, openConversation, loadConversationTurn, saveSettings, cleanupLogs, cleanupAllLogs,
@@ -1009,13 +1046,13 @@ export const LogsTab = {
             <Field class="logs-filter-field" v-model="state.filters.to" label="结束日期" type="date" />
             <Field class="logs-filter-field" v-model="state.filters.status" label="状态" type="select" :options="[{ value: '', label: '全部状态' }, { value: 'running', label: '进行中' }, { value: 'ok', label: '成功' }, { value: 'error', label: '失败' }, { value: 'ambiguous', label: '结果不确定' }, { value: 'denied', label: '拒绝' }, { value: 'blocked', label: '拦截' }, { value: 'skipped', label: '已跳过' }, { value: 'partial', label: '部分完成' }, { value: 'silent', label: '静默' }, { value: 'canceled', label: '取消' }]" />
             <Field class="logs-filter-field" v-model="state.filters.model" label="模型" type="select" :options="modelOptions" />
-            <Field v-if="!sourceScope" class="logs-filter-field" v-model="state.filters.source" label="来源" type="select" :options="[{value:'',label:'全部来源'},{value:'dailyStill.decision',label:'日常定格'},{value:'firstPerson',label:'第一人称对话'},{value:'group-memory-consolidation',label:'群聊记忆提炼'},{value:'memory-recall',label:'记忆召回'},{value:'memory-vector-index',label:'记忆向量'},{value:'knowledge-vector-index',label:'知识库向量'},{value:'management',label:'管理任务'}]" />
+            <Field v-if="!sourceScope" class="logs-filter-field" v-model="state.filters.source" label="来源" type="select" :options="logSourceOptions" />
             <Field class="logs-filter-field logs-filter-query" v-model="state.filters.query" label="关键词" placeholder="搜索正文、工具或错误信息" @enter="applyFilters" />
             <div class="logs-filter-actions"><button class="btn small ghost" type="button" :aria-expanded="moreFilters" @click="moreFilters = !moreFilters"><Icon name="sliders" :size="13" />更多条件</button><button class="btn small ghost" type="button" @click="resetFilters">重置</button>
             <button class="btn small outline" type="button" :disabled="state.loading" @click="applyFilters">查询</button></div>
           </div>
         </div>
-        <div v-if="moreFilters" class="logs-extra-filters"><Field v-model="state.filters.userId" label="用户" placeholder="精确用户 ID" @enter="applyFilters" /><Field v-model="state.filters.groupId" label="群" placeholder="精确群 ID" @enter="applyFilters" /><Field v-model="state.filters.purpose" label="用途" placeholder="chat / decision / embedding" @enter="applyFilters" /><Field v-if="!sourceScope" v-model="state.filters.source" label="自定义来源" placeholder="完整来源标识" @enter="applyFilters" /></div>
+        <div v-if="moreFilters" class="logs-extra-filters"><Field v-model="state.filters.userId" label="用户" placeholder="精确用户 ID" @enter="applyFilters" /><Field v-model="state.filters.groupId" label="群" placeholder="精确群 ID" @enter="applyFilters" /><Field v-model="state.filters.purpose" label="用途" type="select" :options="logPurposeOptions" @enter="applyFilters" /><Field v-if="!sourceScope" v-model="state.filters.source" label="自定义来源" placeholder="完整来源标识" @enter="applyFilters" /><Field v-model="state.filters.purpose" label="自定义用途" placeholder="扩展自定义用途标识" @enter="applyFilters" /></div>
         <div class="table-wrap logs-run-table" :aria-busy="state.loading"><table class="data-table"><thead><tr><th>开始时间</th><th>来源 / 用途</th><th>渠道 / 模型 / 协议</th><th class="logs-status-cell">状态</th><th class="num">模型调用</th><th class="num">工具事件</th><th class="num">Token</th><th>用户 / 会话</th><th class="col-actions">操作</th></tr></thead><tbody><tr v-for="row in state.runs" :key="row.id"><td class="muted tiny">{{ time(row.started_at) }}</td><td><div class="cell-title">{{ sourceLabel(row.source) }}</div><span class="muted tiny">{{ purposeLabel(row.purpose) }}<span v-if="compactionLabel(row)"> · {{ compactionLabel(row) }}</span></span></td><td class="logs-model-cell"><div class="cell-title" :title="channelNamesLabel(row)">{{ channelNamesLabel(row) }}</div><span class="muted tiny" :title="modelNamesLabel(row)">{{ modelNamesLabel(row) }} · {{ modelProtocolsLabel(row) }} · {{ modelStreamsLabel(row) }}</span></td><td class="logs-status-cell"><span class="badge" :title="row.error_message || undefined" :class="row.status === 'ok' ? 'on' : (row.status === 'error' ? 'risk-high' : 'risk-medium')">{{ statusLabel(row.status) }}</span></td><td class="num">{{ number(row.model_calls) }}</td><td class="num">{{ number(row.tool_calls) }}<small v-if="row.failed_tools" class="table-subvalue">失败 {{ number(row.failed_tools) }}</small></td><td class="num">{{ number(row.total_tokens) }}</td><td class="muted tiny logs-session-cell"><span>{{ scopeLabel(row) }}</span><span v-if="row.session_id || row.conversation_key" class="logs-session-short" :title="row.session_id || row.conversation_key">sessionId {{ shortId(row.session_id || row.conversation_key) }}</span></td><td class="col-actions"><button class="btn small outline" type="button" @click="openRun(row)">查看详情</button></td></tr></tbody></table><div v-if="!state.runs.length" class="logs-empty"><Icon name="activity" :size="22" /><b>没有匹配的日志</b><span>调整筛选条件后再试一次。</span></div></div>
         <div class="pager"><span class="pager-info">第 {{ page }} 页 · 本页 {{ state.runs.length }} 条</span><div class="pager-controls"><select v-model.number="pageSize" aria-label="日志每页条数" :disabled="state.loading" @change="resetAndRefresh"><option :value="25">25 条 / 页</option><option :value="50">50 条 / 页</option><option :value="100">100 条 / 页</option></select><button class="icon-btn sm" type="button" aria-label="上一页日志" :disabled="state.loading || page <= 1" @click="goPage(page - 1)"><Icon name="chevron-left" :size="15" /></button><span class="pager-page">{{ page }}</span><button class="icon-btn sm" type="button" aria-label="下一页日志" :disabled="state.loading || !state.nextCursor" @click="goPage(page + 1)"><Icon name="chevron-right" :size="15" /></button></div></div>
       </Panel>
@@ -1038,7 +1075,7 @@ export const LogsTab = {
 
       <SideDrawer :open="drawerOpen" title="运行链路详情" subtitle="按模型请求、工具轮次和结束状态展示完整链路" icon="activity" width="720px" @close="drawerOpen = false">
         <div v-if="state.detail" class="logs-detail">
-          <div class="detail-summary"><div><span class="badge" :class="state.detail.run.status === 'ok' ? 'on' : 'risk-medium'">{{ statusLabel(state.detail.run.status) }}</span><span v-if="state.detail.run.model_name" class="badge">{{ modelNamesLabel(state.detail.run) }}</span><span v-if="state.detail.run.model_name" class="badge">{{ modelProtocolsLabel(state.detail.run) }}</span><span v-if="state.detail.run.model_name" class="badge">{{ modelStreamsLabel(state.detail.run) }}</span><span class="muted">{{ time(state.detail.run.started_at) }} · 总耗时 {{ duration(state.detail.run.duration_ms) }}</span><span v-if="state.detail.run.session_id || state.detail.run.conversation_key" class="muted tiny logs-session-short" :title="state.detail.run.session_id || state.detail.run.conversation_key">sessionId {{ shortId(state.detail.run.session_id || state.detail.run.conversation_key) }}</span><span v-if="state.detail.run.error_message" class="text-danger tiny logs-inline-message" :title="state.detail.run.error_message">失败：{{ messagePreview(state.detail.run.error_message) }}</span></div><button v-if="state.detail.run.conversation_key" class="btn small outline" type="button" @click="openConversation"><Icon name="message" :size="13" />查看完整会话</button></div><JsonBlock v-if="store.developerMode && state.detail.run.error_details && Object.keys(state.detail.run.error_details).length" title="运行失败诊断详情" :value="state.detail.run.error_details" :open="true" />
+          <div class="detail-summary"><div><span class="badge" :class="state.detail.run.status === 'ok' ? 'on' : 'risk-medium'">{{ statusLabel(state.detail.run.status) }}</span><span class="badge">{{ sourceLabel(state.detail.run.source) }}</span><span class="badge">{{ purposeLabel(state.detail.run.purpose) }}</span><span v-if="state.detail.run.model_name" class="badge">{{ modelNamesLabel(state.detail.run) }}</span><span v-if="state.detail.run.model_name" class="badge">{{ modelProtocolsLabel(state.detail.run) }}</span><span v-if="state.detail.run.model_name" class="badge">{{ modelStreamsLabel(state.detail.run) }}</span><span class="muted">{{ time(state.detail.run.started_at) }} · 总耗时 {{ duration(state.detail.run.duration_ms) }}</span><span v-if="state.detail.run.session_id || state.detail.run.conversation_key" class="muted tiny logs-session-short" :title="state.detail.run.session_id || state.detail.run.conversation_key">sessionId {{ shortId(state.detail.run.session_id || state.detail.run.conversation_key) }}</span><span v-if="state.detail.run.error_message" class="text-danger tiny logs-inline-message" :title="state.detail.run.error_message">失败：{{ messagePreview(state.detail.run.error_message) }}</span></div><button v-if="state.detail.run.conversation_key" class="btn small outline" type="button" @click="openConversation"><Icon name="message" :size="13" />查看完整会话</button></div><JsonBlock v-if="store.developerMode && state.detail.run.error_details && Object.keys(state.detail.run.error_details).length" title="运行失败诊断详情" :value="state.detail.run.error_details" :open="true" />
           <div class="logs-detail-stats"><span>模型请求 <b>{{ number(state.detail.run.model_calls) }}</b></span><span>可用工具 <b>{{ number(availableToolCount) }}</b></span><span>工具事件 <b>{{ number(actualToolCount) }}</b></span><span v-if="state.detail.run.failed_tools">失败 <b class="text-danger">{{ number(state.detail.run.failed_tools) }}</b></span><span>Token <b>{{ number(state.detail.run.total_tokens) }}</b></span><span title="上游报告的缓存输入；未命中或上游未提供时显示 —">缓存输入 <b>{{ Number(state.detail.run.cached_tokens) > 0 ? number(state.detail.run.cached_tokens) : '—' }}</b></span></div>
           <details v-if="state.detail.run.response_text" class="logs-run-response"><summary>查看最终模型回复（{{ number(state.detail.run.response_text.length) }} 字符）</summary><div class="logs-rich-content" v-html="renderRichContent(state.detail.run.response_text)"></div><details v-if="store.developerMode" class="logs-raw-content"><summary>原始回复</summary><pre>{{ state.detail.run.response_text }}</pre></details></details>
           <div v-if="state.detail.childRuns?.length" class="logs-detail-stats logs-child-runs"><span>子运行 <b>{{ number(state.detail.childRuns.length) }}</b></span><span v-for="child in state.detail.childRuns" :key="child.id" class="badge">{{ sourceLabel(child.source) }} · {{ statusLabel(child.status) }} · {{ String(child.id).slice(0, 8) }}</span></div>

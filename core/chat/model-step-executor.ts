@@ -1,3 +1,4 @@
+import { formatSearchMessageParts } from "./search-citations.js"
 import { isGroupEvent } from "../message/event-scope.js"
 import { recentContextStore } from "./recent-context.js"
 import { adapterRegistry } from "../../models/adapters/registry.js"
@@ -237,7 +238,10 @@ function completedTextReply(trace: UnknownRecord, call: UnknownRecord): string {
     || partCount <= 0 || number(metadata.receiptSentCount) !== partCount || number(metadata.receiptFailedCount) !== 0
     || number(metadata.mediaPartCount) > 0 || !list(metadata.contentTypes).includes("text")
     || !parts.length || parts.some(part => !["text", "reply", "mention"].includes(text(part.type)))) return ""
-  return parts.filter(part => part.type === "text").map(part => normalizeResponseText(part.text)).filter(Boolean).join("\n")
+  // 结构仍按模型主动发送的部分判断；正文使用真正执行的参数，包含引用清理结果。
+  const deliveredParts = list(record(trace.arguments).parts).map(record)
+  return (deliveredParts.length ? deliveredParts : parts)
+    .filter(part => part.type === "text").map(part => normalizeResponseText(part.text)).filter(Boolean).join("\n")
 }
 
 interface ContextHint {
@@ -985,7 +989,13 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
   const workingRecoveryMessages = hasSeparateRecoveryContext ? [...recoveryMessages] : workingMessages
   const executeToolRoundWithReplay = async (input: Omit<Parameters<typeof executeToolRound>[0], "workingMessages">) => {
     const before = workingMessages.length
-    const result = await executeToolRound({ ...input, workingMessages })
+    const toolCalls = (input.toolCalls || []).map(record).map(call => {
+      if (call.name !== "message_send") return call
+      const args = record(call.arguments)
+      if (!Array.isArray(args.parts)) return call
+      return { ...call, arguments: { ...args, parts: formatSearchMessageParts(args.parts.map(record), [...hostedSearchSources.values()]) } }
+    })
+    const result = await executeToolRound({ ...input, toolCalls, workingMessages })
     if (workingRecoveryMessages !== workingMessages) workingRecoveryMessages.push(...workingMessages.slice(before))
     return result
   }

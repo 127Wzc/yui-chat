@@ -914,6 +914,19 @@ async function checkToolPolicy() {
     assert(observedImageCounts[0] === 1 && ordinaryImage.metadata?.imageCount === 1, "ordinary users should always request and receive one generated image")
     assert(observedImageCounts[1] === 2 && allowlistedImage.metadata?.imageCount === 2, "allowlisted users should have their requested count capped by maxCount")
     assert(observedImageCounts[2] === undefined && ownerDefaultImage.metadata?.imageCount === 2, "maxCount should cap returned images without becoming the upstream count when count is omitted")
+    const gifData = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
+    const animationPrompt = "把参考角色做成哭哭的动态 GIF，循环播放，不要改成静图"
+    let animationRequest
+    adapterRegistry.generateImages = async request => {
+      animationRequest = request
+      return { images: [{ data: gifData, mimeType: "image/png" }] }
+    }
+    const animation = await imageTool.execute({ prompt: animationPrompt, referenceImages: [], quality: "hd", imageSize: "8K", background: "custom" }, { config, e: { user_id: "ordinary" } })
+    assert(animationRequest.prompt === animationPrompt && animationRequest.quality === "hd" && animationRequest.imageSize === "8K" && animationRequest.background === "custom", "animation intent and model-specific parameters must reach the image model unchanged")
+    const animationPart = animation.chain.find(part => part.type === "image")
+    assert(animationPart.source.mimeType === "image/gif" && animationPart.source.value === gifData.split(",")[1], "delivery must retain GIF bytes and prefer the data URL type over a PNG fallback")
+    const { validateToolArguments } = await import("../output/runtime/tools/support/contract.js")
+    assert(validateToolArguments(imageTool, { prompt: animationPrompt, quality: "hd", imageSize: "8K", background: "custom" }).ok, "model-specific image options must not be rejected by local enums")
     const { errorDetails } = await import("../output/runtime/core/shared/error-details.js")
     const imageFailure = new RangeError("Maximum call stack size exceeded")
     adapterRegistry.generateImages = async () => { throw imageFailure }
@@ -2646,6 +2659,21 @@ async function checkAdapterToolProtocol() {
     assert(chatCompletionsImageRequest.size === "1024x1536" && chatCompletionsImageRequest.quality === "high" && chatCompletionsImageRequest.background === "transparent", "Chat Completions image requests should let tool parameters override model image defaults")
     assert(chatCompletionsImage.images.length === 4 && chatCompletionsImage.usage.total === 18, "Chat Completions image responses should preserve every upstream image and usage")
 
+    for (const content of [
+      [{ type: "image_url", image_url: { url: "https://images.example/animation.png" } }],
+      "![animation](https://images.example/animation.png)",
+      [{ type: "image_url", image_url: { url: "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" } }],
+    ]) {
+      global.fetch = async () => new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200, headers: { "content-type": "application/json" } })
+      const generated = await adapterRegistry.get("openai-images").generateImages({
+        channel: { id: "animation", type: "openai-images", model: "image-model", baseURL: "https://images.example/v1", authType: "none", modelConfig: { image: { protocol: "openai-chat-completions" } } },
+        prompt: "制作动态 GIF",
+      })
+      assert(generated.images.length === 1, "image gateway must accept animation resources")
+      if (generated.images[0].url) assert(generated.images[0].mimeType === undefined, "remote image format must not be guessed from a PNG suffix")
+      else assert(generated.images[0].mimeType === "image/gif", "inline animation MIME must be retained")
+    }
+
     let geminiImageRequest
     global.fetch = async (url, options = {}) => {
       geminiImageRequest = { url: String(url), body: JSON.parse(String(options.body || "{}")) }
@@ -3218,6 +3246,32 @@ async function checkOutputSemantics() {
     ],
   )
   assert(citedText === "结论一。¹\n结论二。²\n保留 [普通链接](https://local.example/keep)。", "hosted search citations should become compact markers without removing unrelated links")
+  const citationCases = [
+    ["([来源](https://example.com/news?utm_source=openai))", "¹"],
+    ["（[来源](https://example.com/news?utm_medium=chat&utm_source=openai)）", "¹"],
+    ["<https://example.com/news?utm_source=openai>", "¹"],
+    ["https://example.com/news?utm_source=openai。后文", "¹。后文"],
+    ["https://example.com/news-extra", "https://example.com/news-extra"],
+    ["https://example.com/news(foo_(bar))", "https://example.com/news(foo_(bar))"],
+    ["[业务链接](https://example.com/news?id=10&utm_source=openai)", "[业务链接](https://example.com/news?id=10&utm_source=openai)"],
+    ["[其他网址](https://other.example/news)", "[其他网址](https://other.example/news)"],
+    ["`https://example.com/news`", "`https://example.com/news`"],
+    ["```text\nhttps://example.com/news\n```", "```text\nhttps://example.com/news\n```"],
+    ["![图片](https://example.com/news)", "![图片](https://example.com/news)"],
+  ]
+  for (const [input, expected] of citationCases) assert(formatHostedSearchCitations(input, [{ url: "https://example.com/news" }]) === expected, `citation cleanup should preserve complete URL boundaries: ${input}`)
+  assert(formatHostedSearchCitations("([来源](https://example.com/news?id=10))", [{ url: "https://example.com/news?id=1" }]) === "([来源](https://example.com/news?id=10))", "similar business parameters must not match")
+  assert(formatHostedSearchCitations('[来源](https://example.com/news?b=2&amp;a=1&utm_source=openai "标题")', [{ url: "https://example.com/news?a=1&b=2" }]) === "¹", "query order, HTML escaping and Markdown titles should be handled")
+  assert(formatHostedSearchCitations("([来源](https://example.com/a_(b)?utm_source=openai))", [{ url: "https://example.com/a_(b)" }]) === "¹", "balanced parentheses inside URL should stay intact")
+  const { formatSearchMessageParts } = await import("../output/runtime/core/chat/search-citations.js")
+  const sourceForward = { type: "forward", nodes: [{ parts: [{ type: "text", text: "标题\n链接：https://example.com/news" }] }] }
+  const imagePart = { type: "image", source: { kind: "url", value: "https://example.com/news" } }
+  const messageParts = [{ type: "text", text: "结论。([来源](https://example.com/news?utm_source=openai))" }, imagePart, sourceForward]
+  const cleanedParts = formatSearchMessageParts(messageParts, [])
+  assert(cleanedParts[0].text === "结论。¹" && cleanedParts[1] === imagePart && cleanedParts[2] === sourceForward, "tool body cleanup must preserve media and the original source forward")
+  assert(messageParts[0].text.includes("utm_source"), "cleanup must not mutate the model call")
+  assert(formatSearchMessageParts([{ type: "text", text: "  正文 ([来源](https://example.com/news)) \n" }], [{ url: "https://example.com/news" }])[0].text === "  正文 ¹ \n", "tool text fragment spacing must survive cleanup")
+  assert(formatHostedSearchCitations("[普通链接](https://example.com/news)", []) === "[普通链接](https://example.com/news)", "without known sources ordinary links must survive")
   const indexedParts = splitNaturalReply(`这是第一段，需要有足够长度才能自然切开。${"补充内容".repeat(12)}。给你两个办法选一个：\n- 稍后再搜\n- 直接发 BV 号`, { maxParts: 3, minChars: 80, minPartChars: 40 })
   assert(indexedParts.join("\n").includes("给你两个办法选一个") && !indexedParts.at(-1).startsWith("个："), "natural split should preserve the original text boundary")
   const configuredParts = splitConfiguredReply("第一句。第二句！第三句？", {
@@ -3313,7 +3367,7 @@ async function checkOutputSemantics() {
     reply: async msg => hostedReplies.push(msg),
   }, {
     channel: "responses",
-    text: "远程检索结论。([来源一](https://example.com/one)) 第二条结论。([来源二](https://example.com/two))",
+    text: "远程检索结论。([来源一](https://example.com/one?utm_source=openai)) 第二条结论。([来源二](https://example.com/two))",
     hostedSearchSources: [
       { title: "来源一", url: "https://example.com/one" },
       { title: "重复来源", url: "https://example.com/one" },
@@ -3451,6 +3505,26 @@ async function checkMessageFilters() {
 }
 
 async function checkAccessControl() {
+  const { accessListDraft, accessListValue } = await import("../output/runtime/web/client/features/persona/access-list-editor.js")
+  const legacyList = ["20001", "^10003", "20002^10004"]
+  const editor = accessListDraft(legacyList)
+  assert(editor.groups === "20001" && editor.users === "10003" && editor.groupUsers === "20002^10004", "access editor should classify legacy entries without guessing numeric user IDs")
+  assert(JSON.stringify(accessListValue(editor, "名单")) === JSON.stringify(legacyList), "existing mixed access list should round-trip")
+  assert(accessListDraft("20001;^10003|20002^10004").users === "10003", "legacy string separators should still load")
+  const editedList = accessListValue({ groups: "20001，20002\n20001", users: "10003, 10004\n10003", groupUsers: "20003^10005" }, "名单")
+  assert(JSON.stringify(editedList) === JSON.stringify(["20001", "20002", "^10003", "^10004", "20003^10005"]), "editor should encode users, accept separators, and deduplicate")
+  assert(accessListValue(accessListDraft([]), "名单").length === 0, "empty fields should disable the list")
+  for (const invalid of [
+    { groups: "^10003", users: "", groupUsers: "" },
+    { groups: "", users: "20001^10003", groupUsers: "" },
+    { groups: "", users: "^10003", groupUsers: "" },
+    { groups: "", users: "", groupUsers: "10003" },
+    { groups: "", users: "", groupUsers: "20001^10003^10004" },
+  ]) {
+    let rejected = false
+    try { accessListValue(invalid, "名单") } catch { rejected = true }
+    assert(rejected, "misplaced or malformed access entries should fail before saving")
+  }
   const { blockUser, checkAccess, clearBlockedUsers, clearMutedScopes, muteScope, unblockUser, unmuteScope } = await import("../output/runtime/core/chat/access-control.js")
   const { preflight } = await import("../output/runtime/core/chat/response-pipeline.js")
   const { configStore } = await import("../output/runtime/config/store.js")
@@ -3467,6 +3541,36 @@ async function checkAccessControl() {
   assert(checkAccess({ isPrivate: true, isMaster: true, user_id: "master" }, config).ok, "master should bypass access limits")
   assert(checkAccess({ isGroup: true, group_id: "20001", user_id: "10001", sender: { user_id: "10001" } }, config).ok, "whitelisted group should be allowed")
   assert(!checkAccess({ isGroup: true, group_id: "20001", user_id: "10002", sender: { user_id: "10002" } }, config).ok, "group-user blacklist should deny")
+  const allowConfig = { chat: { access: { whitelist: accessListValue(editor, "白名单"), blacklist: ["^10003"] } } }
+  assert(checkAccess({ isGroup: true, group_id: "20001", user_id: "10001" }, allowConfig).ok, "group whitelist should allow its members")
+  assert(checkAccess({ isGroup: true, group_id: "20002", user_id: "10004" }, allowConfig).ok, "group member whitelist should allow the matching member")
+  assert(!checkAccess({ isGroup: true, group_id: "20099", user_id: "10004" }, allowConfig).ok, "nonempty whitelist should deny unrelated members")
+  assert(!checkAccess({ isGroup: true, group_id: "20001", user_id: "10003" }, allowConfig).ok, "blacklist should take priority over both user and group whitelist")
+  assert(checkAccess({ isPrivate: true, user_id: "10003" }, { chat: { access: { whitelist: ["^10003"] } } }).ok, "user whitelist should allow private chat when enabled")
+  const userBlockConfig = { chat: { access: { blacklist: accessListValue({ groups: "20001", users: "10003", groupUsers: "20002^10004" }, "黑名单") } } }
+  for (const event of [
+    { isGroup: true, group_id: "20001", user_id: "10001" },
+    { isGroup: true, group_id: "20099", user_id: "10003" },
+    { isPrivate: true, user_id: "10003" },
+    { isGroup: true, group_id: "20002", user_id: "10004" },
+  ]) assert(!checkAccess(event, userBlockConfig).ok, "edited blacklist should deny the selected group, user, or group member")
+  assert(checkAccess({ isGroup: true, group_id: "20099", user_id: "10004" }, userBlockConfig).ok, "group member block should not affect other groups")
+  assert(checkAccess({ isPrivate: true, user_id: "10004" }, userBlockConfig).ok, "group member block should not affect private chat")
+  assert(checkAccess({ isMaster: true, isPrivate: true, user_id: "10003" }, userBlockConfig).ok, "master bypass should remain enabled by default")
+  userBlockConfig.chat.access.masterBypass = false
+  assert(!checkAccess({ isMaster: true, isPrivate: true, user_id: "10003" }, userBlockConfig).ok, "disabling bypass should apply edited list to masters")
+  const savedConfig = await configStore.load()
+  try {
+    await configStore.update(current => {
+      current.chat.access = { privateChatEnabled: true, masterBypass: false, whitelist: [], blacklist: accessListValue({ groups: "", users: "10003", groupUsers: "" }, "黑名单") }
+    })
+    const denied = await preflight({ isPrivate: true, user_id: "10003" }, "hello", await configStore.load())
+    assert(!denied.ok && denied.silent === true, "saved editor blacklist should take effect on the next preflight without restart")
+    await configStore.update(current => { current.chat.access.blacklist = [] })
+    assert(checkAccess({ isPrivate: true, user_id: "10003" }, await configStore.load()).ok, "removing a saved entry should immediately restore access")
+  } finally {
+    await configStore.save(savedConfig)
+  }
   const event = { isGroup: true, group_id: "20001", user_id: "10001", sender: { user_id: "10001" } }
   muteScope(event, { groupId: "20001", durationMs: 60000 })
   const gate = await preflight(event, "hello", config)
@@ -4563,12 +4667,13 @@ async function checkConversations() {
           channel: { id: hostedMessageAdapter.id, type: hostedMessageAdapter.id, model: "smoke", modelConfig: { toolUse: true, toolPolicy: { routes: { web_search: { source: "hosted" }, tool_search: { source: "disabled" } } } }, timeoutMs: 1000 },
         })
       }
-      hostedMessageParts = [{ type: "reply", messageId: "555011254" }, { type: "text", text: "这是已经发送的最终锐评。" }]
+      hostedMessageParts = [{ type: "reply", messageId: "555011254" }, { type: "text", text: "这是已经发送的最终锐评。([来源](https://example.com/hosted-answer-source?utm_source=openai))" }]
       for (const emptyReply of ["", "<EMPTY>"]) {
         hostedMessageSecondText = emptyReply
         const textResult = await runHostedMessage()
         assert(hostedMessageRequests.length === 1 && hostedMessageDeliveries.length === 1 && textResult.text === "" && textResult.requiresFinalReply === false, "hosted search with an already delivered text answer must stop before a second model request or empty recovery")
-        assert(textResult.deliveredReplyText === "这是已经发送的最终锐评。" && textResult.agentTurn.finalReplyDelivered === true && textResult.agentTurn.phase === "completed" && textResult.agentTurn.emptyFinalRecoveryCount === 0 && textResult.toolFinalizationReason === "FINAL_REPLY_DELIVERED", "delivered answers should remain distinguishable from true silent turns")
+        assert(hostedMessageDeliveries[0].parts[1].text === "这是已经发送的最终锐评。¹", "native hosted search citations must be cleaned before Registry sends message_send")
+        assert(textResult.deliveredReplyText === "这是已经发送的最终锐评。¹" && textResult.agentTurn.finalReplyDelivered === true && textResult.agentTurn.phase === "completed" && textResult.agentTurn.emptyFinalRecoveryCount === 0 && textResult.toolFinalizationReason === "FINAL_REPLY_DELIVERED", "delivered answers should remain distinguishable from true silent turns")
         const { sendChatOutput } = await import("../output/runtime/core/chat/output-service.js")
         const outputReplies = []
         await sendChatOutput({ isGroup: true, user_id: "10001", group_id: "20001", group: { makeForwardMsg: async nodes => ({ type: "node", data: nodes }) }, reply: async message => { outputReplies.push(message); return true } }, textResult, hostedMessageConfig)
@@ -5373,7 +5478,7 @@ async function checkConversations() {
           id: "smoke-text-search-send",
           text: "",
           usage: { input: 1, output: 1, total: 2, source: "reported" },
-          toolCalls: [{ id: "smoke-text-search-send-call", name: "message_send", arguments: { parts: [{ type: "text", text: "文字搜索结果已整理。" }] } }],
+          toolCalls: [{ id: "smoke-text-search-send-call", name: "message_send", arguments: { parts: [{ type: "text", text: "文字搜索结果已整理。([来源](https://example.com/source?utm_source=openai))" }] } }],
         }
       },
     }
@@ -5395,7 +5500,7 @@ async function checkConversations() {
         channel: { id: "smoke-text-search", type: "smoke-text-search", model: "smoke", modelConfig: { toolUse: true }, timeoutMs: 1000 },
       })
       assert(textSearchCalls === 1 && textSearchResult.toolChain.filter(item => item.name !== "openai:web_search").map(item => item.name).join(",") === `${textSearchName},message_send`, "text-only search should finish through message_send even with a hosted search reply obligation")
-      assert(textSearchForcedMessageSend === true && textSearchDeliveries[0] === "文字搜索结果已整理。", "text-only search should force and execute a text message_send delivery")
+      assert(textSearchForcedMessageSend === true && textSearchDeliveries[0] === "文字搜索结果已整理。¹", "text-only search should force and execute a text message_send delivery")
       assert(textSearchDeliveries[1]?.type === "node" && textSearchDeliveries[1]?.data?.[0]?.message?.includes("https://example.com/source"), "search delivery should append prepared source nodes after the model-authored answer")
       assert(textSearchResult.searchDeliveryRequired === true && textSearchResult.searchDeliveryStatus === "sent" && textSearchResult.toolRounds === 2 && textSearchResult.modelCalls.length === 2 && textSearchResult.text === "", "text-only search delivery should use one bounded terminal send even when search consumed the normal tool round")
       for (const successfulParts of [0, 1]) {

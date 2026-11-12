@@ -1,3 +1,5 @@
+import { formatHostedSearchCitations } from "./search-citations.js"
+export { formatHostedSearchCitations } from "./search-citations.js"
 import { recentContextStore } from "./recent-context.js"
 import { applyOutputFilters } from "../../filters/message/message-filter-service.js"
 import { userSettingsStore } from "../../user/settings.js"
@@ -199,58 +201,6 @@ function rememberDeliveredConversation(event: unknown, result: UnknownRecord, so
   if (options.armContinuation === false || !isLlmResult(result, source)) return
   const e = record(event)
   armConversationContinuation(event, e.msg || e.raw_message, botText)
-}
-
-const superscriptDigits: Readonly<Record<string, string>> = Object.freeze({
-  "0": "⁰",
-  "1": "¹",
-  "2": "²",
-  "3": "³",
-  "4": "⁴",
-  "5": "⁵",
-  "6": "⁶",
-  "7": "⁷",
-  "8": "⁸",
-  "9": "⁹",
-})
-
-function citationMarker(index: number): string {
-  return String(index).split("").map(digit => superscriptDigits[digit] || digit).join("")
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-}
-
-/**
- * 将 Responses 原生搜索插入的 Markdown URL 引用收敛成 QQ 可显示的 Unicode
- * 小角标。来源 URL 仍由结构化来源转发和日志持有，不在聊天正文重复展开。
- */
-export function formatHostedSearchCitations(value: unknown, sourcesValue: unknown): string {
-  let output = text(value)
-  const seen = new Set<string>()
-  const sources = (Array.isArray(sourcesValue) ? sourcesValue : []).map(record).filter(source => {
-    const url = text(source.url).trim()
-    if (!/^https?:\/\//i.test(url) || seen.has(url)) return false
-    seen.add(url)
-    return true
-  })
-  for (const [index, source] of sources.entries()) {
-    const url = text(source.url).trim()
-    const marker = citationMarker(index + 1)
-    for (const variant of [...new Set([url, url.replaceAll("&", "&amp;")])]) {
-      const escaped = escapeRegExp(variant)
-      output = output
-        .replace(new RegExp(`\\s*[（(]\\s*\\[[^\\]\\r\\n]+\\]\\(\\s*${escaped}\\s*\\)\\s*[)）]`, "gu"), marker)
-        .replace(new RegExp(`\\s*\\[[^\\]\\r\\n]+\\]\\(\\s*${escaped}\\s*\\)`, "gu"), marker)
-        .replace(new RegExp(`\\s*[（(]\\s*<?${escaped}>?\\s*[)）]`, "gu"), marker)
-        .replace(new RegExp(`\\s*<?${escaped}>?`, "gu"), marker)
-    }
-  }
-  return output
-    .replace(/[ \t]+([，。！？；：,.!?;:])/gu, "$1")
-    .replace(/\n[ \t]+/gu, "\n")
-    .trim()
 }
 
 function hostedSearchSourceNodes(result: UnknownRecord): ForwardNode[] {

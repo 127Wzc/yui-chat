@@ -65,7 +65,7 @@ function resourceForImage(image: { data?: string; url?: string; mimeType?: strin
     return {
       kind: "bytes",
       value: dataUrl[2],
-      mimeType: image.mimeType || dataUrl[1] || "image/png",
+      mimeType: dataUrl[1] || image.mimeType || "image/png",
       name: `generated-${index + 1}`,
     }
   }
@@ -262,21 +262,21 @@ export class GenerateImageTool {
       },
     }
   }
-  descriptionZh = "AI 画图与图片编辑：根据描述创作人物、角色立绘、插画、风景，或编辑参考图片。需要记忆或搜索资料时先调用对应工具，再将返回的资料引用传入；普通绘画无需传参考资料。完成前不要声称已经画好。内容排版使用 render_image。"
-  description = "Generate or edit actual visual images with the configured image model. For memory-based drawings first call memory_manage with action=reference and pass its ref in referenceMaterials; for search-based drawings first call web_search with resultMode=reference. Pass only references selected for this request; their full content is expanded by the tool. Ordinary drawings do not need referenceMaterials. Do not substitute render_image for artwork. Omit referenceImages for text-to-image; include image URLs/data URLs to edit them. Generation runs in the background and sends returned images to the current chat. Do not claim completion before images arrive."
+  descriptionZh = "AI 画图与图片编辑：将用户的完整创作意图以自然语言交给配置的绘图模型。需要记忆或搜索资料时先调用对应工具，再传入资料引用。生成结果由工具返回并发送到当前会话；内容排版使用 render_image。"
+  description = "Generate or edit actual visual images from the user's natural-language request using the configured image model. Preserve the user's full creative intent in prompt. For memory/search references, first call memory_manage(action=reference) or web_search(resultMode=reference), then pass selected refs in referenceMaterials. Runs in the background and sends returned images to this chat. Use render_image for content layout."
   parameters = {
     type: "object",
     properties: {
-      prompt: { type: "string", minLength: 1, maxLength: 4000, description: "Drawing or editing instructions; do not copy reference material here." },
+      prompt: { type: "string", minLength: 1, maxLength: 4000, description: "The user's complete generation or editing intent in natural language. Pass reference material separately." },
       model: { type: "string", maxLength: 200, description: "Optional configured image model ID. Omit to follow the image-generation task." },
       referenceImages: { type: "array", maxItems: 3, description: "Optional image URLs or data URLs. Omit to use an image attached to the current message; use [] to force text-to-image.", items: { type: "string" } },
       referenceMaterials: { type: "array", maxItems: 20, description: "Optional reference IDs returned by memory_manage or another tool in this conversation. Omit when no material is requested.", items: { type: "string" } },
       count: { type: "integer", minimum: 1, description: "Optional target image count. It is honored only for the bot owner or configured allowlisted users; other users are always limited to one image." },
       size: { type: "string", description: "OpenAI image size such as 1024x1024, 1024x1536, or 1536x1024." },
-      quality: { type: "string", enum: ["auto", "low", "medium", "high"], description: "Image quality preset." },
+      quality: { type: "string", description: "Optional quality setting for the configured image model." },
       aspectRatio: { type: "string", description: "Gemini aspect ratio such as 1:1 or 16:9." },
-      imageSize: { type: "string", enum: ["auto", "512", "1K", "2K", "4K"], description: "Gemini output size preset." },
-      background: { type: "string", enum: ["auto", "transparent", "opaque"], description: "OpenAI background mode." },
+      imageSize: { type: "string", description: "Optional output size setting for the configured image model." },
+      background: { type: "string", description: "Optional background setting for the configured image model." },
       startMessage: { type: "string", minLength: 2, maxLength: 80, description: "One short single-line acknowledgement that drawing has started. Do not mention completion, results, model names, or elapsed time. Example: '我开始画了，完成后发给你。'" },
     },
     required: ["prompt"],
