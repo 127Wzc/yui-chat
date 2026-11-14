@@ -1,5 +1,6 @@
 import path from "node:path"
 import { configStore, cacheDir, dataDir, tempDir } from "../../config/store.js"
+import { defaults } from "../../config/defaults.js"
 import { commandObserver } from "../../knowledge/command-observer.js"
 import { providerResolver } from "../../models/routing/provider-resolver.js"
 import { toolRegistry } from "../../tools/support/registry.js"
@@ -159,7 +160,7 @@ export async function buildSetupGuide(config: RuntimeConfigObject = configStore.
         recommendation: "先只配置一个主模型即可；需要稳定性时再添加备用模型。主模型不能识图时，再开启视觉辅助。",
         defaults: {
           选择策略: "失败后切换",
-          最大输出: numberValue(replyer.maxTokens, 1024),
+          最大输出: numberValue(replyer.maxTokens, defaults.modelTasks.replyer.maxTokens),
           温度: replyer.temperature ?? 0.7,
         },
       },

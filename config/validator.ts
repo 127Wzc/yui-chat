@@ -550,7 +550,7 @@ function validateProviders(config: ConfigRecord, issues: ValidationIssue[]): voi
     if (selectionStrategy && !selectionStrategies.has(selectionStrategy)) {
       add(issues, "error", `modelTasks.${taskName}.selectionStrategy`, `未知模型选择策略：${selectionStrategy}`)
     }
-    if (task.maxTokens !== undefined) positiveNumber(issues, `modelTasks.${taskName}.maxTokens`, task.maxTokens, { min: 1, max: 65536 })
+    if (task.maxTokens !== undefined) positiveNumber(issues, `modelTasks.${taskName}.maxTokens`, task.maxTokens, { min: 1, max: 65536, integer: true })
   }
 
   const chat = section(config.chat)

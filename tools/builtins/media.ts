@@ -3,6 +3,7 @@ import { MusicPlayTool } from "./music.js"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { configStore } from "../../config/store.js"
+import { defaults } from "../../config/defaults.js"
 import { mediaCacheDir, prepareMediaForVision } from "../../core/media/media-cache.js"
 import { buildMediaUserContent, resolveMediaContext, summarizeMediaContext } from "../../core/message/media-context.js"
 import type { ResolvedMediaContext } from "../../core/message/media-context.js"
@@ -310,7 +311,7 @@ export class RecognizeMediaTool {
         ],
         tools: [],
         event: context.e,
-        maxTokens: Math.max(1, Number(record(config.modelTasks)[taskName] && record(record(config.modelTasks)[taskName]).maxTokens) || 1024),
+        maxTokens: Math.max(1, Number(record(record(config.modelTasks)[taskName]).maxTokens) || defaults.modelTasks.replyer.maxTokens),
         signal: context.agent?.signal,
         purpose: "media-recognition",
         source: "tool",

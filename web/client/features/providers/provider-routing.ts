@@ -1,5 +1,5 @@
-import { computed, reactive, ref } from "vue"
-import { refreshTab, saveConfigPatch, store, toast } from "../../app/store/store.js"
+import { computed, onUnmounted, reactive, ref, watch } from "vue"
+import { confirmAction, refreshTab, saveConfigPatch, setDirtyScope, store, toast } from "../../app/store/store.js"
 import { splitNames } from "../../shared/format.js"
 import { asRecord, asRecords, errorMessage, type UnknownRecord } from "../../shared/data.js"
 import {
@@ -32,7 +32,7 @@ interface SubAgentSettings extends UnknownRecord {
   systemPrompt?: string
 }
 interface RoutingConfig extends UnknownRecord {
-  modelTasks?: Record<string, { modelList?: string[]; selectionStrategy?: string; purpose?: string }>
+  modelTasks?: Record<string, { modelList?: string[]; selectionStrategy?: string; purpose?: string; maxTokens?: number }>
   subAgent?: SubAgentSettings
   mediaRecognition?: { recognitionModel?: string }
   chat?: { modelRequestTimeoutMs?: number; modelStream?: boolean; defaultTask?: string }
@@ -204,6 +204,7 @@ export const ModelRoutingBuilder = {
     const draft = reactive({
       replyerModels: initialReplyerModels.join(", "),
       replyerStrategy: props.cfg.modelTasks?.replyer?.selectionStrategy || "sequential",
+      replyerMaxTokens: props.cfg.modelTasks?.replyer?.maxTokens ?? 10000,
       recognitionModel: props.cfg.mediaRecognition?.recognitionModel || "",
       modelRequestTimeoutMs: props.cfg.chat?.modelRequestTimeoutMs ?? 90000,
       modelStream: props.cfg.chat?.modelStream === true ? "true" : "false",
@@ -235,6 +236,17 @@ export const ModelRoutingBuilder = {
     const showDrawer = ref(false)
     const saving = ref(false)
     const previewing = ref(false)
+    const savedDraft = ref(JSON.stringify(draft))
+    const dirty = computed(() => JSON.stringify(draft) !== savedDraft.value)
+    watch(() => showDrawer.value && dirty.value, value => setDirtyScope("reply-settings", value), { flush: "sync" })
+    onUnmounted(() => setDirtyScope("reply-settings", false))
+
+    async function closeSettings() {
+      if (saving.value) return
+      if (dirty.value && !await confirmAction({ title: "放弃未保存的回复设置？", message: "当前修改尚未保存。", confirmText: "放弃修改" })) return
+      Object.assign(draft, JSON.parse(savedDraft.value))
+      showDrawer.value = false
+    }
 
     function toggleReplyerModel(name: string) {
       const rows = [...replyerModelList.value]
@@ -255,16 +267,21 @@ export const ModelRoutingBuilder = {
         try {
         const replyer = splitNames(draft.replyerModels)
         if (!replyer.length) throw new Error("请填写至少一个回复模型")
+        const maxTokens = Number(draft.replyerMaxTokens)
+        if (!Number.isInteger(maxTokens) || maxTokens < 1 || maxTokens > 65536) throw new Error("回复输出 Token 上限必须是 1–65536 之间的整数")
+        const submittedDraft = JSON.stringify(draft)
         const patch = {
           "chat.defaultTask": "replyer",
           "chat.defaultChannel": replyer[0],
           "modelTasks.replyer.modelList": replyer,
           "modelTasks.replyer.selectionStrategy": draft.replyerStrategy,
+          "modelTasks.replyer.maxTokens": maxTokens,
           "mediaRecognition.recognitionModel": draft.recognitionModel,
           "chat.modelRequestTimeoutMs": Number(draft.modelRequestTimeoutMs) || 90000,
           "chat.modelStream": draft.modelStream === "true",
         }
         await saveConfigPatch(patch)
+        savedDraft.value = submittedDraft
         toast(draft.replyerStrategy === "fallback" ? "已设为主对话 + fallback 回复" : "已设为单模型直接回复")
       } catch (err) { toast(errorMessage(err)) }})
     }
@@ -284,7 +301,7 @@ export const ModelRoutingBuilder = {
       replyerStrategyLabel,
       visionOk,
       digest, digestMetrics, previewResult, diagIssues, showDrawer,
-      saving, previewing, toggleReplyerModel, makePrimaryModel, saveSimple, runPreview,
+      saving, previewing, dirty, closeSettings, toggleReplyerModel, makePrimaryModel, saveSimple, runPreview,
     }
   },
   template: `
@@ -296,6 +313,7 @@ export const ModelRoutingBuilder = {
             { label: '主模型 ' + (modelLabel(replyerModelList[0]) || '尚未设置'), active: !!replyerModelList.length },
             { label: '备用 ' + Math.max(0, replyerModelList.length - 1) },
             { label: '策略 ' + replyerStrategyLabel },
+            { label: '输出 ' + draft.replyerMaxTokens + ' Token' },
             { label: draft.modelStream === 'true' ? '默认流式' : '默认非流式', tone: draft.modelStream === 'true' ? 'accent' : '' }
           ]" />
         </div>
@@ -309,6 +327,7 @@ export const ModelRoutingBuilder = {
         <PillList :items="[
           { label: '回复模型 ' + replyerModelList.length, active: true },
           { label: '策略 ' + replyerStrategyLabel },
+          { label: '输出 ' + draft.replyerMaxTokens + ' Token' },
           { label: '超时 ' + Math.round(Number(draft.modelRequestTimeoutMs || 0) / 1000) + ' 秒' },
           { label: draft.modelStream === 'true' ? '默认流式' : '默认非流式', tone: draft.modelStream === 'true' ? 'accent' : '' },
           { label: draft.recognitionModel ? ('识图增强 ' + modelLabel(draft.recognitionModel)) : '识图自动选择', tone: 'accent' }
@@ -353,7 +372,7 @@ export const ModelRoutingBuilder = {
         size="lg"
         title="全局回复设置"
         description="选择主回复模型、备用模型和全局传输参数。"
-        @close="showDrawer = false"
+        @close="closeSettings"
       >
         <div class="form-section">
           <div class="section-title"><Icon name="bot" :size="13" />回复模型</div>
@@ -379,6 +398,7 @@ export const ModelRoutingBuilder = {
           <p class="muted tiny">点击卡片加入或移除。带高亮光环的是主模型，其余已选模型会在主模型失败时作为备用。</p>
           <Field label="选择策略" type="select" :options="STRATEGY_OPTIONS" v-model="draft.replyerStrategy" tip="推荐“失败回退”：先用主模型，失败时再自动切到后备模型。" />
           <div class="form-grid dense">
+            <Field label="回复输出 Token 上限" type="number" v-model="draft.replyerMaxTokens" tip="默认 10000，允许 1–65536。每次模型请求的思考与工具参数也计入输出上限，实际受模型能力限制。" />
             <Field label="全局请求超时（毫秒）" type="number" v-model="draft.modelRequestTimeoutMs" tip="所有模型默认使用；单个模型可以在“渠道与模型 → 编辑模型”中覆盖。范围 1000–600000。" />
           <Field label="默认流式响应" type="select" :options="BOOL_OFF_OPTIONS" v-model="draft.modelStream" tip="OpenAI Compatible、Responses、Qwen、ChatGLM、Gemini、Claude 会使用各自的 SSE；具体模型仍以供应商能力为准。" />
           </div>
@@ -390,6 +410,7 @@ export const ModelRoutingBuilder = {
           <p class="muted tiny">常规聊天只使用默认回复任务：主回复模型负责对话、工具调用和媒体上下文；多个回复模型请把策略设为 fallback 做失败回退。</p>
         </div>
         <template #footer>
+          <button class="btn outline" type="button" :disabled="saving" @click="closeSettings">取消</button>
           <button class="btn primary" type="button" :disabled="saving" @click="saveSimple"><Icon name="save" :size="14" :class="{ 'icon-spin': saving }" />{{ saving ? "保存中..." : "保存回复方案" }}</button>
           <button class="btn outline" type="button" :disabled="previewing" @click="runPreview()"><Icon name="eye" :size="14" :class="{ 'icon-spin': previewing }" />{{ previewing ? "刷新中..." : "刷新预览" }}</button>
         </template>

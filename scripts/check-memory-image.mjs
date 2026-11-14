@@ -367,6 +367,8 @@ try {
     const flowConfig = await configStore.load()
     flowConfig.tools.promptSelection.enabled = false
     flowConfig.chat.maxToolRounds = 3
+    // 使用完整模型窗口，与真实路由一致；默认输出预算不应受测试中缺失的模型配置限制。
+    const flowChannel = { id: "mock", type: "mock", model: "mock", modelConfig: flowConfig.models.find(model => model.name === "mock"), timeoutMs: 1000 }
     let calls = 0
     let flowRef = ""
     adapterRegistry.sendMessage = async ({ messages, tools, toolChoice }) => {
@@ -386,7 +388,7 @@ try {
       return { id: "flow-2", text: "", stopReason: "tool_calls", toolCalls: [{ id: "image-call", name: "generate_image", arguments: { prompt: "肖像", referenceMaterials: [flowRef], referenceImages: [] } }], usage: { input: 1, output: 1, total: 2 } }
     }
     imageRequest = null
-    const flow = await chatService.runModelStepWithChannel({ e: event, prompt: ownRequest, config: flowConfig, history: [], step: { id: "reply", task: "replyer", mode: "final" }, channel: { id: "mock", type: "mock", model: "mock", modelConfig: { toolUse: true }, timeoutMs: 1000 }, artifacts })
+    const flow = await chatService.runModelStepWithChannel({ e: event, prompt: ownRequest, config: flowConfig, history: [], step: { id: "reply", task: "replyer", mode: "final" }, channel: flowChannel, artifacts })
     assert.deepEqual(flow.toolChain.map(item => item.name), ["memory_manage", "generate_image"])
     const taskId = flow.toolChain.find(item => item.name === "generate_image")?.metadata?.taskId
     assert(taskId, "image generation must be dispatched to the background queue")
@@ -395,7 +397,7 @@ try {
     assert.equal(materialRecords(imageRequest.prompt).length, 265)
     assert(artifacts.get(flowRef).uses.some(use => use.tool === "generate_image"), "using a reference must be observable")
     adapterRegistry.sendMessage = async () => ({ id: "hosted-result", text: "托管搜索摘要", stopReason: "end_turn", toolCalls: [], hostedToolCalls: [{ id: "hosted-call", type: "web_search_call", status: "completed", query: "极光", sources: [{ title: "极光来源", url: "https://example.org/aurora" }] }], usage: { input: 1, output: 1, total: 2 } })
-    await chatService.runModelStepWithChannel({ e: event, prompt: "搜索极光", config: flowConfig, history: [], step: { id: "reply", task: "replyer", mode: "final" }, channel: { id: "mock", type: "mock", model: "mock", modelConfig: { toolUse: true }, timeoutMs: 1000 }, artifacts })
+    await chatService.runModelStepWithChannel({ e: event, prompt: "搜索极光", config: flowConfig, history: [], step: { id: "reply", task: "replyer", mode: "final" }, channel: flowChannel, artifacts })
     const hostedRef = artifacts.list().find(item => item.source === "openai:web_search" && item.title === "搜索：极光")
     assert(hostedRef, "native hosted search results should remain available for later conversation turns")
     assert.equal(hostedRef.value.results[0].title, "极光来源")

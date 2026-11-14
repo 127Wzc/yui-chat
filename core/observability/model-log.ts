@@ -29,6 +29,18 @@ const RUN_LIST_COLUMNS = [
   "estimated_cost",
 ]
 const SECRET_KEY = /token|key|secret|password|credential|authorization|cookie|api[_-]?key|encrypted[_-]?content/i
+const TOKEN_COUNT_KEYS = new Set([
+  "inputtokens", "outputtokens", "totaltokens", "prompttokens", "completiontokens", "cachedtokens", "reasoningtokens",
+  "cachereadinputtokens", "cachecreationinputtokens", "cachewritetokens", "ephemeral5minputtokens", "ephemeral1hinputtokens",
+  "audiotokens", "imagetokens", "texttokens", "videotokens", "acceptedpredictiontokens", "rejectedpredictiontokens",
+  "prompttokencount", "candidatestokencount", "totaltokencount", "cachedcontenttokencount", "thoughtstokencount",
+  "maxtokens", "maxinputtokens", "maxoutputtokens", "maxcompletiontokens", "maxoutputtokencount",
+  "tokenestimate", "estimatedinputtokens", "estimatedoutputtokens", "inputtokenbudget", "prompttokenbudget",
+  "contextwindowtokens", "tokenlimit", "inputtokenlimit", "outputtokenlimit", "tokensperday", "maxtotaltokens",
+])
+const TOKEN_DETAIL_KEYS = new Set([
+  "inputtokensdetails", "outputtokensdetails", "prompttokensdetails", "completiontokensdetails", "cachewritetokensdetails",
+])
 
 function opaqueIdForLog(value: unknown): string {
   const id = String(value ?? "").trim()
@@ -346,16 +358,17 @@ function responseForLog({ source = "", purpose = "" }: { source?: unknown; purpo
   return shouldStoreMemoryConsolidationInput({ source, purpose }) ? "" : redactText(response, 20000)
 }
 
-// 仅放行已知的数值用量和结构化明细，不能让同名字符串绕过凭证脱敏。
-function isUsageCounter(value: unknown, key: string): boolean {
+// 仅放行已知的数值用量、预算和结构化明细，不能让同名字符串绕过凭证脱敏。
+function isTokenCount(value: unknown, key: string): boolean {
+  const normalized = key.replace(/_/g, "").toLowerCase()
   return typeof value === "number" && Number.isFinite(value)
-    && /^(?:input_tokens|output_tokens|total_tokens|prompt_tokens|completion_tokens|cached_tokens|reasoning_tokens|cache_read_input_tokens|cache_creation_input_tokens|promptTokenCount|candidatesTokenCount|totalTokenCount|cachedContentTokenCount|thoughtsTokenCount)$/.test(key)
+    && TOKEN_COUNT_KEYS.has(normalized)
     || Boolean(value) && typeof value === "object" && !Array.isArray(value)
-    && /^(?:input_tokens_details|output_tokens_details|prompt_tokens_details|completion_tokens_details)$/.test(key)
+    && TOKEN_DETAIL_KEYS.has(normalized)
 }
 
 function redactValue(value: unknown, key = "", depth = 0, seen = new WeakSet<object>()): unknown {
-  if (SECRET_KEY.test(String(key)) && !isUsageCounter(value, key)) return "<redacted>"
+  if (SECRET_KEY.test(String(key)) && !isTokenCount(value, key)) return "<redacted>"
   if (depth > 4) return "[truncated]"
   if (value === null || value === undefined || typeof value !== "object") {
     if (typeof value === "string") return redactText(value, key === "stack" ? 6000 : 800)
@@ -372,7 +385,7 @@ function redactValue(value: unknown, key = "", depth = 0, seen = new WeakSet<obj
 // 请求快照需要比普通元数据保留更多正文，才能在详情窗口还原模型实际看到的上下文；
 // 仍沿用同一组凭证字段脱敏规则，并对单值、层级、数组和对象键数设上限。
 function snapshotValue(value: unknown, key = "", depth = 0, seen = new WeakSet<object>()): unknown {
-  if (SECRET_KEY.test(String(key)) && !isUsageCounter(value, key)) return "<redacted>"
+  if (SECRET_KEY.test(String(key)) && !isTokenCount(value, key)) return "<redacted>"
   if (depth > 6) return "[truncated]"
   if (value === null || value === undefined || typeof value !== "object") {
     if (typeof value === "string") return redactText(value, SNAPSHOT_STRING_LIMIT)

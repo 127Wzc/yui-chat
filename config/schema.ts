@@ -103,6 +103,7 @@ export const schema: SchemaGroup[] = [
       { path: "apiProviders", label: "供应商列表", type: "json" },
       { path: "models", label: "模型列表", type: "json" },
       { path: "modelTasks", label: "模型任务配置", type: "json" },
+      { path: "modelTasks.replyer.maxTokens", label: "回复输出 Token 上限", type: "number", description: "默认 10000，允许 1–65536；思考与工具参数也计入，实际受模型能力限制。" },
     ],
   },
   {

@@ -1,4 +1,5 @@
 import { formatSearchMessageParts } from "./search-citations.js"
+import { defaults } from "../../config/defaults.js"
 import { isGroupEvent } from "../message/event-scope.js"
 import { recentContextStore } from "./recent-context.js"
 import { adapterRegistry } from "../../models/adapters/registry.js"
@@ -697,7 +698,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
     }
   }
   const taskConfig = stepConfig(root, step)
-  const maxTokens = Math.max(1, number(taskConfig.maxTokens, 1024))
+  const maxTokens = Math.max(1, number(taskConfig.maxTokens, defaults.modelTasks.replyer.maxTokens))
   // Responses 在正常请求内进行服务端压缩；本地预算仍负责窗口的安全边界。
   // 预算目标优先用当前渠道模型声明的上下文窗口，未声明时回落全局聊天预算。
   const usage = emptyUsage()

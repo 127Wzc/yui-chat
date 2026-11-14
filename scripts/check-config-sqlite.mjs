@@ -26,6 +26,7 @@ if (mode) {
       await configStore.load()
       if (mode === "initial") {
         assert.equal(configStore.get().web.authToken, "")
+        assert.equal(configStore.get().modelTasks.replyer.maxTokens, 10000, "missing output limits inherit the current default")
         const auth = await import("../output/runtime/web/http/auth.js")
         assert.equal(auth.validateConfiguredWebToken(testToken), false)
         const ticket = auth.issueQuickLogin("owner")
@@ -36,10 +37,12 @@ if (mode) {
         await Promise.all([
           configStore.update(config => { config.persona.assistantLabel = "existing-label" }),
           configStore.update(config => { config.web.authToken = testToken }),
+          configStore.update(config => { config.modelTasks.replyer.maxTokens = 1024 }),
         ])
         assert.equal(configStore.get().persona.assistantLabel, "existing-label")
         assert.equal(configStore.get().web.authToken, testToken)
       } else if (mode === "verify-saved") {
+        assert.equal(configStore.get().modelTasks.replyer.maxTokens, 1024, "explicit output limits survive reloads and default changes")
         assert.equal(configStore.get().persona.assistantLabel, "existing-label")
         assert.equal(configStore.get().web.authToken, testToken)
         assert.equal(configStore.getPublic().web.authToken, "********")

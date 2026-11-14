@@ -6233,18 +6233,24 @@ async function checkUnifiedModelLogs() {
         { type: "web_search" },
         { type: "function", name: "command_search", description: "Search commands.", parameters: { type: "object", properties: {} }, defer_loading: true },
       ],
-      request: { protocol: "responses" },
+      request: { protocol: "responses", maxTokens: 10000 },
+      metadata: { tokenEstimate: 27774, inputTokenBudget: 100000, contextWindowTokens: 200000, api_token: 123456789, token: "MUST_NOT_PERSIST" },
     })
     assert(call?.id, "Responses model log smoke should start a model call")
     modelLogStore.captureModelRequest(call, {
       protocol: "responses",
       phase: "initial",
-      body: { model: "gpt-5.4", input: [{ role: "user", content: "调试请求" }], authorization: "MUST_NOT_PERSIST" },
+      body: {
+        model: "gpt-5.4", input: [{ role: "user", content: "调试请求" }], authorization: "MUST_NOT_PERSIST",
+        max_output_tokens: 10000, max_tokens: 10000, max_completion_tokens: 10000,
+        generationConfig: { maxOutputTokens: 10000 },
+        metadata: { maxTokens: "MUST_NOT_PERSIST", input_tokens: "MUST_NOT_PERSIST", max_output_tokens: Number.NaN, api_token: 123456789 },
+      },
     })
     modelLogStore.completeModelCall(call, {
       response: {
         id: "resp_log_smoke",
-        raw: { usage: { input_tokens: 2, output_tokens: 1, total_tokens: 3, input_tokens_details: { cached_tokens: 1 } }, output: [], authorization: "MUST_NOT_PERSIST", api_key: "MUST_NOT_PERSIST" },
+        raw: { max_output_tokens: 10000, usage: { input_tokens: 2, output_tokens: 1, total_tokens: 3, input_tokens_details: { cached_tokens: 1 }, cache_write_tokens: 0, cache_write_tokens_details: { ephemeral_5m_input_tokens: 0, token: "MUST_NOT_PERSIST" } }, output: [], authorization: "MUST_NOT_PERSIST", api_key: "MUST_NOT_PERSIST" },
         text: "完成",
         stopReason: "end_turn",
         toolCalls: [],
@@ -6258,6 +6264,14 @@ async function checkUnifiedModelLogs() {
     assert(responseDetail?.snapshot?.request?.rawResponse?.body?.usage?.input_tokens === 2 && responseDetail.snapshot.request.rawResponse.body.usage.input_tokens_details.cached_tokens === 1, "raw response usage numbers must survive secret redaction")
     assert(responseDetail?.snapshot?.request?.rawResponse?.usage?.source === "reported" && responseDetail.modelCall.estimated_input_tokens === 0, "reported usage must remain distinct from estimates")
     assert(!JSON.stringify(responseDetail?.snapshot).includes("MUST_NOT_PERSIST"), "raw responses must redact credentials and encrypted content")
+    const loggedRequest = responseDetail.snapshot.request
+    assert(loggedRequest.options.maxTokens === 10000 && loggedRequest.metadata.tokenEstimate === 27774 && loggedRequest.metadata.inputTokenBudget === 100000, "request metadata must preserve numeric output limits and token budgets")
+    assert(responseDetail.modelCall.metadata.tokenEstimate === 27774 && responseDetail.modelCall.metadata.contextWindowTokens === 200000 && responseDetail.modelCall.metadata.api_token === "<redacted>", "ordinary log metadata must preserve numeric token quantities while redacting numeric credentials")
+    const sentBody = loggedRequest.rawRequests[0].body
+    assert(sentBody.max_output_tokens === 10000 && sentBody.max_tokens === 10000 && sentBody.max_completion_tokens === 10000 && sentBody.generationConfig.maxOutputTokens === 10000, "raw protocol requests must retain numeric limits across naming conventions")
+    assert(sentBody.metadata.maxTokens === "<redacted>" && sentBody.metadata.input_tokens === "<redacted>" && sentBody.metadata.max_output_tokens === "<redacted>" && sentBody.metadata.api_token === "<redacted>", "strings, non-finite limits and numeric credentials must not bypass redaction")
+    const loggedResponse = loggedRequest.rawResponse
+    assert(loggedResponse.body.max_output_tokens === 10000 && loggedResponse.upstreamUsage.cache_write_tokens === 0 && loggedResponse.upstreamUsage.cache_write_tokens_details.ephemeral_5m_input_tokens === 0 && loggedResponse.upstreamUsage.cache_write_tokens_details.token === "<redacted>", "response snapshots must preserve zero cache-write counters and recursively redact detail objects")
 
     const detail = await modelLogStore.getModelCallDetail(call.id)
     assert(detail?.modelCall?.adapter === "openai-responses" && detail.modelCall.hosted_tool_call_count === 1, "model logs should expose protocol adapter and hosted-tool call summaries")

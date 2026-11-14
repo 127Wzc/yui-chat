@@ -270,7 +270,7 @@ export const defaults = {
     replyer: {
       modelList: ["mock"],
       selectionStrategy: "sequential",
-      maxTokens: 1024,
+      maxTokens: 10000,
       temperature: 0.7,
       slowThreshold: 15,
     },
