@@ -1,3 +1,4 @@
+import { langfuseReporter } from "../observability/langfuse.js"
 import { randomUUID } from "node:crypto"
 import { configStore } from "../../config/store.js"
 import { sqliteClient } from "../storage/sqlite/client.js"
@@ -189,6 +190,7 @@ export class ConversationState {
           this.conversations.delete(key)
           clearedKeys.add(key)
         }
+        await langfuseReporter.resetScopes(scopeKeys)
         artifactStore.clearKeys(clearedKeys)
         artifactStore.clearWhere(key => userIds.some(userId => this.scopeMatches(parseConversationKey(key), event, userId)))
         return clearedKeys.size
@@ -198,7 +200,7 @@ export class ConversationState {
     })
   }
 
-  async clearAll(): Promise<number> {
+  async clearAll(options: { preserveObservationSessions?: boolean } = {}): Promise<number> {
     this.globalGeneration = this.nextGeneration()
     this.keyGenerations.clear()
     this.scopeGenerations.clear()
@@ -206,6 +208,7 @@ export class ConversationState {
       const clearedKeys = new Set(await conversationStore.clearAllKeys())
       for (const key of this.conversations.keys()) clearedKeys.add(key)
       this.conversations.clear()
+      if (!options.preserveObservationSessions) await langfuseReporter.resetScopes()
       artifactStore.clear()
       return clearedKeys.size
     })
@@ -220,6 +223,7 @@ export class ConversationState {
         for (const key of normalized) {
           if (this.conversations.delete(key)) clearedKeys.add(key)
         }
+        await langfuseReporter.resetScopes(normalized.map(key => parseConversationKey(key).scope).filter(Boolean))
         artifactStore.clearKeys(normalized)
         return clearedKeys.size
       } finally {

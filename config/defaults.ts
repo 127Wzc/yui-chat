@@ -38,6 +38,17 @@ export const defaults = {
     loginInGroup: false,
   },
   logging: {
+    langfuse: {
+      enabled: false,
+      baseUrl: "https://jp.cloud.langfuse.com",
+      publicKey: "",
+      secretKey: "",
+      environment: "production",
+      sampleRate: 1,
+      backgroundSampleRate: 0.1,
+      monthlyUnitLimit: 45000,
+      captureContent: false,
+    },
     level: "info",
     history: {
       detailRetentionDays: 7,

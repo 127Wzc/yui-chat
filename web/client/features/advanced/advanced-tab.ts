@@ -1,4 +1,5 @@
-import { computed, onBeforeUnmount, reactive, ref, watch } from "vue"
+import { LangfusePanel } from "./langfuse-panel.js"
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue"
 import { confirmAction, refreshSlices, request, saveConfigPatch, setDeveloperMode, setDirtyScope, setTab, store, toast } from "../../app/store/store.js"
 import { toJson } from "../../shared/format.js"
 import { asRecord, asRecords, errorMessage, type UnknownRecord } from "../../shared/data.js"
@@ -65,7 +66,7 @@ interface SystemRenderStrategyPanelHandle {
 
 export const AdvancedTab = {
   name: "AdvancedTab",
-  components: { SystemRenderStrategyPanel },
+  components: { SystemRenderStrategyPanel, LangfusePanel },
   setup() {
     const config = computed(() => asRecord<AdvancedConfig>(store.config))
     const draft = reactive({
@@ -105,16 +106,81 @@ export const AdvancedTab = {
       memoryRerankCache: config.value.memory?.retrieval?.rerankCacheTtlMs ?? 300000,
       memoryRerankMinScore: config.value.memory?.retrieval?.rerankMinScore ?? "",
     })
-    const activeSection = ref(store.systemSettingsSection || "status")
-    const captureState = () => JSON.stringify(Object.entries(draft).filter(([key]) => key.startsWith("capture") || key.startsWith("memoryRerank")))
-    const captureBaseline = ref(captureState())
-    watch(captureState, value => setDirtyScope("system:memory-capture", value !== captureBaseline.value), { flush: "sync" })
-    onBeforeUnmount(() => setDirtyScope("system:memory-capture", false))
+    const activeSection = ref("status")
+    const subsections: Record<string, Array<{ value: string; label: string; icon: string; description: string }>> = {
+      status: [
+        { value: "overview", label: "运行状态", icon: "activity", description: "查看配置状态、运行诊断与建议处理项。" },
+        { value: "address", label: "访问地址", icon: "link", description: "设置服务器地址，预览管理台入口。" },
+        { value: "credentials", label: "登录凭证", icon: "key", description: "查看和管理长期 Web 登录令牌。" },
+      ],
+      langfuse: [
+        { value: "connection", label: "连接与凭证", icon: "key", description: "连接模型观测服务。" },
+        { value: "sampling", label: "采样与额度", icon: "sliders", description: "控制模型调用采集范围。" },
+        { value: "status", label: "上报状态", icon: "activity", description: "查看上报队列与额度。" },
+      ],
+      "link-safety": [
+        { value: "network", label: "私网与可信资源", icon: "shield", description: "统一管理网页、媒体与工具的私网访问例外。" },
+        { value: "screenshot", label: "截图域名", icon: "image", description: "限定 URL 截图允许访问的域名。" },
+      ],
+      backup: [
+        { value: "manage", label: "备份管理", icon: "restore", description: "手动创建配置包，查看记录并按需回滚。" },
+        { value: "retention", label: "保留策略", icon: "clock", description: "设置手动配置备份的保护天数与最少份数。" },
+      ],
+      "memory-capture": [
+        { value: "retention", label: "采集与保留", icon: "database", description: "管理原始消息与到期记忆的保留时间。" },
+        { value: "extraction", label: "提炼设置", icon: "bot", description: "设置提炼模型、提示词、输入输出预算与置信度。" },
+        { value: "schedule", label: "调度与预算", icon: "clock", description: "安排后台提炼时间，控制扫描范围与每日用量。" },
+        { value: "recall", label: "记忆召回", icon: "search", description: "设置日常对话注入的记忆条数、预算与向量模型。" },
+        { value: "rerank", label: "重排设置", icon: "list", description: "配置记忆候选的相关性重排、超时与缓存。" },
+      ],
+      developer: [
+        { value: "logs", label: "日志与预算", icon: "activity", description: "管理本地日志等级与 Embedding 每日预算。" },
+        { value: "render", label: "渲染设置", icon: "image", description: "选择系统图片使用的渲染引擎。" },
+        { value: "config", label: "完整配置", icon: "sliders", description: "查看并编辑完整配置 JSON。" },
+        { value: "diagnostics", label: "结构与诊断", icon: "info", description: "查看配置结构、运行路径与原始诊断信息。" },
+      ],
+    }
+    const selectedSubsections = reactive<Record<string, string>>(Object.fromEntries(Object.entries(subsections).map(([key, items]) => [key, items[0].value])))
+    const activeSubsection = computed(() => selectedSubsections[activeSection.value])
+    const subsection = computed(() => subsections[activeSection.value]?.find(item => item.value === activeSubsection.value) || subsections.status[0])
+    function selectSection(value: string, child?: string): void {
+      const [section, nested] = value.split("/")
+      if (!subsections[section]) return
+      activeSection.value = section
+      const target = child || nested
+      if (target && subsections[section].some(item => item.value === target)) selectedSubsections[section] = target
+    }
     const showJsonDrawer = ref(false)
     const webTokenVisible = ref(false)
     const webTokenLoaded = ref(false)
     const webTokenBusy = ref(false)
     const systemRenderPanel = ref<SystemRenderStrategyPanelHandle | null>(null)
+    const draftGroups = ["web-address", "web-token", "link-safety", "backup", "memory-capture", "developer", "config-json"]
+    function groupForKey(key: string): string {
+      if (key.startsWith("capture") || key.startsWith("memoryRerank")) return "memory-capture"
+      if (key.startsWith("link")) return "link-safety"
+      if (key.startsWith("backup")) return "backup"
+      return ({ webPublicBaseUrl: "web-address", webAuthToken: "web-token", configJson: "config-json" } as Record<string, string>)[key] || "developer"
+    }
+    function draftState(group: string): string {
+      const fields: UnknownRecord = Object.fromEntries(Object.entries(draft).filter(([key]) => groupForKey(key) === group))
+      if (group === "developer") fields.render = systemRenderPanel.value?.getPatch?.() || {
+        "response.render.system.engine": String(asRecord(asRecord(asRecord(config.value.response).render).system).engine || "html"),
+      }
+      return JSON.stringify(fields)
+    }
+    const baselines = reactive<Record<string, string>>(Object.fromEntries(draftGroups.map(group => [group, draftState(group)])))
+    function markClean(group: string): void {
+      baselines[group] = draftState(group)
+      setDirtyScope(`system:${group}`, false)
+    }
+    const isDirty = (group: string): boolean => draftState(group) !== baselines[group]
+    for (const group of draftGroups) watch(() => [draftState(group), baselines[group]], () => setDirtyScope(`system:${group}`, isDirty(group)), { flush: "sync", immediate: true })
+    onBeforeUnmount(() => { for (const group of draftGroups) setDirtyScope(`system:${group}`, false) })
+    function sectionDirty(section: string): boolean {
+      const groups: Record<string, string[]> = { status: ["web-address", "web-token"], developer: ["developer", "config-json"] }
+      return (groups[section] || [section]).some(group => store.dirtyScopes[`system:${group}`])
+    }
     const configMeta = computed(() => asRecord<ConfigMeta>(store.configMeta))
     const backups = computed(() => store.configBackups)
     const manifest = computed(() => asRecord<SchemaManifest>(store.schemaManifest))
@@ -143,7 +209,7 @@ export const AdvancedTab = {
       if (issue.area === "persona") return { ...issue, index, advice: "补充目标群，或先关闭定时主动问候。", action: "去配置人设", target: "persona" }
       if (/provider|model|routing/i.test(String(issue.area || ""))) return { ...issue, index, advice: "检查供应商、默认模型和回复方案。", action: "去模型与回复", target: "providers" }
       if (/tool|mcp|skill|custom/i.test(String(issue.area || ""))) return { ...issue, index, advice: "到能力中心查看错误详情并启停对应能力。", action: "去能力中心", target: "tools" }
-      if (issue.area === "web") return { ...issue, index, advice: "检查 Web 登录和访问策略。", action: "查看开发设置", target: "advanced", section: "developer" }
+      if (issue.area === "web") return { ...issue, index, advice: "检查 Web 登录和访问策略。", action: "查看登录设置", target: "advanced", section: "status/credentials" }
       return { ...issue, index, advice: "根据问题描述检查对应配置；不确定时先保留现状。" }
     }))
 
@@ -170,15 +236,16 @@ export const AdvancedTab = {
       { label: "警告", value: diagSummary.value.warnCount || 0, icon: "info", tone: diagSummary.value.warnCount ? "orange" : "green" },
     ])
     const systemSectionItems = computed(() => [
-      { value: "status", label: "运行与登录", description: "检查运行状态并管理 Web 凭证", icon: "activity", badge: systemState.value === "good" ? "正常" : (systemState.value === "bad" ? "错误" : "警告"), tone: systemState.value === "good" ? "on" : (systemState.value === "bad" ? "bad" : "warn") },
-      { value: "link-safety", label: "链接安全", description: "集中管理私网、可信 DNS 与截图域名", icon: "shield", badge: config.value.security?.linkSafety?.allowPrivateHosts ? "私网已开" : "默认拦截", tone: config.value.security?.linkSafety?.allowPrivateHosts ? "warn" : "on" },
-      { value: "backup", label: "备份与恢复", description: "仅在回滚配置时进入", icon: "restore", badge: backups.value.length || 0 },
-      { value: "memory-capture", label: "群记忆默认", description: "新采集群继承的保留、提炼和召回参数", icon: "database", badge: "默认" },
-      { value: "developer", label: "开发者设置", description: "JSON、Schema 和原始诊断", icon: "sliders", badge: store.developerMode ? "已开启" : "已隐藏", tone: store.developerMode ? "warn" : "" },
+      { value: "status", label: "运行与登录", description: "运行状态与 Web 登录", icon: "activity", badge: systemState.value === "good" ? "正常" : (systemState.value === "bad" ? "错误" : "警告"), tone: systemState.value === "good" ? "on" : (systemState.value === "bad" ? "bad" : "warn") },
+      { value: "langfuse", label: "Langfuse 观测", description: "模型观测与额度", icon: "activity", badge: "Cloud" },
+      { value: "link-safety", label: "链接安全", description: "私网、DNS 与截图", icon: "shield", badge: config.value.security?.linkSafety?.allowPrivateHosts ? "私网已开" : "默认拦截", tone: config.value.security?.linkSafety?.allowPrivateHosts ? "warn" : "on" },
+      { value: "backup", label: "备份与恢复", description: "手动备份与恢复", icon: "restore", badge: backups.value.length || 0 },
+      { value: "memory-capture", label: "群记忆默认", description: "采集、提炼与召回", icon: "database", badge: "默认" },
+      { value: "developer", label: "开发者设置", description: "日志、预算与 JSON", icon: "sliders", badge: store.developerMode ? "已开启" : "已隐藏", tone: store.developerMode ? "warn" : "" },
     ])
     const captureSummary = computed(() => asRecord<MemorySummary>(store.memory).capture || {})
     const captureDefaults = computed<CaptureDefaults>(() => captureSummary.value.defaultPolicy ? {
-      retentionDays: Number(captureSummary.value.defaultPolicy.retentionDays) || 30,
+      retentionDays: Number(captureSummary.value.defaultPolicy.retentionDays ?? 30),
       tokenLimit: Number(captureSummary.value.defaultPolicy.tokenLimit) || 200000,
       promptTemplate: String(captureSummary.value.defaultPolicy.promptTemplate || ""),
       modelName: String(captureSummary.value.defaultPolicy.modelName || ""),
@@ -186,7 +253,7 @@ export const AdvancedTab = {
       minConfidence: Number(captureSummary.value.defaultPolicy.minConfidence ?? 0.7),
       retrievalResultLimit: Number(captureSummary.value.defaultPolicy.retrievalResultLimit) || 3,
     } : {
-      retentionDays: Number(config.value.memory?.groupCapture?.defaultRetentionDays) || 30,
+      retentionDays: Number(config.value.memory?.groupCapture?.defaultRetentionDays ?? 30),
       tokenLimit: Number(config.value.memory?.groupCapture?.defaultTokenLimit) || 200000,
       promptTemplate: String(config.value.memory?.groupCapture?.promptTemplate || "").trim() || captureSummary.value.defaultPromptTemplate || "",
       modelName: String(config.value.memory?.groupCapture?.consolidation?.modelName || ""),
@@ -225,47 +292,51 @@ export const AdvancedTab = {
       ]
     })
 
-    async function syncDraft() {
-      draft.configJson = toJson(store.config)
-      draft.webPublicBaseUrl = String(config.value.web?.publicBaseUrl || "")
-      draft.loggingLevel = config.value.logging?.level || "info"
-      draft.backupMaxFiles = config.value.system?.backups?.maxFiles ?? 3
-      draft.backupMaxAgeDays = config.value.system?.backups?.maxAgeDays ?? 30
-      draft.linkAllowPrivateHosts = config.value.security?.linkSafety?.allowPrivateHosts === true
-      draft.linkTrustedPrivateDnsBypass = config.value.security?.linkSafety?.trustedPrivateDnsBypass === true
-      draft.linkScreenshotAllowedHosts = (config.value.security?.linkSafety?.screenshotAllowedHosts || []).join("\n")
-      draft.memoryEmbeddingTokensPerDay = config.value.memory?.retrieval?.embeddingTokensPerDay ?? 200000
-      draft.knowledgeEmbeddingTokensPerDay = config.value.knowledge?.indexing?.globalEmbeddingTokensPerDay ?? 2000000
+    async function syncDraft(forceGroup = "") {
+      const groups = draftGroups.filter(group => forceGroup === "all" || group === forceGroup || !isDirty(group))
+      const next = { ...draft }
+      next.configJson = toJson(store.config)
+      next.webPublicBaseUrl = String(config.value.web?.publicBaseUrl || "")
+      next.loggingLevel = config.value.logging?.level || "info"
+      next.backupMaxFiles = config.value.system?.backups?.maxFiles ?? 3
+      next.backupMaxAgeDays = config.value.system?.backups?.maxAgeDays ?? 30
+      next.linkAllowPrivateHosts = config.value.security?.linkSafety?.allowPrivateHosts === true
+      next.linkTrustedPrivateDnsBypass = config.value.security?.linkSafety?.trustedPrivateDnsBypass === true
+      next.linkScreenshotAllowedHosts = (config.value.security?.linkSafety?.screenshotAllowedHosts || []).join("\n")
+      next.memoryEmbeddingTokensPerDay = config.value.memory?.retrieval?.embeddingTokensPerDay ?? 200000
+      next.knowledgeEmbeddingTokensPerDay = config.value.knowledge?.indexing?.globalEmbeddingTokensPerDay ?? 2000000
       const capture = config.value.memory?.groupCapture || {}
       const consolidation = capture.consolidation || {}
       const configuredPrompt = String(capture.promptTemplate || "").trim()
-      draft.captureRetentionDays = Number(capture.defaultRetentionDays) || 30
-      draft.captureTokenLimit = Number(capture.defaultTokenLimit) || 200000
-      draft.captureModelName = consolidation.modelName || ""
-      draft.captureUseBuiltInPrompt = !configuredPrompt
-      draft.capturePromptTemplate = configuredPrompt || captureDefaults.value.promptTemplate || ""
-      draft.captureMaxTokens = Number(consolidation.maxTokens) || 100000
+      next.captureRetentionDays = Number(capture.defaultRetentionDays ?? 30)
+      next.captureTokenLimit = Number(capture.defaultTokenLimit) || 200000
+      next.captureModelName = consolidation.modelName || ""
+      next.captureUseBuiltInPrompt = !configuredPrompt
+      next.capturePromptTemplate = configuredPrompt || captureDefaults.value.promptTemplate || ""
+      next.captureMaxTokens = Number(consolidation.maxTokens) || 100000
       const confidence = Number(consolidation.minConfidence)
-      draft.captureMinConfidence = Number.isFinite(confidence) ? confidence : 0.7
-      draft.captureMaxWindowsPerScan = Number(consolidation.maxWindowsPerScan) || 2
-      draft.captureTokensPerDay = Number(consolidation.tokensPerDay) || 0
-      draft.captureRelatedFactLimit = consolidation.relatedFactLimit ?? 8
-      draft.captureExpiredFactDays = config.value.memory?.retention?.expiredFactDays ?? 0
-      draft.captureScheduleMode = consolidation.schedule?.mode || "interval"
-      draft.captureScheduleTime = consolidation.schedule?.time || "03:00"
-      draft.captureScheduleCron = consolidation.schedule?.cron || "0 3 * * *"
-      draft.captureRetrievalResultLimit = Number(config.value.memory?.retrieval?.resultLimit) || 3
-      draft.capturePromptTokenBudget = Number(config.value.memory?.retrieval?.promptTokenBudget) || 2000
-      draft.captureEmbeddingModel = String(config.value.memory?.retrieval?.embeddingModel || "")
-      draft.memoryRerankEnabled = config.value.memory?.retrieval?.rerankEnabled === true
-      draft.memoryRerankModel = config.value.memory?.retrieval?.rerankModel || ""
-      draft.memoryRerankCandidates = config.value.memory?.retrieval?.rerankMaxCandidates ?? 20
-      draft.memoryRerankTokenBudget = config.value.memory?.retrieval?.rerankInputTokenBudget ?? 6000
-      draft.memoryRerankTimeout = config.value.memory?.retrieval?.rerankTimeoutMs ?? 10000
-      draft.memoryRerankCache = config.value.memory?.retrieval?.rerankCacheTtlMs ?? 300000
-      draft.memoryRerankMinScore = config.value.memory?.retrieval?.rerankMinScore ?? ""
-      captureBaseline.value = captureState()
-      setDirtyScope("system:memory-capture", false)
+      next.captureMinConfidence = Number.isFinite(confidence) ? confidence : 0.7
+      next.captureMaxWindowsPerScan = Number(consolidation.maxWindowsPerScan) || 2
+      next.captureTokensPerDay = Number(consolidation.tokensPerDay) || 0
+      next.captureRelatedFactLimit = consolidation.relatedFactLimit ?? 8
+      next.captureExpiredFactDays = config.value.memory?.retention?.expiredFactDays ?? 0
+      next.captureScheduleMode = consolidation.schedule?.mode || "interval"
+      next.captureScheduleTime = consolidation.schedule?.time || "03:00"
+      next.captureScheduleCron = consolidation.schedule?.cron || "0 3 * * *"
+      next.captureRetrievalResultLimit = Number(config.value.memory?.retrieval?.resultLimit) || 3
+      next.capturePromptTokenBudget = Number(config.value.memory?.retrieval?.promptTokenBudget) || 2000
+      next.captureEmbeddingModel = String(config.value.memory?.retrieval?.embeddingModel || "")
+      next.memoryRerankEnabled = config.value.memory?.retrieval?.rerankEnabled === true
+      next.memoryRerankModel = config.value.memory?.retrieval?.rerankModel || ""
+      next.memoryRerankCandidates = config.value.memory?.retrieval?.rerankMaxCandidates ?? 20
+      next.memoryRerankTokenBudget = config.value.memory?.retrieval?.rerankInputTokenBudget ?? 6000
+      next.memoryRerankTimeout = config.value.memory?.retrieval?.rerankTimeoutMs ?? 10000
+      next.memoryRerankCache = config.value.memory?.retrieval?.rerankCacheTtlMs ?? 300000
+      next.memoryRerankMinScore = config.value.memory?.retrieval?.rerankMinScore ?? ""
+      for (const [key, value] of Object.entries(next)) {
+        if (groups.includes(groupForKey(key))) Object.assign(draft, { [key]: value })
+      }
+      for (const group of groups) markClean(group)
     }
     async function saveDeveloperSettings() {
       try {
@@ -280,16 +351,18 @@ export const AdvancedTab = {
           "knowledge.indexing.globalEmbeddingTokensPerDay": knowledge,
           ...(systemRenderPanel.value?.getPatch?.() || {}),
         }, "developer-settings")
-        await syncDraft()
+        await syncDraft("developer")
         toast("开发者设置已保存", "success")
       } catch (err) { toast(errorMessage(err)) }
     }
     async function loadWebAuthToken(force = false) {
       if ((webTokenLoaded.value && !force) || webTokenBusy.value) return
+      if (force && isDirty("web-token") && !await confirmAction({ title: "重新读取登录凭证？", message: "当前未保存的令牌输入会被替换。", confirmText: "重新读取", tone: "warn" })) return
       webTokenBusy.value = true
       try {
         const result = await request("/api/config/auth-token")
         draft.webAuthToken = String(result.authToken || "")
+        markClean("web-token")
         webTokenLoaded.value = true
       } catch (err) { toast(errorMessage(err)) }
       finally { webTokenBusy.value = false }
@@ -314,6 +387,7 @@ export const AdvancedTab = {
       try {
         const result = await request("/api/config/auth-token", { method: "PUT", body: JSON.stringify({ authToken }) })
         draft.webAuthToken = String(result.authToken || authToken)
+        markClean("web-token")
         webTokenLoaded.value = true
         toast(authToken ? "Web 静态访问令牌已更新" : "静态 Token 登录已禁用", "success")
         await refreshSlices(["config"])
@@ -336,6 +410,7 @@ export const AdvancedTab = {
       try {
         await saveConfigPatch({ "web.publicBaseUrl": normalized }, "web-public-base-url")
         draft.webPublicBaseUrl = normalized
+        markClean("web-address")
         await refreshSlices(["config"])
         toast(normalized ? "服务器地址前缀已保存" : "已恢复自动获取服务器地址", "success")
       } catch (err) { toast(errorMessage(err)) }
@@ -363,7 +438,7 @@ export const AdvancedTab = {
           "security.linkSafety.trustedPrivateDnsBypass": draft.linkTrustedPrivateDnsBypass,
           "security.linkSafety.screenshotAllowedHosts": screenshotAllowedHosts,
         }, "link-safety")
-        await syncDraft()
+        await syncDraft("link-safety")
         await refreshSlices(["config", "render", "diagnostics"])
         toast("链接安全策略已保存", "success")
       } catch (err) { toast(errorMessage(err)) }
@@ -388,7 +463,7 @@ export const AdvancedTab = {
           "system.backups.maxFiles": maxFiles,
           "system.backups.maxAgeDays": maxAgeDays,
         }, "backup-retention")
-        await syncDraft()
+        await syncDraft("backup")
         await loadBackupDetails()
         toast("备份保留策略已保存并生效")
       } catch (err) { toast(errorMessage(err)) }
@@ -448,13 +523,13 @@ export const AdvancedTab = {
           "memory.retrieval.rerankCacheTtlMs": Number(draft.memoryRerankCache),
           "memory.retrieval.rerankMinScore": draft.memoryRerankMinScore === "" ? null : Number(draft.memoryRerankMinScore),
         })
-        await syncDraft()
+        await syncDraft("memory-capture")
         toast("群记忆系统默认已保存；继承默认的群会自动同步", "success")
       } catch (err) { toast(errorMessage(err)) }
     }
-    async function refreshSystem() {
+    async function refreshSystem(forceGroup = "") {
       await refreshSlices(["config", "diagnostics", "output"])
-      await syncDraft()
+      await syncDraft(forceGroup)
     }
     async function saveJson() {
       try {
@@ -466,7 +541,9 @@ export const AdvancedTab = {
         store.configMeta = asRecord(saved.meta)
         store.configBackups = asRecords(saved.backups)
         toast("JSON 配置已保存")
-        await refreshSystem()
+        draft.webAuthToken = ""
+        webTokenLoaded.value = false
+        await refreshSystem("all")
       } catch (err) { toast(errorMessage(err)) }
     }
     async function applyDiagnosticAction(item: DiagnosticIssue) {
@@ -486,7 +563,7 @@ export const AdvancedTab = {
           toast("建议配置已应用，诊断结果已重新检查")
           return
         }
-        if (item.target === "advanced" && item.section) activeSection.value = item.section
+        if (item.target === "advanced" && item.section) selectSection(item.section)
         else if (item.target) setTab(item.target)
       } catch (err) { toast(errorMessage(err)) }
     }
@@ -508,7 +585,9 @@ export const AdvancedTab = {
         store.configMeta = asRecord(result.meta)
         store.configBackups = asRecords(result.backups)
         toast("配置已回滚，运行配置已重新载入")
-        await refreshSystem()
+        draft.webAuthToken = ""
+        webTokenLoaded.value = false
+        await refreshSystem("all")
       } catch (err) { toast(errorMessage(err)) }
     }
     async function requestDeleteBackup(fileName: unknown) {
@@ -529,11 +608,23 @@ export const AdvancedTab = {
         toast("配置备份已删除")
       } catch (err) { toast(errorMessage(err)) }
     }
-    function toggleDeveloperMode(value?: boolean) {
+    async function closeJsonDrawer(): Promise<void> {
+      if (isDirty("config-json")) {
+        if (!await confirmAction({ title: "放弃未保存的 JSON 修改？", message: "关闭后恢复为当前已保存的配置。", confirmText: "放弃修改", tone: "warn" })) return
+        await syncDraft("config-json")
+      }
+      showJsonDrawer.value = false
+    }
+    async function toggleDeveloperMode(value?: boolean) {
       const next = typeof value === "boolean" ? value : !store.developerMode
+      if (!next && (isDirty("developer") || isDirty("config-json")) && !await confirmAction({ title: "关闭开发者模式？", message: "当前未保存的开发者设置和 JSON 修改会被放弃。", confirmText: "关闭并放弃修改", tone: "warn" })) return
       setDeveloperMode(next)
-      if (!next) showJsonDrawer.value = false
-      else syncDraft()
+      if (!next) {
+        showJsonDrawer.value = false
+        await nextTick()
+        await syncDraft("developer")
+        await syncDraft("config-json")
+      } else await syncDraft()
     }
     function sectionPills(tab: ManifestTab) {
       return (tab.sections || []).map(id => {
@@ -564,31 +655,51 @@ export const AdvancedTab = {
       } else if (item.sqliteAvailable === false) parts.push("未包含 SQLite 配置")
       return parts.join(" · ")
     }
+    watch(config, () => { void syncDraft() })
     watch(() => store.systemSettingsSection, section => {
       if (!section) return
-      activeSection.value = section
+      selectSection(section)
       store.systemSettingsSection = ""
     }, { immediate: true })
-    watch(activeSection, section => {
-      if (section === "memory-capture" || section === "link-safety") syncDraft()
-      if (section === "status") loadWebAuthToken()
-      if (section === "backup") loadBackupDetails()
+    watch(() => [activeSection.value, activeSubsection.value], ([section, child]) => {
+      if (section === "status" && child === "credentials") void loadWebAuthToken()
+      if (section === "backup" && child === "manage") void loadBackupDetails()
+      void syncDraft()
     }, { immediate: true })
 
     return {
-      draft, showJsonDrawer, webTokenVisible, webTokenLoaded, webTokenBusy, systemRenderPanel, webAddressPreview, configMeta, backups, manifest, activeSection, systemSectionItems,
+      draft, showJsonDrawer, webTokenVisible, webTokenLoaded, webTokenBusy, systemRenderPanel, webAddressPreview, configMeta, backups, manifest, activeSection, systemSectionItems, subsections, activeSubsection, subsection, selectSection, selectedSubsections, isDirty, sectionDirty,
       systemState, systemTitle, systemDescription, systemMetrics, diagnosticRows, manifestMetrics,
       captureDefaults, captureModelOptions, memoryEmbeddingModelOptions, memoryRerankModelOptions, defaultReplyModelName,
       sectionPills, saveJson, saveDeveloperSettings, loadWebAuthToken, saveWebAddress, saveWebAuthToken, copyWebAuthToken, saveLinkSafety, saveBackupPolicy, createBackup, loadBackupDetails, saveCaptureDefaults, requestRestore, requestDeleteBackup,
-      toggleDeveloperMode, applyDiagnosticAction, shortTime, formatBytes, backupContents, store,
+      toggleDeveloperMode, closeJsonDrawer, applyDiagnosticAction, shortTime, formatBytes, backupContents, store,
     }
   },
   template: `
-    <div class="stack">
-      <SectionNav v-model="activeSection" :items="systemSectionItems" label="系统与诊断分区" />
+    <div class="settings-workspace system-settings-workspace">
+      <aside class="settings-rail" aria-label="系统设置导航">
+        <div class="settings-rail-kicker">系统设置</div>
+        <template v-for="item in systemSectionItems" :key="item.value">
+          <button class="settings-rail-group" :class="{ active: activeSection === item.value }" type="button" :aria-current="activeSection === item.value ? 'page' : undefined" @click="selectSection(item.value)">
+            <span class="settings-rail-icon"><Icon :name="item.icon" :size="16" /></span>
+            <span class="settings-rail-copy"><strong>{{ item.label }}</strong><small>{{ item.description }}</small></span>
+            <span v-if="item.value !== 'langfuse' || sectionDirty(item.value)" class="settings-rail-badge" :class="sectionDirty(item.value) ? 'warn' : item.tone">{{ sectionDirty(item.value) ? '未保存' : item.badge }}</span>
+          </button>
+          <nav v-if="activeSection === item.value && (item.value !== 'developer' || store.developerMode)" class="settings-rail-subnav" :aria-label="item.label + '分区'">
+            <button v-for="child in subsections[item.value]" :key="child.value" class="settings-rail-subitem" :class="{ active: activeSubsection === child.value }" type="button" :aria-current="activeSubsection === child.value ? 'page' : undefined" @click="selectSection(item.value, child.value)"><Icon :name="child.icon" :size="14" /><span>{{ child.label }}</span></button>
+          </nav>
+        </template>
+      </aside>
+      <div class="settings-content system-settings-content">
+        <header v-if="activeSection !== 'langfuse'" class="settings-content-head">
+          <div><div class="eyebrow">{{ systemSectionItems.find(item => item.value === activeSection)?.label }}</div><h2>{{ activeSection === 'developer' && !store.developerMode ? '开发者模式' : subsection.label }}</h2><p>{{ activeSection === 'developer' && !store.developerMode ? '开启后可管理日志、渲染与完整配置。' : subsection.description }}</p></div>
+          <Field v-if="activeSection === 'developer'" class="system-developer-toggle" label="开发者模式" type="switch" :model-value="store.developerMode" :hint="store.developerMode ? '已开启' : '已关闭'" @update:model-value="toggleDeveloperMode" />
+        </header>
+        <LangfusePanel v-show="activeSection === 'langfuse'" :section="selectedSubsections.langfuse" />
 
-      <div v-if="activeSection === 'status'" class="section-stage">
-      <section class="system-hero" :class="systemState">
+        <div v-show="activeSection === 'status'" class="system-settings-pane">
+          <div v-show="activeSubsection === 'overview'" class="settings-stack">
+            <section class="system-hero" :class="systemState">
         <div class="system-hero-copy">
           <span class="eyebrow"><span class="dot" :class="systemState === 'good' ? 'on' : (systemState === 'bad' ? 'bad' : 'warn')"></span>系统状态</span>
           <h2>{{ systemTitle }}</h2>
@@ -608,58 +719,44 @@ export const AdvancedTab = {
         </PagedList>
       </Panel>
 
-      <Panel title="Web 访问与登录" icon="key">
-        <p class="muted small">服务器地址前缀和静态令牌保存在运行配置中。主人通过 <code>#yui面板</code> 获取的一次性快捷链接独立签发，页面不能主动生成。</p>
-        <div class="form-section web-auth-settings">
-          <div class="developer-section-head">
-            <div><b>服务器地址前缀</b><span>可填写自定义域名、端口和反向代理路径；系统会在后面拼接 Web 路由与一次性快捷码。</span></div>
-            <button class="btn primary small" type="button" @click="saveWebAddress"><Icon name="save" :size="14" />保存服务器地址</button>
-          </div>
-          <Field label="web.publicBaseUrl" type="text" v-model="draft.webPublicBaseUrl" placeholder="https://bot.example.com 或 https://bot.example.com/admin" hint="留空时自动使用 Yunzai 已知地址，并保留 localhost 后备地址" />
-          <div class="web-address-preview"><span>快捷链接预览</span><code>{{ webAddressPreview }}</code></div>
-        </div>
-        <div class="form-section web-auth-settings">
-          <div class="developer-section-head">
-            <div><b>长期 Web 访问令牌</b><span>用于管理台首次登录、脚本请求头和建立浏览器短会话。</span></div>
-            <button class="btn small outline" type="button" :disabled="webTokenBusy" @click="loadWebAuthToken(true)"><Icon name="refresh" :size="14" />重新读取</button>
-          </div>
-          <Field label="web.authToken" :type="webTokenVisible ? 'text' : 'password'" v-model="draft.webAuthToken" :disabled="webTokenBusy" hint="留空关闭静态登录；启用时填写 16–512 个字符" />
-          <div class="action-bar">
-            <button class="btn outline" type="button" :disabled="!webTokenLoaded" @click="webTokenVisible = !webTokenVisible"><Icon :name="webTokenVisible ? 'eye-off' : 'eye'" :size="14" />{{ webTokenVisible ? '隐藏' : '显示' }}</button>
-            <button class="btn outline" type="button" :disabled="!webTokenLoaded" @click="copyWebAuthToken"><Icon name="copy" :size="14" />复制</button>
-            <button class="btn primary" type="button" :disabled="webTokenBusy || !webTokenLoaded" @click="saveWebAuthToken"><Icon name="save" :size="14" />保存静态登录设置</button>
-          </div>
-        </div>
-      </Panel>
-      </div>
 
-      <Panel v-if="activeSection === 'link-safety'" title="统一链接安全" icon="shield">
-        <template #actions><button class="btn primary small" type="button" @click="saveLinkSafety"><Icon name="save" :size="14" />保存</button></template>
-        <p class="muted small">网页读取、入站图片预处理、图片缓存、出站媒体和 URL 截图统一读取这里；各功能页不再保留重复的私网开关。</p>
-        <div class="settings-toggle-grid">
+          </div>
+          <div v-show="activeSubsection === 'address'" class="settings-stack">
+            <Field label="服务器地址" type="text" v-model="draft.webPublicBaseUrl" placeholder="https://bot.example.com 或 https://bot.example.com/admin" description="留空时自动使用 Yunzai 已知地址，并保留 localhost 后备地址" />
+            <div class="web-address-preview"><span>管理台入口预览</span><code>{{ webAddressPreview }}</code></div>
+            <p class="muted small">主人通过 #yui面板 获取一次性快捷链接；这里设置链接使用的服务器地址。</p>
+            <footer class="system-settings-save-bar"><span>{{ isDirty('web-address') ? '有未保存的更改' : '设置已同步' }}</span><button class="btn primary" type="button" @click="saveWebAddress"><Icon name="save" :size="14" />保存访问地址</button></footer>
+          </div>
+          <div v-show="activeSubsection === 'credentials'" class="settings-stack">
+            <p class="muted small">长期令牌用于管理台首次登录与脚本请求头；一次性快捷登录仍由主人通过 #yui面板 发起。</p>
+            <div class="action-bar"><button class="btn small outline" type="button" :disabled="webTokenBusy" @click="loadWebAuthToken(true)"><Icon name="refresh" :size="14" />重新读取</button></div>
+            <Field label="长期登录令牌" :type="webTokenVisible ? 'text' : 'password'" v-model="draft.webAuthToken" :disabled="webTokenBusy" description="留空关闭静态登录；启用时填写 16–512 个字符" />
+            <footer class="system-settings-save-bar">
+              <div class="action-bar"><button class="btn outline" type="button" :disabled="!webTokenLoaded" @click="webTokenVisible = !webTokenVisible"><Icon :name="webTokenVisible ? 'eye-off' : 'eye'" :size="14" />{{ webTokenVisible ? '隐藏' : '显示' }}</button><button class="btn outline" type="button" :disabled="!webTokenLoaded" @click="copyWebAuthToken"><Icon name="copy" :size="14" />复制</button></div>
+              <button class="btn primary" type="button" :disabled="webTokenBusy || !webTokenLoaded" @click="saveWebAuthToken"><Icon name="save" :size="14" />保存登录凭证</button>
+            </footer>
+          </div>
+        </div>
+
+        <div v-show="activeSection === 'link-safety'" class="system-settings-pane">
+          <div v-show="activeSubsection === 'network'" class="settings-stack">
+            <p class="muted small">网页读取、媒体缓存、消息发送和 URL 截图共用这里的网络访问策略。</p>
+            <div class="settings-toggle-grid">
           <div class="settings-toggle-item"><div><strong>允许任意私网链接</strong><small>默认开启；关闭后网页、媒体、图片缓存、消息发送和截图统一拦截私网。</small></div><Switch :model-value="draft.linkAllowPrivateHosts" @update:model-value="draft.linkAllowPrivateHosts = $event" /></div>
           <div class="settings-toggle-item"><div><strong>可信资源私网 DNS 例外</strong><small>默认开启；关闭总私网授权后，仍可单独控制 QQ 媒体和 Bilibili CDN。</small></div><Switch :model-value="draft.linkTrustedPrivateDnsBypass" @update:model-value="draft.linkTrustedPrivateDnsBypass = $event" /></div>
         </div>
-        <Field label="URL 截图允许域名" type="textarea" rows="8" v-model="draft.linkScreenshotAllowedHosts" placeholder="*\nexample.com\n*.example.com" hint="* 允许全部域名；也可用精确域名或 *.example.com 子域通配，每行或逗号分隔。" />
-      </Panel>
 
-      <Panel v-if="activeSection === 'backup'" title="配置备份与恢复" icon="restore">
-        <template #actions><button class="btn primary small" type="button" @click="createBackup"><Icon name="save" :size="14" />手动备份配置</button></template>
-        <p class="muted small">备份只在点击按钮时创建。每份文件包含逻辑运行配置覆盖（含已配置的服务凭证），以及 SQLite 中的能力权限、知识库设置与授权；不包含运行日志、用量流水、聊天、记忆和知识正文。</p>
-        <div class="backup-directory"><Icon name="folder" :size="14" /><span>保存目录</span><code>{{ configMeta.configBackupDir || 'data/yui-chat/backups/' }}</code></div>
-
-        <div class="form-section">
-          <div class="developer-section-head">
-            <div><b>手动备份保留策略</b><span>至少保留最新指定份数；只有更早的备份同时超过保留天数时，才会在创建手动备份时清理。</span></div>
-            <button class="btn primary small" type="button" @click="saveBackupPolicy"><Icon name="save" :size="14" />保存策略</button>
           </div>
-          <div class="form-grid">
-            <Field label="最少保留份数" type="number" v-model="draft.backupMaxFiles" hint="3–1000 个" />
-            <Field label="保护天数" type="number" v-model="draft.backupMaxAgeDays" hint="30–3650 天" />
-          </div>
+          <div v-show="activeSubsection === 'screenshot'"><Field label="URL 截图允许域名" type="textarea" :rows="8" v-model="draft.linkScreenshotAllowedHosts" placeholder="*\nexample.com\n*.example.com" hint="* 允许全部域名；也可用精确域名或 *.example.com 子域通配，每行或逗号分隔。" /></div>
+          <footer class="system-settings-save-bar"><span>{{ isDirty('link-safety') ? '有未保存的更改' : '设置已同步' }}</span><button class="btn primary" type="button" @click="saveLinkSafety"><Icon name="save" :size="14" />保存链接策略</button></footer>
         </div>
 
-        <PagedList :rows="backups" :page-size="6" label="备份" list-class="backup-timeline" empty="暂无手动配置备份。" v-slot="{ item }">
+        <div v-show="activeSection === 'backup'" class="system-settings-pane">
+          <div v-show="activeSubsection === 'manage'" class="settings-stack">
+            <p class="muted small">备份只在点击按钮时创建。每份文件包含逻辑运行配置覆盖（含已配置的服务凭证），以及 SQLite 中的能力权限、知识库设置与授权；不包含运行日志、用量流水、聊天、记忆和知识正文。</p>
+            <div class="backup-directory"><Icon name="folder" :size="14" /><span>保存目录</span><code>{{ configMeta.configBackupDir || 'data/yui-chat/backups/' }}</code></div>
+            <div class="action-bar"><button class="btn primary" type="button" @click="createBackup"><Icon name="save" :size="14" />手动备份配置</button></div>
+            <PagedList :rows="backups" :page-size="6" label="备份" list-class="backup-timeline" empty="暂无手动配置备份。" v-slot="{ item }">
           <div class="backup-row">
             <span class="backup-dot"></span>
             <div class="backup-copy">
@@ -674,122 +771,62 @@ export const AdvancedTab = {
             </div>
           </div>
         </PagedList>
-      </Panel>
 
-      <Panel v-if="activeSection === 'memory-capture'" title="群记忆系统默认" icon="database" class="memory-capture-defaults">
-        <template #actions><button class="btn primary small" type="button" @click="saveCaptureDefaults"><Icon name="save" :size="14" />保存系统默认</button></template>
-        <p class="muted small">每日提炼与手动 AI 整理共用输入上限、提炼模型、输出上限和置信度。单群可在“记忆管理 → 采集设置”覆盖这些值，恢复继承后跟随系统默认。</p>
-
-        <div class="settings-stack">
-          <div class="form-section">
-            <div class="developer-section-head"><div><b>消息保留与输入上限</b><span>保留期更新后，继承默认的群会按消息发送时间重新计算到期时间。</span></div></div>
-            <div class="form-grid capture-token-limits">
-              <Field label="原始消息保留天数" type="number" v-model="draft.captureRetentionDays" description="0 表示永久保留；有限保留最少 1 天" />
-              <Field label="输入 Token 上限（提炼与 AI 整理）" type="number" v-model="draft.captureTokenLimit" description="默认 200,000，可设 3,000–1,000,000。每日提炼按消息切分；AI 整理计入系统提示和完整资料，超限时停止。" />
-            </div>
           </div>
+          <div v-show="activeSubsection === 'retention'" class="settings-stack">
+            <p class="muted small">至少保留最新指定份数；只有更早的备份同时超过保留天数时，才会在创建手动备份时清理。</p>
+            <div class="form-grid"><Field label="最少保留份数" type="number" v-model="draft.backupMaxFiles" hint="3–1000 个" /> <Field label="保护天数" type="number" v-model="draft.backupMaxAgeDays" hint="30–3650 天" /></div>
+            <footer class="system-settings-save-bar"><span>{{ isDirty('backup') ? '有未保存的更改' : '设置已同步' }}</span><button class="btn primary" type="button" @click="saveBackupPolicy"><Icon name="save" :size="14" />保存保留策略</button></footer>
+          </div>
+        </div>
 
-          <div class="form-section">
-            <div class="developer-section-head"><div><b>提炼默认</b><span>留空模型时跟随当前默认对话模型；这些值可由单群覆盖。</span></div></div>
+        <div v-show="activeSection === 'memory-capture'" class="system-settings-pane memory-capture-defaults">
+          <p class="muted small">这些是系统默认值。单群可在“记忆管理 → 采集设置”覆盖，恢复继承后跟随系统默认。</p>
+          <div v-show="activeSubsection === 'retention'" class="settings-stack"><div class="form-grid"><Field label="原始消息保留天数" type="number" v-model="draft.captureRetentionDays" description="0 表示永久保留；有限保留最少 1 天" /> <Field label="事实到期后删除天数" type="number" v-model="draft.captureExpiredFactDays" description="0 保留历史。短期记录与经历继续使用原有清理规则。" /></div></div>
+          <div v-show="activeSubsection === 'extraction'" class="settings-stack">
             <Field label="提炼模型" type="select" :options="captureModelOptions" v-model="draft.captureModelName" :description="defaultReplyModelName ? '留空时使用默认对话模型：' + defaultReplyModelName : '留空时使用当前默认对话模型'" />
-            <div class="form-grid capture-token-limits">
-              <Field label="输出 Token 上限（提炼与 AI 整理）" type="number" v-model="draft.captureMaxTokens" description="默认 100,000，可设 256–100,000；思考 Token 也计入，实际受模型能力限制" />
-              <Field label="候选置信度阈值" type="number" v-model="draft.captureMinConfidence" description="0–1；低于此值的候选不会写入记忆" />
-            </div>
-            <label class="field"><span class="field-label">提炼提示词</span><span class="row"><Switch v-model="draft.captureUseBuiltInPrompt" /><small>{{ draft.captureUseBuiltInPrompt ? '使用内置默认提示词' : '使用下方自定义提示词' }}</small></span></label>
+            <div class="form-grid"><Field label="输入 Token 上限（提炼与 AI 整理）" type="number" v-model="draft.captureTokenLimit" description="默认 200,000，可设 3,000–1,000,000。每日提炼按消息切分；AI 整理计入系统提示和完整资料，超限时停止。" /> <Field label="输出 Token 上限（提炼与 AI 整理）" type="number" v-model="draft.captureMaxTokens" description="默认 100,000，可设 256–100,000；思考 Token 也计入，实际受模型能力限制" /> <Field label="候选置信度阈值" type="number" v-model="draft.captureMinConfidence" description="0–1；低于此值的候选不会写入记忆" /></div>
+            <label class="field"><span class="field-label">提炼提示词</span><span class="row"><Switch tip="使用内置提炼提示词" v-model="draft.captureUseBuiltInPrompt" /><small>{{ draft.captureUseBuiltInPrompt ? '使用内置默认提示词' : '使用下方自定义提示词' }}</small></span></label>
             <Field label="提示词内容" type="textarea" :rows="12" v-model="draft.capturePromptTemplate" :disabled="draft.captureUseBuiltInPrompt" :description="draft.captureUseBuiltInPrompt ? '当前展示的是内置默认提示词；关闭上方开关后可复制并修改。' : '自定义提示词会成为新群的默认值。'" />
           </div>
-
-          <div class="form-section">
-            <div class="developer-section-head"><div><b>后台提炼与调度</b><span>全部群共用后台预算与执行计划；这些参数只用于每日窗口提炼。</span></div></div>
-            <div class="form-grid capture-token-limits">
-              <Field label="每日提炼 Token 预算" type="number" v-model="draft.captureTokensPerDay" description="全部群共用，0 不限制。包含失败重试，额度不足次日继续；手动 AI 整理不计入此预算。" />
-              <Field label="相关旧事实条数" type="number" v-model="draft.captureRelatedFactLimit" description="默认 8，0–20；本地检索，不额外调用模型" />
-              <Field label="每轮扫描窗口数" type="number" v-model="draft.captureMaxWindowsPerScan" description="1–64；积压时可临时调高" />
-              <Field label="提炼触发方式" type="select" v-model="draft.captureScheduleMode" :options="[{ value: 'interval', label: '跟随扫描间隔（兼容默认）' }, { value: 'time', label: '每天固定时间' }, { value: 'cron', label: 'Cron 表达式' }]" />
-            </div>
-            <Field v-if="draft.captureScheduleMode === 'time'" label="每天触发时间" type="time" v-model="draft.captureScheduleTime" description="按服务器本地时区执行，例如 03:00。" />
-            <Field v-if="draft.captureScheduleMode === 'cron'" label="Cron（分 时 日 月 周）" v-model="draft.captureScheduleCron" placeholder="0 3 * * *" description="五段本地 Cron；例如 0 3 * * * = 每天 03:00，*/30 * * * * = 每 30 分钟。" />
-            <p class="muted tiny">原始消息仍按实时采集；这里仅控制自动提炼。手动“立即执行”不受此计划限制。</p>
+          <div v-show="activeSubsection === 'schedule'" class="settings-stack">
+            <p class="muted small">全部群共用后台预算；这里仅控制自动提炼，手动“立即执行”不受触发计划限制。</p>
+            <div class="form-grid"><Field label="每日提炼 Token 预算" type="number" v-model="draft.captureTokensPerDay" description="全部群共用，0 不限制。包含失败重试，额度不足次日继续；手动 AI 整理不计入此预算。" /> <Field label="相关旧事实条数" type="number" v-model="draft.captureRelatedFactLimit" description="默认 8，0–20；本地检索，不额外调用模型" /> <Field label="每轮扫描窗口数" type="number" v-model="draft.captureMaxWindowsPerScan" description="1–64；积压时可临时调高" /> <Field label="提炼触发方式" type="select" v-model="draft.captureScheduleMode" :options="[{ value: 'interval', label: '跟随扫描间隔（兼容默认）' }, { value: 'time', label: '每天固定时间' }, { value: 'cron', label: 'Cron 表达式' }]" /></div>
+            <Field v-if="draft.captureScheduleMode === 'time'" label="每天触发时间" type="time" v-model="draft.captureScheduleTime" description="按服务器本地时区执行，例如 03:00。" /> <Field v-if="draft.captureScheduleMode === 'cron'" label="Cron（分 时 日 月 周）" v-model="draft.captureScheduleCron" placeholder="0 3 * * *" description="五段本地 Cron；例如 0 3 * * * = 每天 03:00，*/30 * * * * = 每 30 分钟。" />
           </div>
-
-          <div class="form-section">
-            <div class="developer-section-head"><div><b>记忆历史保留</b><span>到期后退出当前召回，保留多久单独设置。</span></div></div>
-            <div class="form-grid capture-token-limits">
-              <Field label="事实到期后删除天数" type="number" v-model="draft.captureExpiredFactDays" description="0 保留历史。短期记录与经历继续使用原有清理规则。" />
-            </div>
-          </div>
-
-          <div class="form-section">
-            <div class="developer-section-head"><div><b>对话记忆召回</b><span>需要记忆时进行全文与向量双召回，融合后选出默认条数；模型配置独立于知识库 RAG。</span></div></div>
-            <div class="form-grid capture-token-limits">
-              <Field label="自动注入记忆条数" type="number" v-model="draft.captureRetrievalResultLimit" description="1–20；默认 3，单群可覆盖。" />
-              <Field label="记忆提示 Token 预算" type="number" v-model="draft.capturePromptTokenBudget" description="30–10,000；默认 2,000，仅限制日常自动注入。" />
-            </div>
+          <div v-show="activeSubsection === 'recall'" class="settings-stack">
+            <div class="form-grid"><Field label="自动注入记忆条数" type="number" v-model="draft.captureRetrievalResultLimit" description="1–20；默认 3，单群可覆盖。" /> <Field label="记忆提示 Token 预算" type="number" v-model="draft.capturePromptTokenBudget" description="30–10,000；默认 2,000，仅限制日常自动注入。" /></div>
             <Field label="记忆向量模型" type="select" :options="memoryEmbeddingModelOptions" v-model="draft.captureEmbeddingModel" description="独立选择，与知识库向量模型互不联动；留空只进行本地全文检索。" />
-            <Field label="启用记忆重排" type="switch" v-model="draft.memoryRerankEnabled" description="对少量融合候选重新评估相关性；关闭、超时或失败时使用 RRF 融合排名。" />
-            <Field label="记忆重排模型" type="select" :options="memoryRerankModelOptions" v-model="draft.memoryRerankModel" :disabled="!draft.memoryRerankEnabled" description="单独选择专用重排模型，不继承知识库 RAG 或全局重排任务。" />
-            <details v-if="draft.memoryRerankEnabled" class="capture-default-prompt"><summary>重排候选、预算与缓存</summary><div class="form-grid" style="padding:12px">
+            <p class="muted small">“查询我的全部记忆并总结”使用独立的本人记忆读取与分页，不受日常注入条数限制。</p>
+          </div>
+          <div v-show="activeSubsection === 'rerank'" class="settings-stack">
+            <Field label="启用记忆重排" type="switch" v-model="draft.memoryRerankEnabled" description="对少量融合候选重新评估相关性；关闭、超时或失败时使用 RRF 融合排名。" /> <Field label="记忆重排模型" type="select" :options="memoryRerankModelOptions" v-model="draft.memoryRerankModel" :disabled="!draft.memoryRerankEnabled" description="单独选择专用重排模型，不继承知识库 RAG 或全局重排任务。" /> <details v-if="draft.memoryRerankEnabled" class="capture-default-prompt"><summary>重排候选、预算与缓存</summary><div class="form-grid" style="padding:12px">
               <Field label="重排候选上限" type="number" v-model="draft.memoryRerankCandidates" description="1–30；默认 20。" />
               <Field label="重排输入 Token 预算" type="number" v-model="draft.memoryRerankTokenBudget" description="200–30000；默认 6000。" />
               <Field label="重排超时（毫秒）" type="number" v-model="draft.memoryRerankTimeout" description="1000–60000；默认 10000。" />
               <Field label="重排缓存（毫秒）" type="number" v-model="draft.memoryRerankCache" description="0–86400000；默认 300000，0 为关闭。" />
               <Field label="重排最低分" type="number" v-model="draft.memoryRerankMinScore" description="留空不额外过滤；不同模型的分数含义可能不同。" />
             </div></details>
-            <p class="muted small">明确要求“查询我的全部记忆并总结”时，会独立读取本人全局和本群个人的有效记忆，包含低活跃记忆，不受默认条数限制；内容过大时分页并标明剩余，不会自动扩大日常注入。</p>
-          </div>
-        </div>
-      </Panel>
 
-      <Panel v-if="activeSection === 'developer'" title="开发者模式" icon="sliders">
-        <template #actions>
-          <label class="heading-switch" data-tip="开发者模式会显示完整 JSON、Schema 和原始诊断数据">
-            <Switch :model-value="store.developerMode" @update:model-value="toggleDeveloperMode" />
-            <span>{{ store.developerMode ? "开发者模式已开启" : "开启开发者模式" }}</span>
-          </label>
-        </template>
-
-        <div v-if="!store.developerMode" class="developer-gate">
-          <span class="developer-gate-icon"><Icon name="sliders" :size="22" /></span>
-          <div>
-            <h3>高级配置已隐藏</h3>
-            <p>完整 JSON、Schema、运行路径和原始诊断适合熟悉配置结构的维护者。日常设置不需要开启。</p>
           </div>
+          <footer class="system-settings-save-bar"><span>{{ isDirty('memory-capture') ? '有未保存的更改' : '设置已同步' }}</span><button class="btn primary" type="button" @click="saveCaptureDefaults"><Icon name="save" :size="14" />保存群记忆默认</button></footer>
         </div>
 
-        <div v-else class="developer-stack">
-          <div class="developer-warning"><Icon name="alert" :size="16" /><span>修改完整 JSON 可能导致模型、工具或权限无法启动。需要回滚时请先手动备份；后端校验仍会阻止无效配置。</span></div>
-
-          <div class="developer-section-head">
-            <div><b>开发者设置</b><span>日志、预算和系统渲染</span></div>
-            <button class="btn primary small" type="button" @click="saveDeveloperSettings"><Icon name="save" :size="14" />保存</button>
-          </div>
-
-          <SystemRenderStrategyPanel ref="systemRenderPanel" :show-save="false" />
-
-          <div class="developer-section-head">
-            <div><b>对话日志等级</b><span>控制模型、工具链和 Token 汇总日志；不会输出密钥或完整工具结果</span></div>
-            <div class="toolbar">
-              <select class="input" v-model="draft.loggingLevel"><option value="off">关闭</option><option value="error">仅错误</option><option value="warn">警告</option><option value="info">常规</option><option value="debug">调试</option></select>
+        <div v-show="activeSection === 'developer'" class="system-settings-pane">
+          <div v-if="!store.developerMode" class="developer-gate"><span class="developer-gate-icon"><Icon name="sliders" :size="22" /></span><div><h3>高级配置已隐藏</h3><p>开启后可查看完整 JSON、Schema、运行路径和原始诊断。</p></div></div>
+          <div v-else class="settings-stack">
+            <div v-show="activeSubsection === 'logs'" class="settings-stack">
+              <Field label="本地日志等级" type="select" v-model="draft.loggingLevel" :options="[{ value: 'off', label: '关闭' }, { value: 'error', label: '仅错误' }, { value: 'warn', label: '警告' }, { value: 'info', label: '常规' }, { value: 'debug', label: '调试' }]" description="控制模型、工具链和 Token 汇总日志。" />
+              <div class="form-grid"><Field label="记忆 embedding Token / 天" type="number" v-model="draft.memoryEmbeddingTokensPerDay" hint="默认 200000" /> <Field label="知识库 embedding Token / 天" type="number" v-model="draft.knowledgeEmbeddingTokensPerDay" hint="默认 2000000" /></div>
             </div>
-          </div>
-
-          <div class="developer-section-head">
-            <div><b>Embedding 每日预算</b><span>本地预检通过后才占用；0 表示关闭本地上限</span></div>
-          </div>
-          <div class="form-grid">
-            <Field label="记忆 embedding Token / 天" type="number" v-model="draft.memoryEmbeddingTokensPerDay" hint="默认 200000" />
-            <Field label="知识库 embedding Token / 天" type="number" v-model="draft.knowledgeEmbeddingTokensPerDay" hint="默认 2000000" />
-          </div>
-
-          <div class="developer-section-head">
-            <div><b>完整配置 JSON</b><span>适合批量修改或排查底层字段</span></div>
-            <button class="btn small outline" type="button" @click="showJsonDrawer = true"><Icon name="pencil" :size="14" />编辑 JSON</button>
-          </div>
-
-          <JsonBlock title="配置运行态与路径" :value="configMeta" />
-
-          <Collapse title="配置结构 Schema" hint="查看字段、敏感项和进阶项统计">
+            <div v-show="activeSubsection === 'render'"><SystemRenderStrategyPanel ref="systemRenderPanel" :show-save="false" /></div>
+            <div v-show="activeSubsection === 'config'" class="settings-stack">
+              <div class="developer-warning"><Icon name="alert" :size="16" /><span>完整 JSON 适合批量修改配置。保存前仍会执行后端校验；需要回滚时请先手动备份。</span></div>
+              <div class="action-bar"><button class="btn primary" type="button" @click="showJsonDrawer = true"><Icon name="pencil" :size="14" />编辑完整 JSON</button></div>
+            </div>
+            <div v-show="activeSubsection === 'diagnostics'" class="settings-stack">
+              <JsonBlock title="配置运行态与路径" :value="configMeta" />
+              <Collapse title="配置结构 Schema" hint="查看字段、敏感项和进阶项统计">
             <MetricGrid :items="manifestMetrics" compact />
             <PagedList :rows="manifest.tabs || []" :page-size="4" label="页签" list-class="config-schema-list" empty="暂无配置结构。" v-slot="{ item }">
               <div class="schema-card" :data-tip="item.description || ''">
@@ -799,24 +836,17 @@ export const AdvancedTab = {
             </PagedList>
           </Collapse>
 
-          <JsonBlock title="原始调试数据 · Schema / 输出 / 诊断" :value="{ schema: store.schema, output: store.output, diagnostics: store.diagnostics }" />
-        </div>
 
-        <SideDrawer
-          v-if="store.developerMode"
-          :open="showJsonDrawer"
-          title="完整配置 JSON"
-          subtitle="由后端执行完整配置校验；需要回滚时请先手动备份。"
-          icon="sliders"
-          width="760px"
-          @close="showJsonDrawer = false"
-        >
-          <Field type="textarea" v-model="draft.configJson" rows="22" />
-          <template #actions>
-            <button class="btn primary small" type="button" @click="saveJson"><Icon name="save" :size="14" />保存 JSON</button>
-          </template>
-        </SideDrawer>
-      </Panel>
+              <JsonBlock title="原始调试数据 · Schema / 输出 / 诊断" :value="{ schema: store.schema, output: store.output, diagnostics: store.diagnostics }" />
+            </div>
+            <footer v-if="activeSubsection === 'logs' || activeSubsection === 'render'" class="system-settings-save-bar"><span>{{ isDirty('developer') ? '有未保存的更改' : '设置已同步' }}</span><button class="btn primary" type="button" @click="saveDeveloperSettings"><Icon name="save" :size="14" />保存开发者设置</button></footer>
+          </div>
+          <SideDrawer v-if="store.developerMode" :open="showJsonDrawer && activeSection === 'developer'" title="完整配置 JSON" subtitle="保存时执行完整配置校验；关闭未保存草稿前会提醒。" icon="sliders" width="760px" @close="closeJsonDrawer">
+            <Field type="textarea" v-model="draft.configJson" :rows="22" />
+            <template #actions><button class="btn primary small" type="button" @click="saveJson"><Icon name="save" :size="14" />保存 JSON</button></template>
+          </SideDrawer>
+        </div>
+      </div>
     </div>
   `,
 }

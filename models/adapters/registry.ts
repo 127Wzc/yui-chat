@@ -1,4 +1,5 @@
 import crypto from "node:crypto"
+import { langfuseReporter } from "../../core/observability/langfuse.js"
 import { configStore } from "../../config/store.js"
 import { ClaudeAdapter } from "./claude.js"
 import { GeminiAdapter, GeminiImagesAdapter } from "./gemini.js"
@@ -201,12 +202,15 @@ export class AdapterRegistry {
     if (!channel) throw new Error("channel is required")
     const adapter = this.get(channel.type)
     const modelVisibleTools = adapter.supportsNativeToolSearch ? toolsForResponses(tools, channel) : tools
+    const observation = await langfuseReporter.begin({ trace, source, purpose, taskName, operation: "chat", channel, input: messages, tools: modelVisibleTools })
     const call = modelLogStore.beginModelCall({ trace, event, source, purpose, taskName, operation: "chat", channel, messages, tools: modelVisibleTools, parentToolId, metadata, snapshotMetadata, request: { maxTokens, toolChoice, protocol: adapter.protocol } })
     try {
       const result = normalizeModelResponse(await adapter.sendMessage({ channel, messages, replayMessages, tools, toolChoice, maxTokens, signal, event, onRequest: capture => modelLogStore.captureModelRequest(call, capture) }))
+      langfuseReporter.complete(observation, result)
       modelLogStore.completeModelCall(call, { response: result })
       return result
     } catch (error) {
+      langfuseReporter.complete(observation, undefined, error)
       modelLogStore.completeModelCall(call, { error })
       throw error
     }
@@ -215,12 +219,15 @@ export class AdapterRegistry {
   async embedTexts({ channel, texts = [], dimensions = 0, signal, event, purpose = "embedding", source = "embedding", taskName = "", trace = null, parentToolId = "", metadata = {} }: EmbeddingSendOptions = {}): Promise<Awaited<ReturnType<RuntimeAdapter["embedTexts"]>>> {
     if (!channel) throw new Error("channel is required")
     const adapter = this.get(channel.type)
+    const observation = await langfuseReporter.begin({ trace, source, purpose, taskName, operation: "embedding", channel, input: texts, inputCount: texts.length })
     const call = modelLogStore.beginModelCall({ trace, event, source, purpose, taskName, operation: "embedding", channel, texts, parentToolId, metadata, request: { dimensions, protocol: adapter.protocol } })
     try {
       const result = await adapter.embedTexts({ channel, texts, dimensions, signal, event, purpose, source, taskName, trace, parentToolId, metadata, onRequest: capture => modelLogStore.captureModelRequest(call, capture) })
+      langfuseReporter.complete(observation, result)
       modelLogStore.completeModelCall(call, { response: result })
       return result
     } catch (error) {
+      langfuseReporter.complete(observation, undefined, error)
       modelLogStore.completeModelCall(call, { error })
       throw error
     }
@@ -229,12 +236,15 @@ export class AdapterRegistry {
   async rerank({ channel, query, documents, signal, event, source = "knowledge-rerank", purpose = "knowledge-rerank", taskName = "rerank" }: RerankRequest & { event?: unknown; source?: string; purpose?: string; taskName?: string }): Promise<RerankResponse> {
     const adapter = this.get(channel.type)
     if (!adapter.supportsRerank || !adapter.rerank) throw new Error(`${adapter.id} 不支持重排序`)
+    const observation = await langfuseReporter.begin({ source, purpose, taskName, operation: "rerank", channel, input: { query, documents }, inputCount: documents.length })
     const call = modelLogStore.beginModelCall({ event, source, purpose, taskName, operation: "rerank", channel, texts: [query, ...documents], request: { protocol: "rerank", candidates: documents.length } })
     try {
       const response = await adapter.rerank({ channel, query, documents, signal, onRequest: capture => modelLogStore.captureModelRequest(call, capture) })
+      langfuseReporter.complete(observation, response)
       modelLogStore.completeModelCall(call, { response: { ...response, text: JSON.stringify(response.results) } })
       return response
     } catch (error) {
+      langfuseReporter.complete(observation, undefined, error)
       modelLogStore.completeModelCall(call, { error })
       throw error
     }
@@ -257,6 +267,7 @@ export class AdapterRegistry {
     const safeCount = hasExplicitCount ? Math.max(1, Math.trunc(Number(count))) : undefined
     const stream = requestedStream === undefined ? channel.stream === true : requestedStream === true
     const messages: ModelMessage[] = [{ role: "user", content: `${prompt}${safeReferences.length ? `\n[参考图 ${safeReferences.length} 张]` : ""}` }]
+    const observation = await langfuseReporter.begin({ trace, source, purpose, taskName, operation: "image-generation", channel, input: { prompt, referenceCount: safeReferences.length } })
     const call = modelLogStore.beginModelCall({
       trace,
       event,
@@ -299,6 +310,7 @@ export class AdapterRegistry {
         : Math.max(0, Math.min(6, Math.trunc(Number(renderConfig.mediaThumbnailMaxCount) || 3)))
       const maxThumbnailChars = Math.max(1000, Math.min(4000000, Math.trunc(Number(renderConfig.mediaThumbnailMaxDataUrlChars) || 800000)))
       const thumbnailSources = result.images.slice(0, maxThumbnailCount).map(image => image.data || image.url)
+      langfuseReporter.complete(observation, result)
       modelLogStore.completeModelCall(call, { response: { id: crypto.randomUUID(), text: `图片生成完成（${result.images.length} 张）`, toolCalls: [], stopReason: "end_turn", usage: result.usage || unknownImageUsage() } })
       // 缩略图不阻塞图片投递，生成后只写入按需读取的模型详情快照。
       void Promise.all(thumbnailSources.map(source => createMediaThumbnail(source, currentConfig)))
@@ -306,6 +318,7 @@ export class AdapterRegistry {
         .catch(() => hostRuntime.logger?.warn?.("[yui-chat] 生成日志缩略图失败"))
       return result
     } catch (error) {
+      langfuseReporter.complete(observation, undefined, error)
       modelLogStore.completeModelCall(call, { error })
       throw error
     }
@@ -317,12 +330,15 @@ export class AdapterRegistry {
     const adapter = this.get(channel.type)
     if (!adapter.decide || adapter.supportsDecision !== true) throw new Error(`${adapter.id} adapter does not support decision requests`)
     const stateText = typeof state === "string" ? state : JSON.stringify(state)
+    const observation = await langfuseReporter.begin({ trace, source, purpose, taskName, operation: "decision", channel, input: { state: stateText, questions } })
     const call = modelLogStore.beginModelCall({ trace, event, source, purpose, taskName, operation: "decision", channel, messages: [{ role: "user", content: stateText }], tools: [], metadata: { ...metadata, questions: Object.keys(questions) }, request: { protocol: adapter.protocol } })
     try {
       const result = await adapter.decide({ channel, state, questions, signal, onRequest: capture => modelLogStore.captureModelRequest(call, capture) })
+      langfuseReporter.complete(observation, result)
       modelLogStore.completeModelCall(call, { response: { id: crypto.randomUUID(), text: JSON.stringify(result.answers), toolCalls: [], stopReason: "end_turn", usage: result.usage } })
       return result
     } catch (error) {
+      langfuseReporter.complete(observation, undefined, error)
       modelLogStore.completeModelCall(call, { error })
       throw error
     }

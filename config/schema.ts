@@ -36,6 +36,7 @@ export const schema: SchemaGroup[] = [
   {
     group: "Logging",
     fields: [
+      { path: "logging.langfuse", label: "Langfuse 观测", type: "json", advanced: true, description: "按会话关联实际模型调用；支持 Cloud 与私有化服务地址、密钥、采样和月度额度。" },
       { path: "logging.level", label: "对话日志等级", type: "string", advanced: true },
       { path: "logging.history.detailRetentionDays", label: "日志详情保留天数", type: "number", advanced: true },
       { path: "logging.history.aggregateRetentionDays", label: "日志汇总保留天数", type: "number", advanced: true },

@@ -15,7 +15,7 @@
   .group-member-area { grid-template-columns: 1fr; }
   .group-member-list { border-right: 0; border-bottom: 1px solid var(--border); }
   .group-member-rows { max-height: 250px; }
-  .persona-interaction-workspace { grid-template-columns: 190px minmax(0, 1fr); gap: 12px; }
+  .persona-interaction-workspace, .settings-workspace { grid-template-columns: 190px minmax(0, 1fr); gap: 12px; }
 }
 @media (max-width: 860px) {
   :root { --sidebar-w: 0px; }
@@ -53,10 +53,17 @@
   .token-field { flex: 1 1 180px; max-width: none; }
   .form-grid, .form-grid.dense, .form-grid.three, .command-retrieval-controls.form-grid, .metric-grid { grid-template-columns: 1fr; }
   .settings-toggle-grid { grid-template-columns: 1fr; }
-  .persona-interaction-workspace { grid-template-columns: 1fr; }
-  .persona-interaction-rail { position: static; }
-  .persona-rail-subnav { display: flex; flex-wrap: wrap; margin: 0 0 4px; padding: 0 0 5px; border-left: 0; border-bottom: 1px solid var(--border); }
-  .persona-rail-subitem { flex: 1 1 100px; }
+  .system-settings-workspace { padding: 12px; }
+  .system-settings-workspace .settings-rail { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
+  .system-settings-workspace .settings-rail-kicker, .system-settings-workspace .settings-rail-subnav { grid-column: 1 / -1; }
+  .system-settings-workspace .settings-rail-copy small { display: none; }
+  .langfuse-form-grid { grid-template-columns: 1fr; gap: 16px; }
+  .system-settings-pane .form-grid { grid-template-columns: 1fr; }
+  .langfuse-budget > div { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .persona-interaction-workspace, .settings-workspace { grid-template-columns: 1fr; }
+  .persona-interaction-rail, .settings-rail { position: static; }
+  .persona-rail-subnav, .settings-rail-subnav { display: flex; flex-wrap: wrap; margin: 0 0 4px; padding: 0 0 5px; border-left: 0; border-bottom: 1px solid var(--border); }
+  .persona-rail-subitem, .settings-rail-subitem { flex: 1 1 100px; }
   .home-hero { grid-template-columns: 1fr; }
   .chat-test-workspace { height: calc(100vh - 250px); min-height: 540px; }
   .group-memory-toolbar { align-items: flex-start; flex-wrap: wrap; }
@@ -100,7 +107,7 @@
   .tool-detail-next .btn { grid-column: 2; justify-self: start; }
   .persona-section-body { padding: 13px; }
   .heading-switch { align-items: flex-end; flex-direction: column-reverse; gap: 4px; }
-  .persona-content-head, .persona-default-mode-head { align-items: stretch; flex-direction: column; }
+  .persona-content-head, .persona-default-mode-head, .settings-content-head { align-items: stretch; flex-direction: column; }
   .persona-basic-switches { grid-template-columns: 1fr; }
   .response-mode-picker { grid-template-columns: 1fr; }
   .persona-command-summary { grid-template-columns: 1fr; }

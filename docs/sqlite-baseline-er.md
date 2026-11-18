@@ -4,6 +4,8 @@
 
 `ai_runs.session_id` 关联一段会话的顶层轮次，`conversation_key` 表示固定归属；运行、模型调用和工具事件的父级引用构成调用拓扑。模型快照独立存储上下文、工具定义与请求元数据，供详情页按需读取。
 
+`016-langfuse.sql` 增加独立的远端观测状态，不改写本地会话和日志：`langfuse_sessions` 保存按目标、环境与归属隔离的 Session/Trace 身份，`langfuse_budget_monthly` 保存目标与 UTC 月份的预留额度，`langfuse_outbox` 保存有界脱敏 OTLP、预留月份、Units 和重试状态。三表不进入配置包白名单，队列不保存项目密钥。具体生命周期见 [Langfuse Cloud](langfuse.md)。
+
 ## ER 图
 
 实线是数据库外键；虚线是同库内的投影或以业务键关联的关系（不以外键强制）。`memory_fts`、`knowledge_fts` 和每个 `vec_<space>` 均是可重建索引。

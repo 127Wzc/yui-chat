@@ -59,7 +59,7 @@ pnpm i
 3. 在「助手人设」调整人格；在「AI 能力」启用所需工具并设置角色权限。
 4. 发送 `埋埋 你好` 或 `#yuichat 你好` 开始对话。
 
-如需固定 Web 登录令牌，在管理台「系统设置 → 运行与登录 → Web 访问与登录」设置；登录框支持浏览器密码管理器保存和自动填充。留空时可继续使用主人一次性链接。
+如需固定 Web 登录令牌，在管理台「系统设置 → 运行与登录 → 登录凭证」设置；登录框支持浏览器密码管理器保存和自动填充。留空时可继续使用主人一次性链接。
 
 默认命令前缀为 `#yui`，自然呼叫为“埋埋”，均可配置。工具启用与授权分别控制；「使用权限」可设置用户例外，群管理操作仍受实际身份和机器人权限限制。
 
@@ -119,6 +119,7 @@ flowchart LR
 - [架构与数据流](docs/architecture.md) · [Responses 与上下文压缩](docs/responses-api.md)
 - [工具开发](docs/tool-authoring-guide.md) · [Custom 框架资源](docs/custom-framework-resources.md)
 - [SQLite 表结构](docs/sqlite-baseline-er.md)
+- [Langfuse Cloud / 私有部署观测与评测入口](docs/langfuse.md)
 - [更新记录](CHANGELOG.md) · [待办](TODOLIST.md) · [维护约束](AGENTS.md)
 
 开发检查：在插件目录运行 `npm run check`。

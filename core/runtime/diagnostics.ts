@@ -1,3 +1,4 @@
+import { langfuseReporter } from "../observability/langfuse.js"
 import { installationStore } from "../../extensions/installation/store.js"
 import { actionCommandStatus } from "./host-command-registry.js"
 import { parseActions } from "../actions/contract.js"
@@ -304,6 +305,7 @@ export async function buildDiagnostics(): Promise<UnknownRecord> {
         credentialsExported: false,
       } : { available: false },
       logs: modelLogStore.stats(),
+      langfuse: await langfuseReporter.stats(),
     },
   }
 }

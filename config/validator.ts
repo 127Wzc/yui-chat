@@ -1,3 +1,4 @@
+import { validLangfuseBaseUrl } from "./langfuse.js"
 import { findPortraitType } from "../memory/portrait-types.js"
 import { specializedModelAdapter, specializedAdapterPurpose } from "../models/protocol/specialized-adapters.js"
 import { COMMON_REASONING_TARGETS, getReasoningOptions } from "../models/configuration/reasoning.js"
@@ -1104,6 +1105,16 @@ function validateRuntimeNumbers(config: ConfigRecord, issues: ValidationIssue[])
   }
   positiveNumber(issues, "logging.history.detailRetentionDays", config.logging?.history?.detailRetentionDays, { min: 1, max: 3650, integer: true })
   positiveNumber(issues, "logging.history.aggregateRetentionDays", config.logging?.history?.aggregateRetentionDays, { min: 1, max: 3650, integer: true })
+  const langfuse = section(config.logging?.langfuse)
+  for (const key of ["enabled", "captureContent"]) if (langfuse[key] !== undefined && typeof langfuse[key] !== "boolean") add(issues, "error", `logging.langfuse.${key}`, "必须是布尔值")
+  for (const key of ["sampleRate", "backgroundSampleRate"]) positiveNumber(issues, `logging.langfuse.${key}`, langfuse[key], { min: 0, max: 1 })
+  positiveNumber(issues, "logging.langfuse.monthlyUnitLimit", langfuse.monthlyUnitLimit, { min: 0, max: 50000, integer: true })
+  if (langfuse.baseUrl !== undefined && !validLangfuseBaseUrl(langfuse.baseUrl)) add(issues, "error", "logging.langfuse.baseUrl", "请填写有效的 HTTP/HTTPS 服务地址，可含端口和路径前缀，不可含账号密码、查询参数或片段")
+  for (const key of ["publicKey", "secretKey"]) {
+    if (langfuse[key] !== undefined && (typeof langfuse[key] !== "string" || /[\r\n]/.test(String(langfuse[key])) || String(langfuse[key]).length > 512)) add(issues, "error", `logging.langfuse.${key}`, "密钥必须是不含换行的字符串，最长 512 字符")
+    if (langfuse.enabled === true && !String(langfuse[key] || "").trim()) add(issues, "error", `logging.langfuse.${key}`, "启用 Langfuse 前请配置项目密钥")
+  }
+  if (langfuse.environment !== undefined && (typeof langfuse.environment !== "string" || !/^[a-z0-9][a-z0-9_-]{0,39}$/.test(langfuse.environment))) add(issues, "error", "logging.langfuse.environment", "环境标识需为 1–40 位小写字母、数字、下划线或短横线")
   const detailRetentionDays = Number(config.logging?.history?.detailRetentionDays || 7)
   const aggregateRetentionDays = Number(config.logging?.history?.aggregateRetentionDays || 90)
   if (aggregateRetentionDays < detailRetentionDays) add(issues, "error", "logging.history.aggregateRetentionDays", "汇总保留天数不能少于详情保留天数")

@@ -1,3 +1,4 @@
+import { langfuseReporter } from "../observability/langfuse.js"
 import { isEmptyResponse } from "./response-pipeline.js"
 import { ConversationState, type ConversationEntry, type ConversationVersion } from "./conversation-state.js"
 import { modelLogStore } from "../observability/model-log.js"
@@ -80,8 +81,8 @@ export class ChatService {
     return this.conversationState.clear(event, options)
   }
 
-  clearAll(): Promise<number> {
-    return this.conversationState.clearAll()
+  clearAll(options: { preserveObservationSessions?: boolean } = {}): Promise<number> {
+    return this.conversationState.clearAll(options)
   }
 
   clearByKeys(keys: unknown[] = []): Promise<number> {
@@ -223,7 +224,7 @@ export class ChatService {
       conversationKey: (value, channelId) => this.conversationKey(value, channelId),
       runObservedStep: value => this.runObservedStep(value),
     }
-    return sendConversationTs(event, prompt, options, runtime)
+    return langfuseReporter.withConversation(event, record(options).source, () => sendConversationTs(event, prompt, options, runtime))
   }
 }
 

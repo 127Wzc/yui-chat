@@ -34,7 +34,7 @@ export const SystemRenderStrategyPanel = {
       settings.engine = String(strategyValue(system, "engine", "html")) === "svg" ? "svg" : "html"
     }
     syncSettings()
-    watch(render, syncSettings, { deep: true })
+    watch(() => asRecord(render.value.system).engine, syncSettings)
 
     function buildPatch(): UnknownRecord {
       return {

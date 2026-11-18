@@ -1,3 +1,4 @@
+import { langfuseReporter } from "../observability/langfuse.js"
 import { installationInstaller } from "../../extensions/installation/installer.js"
 import { loadPersonaPunishments } from "../chat/persona-punishments.js"
 import { applyActionCommands } from "../../apps/actions.js"
@@ -82,6 +83,7 @@ export async function applyRuntimeConfig(config: UnknownRecord = {}, opts: Runti
   const logRetentionChanged = opts.startLogs !== false ? modelLogStore.start(config) : modelLogStore.configure(config)
   if (logRetentionChanged) modelLogStore.cleanupExpired().catch(err => modelLogStore.noteError(err))
   result.logs = true
+  langfuseReporter.start()
   if (opts.reinitTools !== false) {
     await toolRegistry.init()
     result.tools = true
@@ -111,7 +113,7 @@ export async function applyRuntimeConfig(config: UnknownRecord = {}, opts: Runti
 export async function endAllConversationsRuntime(opts: RuntimeLifecycleOptions = {}): Promise<UnknownRecord> {
   const before = runtimeStats()
   const cleared = {
-    conversations: await chatService.clearAll(),
+    conversations: await chatService.clearAll({ preserveObservationSessions: opts.shutdown === true }),
     response: clearResponseState(),
     personaTrigger: clearPersonaTriggerState(),
     mutedScopes: opts.clearMutedScopes === false ? 0 : clearMutedScopes(),
@@ -131,6 +133,7 @@ export async function endAllConversationsRuntime(opts: RuntimeLifecycleOptions =
   if (opts.shutdown) {
     await installationInstaller.stop()
     await applyActionCommands({ actions: { enabled: false } })
+    await langfuseReporter.stop()
     await modelLogStore.stop({ flush: true, timeoutMs: 1500 })
     await filterRegistry.destroy()
     await toolRegistry.destroy()
