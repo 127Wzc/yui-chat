@@ -128,6 +128,8 @@ class InitiativeGreetingScheduler {
   private lastPreview: GreetingPreview[] = []
   private lastError = ""
 
+  configure(config: unknown): void { this.config = record(config) }
+
   start(config: unknown = {}): UnknownRecord {
     this.stop()
     const cfg = greetingConfig(config)

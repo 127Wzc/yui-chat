@@ -1,3 +1,4 @@
+import { cloneJsonValue } from "../../core/shared/json-values.js"
 import { configStore } from "../../config/store.js"
 import { applyRuntimeConfig } from "../../core/runtime/lifecycle.js"
 import type { ConfigSaveOptions, RuntimeConfigObject, RuntimeConfigSnapshot, RuntimeConfigUpdater } from "../../config/types.js"
@@ -31,17 +32,16 @@ export function saveConfigAndApply(next: RuntimeConfigObject, saveOpts: ConfigSa
 
 export function updateConfigAndApply(updater: RuntimeConfigUpdater, saveOpts: ConfigSaveOptions = {}, applyOpts: RuntimeLifecycleOptions = {}): Promise<{ saved: RuntimeConfigSnapshot; runtime: unknown }> {
   return enqueueRuntimeMutation(async () => {
-    let otherConfig = ""
-    const outsideKnowledge = (config: RuntimeConfigObject): string => JSON.stringify(Object.fromEntries(Object.entries(config).filter(([key]) => key !== "knowledge")))
+    let previous: RuntimeConfigObject | undefined
     const saved = await configStore.update(async current => {
-      otherConfig = outsideKnowledge(current)
+      previous = cloneJsonValue(current)
       return updater(current)
     }, saveOpts)
-    // 知识配置由查询和索引任务逐次读取发布快照，无需重载工具、MCP 或调度器。
-    // 比较实际提交结果，混合修改或其他模块配置仍走原有完整热应用。
-    const runtime = outsideKnowledge(saved) === otherConfig && !runtimeApplyFailed && !Object.keys(applyOpts).length
-      ? { knowledge: true, reloaded: false }
-      : await applyTrackedRuntimeConfig(saved, applyOpts)
+    // 依据实际提交前后差异应用；上次热应用失败时完整重试，不能把失败当作成功缓存。
+    const runtime = await applyTrackedRuntimeConfig(saved, {
+      ...applyOpts,
+      ...(runtimeApplyFailed ? {} : { previousConfig: previous }),
+    })
     return { saved, runtime }
   })
 }

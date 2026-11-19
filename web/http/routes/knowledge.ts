@@ -51,6 +51,9 @@ export function registerKnowledgeRoutes(app: RouteApp): void {
     res.json({ ok: true, quality: commandObserver.qualityReport({ limit: Number(req.query.limit || 30) }) })
   })
 
+  app.get("/api/memory/capture-defaults", auth, (_req: RouteRequest, res: RouteResponse) => {
+    res.json({ ok: true, capture: groupCaptureStore.defaults() })
+  })
   app.get("/api/memory", auth, handleRoute(async (req, res) => {
     await memoryStore.load()
     res.json({

@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util"
 import { isMcpDefinitionSelected, mcpToolSchemaDigest } from "./managed-tools.js"
 import { installationStore } from "../extensions/installation/store.js"
 import { sqliteClient } from "../core/storage/sqlite/client.js"
@@ -413,70 +414,95 @@ export class McpManager {
   /** 重连刷新定义后，Registry 用此版本重新归一化工具。 */
   toolsRevision = 0
 
-  async init(): Promise<void> {
-    const config = await configStore.load()
-    await this.closeConnections()
-    this.tools = []
-    this.catalog = []
-    this.errors = []
-    const mcp = record(config.mcp)
-    if (mcp.enabled !== true) {
-      this.clearCaches()
-      this.initialized = false
-      return
-    }
-
-    const servers = record(mcp.servers)
-    let sdk: McpSdkModule
+  async init(previousConfig?: unknown): Promise<void> {
     try {
-      sdk = await loadSdk()
-    } catch (error) {
-      const message = errorMessage(error)
-      this.setError("__sdk__", message, "sdk")
-      // SDK 暂时不可加载时也保留已发现的工具。执行时会返回明确异常，
-      // 下一次调用仍可通过 recoverServer 重新尝试，而不会永久丢失注入状态。
+      const config = await configStore.load()
+      const mcp = record(config.mcp), previous = record(previousConfig)
+      const servers = record(mcp.servers), previousServers = record(previous.servers)
+      const retained = new Set<string>()
+      if (this.initialized && previous.enabled === true && mcp.enabled === true) {
+        for (const [name, server] of Object.entries(servers)) {
+          if (record(server).enabled !== false && !extensionIsolated("mcp", name) && isDeepStrictEqual(server, previousServers[name])) retained.add(name)
+        }
+        for (const name of new Set([...Object.keys(previousServers), ...this.clients.keys(), ...this.transports.keys()])) {
+          if (!retained.has(name)) await this.disconnectServer(name)
+        }
+        this.tools = this.tools.filter(tool => retained.has(tool.serverName))
+        this.catalog = this.catalog.filter(tool => retained.has(tool.server))
+        this.errors = this.errors.filter(error => retained.has(error.server))
+      } else {
+        await this.closeConnections()
+        this.tools = []
+        this.catalog = []
+        this.errors = []
+      }
+      if (mcp.enabled !== true) {
+        this.clearCaches()
+        this.initialized = false
+        return
+      }
+
+      if (Object.entries(servers).every(([name, server]) => retained.has(name) || record(server).enabled === false || extensionIsolated("mcp", name))) {
+        this.clearCachesExcept(new Set(Object.keys(servers)))
+        this.initialized = true
+        return
+      }
+      let sdk: McpSdkModule
+      try {
+        sdk = await loadSdk()
+      } catch (error) {
+        const message = errorMessage(error)
+        this.setError("__sdk__", message, "sdk")
+        // SDK 暂时不可加载时也保留已发现的工具。执行时会返回明确异常，
+        // 下一次调用仍可通过 recoverServer 重新尝试，而不会永久丢失注入状态。
+        for (const [name, rawServerConfig] of Object.entries(servers)) {
+          if (retained.has(name)) continue
+          const serverConfig = record(rawServerConfig)
+          if (extensionIsolated("mcp", name) || serverConfig.enabled === false) {
+            this.clearServerCache(name)
+            continue
+          }
+          this.restoreUnavailableServer(name, serverConfig, message, "sdk")
+        }
+        this.clearCachesExcept(new Set(Object.keys(servers)))
+        this.initialized = true
+        return
+      }
+
       for (const [name, rawServerConfig] of Object.entries(servers)) {
+        if (retained.has(name)) continue
         const serverConfig = record(rawServerConfig)
         if (extensionIsolated("mcp", name) || serverConfig.enabled === false) {
           this.clearServerCache(name)
           continue
         }
-        this.restoreUnavailableServer(name, serverConfig, message, "sdk")
+        let client: McpClient | null = null
+        let transport: McpTransport | null = null
+        let phase: McpServerStatus["phase"] = "connect"
+        try {
+          const connection = await connectServer(name, serverConfig, text(config.version), sdk)
+          client = connection.client
+          transport = connection.transport
+          this.clients.set(name, client)
+          this.transports.set(name, transport)
+          phase = "discover"
+          const discovered = await discoverClientTools(name, client, serverConfig)
+          this.registerAvailableServer(name, client, discovered, serverConfig)
+        } catch (error) {
+          const message = errorMessage(error, Boolean(serverConfig.installationId))
+          this.clients.delete(name)
+          this.transports.delete(name)
+          this.restoreUnavailableServer(name, serverConfig, message, phase)
+          try { await client?.close?.() } catch { /* best-effort：失败不影响主流程。 */ }
+          try { await transport?.close?.() } catch { /* best-effort：失败不影响主流程。 */ }
+        }
       }
       this.clearCachesExcept(new Set(Object.keys(servers)))
       this.initialized = true
-      return
+    } finally {
+      // 进行中的目录可以被查询；完成后另发版本，确保 Registry 同步最终结果。
+      this.toolsRevision++
     }
-
-    for (const [name, rawServerConfig] of Object.entries(servers)) {
-      const serverConfig = record(rawServerConfig)
-      if (extensionIsolated("mcp", name) || serverConfig.enabled === false) {
-        this.clearServerCache(name)
-        continue
-      }
-      let client: McpClient | null = null
-      let transport: McpTransport | null = null
-      let phase: McpServerStatus["phase"] = "connect"
-      try {
-        const connection = await connectServer(name, serverConfig, text(config.version), sdk)
-        client = connection.client
-        transport = connection.transport
-        this.clients.set(name, client)
-        this.transports.set(name, transport)
-        phase = "discover"
-        const discovered = await discoverClientTools(name, client, serverConfig)
-        this.registerAvailableServer(name, client, discovered, serverConfig)
-      } catch (error) {
-        const message = errorMessage(error, Boolean(serverConfig.installationId))
-        this.clients.delete(name)
-        this.transports.delete(name)
-        this.restoreUnavailableServer(name, serverConfig, message, phase)
-        try { await client?.close?.() } catch { /* best-effort：失败不影响主流程。 */ }
-        try { await transport?.close?.() } catch { /* best-effort：失败不影响主流程。 */ }
-      }
-    }
-    this.clearCachesExcept(new Set(Object.keys(servers)))
-    this.initialized = true
   }
 
   async disconnectServer(serverName: string): Promise<void> {
@@ -485,7 +511,6 @@ export class McpManager {
     this.clients.delete(serverName)
     this.transports.delete(serverName)
     this.clearServerCache(serverName)
-    this.tools = this.tools.filter(tool => tool.serverName !== serverName)
     this.toolsRevision++
     try { await client?.close?.() } catch { /* Revocation remains effective when the remote close fails. */ }
     try { await transport?.close?.() } catch { /* Best effort connection cleanup. */ }

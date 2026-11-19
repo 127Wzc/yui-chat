@@ -671,6 +671,10 @@ export class ConfigStore implements ConfigStoreContract {
     if (!stored.exists) throw new Error("SQLite 主配置记录缺失，已停止保存。")
     const overrides = extractConfigOverrides(candidate)
     if (!sameJsonValue(overrides, stored.overrides)) await repository.save(overrides as RuntimeConfigObject)
+    if (this.loaded && sameJsonValue(candidate, this.config)) {
+      this.lastLoadError = null
+      return clone(this.config)
+    }
     return this.publish(candidate)
   }
 

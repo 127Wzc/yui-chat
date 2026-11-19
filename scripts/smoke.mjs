@@ -3245,12 +3245,12 @@ async function checkOutputSemantics() {
       { title: "来源二", url: "https://example.com/two" },
     ],
   )
-  assert(citedText === "结论一。¹\n结论二。²\n保留 [普通链接](https://local.example/keep)。", "hosted search citations should become compact markers without removing unrelated links")
+  assert(citedText === "结论一。\n结论二。\n保留 [普通链接](https://local.example/keep)。", "hosted search citations should disappear from the body without removing unrelated links")
   const citationCases = [
-    ["([来源](https://example.com/news?utm_source=openai))", "¹"],
-    ["（[来源](https://example.com/news?utm_medium=chat&utm_source=openai)）", "¹"],
-    ["<https://example.com/news?utm_source=openai>", "¹"],
-    ["https://example.com/news?utm_source=openai。后文", "¹。后文"],
+    ["([来源](https://example.com/news?utm_source=openai))", ""],
+    ["（[来源](https://example.com/news?utm_medium=chat&utm_source=openai)）", ""],
+    ["<https://example.com/news?utm_source=openai>", ""],
+    ["https://example.com/news?utm_source=openai。后文", "。后文"],
     ["https://example.com/news-extra", "https://example.com/news-extra"],
     ["https://example.com/news(foo_(bar))", "https://example.com/news(foo_(bar))"],
     ["[业务链接](https://example.com/news?id=10&utm_source=openai)", "[业务链接](https://example.com/news?id=10&utm_source=openai)"],
@@ -3261,16 +3261,25 @@ async function checkOutputSemantics() {
   ]
   for (const [input, expected] of citationCases) assert(formatHostedSearchCitations(input, [{ url: "https://example.com/news" }]) === expected, `citation cleanup should preserve complete URL boundaries: ${input}`)
   assert(formatHostedSearchCitations("([来源](https://example.com/news?id=10))", [{ url: "https://example.com/news?id=1" }]) === "([来源](https://example.com/news?id=10))", "similar business parameters must not match")
-  assert(formatHostedSearchCitations('[来源](https://example.com/news?b=2&amp;a=1&utm_source=openai "标题")', [{ url: "https://example.com/news?a=1&b=2" }]) === "¹", "query order, HTML escaping and Markdown titles should be handled")
-  assert(formatHostedSearchCitations("([来源](https://example.com/a_(b)?utm_source=openai))", [{ url: "https://example.com/a_(b)" }]) === "¹", "balanced parentheses inside URL should stay intact")
+  assert(formatHostedSearchCitations('[来源](https://example.com/news?b=2&amp;a=1&utm_source=openai "标题")', [{ url: "https://example.com/news?a=1&b=2" }]) === "", "query order, HTML escaping and Markdown titles should be handled")
+  assert(formatHostedSearchCitations("([来源](https://example.com/a_(b)?utm_source=openai))", [{ url: "https://example.com/a_(b)" }]) === "", "balanced parentheses inside URL should stay intact")
+  const residualSources = Array.from({ length: 6 }, (_, index) => ({ url: index === 5 ? "https://chartexchange.com/symbol/nasdaq-sndk/" : `https://example.com/${index}` }))
+  const screenshotResidual = "结论。([chartexchange.com](⁶?utm_source=openai))"
+  assert(formatHostedSearchCitations(screenshotResidual, residualSources) === "结论。", "screenshot residue with an already replaced URL must be repaired")
+  assert(formatHostedSearchCitations("（[www.chartexchange.com](⁶?utm_source=openai&amp;utm_medium=chat)）", residualSources) === "", "residual references support Chinese brackets and escaped tracking parameters")
+  for (const input of ["([other.example](⁶?utm_source=openai))", "([chartexchange.com](⁵?utm_source=openai))", "([chartexchange.com](⁶?id=10&utm_source=openai))", "`([chartexchange.com](⁶?utm_source=openai))`", "![chartexchange.com](⁶?utm_source=openai)"]) {
+    assert(formatHostedSearchCitations(input, residualSources) === input, "unknown domain/index, business parameters, code and images must survive residual repair")
+  }
+  assert(formatHostedSearchCitations(screenshotResidual, []) === screenshotResidual, "residual references must not be guessed without structured sources")
   const { formatSearchMessageParts } = await import("../output/runtime/core/chat/search-citations.js")
   const sourceForward = { type: "forward", nodes: [{ parts: [{ type: "text", text: "标题\n链接：https://example.com/news" }] }] }
   const imagePart = { type: "image", source: { kind: "url", value: "https://example.com/news" } }
   const messageParts = [{ type: "text", text: "结论。([来源](https://example.com/news?utm_source=openai))" }, imagePart, sourceForward]
   const cleanedParts = formatSearchMessageParts(messageParts, [])
-  assert(cleanedParts[0].text === "结论。¹" && cleanedParts[1] === imagePart && cleanedParts[2] === sourceForward, "tool body cleanup must preserve media and the original source forward")
+  assert(cleanedParts[0].text === "结论。" && cleanedParts[1] === imagePart && cleanedParts[2] === sourceForward, "tool body cleanup must preserve media and the original source forward")
   assert(messageParts[0].text.includes("utm_source"), "cleanup must not mutate the model call")
-  assert(formatSearchMessageParts([{ type: "text", text: "  正文 ([来源](https://example.com/news)) \n" }], [{ url: "https://example.com/news" }])[0].text === "  正文 ¹ \n", "tool text fragment spacing must survive cleanup")
+  assert(formatSearchMessageParts([{ type: "text", text: screenshotResidual }], residualSources)[0].text === "结论。", "tool body must repair screenshot residue using the shared formatter")
+  assert(formatSearchMessageParts([{ type: "text", text: "  正文 ([来源](https://example.com/news)) \n" }], [{ url: "https://example.com/news" }])[0].text === "  正文 \n", "tool text fragment spacing must survive cleanup")
   assert(formatHostedSearchCitations("[普通链接](https://example.com/news)", []) === "[普通链接](https://example.com/news)", "without known sources ordinary links must survive")
   const indexedParts = splitNaturalReply(`这是第一段，需要有足够长度才能自然切开。${"补充内容".repeat(12)}。给你两个办法选一个：\n- 稍后再搜\n- 直接发 BV 号`, { maxParts: 3, minChars: 80, minPartChars: 40 })
   assert(indexedParts.join("\n").includes("给你两个办法选一个") && !indexedParts.at(-1).startsWith("个："), "natural split should preserve the original text boundary")
@@ -3374,8 +3383,12 @@ async function checkOutputSemantics() {
       { title: "来源二", url: "https://example.com/two" },
     ],
   }, config)
-  assert(hostedReplies.length === 2 && String(hostedReplies[0]).includes("远程检索结论。¹") && String(hostedReplies[0]).includes("第二条结论。²") && !String(hostedReplies[0]).includes("https://example.com"), "hosted search URLs should leave the visible answer as compact cited text")
+  assert(hostedReplies.length === 2 && String(hostedReplies[0]).includes("远程检索结论。") && String(hostedReplies[0]).includes("第二条结论。") && !String(hostedReplies[0]).includes("https://example.com") && !/(?:来源一|来源二|\]\(|[¹²])/u.test(String(hostedReplies[0])), "hosted search URLs should leave the visible answer without citation markup")
   assert(hostedForwardNodes.length === 2 && hostedForwardNodes[0]?.nickname === "OpenAI 远程搜索来源 1" && String(hostedForwardNodes[0]?.message).includes("https://example.com/one"), "hosted search sources should use a deduplicated local merged-forward message")
+  const residualReplies = []
+  await sendChatOutput({ isGroup: true, group_id: "20001", user_id: "990001-residual", group: { makeForwardMsg: async nodes => ({ type: "node", data: nodes }) }, reply: async message => residualReplies.push(message) }, { channel: "responses", text: screenshotResidual, hostedSearchSources: residualSources }, config)
+  assert(String(residualReplies[0]).includes("结论。") && !String(residualReplies[0]).includes("utm_source"), "normal reply must clean the literal screenshot residue")
+  assert(residualReplies.length === 2 && residualReplies[1].data.length === 6 && JSON.stringify(residualReplies[1]).includes("chartexchange.com/symbol/nasdaq-sndk/"), "original source URLs must remain in the separate forward")
   const cqReplies = []
   const originalAt = global.segment.at
   global.segment.at = id => ({ type: "at", data: { qq: String(id) } })
@@ -4672,8 +4685,8 @@ async function checkConversations() {
         hostedMessageSecondText = emptyReply
         const textResult = await runHostedMessage()
         assert(hostedMessageRequests.length === 1 && hostedMessageDeliveries.length === 1 && textResult.text === "" && textResult.requiresFinalReply === false, "hosted search with an already delivered text answer must stop before a second model request or empty recovery")
-        assert(hostedMessageDeliveries[0].parts[1].text === "这是已经发送的最终锐评。¹", "native hosted search citations must be cleaned before Registry sends message_send")
-        assert(textResult.deliveredReplyText === "这是已经发送的最终锐评。¹" && textResult.agentTurn.finalReplyDelivered === true && textResult.agentTurn.phase === "completed" && textResult.agentTurn.emptyFinalRecoveryCount === 0 && textResult.toolFinalizationReason === "FINAL_REPLY_DELIVERED", "delivered answers should remain distinguishable from true silent turns")
+        assert(hostedMessageDeliveries[0].parts[1].text === "这是已经发送的最终锐评。", "native hosted search citations must be cleaned before Registry sends message_send")
+        assert(textResult.deliveredReplyText === "这是已经发送的最终锐评。" && textResult.agentTurn.finalReplyDelivered === true && textResult.agentTurn.phase === "completed" && textResult.agentTurn.emptyFinalRecoveryCount === 0 && textResult.toolFinalizationReason === "FINAL_REPLY_DELIVERED", "delivered answers should remain distinguishable from true silent turns")
         const { sendChatOutput } = await import("../output/runtime/core/chat/output-service.js")
         const outputReplies = []
         await sendChatOutput({ isGroup: true, user_id: "10001", group_id: "20001", group: { makeForwardMsg: async nodes => ({ type: "node", data: nodes }) }, reply: async message => { outputReplies.push(message); return true } }, textResult, hostedMessageConfig)
@@ -5500,7 +5513,7 @@ async function checkConversations() {
         channel: { id: "smoke-text-search", type: "smoke-text-search", model: "smoke", modelConfig: { toolUse: true }, timeoutMs: 1000 },
       })
       assert(textSearchCalls === 1 && textSearchResult.toolChain.filter(item => item.name !== "openai:web_search").map(item => item.name).join(",") === `${textSearchName},message_send`, "text-only search should finish through message_send even with a hosted search reply obligation")
-      assert(textSearchForcedMessageSend === true && textSearchDeliveries[0] === "文字搜索结果已整理。¹", "text-only search should force and execute a text message_send delivery")
+      assert(textSearchForcedMessageSend === true && textSearchDeliveries[0] === "文字搜索结果已整理。", "text-only search should force and execute a text message_send delivery")
       assert(textSearchDeliveries[1]?.type === "node" && textSearchDeliveries[1]?.data?.[0]?.message?.includes("https://example.com/source"), "search delivery should append prepared source nodes after the model-authored answer")
       assert(textSearchResult.searchDeliveryRequired === true && textSearchResult.searchDeliveryStatus === "sent" && textSearchResult.toolRounds === 2 && textSearchResult.modelCalls.length === 2 && textSearchResult.text === "", "text-only search delivery should use one bounded terminal send even when search consumed the normal tool round")
       for (const successfulParts of [0, 1]) {
@@ -6507,7 +6520,7 @@ async function checkWebAndBoot() {
   assert(webShellSource.includes("日志与用量") && webShellSource.indexOf('{ id: "logs"') > webShellSource.indexOf('label: "管理"') && webStoreSource.includes('logs: ["config"]') && webLogsSource.includes("visibilitychange") && webLogsSource.includes("setInterval"), "logs page should live in the management navigation group with bounded five-second refresh while visible")
   assert(webStoreSource.includes("refreshTab") && webStoreSource.includes("tabSlices") && webStoreSource.includes("saveConfigPatch") && webStoreSource.includes("loadInitial") && webStoreSource.includes("Promise.allSettled") && webStoreSource.includes("setDirtyScope") && webStoreSource.includes("discardPendingNavigation"), "web store should support page-scoped loading, slice error isolation, and shared dirty-state navigation protection")
   assert(webStoreSource.includes("developerMode") && webStoreSource.includes("setDeveloperMode"), "web store should persist the local developer-mode preference")
-  assert(webStoreSource.includes('providers: ["config", "providers", "tools"'), "provider editor should load the live tool catalog for model allowlist and denylist selection")
+  assert(webStoreSource.includes('providers: ["config", "providers"]') && webProvidersSource.includes('useDataSlices(() => ["tools"])'), "provider editor should load the live tool catalog on demand for model allowlist and denylist selection")
   assert(webStoreSource.includes("authenticated") && !webStoreSource.includes('localStorage.setItem("yui-chat-token"') && webShellSource.includes("HttpOnly 会话"), "web UI must keep management tokens out of browser storage and use protected sessions")
   assert(webUiSource.includes("openDrawerStack") && webUiSource.includes("layerZIndex") && webUiSource.includes("focusableElements") && webUiSource.includes("aria-labelledby") && webUiSource.includes("ConfirmDialog") && webUiSource.includes("confirm-layer") && !webUiSource.includes("window.confirm"), "shared UI should provide accessible stacked drawers and a global confirmation modal without native dialogs")
   assert(webUiSource.includes("SearchMultiSelect") && webUiSource.includes("search-multi-options") && webProvidersSource.includes("<SearchMultiSelect") && webProvidersSource.includes("toolPolicyOptions"), "model tool policies should use the shared searchable multi-select against the current tool catalog")
@@ -6555,7 +6568,7 @@ async function checkWebAndBoot() {
   assert(webKnowledgeSource.includes("showCommandMaintenanceDrawer") && webKnowledgeSource.includes("openCommandMaintenance") && webKnowledgeSource.includes("builtin-commands") && webKnowledgeSource.includes('title="指令知识库"'), "built-in command knowledge base should expose one card-level maintenance entry")
   assert(webKnowledgeSource.includes("documentOrigin") && webKnowledgeSource.includes("knowledge-command-origin-inline") && webKnowledgeSource.includes("knowledge-command-preview") && webKnowledgeSource.includes("openBuiltinCommandEditor") && webKnowledgeSource.includes("retrievalText") && webKnowledgeSource.includes("插件") && webKnowledgeSource.includes("文件") && webKnowledgeSource.includes("方法"), "built-in command documents should compactly show their source and open read-only metadata with AI draft generation")
   assert(webKnowledgeSource.includes("maintenancePaneItems") && webKnowledgeSource.includes('value: "settings"') && webKnowledgeSource.includes("向量更新"), "built-in command maintenance should combine capture with commands and keep retrieval settings separate")
-  assert(webShellSource.includes('{ id: "memory", label: "记忆管理"') && webStoreSource.includes('memory: ["config", "memory", "diagnostics"]'), "memory management should be a dedicated sidebar page with its own data slice")
+  assert(webShellSource.includes('{ id: "memory", label: "记忆管理"') && webStoreSource.includes('memory: ["config", "memory"]'), "memory management should be a dedicated sidebar page with its own data slice")
   assert(webMemorySource.includes("group-picker") && webMemorySource.includes("群公共记忆") && webMemorySource.includes("本群记忆") && webMemorySource.includes("全局记忆") && webMemorySource.includes("原始消息（") && webMemorySource.includes("补录历史") && webMemorySource.includes("提炼运行记录") && webMemorySource.includes("扫描昨日及历史") && webMemorySource.includes("等待处理") && webMemorySource.includes("实际模型调用") && webMemorySource.includes("Token 子窗口") && webMemorySource.includes("按日提炼") && webMemorySource.includes("reextractSingleDay") && webMemorySource.includes("runRecordWindows") && webMemorySource.includes("提炼结果（") && webMemorySource.includes("/windows/") && webMemorySource.includes("runExtractionWindow") && webMemorySource.includes("extractionWindowAction") && webMemorySource.includes("立即执行") && webMemorySource.includes("失败重试") && webMemorySource.includes("/api/memory/groups/") && webMemorySource.includes("captureMessageOrder") && webMemorySource.includes("changeCaptureMessageOrder") && webMemorySource.includes("jumpCaptureMessagePage") && webMemorySource.includes("最早在前") && webMemorySource.includes("最新在前"), "memory page should separate source-message backfill from daily extraction runs while exposing token workload, manual execution, failed-day retry, input coverage, message ordering, and page jumps")
   assert(
     webMemorySource.includes("windowSelectionMode")
@@ -6576,7 +6589,7 @@ async function checkWebAndBoot() {
   assert(webChatSource.includes("/api/chat/test/sessions") && webChatSource.includes("历史对话") && webChatSource.includes("删除这段测试对话") && !webChatSource.includes("persistMessages"), "chat page should use SQLite-backed test history without browser-local transcripts")
   assert(webAdvancedSource.includes("开发者模式") && webAdvancedSource.includes("developer-gate") && webAdvancedSource.includes("SystemRenderStrategyPanel") && webAdvancedSource.includes("confirmAction") && webAdvancedSource.includes("确认回滚") && !webAdvancedSource.includes("window.confirm"), "system page should expose hot-updatable system rendering strategy and gate advanced configuration")
   assert(webAdvancedSource.includes("backupMaxFiles") && webAdvancedSource.includes("backupMaxAgeDays") && webAdvancedSource.includes("saveBackupPolicy") && webAdvancedSource.includes("同时超过保留天数") && webAdvancedSource.includes("SQLite 中的能力权限") && webAdvancedSource.includes("运行日志、用量流水") && webAdvancedSource.includes("configBackupDir") && webAdvancedSource.includes("backupContents"), "system backup page should explain the package directory, contents, SQLite whitelist, and excluded detail data")
-  assert(webAdvancedSource.includes("saveDeveloperSettings") && webAdvancedSource.includes("memoryEmbeddingTokensPerDay") && webAdvancedSource.includes("knowledgeEmbeddingTokensPerDay") && webAdvancedSource.includes("systemRenderPanel"), "system page should save developer budgets and rendering settings together")
+  assert(webAdvancedSource.includes("saveDeveloperSettings") && webAdvancedSource.includes("memoryEmbeddingTokensPerDay") && webAdvancedSource.includes("knowledgeEmbeddingTokensPerDay") && webAdvancedSource.includes("systemRenderPanel"), "system page should expose scoped developer budget and rendering controls")
   assert(webAdvancedSource.includes("capturePromptTokenBudget") && webAdvancedSource.includes("captureEmbeddingModel") && webAdvancedSource.includes("memoryRerankModel") && webAdvancedSource.includes("记忆提示 Token 预算") && webAdvancedSource.includes("记忆向量模型"), "memory defaults should expose prompt budget and independent embedding/rerank models")
   assert(webLogsSource.includes("统一使用 CNY") && !webLogsSource.includes("USD") && webProvidersSource.includes("输入价格 / 1M（CNY）"), "usage and model pricing UI should expose CNY as the only currency")
   assert(webProvidersSource.includes("setDefault") && webProvidersSource.includes("removeModel") && webProvidersSource.includes("ModelEditor"), "providers page should expose model management actions")

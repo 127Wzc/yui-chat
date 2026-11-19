@@ -1,8 +1,8 @@
 import { FrameworkResourcePicker } from "../../ui/framework-resource-picker.js"
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue"
-import { confirmAction, store, request, toast, refreshTab, setTab } from "../../app/store/store.js"
+import { confirmAction, store, request, toast, refreshSlices, setTab } from "../../app/store/store.js"
 import { splitTokens, parseJsonText, toJson } from "../../shared/format.js"
-import { asRecord, asRecords, errorMessage, type UnknownRecord } from "../../shared/data.js"
+import { asRecord, asRecords, errorMessage, sameJsonValue, type UnknownRecord } from "../../shared/data.js"
 import { CUSTOM_BUILDER_STEPS, CUSTOM_FIELD_TYPES, applyCustomBuilder, customBuilderFromManifest, customCommandArguments, customTestDraft } from "./custom-builder.js"
 import { ExtensionCreateDrawer } from "./extension-create-drawer.js"
 import { ExtensionEditorDrawer } from "./extension-editor-drawer.js"
@@ -101,6 +101,9 @@ export const ExtensionPanel = {
   name: "ExtensionPanel",
   components: { FrameworkResourcePicker, ExtensionCreateDrawer, ExtensionEditorDrawer, ExtensionLibraryPanel, ToolDetailModal },
   setup() {
+    const runtimeBaseline = ref<UnknownRecord>({})
+    const manifestBaseline = ref<UnknownRecord>({})
+    const sourceBaseline = ref("")
     const customCatalog = computed<ExtensionItem[]>(() => asRecords<ExtensionItem>(asRecord<{ custom?: { catalog?: ExtensionItem[] } }>(store.tools).custom?.catalog))
     const skillCatalog = computed<ExtensionItem[]>(() => asRecords<ExtensionItem>(asRecord<{ skills?: { catalog?: ExtensionItem[] } }>(store.tools).skills?.catalog))
     const showCreateDrawer = ref(false)
@@ -197,13 +200,13 @@ export const ExtensionPanel = {
       ? "编辑 OpenAI 原生 SKILL.md：description 决定何时触发，正文定义完整工作流。"
       : "适合直接在本插件里补一个本地工具。保存后即可启停、授权和调试。")
     async function act(fn: () => Promise<unknown>, message?: string) {
-      try { await fn(); if (message) toast(message); await refreshTab("tools") } catch (err) { toast(errorMessage(err)) }
+      try { await fn(); if (message) toast(message); await refreshSlices(["tools"]) } catch (err) { toast(errorMessage(err)) }
     }
 
     async function reloadExtensions() {
       try {
         await request("/api/tools/reload", { method: "POST", body: "{}" })
-        await refreshTab("tools")
+        await refreshSlices(["tools"])
         toast("已重新扫描扩展目录")
       } catch (err) { toast(errorMessage(err)) }
     }
@@ -270,8 +273,11 @@ export const ExtensionPanel = {
       editor.manifestFile = String(result.manifestFile || "")
       editor.indexFile = String(result.indexFile || "")
       editor.baseManifest = JSON.parse(JSON.stringify(manifest || {}))
+      runtimeBaseline.value = JSON.parse(JSON.stringify(result.runtimeConfig || {}))
       editor.runtimeConfigText = toJson(result.runtimeConfig || {})
       if (type === "custom") Object.assign(customBuilder, customBuilderFromManifest(manifest, editor.id))
+      manifestBaseline.value = JSON.parse(JSON.stringify(editorManifest()))
+      sourceBaseline.value = editor.source
       customTest.tool = type === "custom" ? String(asRecords(manifest.tools).find(item => item.name)?.name || "") : ""
       const testDraft = customTestDraft(editor.source, customBuilder)
       customTest.args = toJson(testDraft.args)
@@ -353,7 +359,7 @@ export const ExtensionPanel = {
         }))
         const id = result.result?.id
         toast(`安装任务 ${String(asRecord(result.task).id || "")} 已受理，请到 AI 能力 → 安装记录查看进度`)
-        await refreshTab("tools")
+        await refreshSlices(["tools"])
         if (id) {
           showCreateDrawer.value = false
           await openSkill(id, "edit")
@@ -394,7 +400,7 @@ export const ExtensionPanel = {
         const path = type === "skill" ? "/api/skills/" : "/api/custom-tools/"
         await request(`${path}${encodeURIComponent(id)}`, { method: "DELETE" })
         toast(`已删除 ${label} ${id}`)
-        await refreshTab("tools")
+        await refreshSlices(["tools"])
       } catch (err) { toast(errorMessage(err)) }
     }
 
@@ -402,6 +408,34 @@ export const ExtensionPanel = {
       const accepted = await confirmAction({ title: `更新远程 Skill“${id}”？`, message: "当前本地目录会被远程仓库版本替换，本地未提交的修改可能丢失。", confirmText: "确认更新", tone: "warn", icon: "download" })
       if (!accepted) return
       return act(() => request(`/api/skills/${encodeURIComponent(id)}/update-remote`, { method: "POST" }), `已更新远程 Skill ${id}`)
+    }
+
+    function editorManifest(): UnknownRecord {
+      const manifest = editor.type === "skill"
+        ? {
+            ...editor.baseManifest,
+            id: editor.id.trim(),
+            name: editor.name.trim() || editor.id.trim(),
+            description: editor.descriptionZh.trim() || editor.description.trim(),
+            enabled: editor.enabled === "true",
+          }
+        : applyCustomBuilder(parseJsonText(editor.manifestJson || "{}", "高级 manifest JSON", {}), customBuilder)
+      if (editor.type !== "skill") {
+        manifest.id = editor.id.trim()
+        manifest.name = editor.name.trim() || editor.id.trim()
+        if (editor.displayNameZh.trim()) manifest.displayNameZh = editor.displayNameZh.trim()
+        else delete manifest.displayNameZh
+        if (editor.displayNameZh.trim()) manifest.nameZh = editor.displayNameZh.trim()
+        else delete manifest.nameZh
+        manifest.description = editor.description.trim()
+        if (editor.descriptionZh.trim()) manifest.descriptionZh = editor.descriptionZh.trim()
+        else delete manifest.descriptionZh
+        manifest.category = editor.category.trim() || "custom"
+        manifest.risk = editor.risk
+        manifest.tags = splitTokens(editor.tags)
+        manifest.enabled = editor.enabled === "true"
+      }
+      return manifest
     }
 
     async function saveEditor() {
@@ -412,45 +446,25 @@ export const ExtensionPanel = {
           const name = String(editor.name || editor.id).trim().toLowerCase()
           if (skillCatalog.value.some(item => item.id !== editor.id && String(item.name || item.id).trim().toLowerCase() === name)) throw new Error(`Skill name “${editor.name}” 已存在`)
         }
-        const manifest = editor.type === "skill"
-          ? {
-              ...editor.baseManifest,
-              id: editor.id.trim(),
-              name: editor.name.trim() || editor.id.trim(),
-              description: editor.descriptionZh.trim() || editor.description.trim(),
-              enabled: editor.enabled === "true",
-            }
-          : applyCustomBuilder(parseJsonText(editor.manifestJson || "{}", "高级 manifest JSON", {}), customBuilder)
-        if (editor.type !== "skill") {
-          manifest.id = editor.id.trim()
-          manifest.name = editor.name.trim() || editor.id.trim()
-          if (editor.displayNameZh.trim()) manifest.displayNameZh = editor.displayNameZh.trim()
-          else delete manifest.displayNameZh
-          if (editor.displayNameZh.trim()) manifest.nameZh = editor.displayNameZh.trim()
-          else delete manifest.nameZh
-          manifest.description = editor.description.trim()
-          if (editor.descriptionZh.trim()) manifest.descriptionZh = editor.descriptionZh.trim()
-          else delete manifest.descriptionZh
-          manifest.category = editor.category.trim() || "custom"
-          manifest.risk = editor.risk
-          manifest.tags = splitTokens(editor.tags)
-          manifest.enabled = editor.enabled === "true"
-        }
+        const manifest = editorManifest()
+        const contentChanged = editor.source !== sourceBaseline.value || !sameJsonValue(manifest, manifestBaseline.value)
+        const value = editor.type === "skill" ? parseJsonText(editor.runtimeConfigText || "{}", "Skill 运行变量", {}) : {}
+        const runtimeChanged = editor.type === "skill" && !sameJsonValue(value, runtimeBaseline.value)
+        if (!creating && !contentChanged && !runtimeChanged) return
         const base = editor.type === "skill" ? "/api/skills" : "/api/custom-tools"
         if (creating) {
           const response = asRecord<ExtensionResponse>(await request(base, { method: "POST", body: JSON.stringify({ manifest, source: editor.source }) }))
           editor.id = String(response.result?.id || editor.id)
           editor.mode = "edit"
-        } else {
+        } else if (contentChanged) {
           await request(`${base}/${encodeURIComponent(editor.id)}`, { method: "PUT", body: JSON.stringify({ manifest, source: editor.source }) })
         }
-        if (editor.type === "skill") {
-          const value = parseJsonText(editor.runtimeConfigText || "{}", "Skill 运行变量", {})
+        if (runtimeChanged) {
           await request(`/api/skills/${encodeURIComponent(editor.id)}/runtime-config`, { method: "PUT", body: JSON.stringify({ value }) })
         }
         toast(`已${creating ? "新建" : "保存"}${editor.type === "skill" ? " Skill" : " Custom"} 扩展 ${editor.id}`)
         showEditor.value = false
-        await refreshTab("tools")
+        await refreshSlices(["tools"])
       } catch (err) { toast(errorMessage(err)) }
     }
 

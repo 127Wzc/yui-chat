@@ -1,12 +1,13 @@
-import { reactive } from "vue"
+import { onScopeDispose, reactive, watch } from "vue"
 import { createApiClient } from "./api.js"
+import { changedConfigPatch } from "../../shared/data.js"
 
 export type UnknownRecord = Record<string, unknown>
 export type DataSlice = UnknownRecord | null
 
 const validTabs = ["overview", "chat", "logs", "providers", "persona", "daily-still", "actions", "tools", "filters", "tool-permissions", "knowledge", "memory", "advanced"] as const
 type TabName = typeof validTabs[number]
-type SliceName = "actions" | "config" | "health" | "providers" | "tools" | "filters" | "skills" | "output" | "mcp" | "diagnostics" | "conversations" | "subAgentRuns" | "capabilities" | "setupGuide" | "logsSummary" | "memory" | "render" | "knowledge" | "dailyStill"
+type SliceName = "actions" | "config" | "health" | "providers" | "tools" | "filters" | "skills" | "output" | "mcp" | "diagnostics" | "conversations" | "subAgentRuns" | "capabilities" | "setupGuide" | "logsSummary" | "memory" | "render" | "knowledge" | "dailyStill" | "captureDefaults"
 
 interface ClientStore {
   token: string
@@ -39,6 +40,7 @@ interface ClientStore {
   knowledge: DataSlice
   dailyStill: DataSlice
   memory: DataSlice
+  captureDefaults: DataSlice
   render: DataSlice
   diagnostics: DataSlice
   conversations: DataSlice
@@ -93,6 +95,7 @@ export const store = reactive<ClientStore>({
   knowledge: null,
   dailyStill: null,
   memory: null,
+  captureDefaults: null,
   render: null,
   diagnostics: null,
   conversations: null,
@@ -204,39 +207,73 @@ const refreshers: Record<SliceName, () => Promise<void>> = {
     store.logsSummary = record((await request(`/api/logs/summary?from=${from}&to=${to}`)).summary)
   },
   memory: async () => { store.memory = await request("/api/memory") },
+  captureDefaults: async () => { store.captureDefaults = record((await request("/api/memory/capture-defaults")).capture) },
   render: async () => { store.render = await request("/api/render/templates") },
   knowledge: async () => { store.knowledge = await request("/api/knowledge") },
   dailyStill: async () => { store.dailyStill = await request("/api/daily-still") },
 }
 
-// 每个页面真正依赖的切片；保存后只刷新这些，不再 loadAll 全量。
+// 页面首屏依赖；编辑器和低频分区通过 ensureSlices 按需读取。
 export const tabSlices: Record<TabName, SliceName[]> = {
   overview: ["config", "diagnostics", "conversations", "setupGuide", "logsSummary"],
-  chat: ["config", "providers", "conversations", "setupGuide"],
+  chat: ["config", "providers", "conversations"],
   logs: ["config"],
-  providers: ["config", "providers", "tools", "diagnostics", "subAgentRuns"],
-  persona: ["config", "output", "diagnostics"],
-  "daily-still": ["config", "dailyStill", "tools", "diagnostics"],
+  providers: ["config", "providers"],
+  persona: ["config", "output"],
+  "daily-still": ["config", "dailyStill"],
   actions: ["actions"],
-  tools: ["config", "tools", "skills", "mcp", "render", "diagnostics"],
+  tools: ["config", "tools"],
   filters: ["filters", "config"],
-  "tool-permissions": ["config", "tools", "skills", "mcp", "render", "diagnostics"],
-  knowledge: ["config", "knowledge", "diagnostics"],
-  memory: ["config", "memory", "diagnostics"],
-  advanced: ["config", "memory", "diagnostics", "output"],
+  "tool-permissions": ["config", "tools"],
+  knowledge: ["config", "knowledge"],
+  memory: ["config", "memory"],
+  advanced: ["config", "diagnostics"],
 }
 
-async function refreshSlice(key: SliceName): Promise<void> {
+const pendingSlices = new Map<SliceName, Promise<void>>()
+const staleSlices = new Set<SliceName>()
+const visibleSlices = reactive(new Map<symbol, { tab: TabName; keys: readonly SliceName[] }>())
+function refreshSlice(key: SliceName): Promise<void> {
+  const pending = pendingSlices.get(key)
+  if (pending) return pending
   store.sliceLoading[key] = true
-  try {
-    await refreshers[key]()
+  const operation = refreshers[key]().then(() => {
     delete store.sliceErrors[key]
-  } catch (error) {
+    staleSlices.delete(key)
+  }).catch(error => {
     store.sliceErrors[key] = errorMessage(error)
     throw error
-  } finally {
+  }).finally(() => {
     store.sliceLoading[key] = false
-  }
+    pendingSlices.delete(key)
+  })
+  pendingSlices.set(key, operation)
+  return operation
+}
+
+export async function ensureSlices(keys: SliceName[]): Promise<void> {
+  await refreshSlices(keys.filter(key => pendingSlices.has(key) || store[key] === null || staleSlices.has(key)))
+}
+
+/** 挂载期间声明可见数据；顶部刷新复用同一依赖，卸载后自动移除。 */
+export function useDataSlices(source: () => readonly SliceName[]): void {
+  const id = Symbol(), tab = store.activeTab
+  watch(source, keys => {
+    visibleSlices.set(id, { tab, keys })
+    void ensureSlices([...keys]).catch(error => toast(errorMessage(error)))
+  }, { immediate: true })
+  onScopeDispose(() => visibleSlices.delete(id))
+}
+
+export function getTabSlices(tab: string = store.activeTab): SliceName[] {
+  const selected = Object.hasOwn(tabSlices, tab) ? tab as TabName : "overview"
+  const keys = [...tabSlices[selected]]
+  for (const entry of visibleSlices.values()) if (entry.tab === selected) keys.push(...entry.keys)
+  return [...new Set(keys)]
+}
+
+function invalidateDerivedSlices(): void {
+  for (const key of Object.keys(refreshers) as SliceName[]) if (key !== "config") staleSlices.add(key)
 }
 
 export async function refreshSlices(keys: string[] = []): Promise<void> {
@@ -245,8 +282,7 @@ export async function refreshSlices(keys: string[] = []): Promise<void> {
 }
 
 export async function refreshTab(tab: string = store.activeTab): Promise<void> {
-  const selected = Object.hasOwn(tabSlices, tab) ? tab as TabName : "overview"
-  await refreshSlices(tabSlices[selected] || tabSlices.overview)
+  await refreshSlices(getTabSlices(tab))
 }
 
 export async function loadAll() {
@@ -272,17 +308,25 @@ export async function loadInitial(tab: string = store.activeTab): Promise<{ load
 }
 
 // ---- 通用 actions ----
-export async function saveConfigPatch(patch: UnknownRecord, _source = ""): Promise<UnknownRecord> {
+/** 写接口已返回最新配置时直接使用，避免再次读取配置。 */
+export function applyConfigResponse(saved: UnknownRecord): void {
+  if (saved.config && typeof saved.config === "object") store.config = record(saved.config)
+  if (saved.meta) store.configMeta = record(saved.meta)
+  if (Array.isArray(saved.backups)) store.configBackups = saved.backups.map(record)
+  invalidateDerivedSlices()
+}
+
+export async function saveConfigPatch(patch: UnknownRecord, _source = "", refresh: SliceName[] = []): Promise<UnknownRecord> {
+  patch = changedConfigPatch(patch, store.config)
+  if (!Object.keys(patch).length) return { ok: true, config: store.config, meta: store.configMeta, changedPaths: [], skipped: true }
   const saved = await request("/api/config", {
     method: "PATCH",
     body: JSON.stringify({ patch }),
   })
-  store.config = record(saved.config)
-  store.configMeta = record(saved.meta) || store.configMeta
-  store.configBackups = Array.isArray(saved.backups) ? saved.backups.map(record) : store.configBackups
+  applyConfigResponse(saved)
   const changedPaths = Array.isArray(saved.changedPaths) ? saved.changedPaths : []
   toast(`配置已保存${changedPaths.length ? `：${changedPaths.length} 项` : ""}`)
-  await refreshTab()
+  if (refresh.length) await refreshSlices(refresh)
   return saved
 }
 
@@ -377,12 +421,6 @@ export function connectWs() {
     ws = new WebSocket(`${proto}://${location.host}${location.pathname.replace(/\/$/, "")}/ws`)
   } catch {
     return
-  }
-  ws.onmessage = event => {
-    try {
-      const data = JSON.parse(event.data)
-      if (data.type === "status" || data.type === "hello") refreshTab().catch(() => {})
-    } catch { /* best-effort：失败不影响主流程。 */ }
   }
   const timer = setInterval(() => {
     if (ws.readyState === 1) ws.send(JSON.stringify({ type: "ping" }))

@@ -1,8 +1,9 @@
 import { reactive, computed, ref, watch } from "vue"
-import { confirmAction, store, request, toast, refreshTab } from "../../app/store/store.js"
+import { useDataSlices, confirmAction, store, request, toast } from "../../app/store/store.js"
 import { splitTokens, parseJsonText, toJson } from "../../shared/format.js"
-import { asRecord, errorMessage, type UnknownRecord } from "../../shared/data.js"
+import { asRecord, changedConfigPatch, errorMessage, type UnknownRecord } from "../../shared/data.js"
 import {
+  applyProviderResponse,
   BOOL_OFF_OPTIONS,
   BOOL_OPTIONS,
   INHERIT_BOOL_OPTIONS,
@@ -93,11 +94,9 @@ export const AddChannelForm = {
               headers: parseJsonText(draft.headers, `${draft.providerName || draft.providerTemplate} headers`, {}),
             }),
           }))
-          store.config = asRecord(result.config)
-          store.providers = { ...asRecord(store.providers), diagnostics: result.diagnostics }
+          applyProviderResponse(result)
           toast(`已新增渠道 ${draft.providerName}`)
           draft.apiKey = ""
-          await refreshTab("providers")
           emit("added")
         } catch (err) {
           toast(errorMessage(err))
@@ -155,16 +154,16 @@ export const ProviderEditor = {
           name: draft.name.trim(),
           baseURL: draft.baseURL,
           headers: parseJsonText(draft.headers, `${name} headers`, {}),
-          clearApiKey: draft.clearApiKey === "true",
         }
-        if (draft.apiKey.trim()) body.apiKey = draft.apiKey.trim()
-        const result = asRecord<RequestResult>(await request(`/api/providers/${encodeURIComponent(name)}`, { method: "PATCH", body: JSON.stringify(body) }))
-        store.config = asRecord(result.config)
-        store.providers = { ...asRecord(store.providers), diagnostics: result.diagnostics }
+        const patch = changedConfigPatch(body, { name: props.provider.name, baseURL: props.provider.baseURL || "", headers: props.provider.headers || {} })
+        if (draft.clearApiKey === "true") patch.clearApiKey = true
+        if (draft.apiKey.trim()) patch.apiKey = draft.apiKey.trim()
+        if (!Object.keys(patch).length) return
+        const result = asRecord<RequestResult>(await request(`/api/providers/${encodeURIComponent(name)}`, { method: "PATCH", body: JSON.stringify(patch) }))
+        applyProviderResponse(result)
         draft.apiKey = ""
         draft.clearApiKey = "false"
         toast(`已保存渠道 ${draft.name.trim()}`)
-        await refreshTab("providers")
         emit("saved")
       } catch (err) {
         toast(errorMessage(err))
@@ -230,6 +229,7 @@ export const ModelEditor = {
       ...modelToolPolicyDraft(props.model.toolPolicy),
       ...responsesModelDraft(props.model.responses),
     })
+    useDataSlices(() => ["tools"])
     const toolPolicyOptions = computed(() => buildModelToolPolicyOptions(store.tools, store.config, [...draft.toolPolicyAllow, ...draft.toolPolicyDeny]))
     const reasoningEffortOptions = ref([{ value: "", label: "default" }])
     const reasoningLoading = ref(false)
@@ -238,6 +238,50 @@ export const ModelEditor = {
     const chatAdapter = computed(() => draft.chatProtocol === "responses" ? "openai-responses"
       : props.model.adapter === "openai-responses" || props.model.adapter === "openai-images" ? "openai-compatible"
       : props.model.adapter === "gemini-images" ? "gemini" : ["embeddings", "rerank", "systemone"].includes(String(props.model.adapter)) ? "openai-compatible" : props.model.adapter)
+    function modelPatch(): UnknownRecord {
+      const name = props.model.name
+      return {
+        modelIdentifier: draft.modelIdentifier,
+        purpose: draft.purpose,
+        adapter: draft.purpose === "image" ? imageAdapterValue(draft.imageProtocol) : draft.purpose === "rerank" ? "rerank" : draft.purpose === "embedding" ? "embeddings" : draft.purpose === "decision" ? "systemone" : chatAdapter.value,
+        image: draft.purpose === "image" ? {
+          protocol: draft.imageProtocol,
+          ...(draft.imageAspectRatio ? { aspectRatio: draft.imageAspectRatio } : {}),
+          ...(draft.imageSize ? { imageSize: draft.imageSize } : {}),
+        } : null,
+        visual: draft.purpose === "chat" && draft.visual === "true",
+        toolUse: draft.purpose === "chat" && draft.toolUse !== "false",
+        timeoutMs: draft.timeoutSeconds === "" ? null : Math.round(Number(draft.timeoutSeconds) * 1000),
+        contextWindowTokens: draft.purpose === "chat"
+          ? (typeof draft.contextWindowTokens === "string" && draft.contextWindowTokens.trim() === "" ? null : Number(draft.contextWindowTokens))
+          : null,
+        stream: (draft.purpose === "chat" || draft.purpose === "image") && draft.stream !== "" ? draft.stream === "true" : null,
+        priceIn: Number(draft.priceIn || 0),
+        priceOut: Number(draft.priceOut || 0),
+        reasoning: draft.purpose === "chat" ? { target: draft.reasoningTarget || "auto", effort: draft.reasoningEffort } : null,
+        capabilities: {
+          chat: draft.purpose === "chat",
+          embedding: draft.purpose === "embedding",
+        },
+        rerank: draft.purpose === "rerank" ? { params: parseJsonText(draft.rerankParams, `${name} rerank params`, {}) } : null,
+        embedding: draft.purpose === "embedding"
+          ? {
+            protocol: draft.embeddingProtocol || "embeddings",
+            defaultDimensions: Number(draft.embeddingDimensions || 0),
+            allowedDimensions: splitTokens(draft.embeddingAllowedDimensions).map(Number).filter(Number.isFinite),
+            supportsDimensionOverride: draft.embeddingSupportsOverride !== "false",
+            batchSize: Number(draft.embeddingBatchSize || 16),
+            timeoutMs: Number(draft.embeddingTimeoutMs || 30000),
+            params: parseJsonText(draft.embeddingParams, `${name} embedding params`, {}),
+          }
+          : null,
+        responses: draft.purpose === "chat" ? responsesModelPatch(draft, name) : null,
+        toolPolicy: draft.purpose === "chat" ? modelToolPolicyPatch(draft) : null,
+        params: parseJsonText(draft.params, `${name} params`, {}),
+
+      }
+    }
+    const initialPatch = modelPatch()
     watch(() => [draft.purpose, draft.modelIdentifier, draft.reasoningTarget, chatAdapter.value], async (_value, _previous, onCleanup) => {
       let cancelled = false
       onCleanup(() => { cancelled = true })
@@ -255,6 +299,7 @@ export const ModelEditor = {
         if (initializeReasoning) {
           draft.reasoningEffort = String(result.defaultEffort || "")
           initializeReasoning = false
+          if (draft.modelIdentifier === props.model.modelIdentifier) initialPatch.reasoning = modelPatch().reasoning
         } else if (draft.reasoningEffort && !efforts.includes(draft.reasoningEffort)) {
           draft.reasoningEffort = String(result.defaultEffort || "")
         }
@@ -315,52 +360,15 @@ export const ModelEditor = {
         try {
         if (reasoningLoading.value || reasoningError.value) throw new Error(reasoningError.value || "思考等级选项正在加载，请稍后保存")
         const name = props.model.name
+        const body = modelPatch()
+        const patch = changedConfigPatch(body, initialPatch)
+        if (!Object.keys(patch).length) return
         const result = asRecord<RequestResult>(await request(`/api/models/${encodeURIComponent(name)}`, {
           method: "PATCH",
-          body: JSON.stringify({
-            modelIdentifier: draft.modelIdentifier,
-            purpose: draft.purpose,
-            adapter: draft.purpose === "image" ? imageAdapterValue(draft.imageProtocol) : draft.purpose === "rerank" ? "rerank" : draft.purpose === "embedding" ? "embeddings" : draft.purpose === "decision" ? "systemone" : chatAdapter.value,
-            image: draft.purpose === "image" ? {
-              protocol: draft.imageProtocol,
-              ...(draft.imageAspectRatio ? { aspectRatio: draft.imageAspectRatio } : {}),
-              ...(draft.imageSize ? { imageSize: draft.imageSize } : {}),
-            } : null,
-            visual: draft.purpose === "chat" && draft.visual === "true",
-            toolUse: draft.purpose === "chat" && draft.toolUse !== "false",
-            timeoutMs: draft.timeoutSeconds === "" ? null : Math.round(Number(draft.timeoutSeconds) * 1000),
-            contextWindowTokens: draft.purpose === "chat"
-              ? (typeof draft.contextWindowTokens === "string" && draft.contextWindowTokens.trim() === "" ? null : Number(draft.contextWindowTokens))
-              : null,
-            stream: (draft.purpose === "chat" || draft.purpose === "image") && draft.stream !== "" ? draft.stream === "true" : null,
-            priceIn: Number(draft.priceIn || 0),
-            priceOut: Number(draft.priceOut || 0),
-            reasoning: draft.purpose === "chat" ? { target: draft.reasoningTarget || "auto", effort: draft.reasoningEffort } : null,
-            capabilities: {
-              chat: draft.purpose === "chat",
-              embedding: draft.purpose === "embedding",
-            },
-            rerank: draft.purpose === "rerank" ? { params: parseJsonText(draft.rerankParams, `${name} rerank params`, {}) } : null,
-            embedding: draft.purpose === "embedding"
-              ? {
-                protocol: draft.embeddingProtocol || "embeddings",
-                defaultDimensions: Number(draft.embeddingDimensions || 0),
-                allowedDimensions: splitTokens(draft.embeddingAllowedDimensions).map(Number).filter(Number.isFinite),
-                supportsDimensionOverride: draft.embeddingSupportsOverride !== "false",
-                batchSize: Number(draft.embeddingBatchSize || 16),
-                timeoutMs: Number(draft.embeddingTimeoutMs || 30000),
-                params: parseJsonText(draft.embeddingParams, `${name} embedding params`, {}),
-              }
-              : null,
-            responses: draft.purpose === "chat" ? responsesModelPatch(draft, name) : null,
-            toolPolicy: draft.purpose === "chat" ? modelToolPolicyPatch(draft) : null,
-            params: parseJsonText(draft.params, `${name} params`, {}),
-          }),
+          body: JSON.stringify(patch),
         }))
-        store.config = asRecord(result.config)
-        store.providers = { ...asRecord(store.providers), diagnostics: result.diagnostics }
+        applyProviderResponse(result)
         toast(`已保存模型 ${name}`)
-        await refreshTab("providers")
         emit("saved")
       } catch (err) {
         toast(errorMessage(err))

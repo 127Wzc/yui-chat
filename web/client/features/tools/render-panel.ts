@@ -1,5 +1,5 @@
 import { computed, reactive, ref, watch } from "vue"
-import { request, saveConfigPatch, store, toast } from "../../app/store/store.js"
+import { useDataSlices, request, saveConfigPatch, store, toast } from "../../app/store/store.js"
 import { parseJsonText, toJson } from "../../shared/format.js"
 import { asRecord, errorMessage, type UnknownRecord } from "../../shared/data.js"
 import { SystemRenderStrategyPanel } from "./system-render-strategy-panel.js"
@@ -51,7 +51,8 @@ export const RenderPanel = {
   name: "RenderPanel",
   components: { SystemRenderStrategyPanel },
   setup() {
-    const render = computed<RenderConfig>(() => asRecord<RenderSlice>(store.render).render || {})
+    useDataSlices(() => ["render"])
+    const render = computed<RenderConfig>(() => ({ ...asRecord(asRecord(store.config).response).render as RenderConfig, catalog: asRecord<RenderSlice>(store.render).render?.catalog || [] }))
     const catalog = computed<RenderTemplate[]>(() => {
       const available = render.value.catalog || []
       return PREVIEW_TEMPLATE_KINDS
@@ -80,7 +81,7 @@ export const RenderPanel = {
       settings.aiEngine = String(render.value.engine || "html") === "svg" ? "svg" : "html"
     }
     syncSettings()
-    watch(render, syncSettings, { deep: true })
+    watch(() => render.value.engine, syncSettings)
 
     async function saveSettings() {
       try {

@@ -163,14 +163,17 @@ try{
   // Exercise actual front-end submit handlers, including a decision model in a chat provider.
   const vue=await import("vue")
   const submitted=[]
+  const clientData=await import("../output/runtime/web/client/shared/data.js")
   const source=await fs.readFile(new URL("../web/client/features/providers/provider-editors.ts",import.meta.url),"utf8")
   const exports={}
   vm.runInNewContext(ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{
-    exports,require:spec=>spec==="vue"?vue:spec.includes("app/store")?{store:{config:cfg,providers:{}},request:async(url,options)=>{if(options.method==="PATCH")submitted.push(JSON.parse(options.body));return {config:cfg}},toast(){},refreshTab:async()=>{}}:spec.includes("shared/data")?{asRecord:v=>v||{},errorMessage:e=>String(e)}:spec.includes("shared/format")?{toJson:v=>JSON.stringify(v),parseJsonText:v=>JSON.parse(v),splitTokens:v=>String(v).split(/[,\s]+/)}:spec.includes("provider-shared")?{runLocked:async(ref,fn)=>{if(ref.value)return;ref.value=true;try{return await fn()}finally{ref.value=false}},BOOL_OFF_OPTIONS:[],BOOL_OPTIONS:[],INHERIT_BOOL_OPTIONS:[],REASONING_TARGET_OPTIONS:[],uniqueModelIds:v=>v,requestProviderModels:async()=>({models:[]})}:spec.includes("provider-tool-policy")?{modelToolPolicyDraft:()=>({toolPolicyAllow:[],toolPolicyDeny:[]}),buildModelToolPolicyOptions:()=>[],modelToolPolicyPatch:()=>({})}:spec.includes("provider-responses")?{responsesModelDraft:()=>({}),responsesModelPatch:()=>({})}:{},setTimeout,clearTimeout,
+    exports,require:spec=>spec==="vue"?vue:spec.includes("app/store")?{store:{config:cfg,providers:{}},request:async(url,options)=>{if(options.method==="PATCH")submitted.push(JSON.parse(options.body));return {config:cfg}},toast(){},useDataSlices(){},refreshSlices:async()=>{}}:spec.includes("shared/data")?clientData:spec.includes("shared/format")?{toJson:v=>JSON.stringify(v),parseJsonText:v=>JSON.parse(v),splitTokens:v=>String(v).split(/[,\s]+/)}:spec.includes("provider-shared")?{applyProviderResponse(){},runLocked:async(ref,fn)=>{if(ref.value)return;ref.value=true;try{return await fn()}finally{ref.value=false}},BOOL_OFF_OPTIONS:[],BOOL_OPTIONS:[],INHERIT_BOOL_OPTIONS:[],REASONING_TARGET_OPTIONS:[],uniqueModelIds:v=>v,requestProviderModels:async()=>({models:[]})}:spec.includes("provider-tool-policy")?{modelToolPolicyDraft:()=>({toolPolicyAllow:[],toolPolicyDeny:[]}),buildModelToolPolicyOptions:()=>[],modelToolPolicyPatch:()=>({})}:spec.includes("provider-responses")?{responsesModelDraft:()=>({}),responsesModelPatch:()=>({})}:{},setTimeout,clearTimeout,
   })
   for(const row of cases.filter(r=>r.purpose!=="chat")){
     const model=cfg.models.find(m=>m.apiProvider==="mixed"&&m.modelIdentifier===row.id)
-    const setup=exports.ModelEditor.setup({model},{emit(){}})
+    const setup=exports.ModelEditor.setup({model:{...model,purpose:"chat",adapter:"openai-compatible"}},{emit(){}})
+    setup.draft.purpose=row.purpose
+    await vue.nextTick()
     await setup.save()
     assert.equal(submitted.at(-1).adapter,row.expected,"editor must submit the dedicated protocol")
   }

@@ -1,5 +1,5 @@
 import { computed, onUnmounted, reactive, ref, watch } from "vue"
-import { confirmAction, refreshTab, saveConfigPatch, setDirtyScope, store, toast } from "../../app/store/store.js"
+import { confirmAction, useDataSlices, refreshSlices, saveConfigPatch, setDirtyScope, store, toast } from "../../app/store/store.js"
 import { splitNames } from "../../shared/format.js"
 import { asRecord, asRecords, errorMessage, type UnknownRecord } from "../../shared/data.js"
 import {
@@ -73,6 +73,7 @@ const SubAgentConfig = {
   name: "SubAgentConfig",
   props: { cfg: Object },
   setup(props: { cfg: RoutingConfig }) {
+    useDataSlices(() => ["subAgentRuns"])
     const taskNames = computed(() => {
       const modelTasks = props.cfg.modelTasks || {}
       const names = Object.keys(modelTasks).filter(name => name !== "rerank" && modelTasks[name]?.purpose !== "rerank")
@@ -280,7 +281,7 @@ export const ModelRoutingBuilder = {
           "chat.modelRequestTimeoutMs": Number(draft.modelRequestTimeoutMs) || 90000,
           "chat.modelStream": draft.modelStream === "true",
         }
-        await saveConfigPatch(patch)
+        await saveConfigPatch(patch, "reply-settings", ["providers"])
         savedDraft.value = submittedDraft
         toast(draft.replyerStrategy === "fallback" ? "已设为主对话 + fallback 回复" : "已设为单模型直接回复")
       } catch (err) { toast(errorMessage(err)) }})
@@ -289,7 +290,7 @@ export const ModelRoutingBuilder = {
     async function runPreview() {
       return runLocked(previewing, async () => {
         try {
-        await refreshTab("providers")
+        await refreshSlices(["providers"])
         const preview = providerState.value.diagnostics?.routingPreview || {}
         toast(`路由预览完成：${preview.candidateCount || 0} 个候选模型`)
       } catch (err) { toast(errorMessage(err)) }})

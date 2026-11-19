@@ -1,10 +1,10 @@
 import { reactive, computed, ref, watch } from "vue"
-import { confirmAction, store, request, toast, refreshTab } from "../../app/store/store.js"
+import { confirmAction, store, request, toast } from "../../app/store/store.js"
 import { asRecord, errorMessage, type UnknownRecord } from "../../shared/data.js"
 import { AddChannelForm, ModelEditor, ProviderEditor } from "./provider-editors.js"
 import { ModelRoutingBuilder } from "./provider-routing.js"
 import { ProviderImportDialog } from "./provider-import-dialog.js"
-import { modelDisplayName, modelTestMessage, providerModelCounts, runLocked } from "./provider-shared.js"
+import { applyProviderResponse, modelDisplayName, modelTestMessage, providerModelCounts, runLocked } from "./provider-shared.js"
 interface ProviderTemplate extends UnknownRecord {
   id: string
   label?: string
@@ -229,14 +229,12 @@ export const ProvidersTab = {
           if (!provider?.name) throw new Error("请先选择供应商")
           const modelCount = channels.value.filter(item => item.provider === provider.name).length
           const result = asRecord<ApiResult>(await request(`/api/providers/${encodeURIComponent(provider.name)}`, { method: "DELETE" }))
-          store.config = asRecord(result.config)
-          store.providers = { ...asRecord<ProvidersSlice>(store.providers), diagnostics: result.diagnostics }
+          applyProviderResponse(result)
           editingProvider.value = ""
           editingId.value = ""
           if (activeProviderName.value === provider.name) activeProviderName.value = ""
           modelQuery.value = ""
           toast(`已删除供应商 ${provider.name}${result.removedModels?.length ? `，并移除 ${result.removedModels.length} 个关联模型` : ""}`)
-          await refreshTab("providers")
         } catch (err) {
           toast(errorMessage(err))
         }})
@@ -277,9 +275,8 @@ export const ProvidersTab = {
           method: "POST",
           body: JSON.stringify({ taskName }),
         }))
-        store.config = asRecord(result.config)
+        applyProviderResponse(result)
         toast(image ? `已将 ${modelDisplayName(ch)} 设为默认画图模型` : `已将 ${modelDisplayName(ch)} 设为默认回复模型`)
-        await refreshTab("providers")
       } catch (err) {
         toast(errorMessage(err))
       }})
@@ -291,10 +288,9 @@ export const ProvidersTab = {
         const name = modelByName.value[ch.id]?.name || ch.id
         await runChannelAction(`remove:${ch.id}`, async () => {
           const result = asRecord<ApiResult>(await request(`/api/models/${encodeURIComponent(name)}`, { method: "DELETE" }))
-          store.config = asRecord(result.config)
+          applyProviderResponse(result)
           toast(`已删除模型 ${modelDisplayName(ch)}${result.fallbackModel ? `，默认回退到 ${modelDisplayName(modelByName.value[result.fallbackModel]) || result.fallbackModel}` : ""}`)
           if (editingId.value === ch.id) editingId.value = ""
-          await refreshTab("providers")
         })
       } catch (err) {
         toast(errorMessage(err))

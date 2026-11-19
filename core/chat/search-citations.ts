@@ -22,11 +22,14 @@ function citationUrl(value: string): string {
 }
 
 const urlPattern = String.raw`https?:\/\/(?:[^\s<>()（），。！？；："'\x60]|\([^()\s]*\))+`
-const markdown = (name: string) => String.raw`\[[^\]\r\n]+\]\(\s*<?(?<${name}>${urlPattern})>?(?:\s+"[^"\r\n]*")?\s*\)`
+const markdown = (name: string, destination = urlPattern) => String.raw`\[[^\]\r\n]+\]\(\s*<?(?<${name}>${destination})>?(?:\s+"[^"\r\n]*")?\s*\)`
+const residualDestination = String.raw`[⁰¹²³⁴⁵⁶⁷⁸⁹]+\?[^\s<>()]+`
 // 每个链接作为完整 token 处理，禁止在未匹配的链接内部继续替换网址前缀。
 const citationTokens = new RegExp([
   String.raw`(?<code>\x60{3}[\s\S]*?\x60{3}|~~~[\s\S]*?~~~|\x60{1,2}[^\x60\r\n]*\x60{1,2})`,
   String.raw`(?<image>!\[[^\]\r\n]*\]\(\s*<?${urlPattern}>?(?:\s+"[^"\r\n]*")?\s*\))`,
+  String.raw`[（(]\s*${markdown("residualWrapped", residualDestination)}\s*[)）]`,
+  String.raw`(?<!!)${markdown("residualPlain", residualDestination)}`,
   String.raw`[（(]\s*${markdown("wrappedMarkdown")}\s*[)）]`,
   markdown("markdown"),
   String.raw`[（(]\s*<?(?<wrappedUrl>${urlPattern})>?\s*[)）]`,
@@ -34,26 +37,38 @@ const citationTokens = new RegExp([
   String.raw`(?<bare>${urlPattern})(?=$|[\s<>）），。！？；："'\x60)])`,
 ].join("|"), "giu")
 
-/** 只压缩已知搜索来源；保留业务参数、无关链接、图片与代码中的 URL。 */
+/** 只移除正文中的已知搜索引用；保留业务参数、无关链接、图片与代码中的 URL。 */
 export function formatHostedSearchCitations(value: unknown, sourcesValue: unknown): string {
-  const markers = new Map<string, string>()
+  const sourceUrls = new Set<string>()
+  const markerHosts = new Map<string, string>()
   const seen = new Set<string>()
   for (const item of Array.isArray(sourcesValue) ? sourcesValue : []) {
     const raw = text(record(item).url).trim()
     const key = citationUrl(raw)
     if (!key || seen.has(raw)) continue
     seen.add(raw)
-    if (!markers.has(key)) markers.set(key, String(seen.size).replace(/\d/g, digit => "⁰¹²³⁴⁵⁶⁷⁸⁹"[Number(digit)]!))
+    const marker = String(seen.size).replace(/\d/g, digit => "⁰¹²³⁴⁵⁶⁷⁸⁹"[Number(digit)]!)
+    markerHosts.set(marker, new URL(key).hostname.replace(/^www\./u, ""))
+    sourceUrls.add(key)
   }
-  if (!markers.size) return text(value).trim()
+  if (!sourceUrls.size) return text(value).trim()
   return text(value).replace(citationTokens, (...args: unknown[]) => {
     const whole = text(args[0])
     const groups = record(args.at(-1))
     if (groups.code || groups.image) return whole
+    const residual = text(groups.residualWrapped || groups.residualPlain)
+    if (residual) {
+      // 旧格式可能已经丢掉 URL，只剩角标与追踪参数；须同时核对本轮来源编号和域名。
+      const [marker, query] = residual.split("?", 2)
+      const params = new URLSearchParams(text(query).replaceAll("&amp;", "&"))
+      const keys = [...params.keys()]
+      const host = whole.match(/\[([^\]\r\n]+)\]/u)?.[1]?.trim().toLowerCase().replace(/^www\./u, "")
+      return marker && host && keys.length && keys.every(key => /^utm_/i.test(key)) && markerHosts.get(marker) === host
+        ? "" : whole
+    }
     const raw = text(groups.wrappedMarkdown || groups.markdown || groups.wrappedUrl || groups.autolink || groups.bare)
     const suffix = groups.bare ? raw.match(/[.,!?;:，。！？；：]+$/u)?.[0] || "" : ""
-    const marker = markers.get(citationUrl(suffix ? raw.slice(0, -suffix.length) : raw))
-    return marker ? marker + suffix : whole
+    return sourceUrls.has(citationUrl(suffix ? raw.slice(0, -suffix.length) : raw)) ? suffix : whole
   }).trim()
 }
 

@@ -1,9 +1,9 @@
 import { CapabilityFilterBar } from "./capability-filter-bar.js"
 import { CapabilityList, CapabilityRisk } from "./capability-list.js"
 import { CapabilityRoleButtons } from "./capability-role-buttons.js"
-import { computed, reactive, ref } from "vue"
+import { computed, reactive, ref, watch } from "vue"
 import { McpToolsPanel } from "./mcp-tools-panel.js"
-import { confirmAction, store, request, toast, refreshTab, saveConfigPatch } from "../../app/store/store.js"
+import { confirmAction, useDataSlices, store, request, toast, refreshSlices, saveConfigPatch } from "../../app/store/store.js"
 import { splitTokens, parseJsonText, toJson } from "../../shared/format.js"
 import { asRecord, asRecords, errorMessage, type UnknownRecord } from "../../shared/data.js"
 import { BOOL_OPTIONS, MCP_RISK_OPTIONS } from "./shared.js"
@@ -109,9 +109,11 @@ export const McpPanel = {
   name: "McpPanel",
   components: { CapabilityFilterBar, McpToolsPanel, CapabilityRoleButtons, CapabilityList, CapabilityRisk },
   setup() {
-    const draft = reactive({
-      mcpEnabled: String((asRecord<McpSlice>(store.mcp).config?.enabled ?? asRecord<{ mcp?: { enabled?: boolean } }>(store.config).mcp?.enabled ?? true) !== false),
-    })
+    useDataSlices(() => ["mcp"])
+    const mcpEnabled = computed(() => (asRecord<McpSlice>(store.mcp).config?.enabled
+      ?? asRecord<{ mcp?: { enabled?: boolean } }>(store.config).mcp?.enabled) === true)
+    const draft = reactive({ mcpEnabled: String(mcpEnabled.value) })
+    watch(mcpEnabled, enabled => { draft.mcpEnabled = String(enabled) })
     const showEditor = ref(false)
     const editorMode = ref("quick")
     const importJsonText = ref("")
@@ -197,7 +199,7 @@ export const McpPanel = {
       const previous = draft.mcpEnabled
       draft.mcpEnabled = String(next)
       try {
-        await saveConfigPatch({ "mcp.enabled": next }, "mcp-global-toggle")
+        await saveConfigPatch({ "mcp.enabled": next }, "mcp-global-toggle", ["mcp", "tools"])
       } catch (err) {
         draft.mcpEnabled = previous
         toast(errorMessage(err))
@@ -219,7 +221,7 @@ export const McpPanel = {
           if (!discover) throw new Error("受管理服务通过安装记录修改绑定，端点变更需要新计划")
           const result = await request(`/api/mcp/${encodeURIComponent(editor.id)}/discover`, { method: "POST", body: "{}" })
           toast(`发现 ${asRecords(asRecord(result.probe).catalog).length} 个工具；请在工具开放配置中选择`)
-          await refreshTab("tools")
+          await refreshSlices(["config", "mcp", "tools"])
           return
         }
         if (editorMode.value === "json" && editor.mode === "create") return importJsonToEditor()
@@ -230,7 +232,6 @@ export const McpPanel = {
           ...(editor.mode === "create" ? { allowedTools: editor.allowedTools } : {}),
           description: String(editor.description || "").trim().slice(0, 240),
           enabled: editor.enabled === "true",
-          mcpEnabled: draft.mcpEnabled === "true",
           transport: editor.connection,
           category: editor.category || "mcp",
           risk: editor.risk || "external",
@@ -259,7 +260,7 @@ export const McpPanel = {
           toast(`已保存 MCP 服务 ${id}`)
         }
         showEditor.value = false
-        await refreshTab("tools")
+        await refreshSlices(["config", "mcp", "tools"])
       } catch (err) { toast(errorMessage(err)) }
     }
     async function toggleServer(id: string, enabled: boolean) {
@@ -268,9 +269,9 @@ export const McpPanel = {
         if (!accepted) return
       }
       try {
-        await request(`/api/mcp/${encodeURIComponent(id)}/enabled`, { method: "POST", body: JSON.stringify({ enabled, mcpEnabled: draft.mcpEnabled === "true" }) })
+        await request(`/api/mcp/${encodeURIComponent(id)}/enabled`, { method: "POST", body: JSON.stringify({ enabled }) })
         toast(`${enabled ? "已启用" : "已停用"} MCP 服务 ${id}`)
-        await refreshTab("tools")
+        await refreshSlices(["config", "mcp", "tools"])
       } catch (err) { toast(errorMessage(err)) }
     }
     async function requestRemoveServer(id: string): Promise<boolean> {
@@ -285,7 +286,7 @@ export const McpPanel = {
       try {
         await request(`/api/mcp/${encodeURIComponent(id)}`, { method: "DELETE" })
         toast(`已删除 MCP 服务 ${id}`)
-        await refreshTab("tools")
+        await refreshSlices(["config", "mcp", "tools"])
         return true
       } catch (err) { toast(errorMessage(err)); return false }
     }

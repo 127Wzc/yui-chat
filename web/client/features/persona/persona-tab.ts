@@ -2,7 +2,7 @@ import { reactive, computed, ref, watch } from "vue"
 import { accessListDraft, accessListValue } from "./access-list-editor.js"
 import { confirmAction, store, request, toast, saveConfigPatch, setDirtyScope } from "../../app/store/store.js"
 import { splitNames, parseJsonText, toJson, shortTime } from "../../shared/format.js"
-import { asRecord, errorMessage, type UnknownRecord } from "../../shared/data.js"
+import { asRecord, errorMessage, sameJsonValue, type UnknownRecord } from "../../shared/data.js"
 
 interface ConfigNode extends UnknownRecord {
   enabled?: boolean
@@ -196,10 +196,6 @@ function initDraft(cfg: PersonaConfig = {}) {
   }
 }
 
-function configDraftState(value: UnknownRecord = {}) {
-  return value
-}
-
 function parseIntervalRange(value: unknown = "") {
   const numbers = String(value || "")
     .split(/[，,\s]+/)
@@ -214,7 +210,7 @@ export const PersonaTab = {
   name: "PersonaTab",
   setup() {
     const draft = reactive(initDraft(asRecord<PersonaConfig>(store.config)))
-    const savedSnapshot = ref(JSON.stringify(configDraftState(draft)))
+    const savedSnapshot = ref(JSON.stringify(draft))
     const activeSection = ref("basic")
     const interactionMenu = ref("trigger")
     const triggerMenu = ref("active")
@@ -222,7 +218,7 @@ export const PersonaTab = {
     const greeting = computed<InitiativeGreeting>(() => asRecord<OutputSlice>(store.output).initiativeGreeting
       ? asRecord<InitiativeGreeting>(asRecord<OutputSlice>(store.output).initiativeGreeting)
       : {})
-    const isDirty = computed(() => JSON.stringify(configDraftState(draft)) !== savedSnapshot.value)
+    const isDirty = computed(() => JSON.stringify(draft) !== savedSnapshot.value)
     const sectionItems = computed(() => [
       {
         value: "basic",
@@ -297,10 +293,46 @@ export const PersonaTab = {
       if (menu === "reply") replyMenu.value = item
     }
 
+    const currentScope = () => activeSection.value !== "advanced" ? activeSection.value
+      : `${interactionMenu.value}:${interactionMenu.value === "trigger" ? triggerMenu.value : replyMenu.value}`
+    function pathScope(path: string): string {
+      if (path.startsWith("persona.trigger.poke.")) return "poke"
+      if (path.startsWith("persona.trigger.ambient.") || path.startsWith("persona.initiativeGreeting.")) return "trigger:active"
+      if (path === "persona.respondToAt") return "trigger:at"
+      if (path === "persona.respondToFirstPersonCall" || path.startsWith("persona.trigger.") || path.startsWith("chat.access.")) return "trigger:passive"
+      if (path.startsWith("response.segmentation.") || path.startsWith("persona.output.")) return "reply:text"
+      if (path === "response.defaultMode") return "reply:overview"
+      if (path.startsWith("response.autoUsePicture")) return "reply:picture"
+      if (path.startsWith("response.tts.")) return "reply:voice"
+      if (path.startsWith("context.") || path.startsWith("mediaRecognition.") || path.startsWith("response.render.")) return "reply:context"
+      return "basic"
+    }
+    function draftScope(key: string): string {
+      if (key.startsWith("personaPoke")) return "poke"
+      if (key.startsWith("personaAmbient") || key.startsWith("initiativeGreeting")) return "trigger:active"
+      if (key === "respondToAt") return "trigger:at"
+      if (key === "firstPersonEnabled" || key.startsWith("personaTrigger") || key === "personaGroupCooldown"
+        || key === "personaDisabledGroups" || key.startsWith("personaEnhance") || key === "privateChatEnabled" || key.startsWith("access")) return "trigger:passive"
+      if (key.startsWith("segmentation") || key === "personaOmitChannelPrefix") return "reply:text"
+      if (key === "responseMode") return "reply:overview"
+      if (key.startsWith("picture")) return "reply:picture"
+      if (key.startsWith("tts")) return "reply:voice"
+      if (key.startsWith("context") || key.startsWith("media") || key.startsWith("render")) return "reply:context"
+      return "basic"
+    }
+    watch(() => store.config, () => {
+      const before = JSON.parse(savedSnapshot.value) as UnknownRecord
+      const next = initDraft(asRecord<PersonaConfig>(store.config))
+      for (const [key, value] of Object.entries(next)) if (sameJsonValue((draft as UnknownRecord)[key], before[key])) Object.assign(draft, { [key]: value })
+      savedSnapshot.value = JSON.stringify(next)
+    })
+
     async function save() {
       try {
         const interval = parseIntervalRange(draft.segmentationIntervalRange)
-        await saveConfigPatch({
+        const scope = currentScope()
+        const submitted = JSON.parse(JSON.stringify(draft)) as UnknownRecord
+        const patch = {
           "persona.enabled": draft.personaEnabled,
           "persona.firstPerson": draft.personaFirstPerson,
           "persona.aliases": splitNames(draft.personaAliases),
@@ -318,7 +350,7 @@ export const PersonaTab = {
           "persona.trigger.poke.cooldownMs": Number(draft.personaPokeCooldown || 0),
           "persona.trigger.poke.groupCooldownMs": Number(draft.personaPokeGroupCooldown || 0),
           "persona.trigger.poke.prompt": draft.personaPokePrompt,
-          "persona.trigger.poke.fallbackMessages": parseJsonText(draft.personaPokeFallbackMessages, "戳一戳 fallback", []),
+          "persona.trigger.poke.fallbackMessages": scope === "poke" ? parseJsonText(draft.personaPokeFallbackMessages, "戳一戳 fallback", []) : [],
           "persona.initiativeGreeting.enabled": draft.initiativeGreetingEnabled,
           "persona.initiativeGreeting.scheduledEnabled": draft.initiativeGreetingScheduled,
           "persona.initiativeGreeting.groups": splitNames(draft.initiativeGreetingGroups),
@@ -326,7 +358,7 @@ export const PersonaTab = {
           "persona.initiativeGreeting.probabilityPercent": Number(draft.initiativeGreetingProbability ?? 50),
           "persona.initiativeGreeting.maxChars": Number(draft.initiativeGreetingMaxChars || 60),
           "persona.initiativeGreeting.prompt": draft.initiativeGreetingPrompt,
-          "persona.initiativeGreeting.fallbackMessages": parseJsonText(draft.initiativeGreetingFallbackMessages, "主动问候 fallback", []),
+          "persona.initiativeGreeting.fallbackMessages": scope === "trigger:active" ? parseJsonText(draft.initiativeGreetingFallbackMessages, "主动问候 fallback", []) : [],
           "persona.trigger.probabilityPercent": Number(draft.personaTriggerProbability ?? 100),
           "persona.trigger.cooldownMs": Number(draft.personaTriggerCooldown || 0),
           "persona.trigger.groupCooldownMs": Number(draft.personaGroupCooldown || 0),
@@ -356,8 +388,8 @@ export const PersonaTab = {
           "response.tts.maxChars": Number(draft.ttsMaxChars || 300),
           "chat.access.privateChatEnabled": draft.privateChatEnabled,
           "chat.access.masterBypass": draft.accessMasterBypass,
-          "chat.access.whitelist": accessListValue(draft.accessWhitelist, "对话白名单"),
-          "chat.access.blacklist": accessListValue(draft.accessBlacklist, "对话黑名单"),
+          "chat.access.whitelist": scope === "trigger:passive" ? accessListValue(draft.accessWhitelist, "对话白名单") : [],
+          "chat.access.blacklist": scope === "trigger:passive" ? accessListValue(draft.accessBlacklist, "对话黑名单") : [],
           "context.recentMessageCount": Number(draft.contextRecentMessageCount ?? 20),
           "mediaRecognition.enabled": draft.mediaEnabled,
           "mediaRecognition.remoteFetch.enabled": draft.mediaRemoteFetch,
@@ -365,9 +397,14 @@ export const PersonaTab = {
           "response.render.mediaThumbnails": draft.renderMediaThumbnails,
           "response.render.mediaThumbnail.enabled": draft.renderMediaThumbnailEnabled,
           "response.render.mediaThumbnailMaxCount": Number(draft.renderMediaThumbnailCount || 3),
-        })
-        savedSnapshot.value = JSON.stringify(configDraftState(draft))
-        setDirtyScope("tab:persona", false)
+        }
+        await saveConfigPatch(Object.fromEntries(Object.entries(patch).filter(([path]) => pathScope(path) === scope)))
+        const next = initDraft(asRecord<PersonaConfig>(store.config))
+        for (const [key, value] of Object.entries(next)) {
+          if (draftScope(key) === scope && sameJsonValue((draft as UnknownRecord)[key], submitted[key])) Object.assign(draft, { [key]: value })
+        }
+        savedSnapshot.value = JSON.stringify(next)
+        setDirtyScope("tab:persona", isDirty.value)
         return true
       } catch (err) {
         toast(errorMessage(err))
@@ -385,7 +422,7 @@ export const PersonaTab = {
       })
       if (!accepted) return
       Object.assign(draft, initDraft(asRecord<PersonaConfig>(store.config)))
-      savedSnapshot.value = JSON.stringify(configDraftState(draft))
+      savedSnapshot.value = JSON.stringify(draft)
       setDirtyScope("tab:persona", false)
       toast("已放弃未保存修改")
     }
@@ -433,7 +470,7 @@ export const PersonaTab = {
             <h2>助手人设</h2>
             <p>称呼、触发与回复策略。</p>
           </div>
-          <button class="btn primary small" type="button" :disabled="!isDirty" @click="save"><Icon name="save" :size="14" />保存</button>
+          <button class="btn primary small" type="button" :disabled="!isDirty" @click="save"><Icon name="save" :size="14" />保存当前分区</button>
         </div>
 
         <SectionNav v-model="activeSection" :items="sectionItems" label="助手人设分区" variant="tabs" />
@@ -711,7 +748,7 @@ export const PersonaTab = {
       </div>
       <div v-if="isDirty" class="sticky-save-bar" role="status">
         <div><span class="dot warn"></span><b>未保存</b></div>
-        <div class="row"><button class="btn outline" type="button" @click="resetDraft">放弃</button><button class="btn primary" type="button" @click="save"><Icon name="save" :size="14" />保存</button></div>
+        <div class="row"><button class="btn outline" type="button" @click="resetDraft">放弃</button><button class="btn primary" type="button" @click="save"><Icon name="save" :size="14" />保存当前分区</button></div>
       </div>
     </div>
   `,

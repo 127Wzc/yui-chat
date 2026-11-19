@@ -1,7 +1,7 @@
 import { computed, ref, watch } from "vue"
-import { store, request, toast, refreshTab } from "../../app/store/store.js"
+import { store, request, toast } from "../../app/store/store.js"
 import { asRecord, asRecords, errorMessage, type UnknownRecord } from "../../shared/data.js"
-import { INHERIT_BOOL_OPTIONS, requestProviderModels, runLocked, uniqueModelIds } from "./provider-shared.js"
+import { applyProviderResponse, INHERIT_BOOL_OPTIONS, requestProviderModels, runLocked, uniqueModelIds } from "./provider-shared.js"
 
 interface RemoteModel extends UnknownRecord {
   id: string
@@ -115,11 +115,9 @@ export const ProviderImportDialog = {
               stream: (purpose.value === "chat" || image) && stream.value !== "" ? stream.value === "true" : undefined,
             }),
           }))
-          store.config = asRecord(result.config)
-          store.providers = { ...asRecord(store.providers), diagnostics: result.diagnostics }
+          applyProviderResponse(result)
           toast(`已导入 ${identifiers.length} 个模型到 ${providerName.value}`)
           emit("close")
-          await refreshTab("providers")
         } catch (err) {
           toast(errorMessage(err))
         }

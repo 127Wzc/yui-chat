@@ -212,12 +212,12 @@ try {
   const options = view.memoryRerankModelOptions.value
   assert(options.some(item => item.value === clientStore.config.memory.retrieval.rerankModel))
   assert(options.filter(item => item.value).every(item => clientStore.config.models.find(model => model.name === item.value)?.purpose === "rerank"))
-  clientStore.systemSettingsSection = "memory-capture"
+  clientStore.systemSettingsSection = "memory-capture/rerank"
   const clientApp = createSSRApp({ setup() {
     view = AdvancedTab.setup()
     view.draft.memoryRerankCandidates = 11
     view.draft.memoryRerankMinScore = 0
-    assert.equal(clientStore.dirtyScopes["system:memory-capture"], true)
+    assert.equal(clientStore.dirtyScopes["system:memory-rerank"], true)
     return view
   }, template: AdvancedTab.template })
   for (const [name, component] of Object.entries({ ...components, ...AdvancedTab.components })) clientApp.component(name, component)
@@ -241,11 +241,12 @@ try {
   try {
     await view.saveCaptureDefaults()
     assert.equal(savedPatch["memory.retrieval.rerankMaxCandidates"], 11)
-    assert.equal(savedPatch["memory.retrieval.rerankMinScore"], 0)
-    assert.equal(savedPatch["memory.retrieval.rerankModel"], configStore.get().memory.retrieval.rerankModel)
+    assert(!Object.hasOwn(savedPatch, "memory.retrieval.rerankMinScore"), "unchanged zero threshold must not be resubmitted")
+    assert.equal(clientConfig.memory.retrieval.rerankMinScore, 0)
+    assert(!Object.hasOwn(savedPatch, "memory.retrieval.rerankModel"), "unchanged model selection must not be resubmitted")
     assert(Object.keys(savedPatch).every(key => key.startsWith("memory.")))
     assert.equal(JSON.stringify(clientConfig.knowledge), ragBefore, "saving memory controls must leave RAG configuration untouched")
-    assert.equal(clientStore.dirtyScopes["system:memory-capture"], undefined)
+    assert.equal(clientStore.dirtyScopes["system:memory-rerank"], undefined)
   } finally { global.fetch = originalFetch }
 
   console.log("ok memory-retrieval: dual recall/RRF, independent rerank/fallback, default injection count, uncapped own full reads, pagination, budget honesty and scope/lifecycle isolation")

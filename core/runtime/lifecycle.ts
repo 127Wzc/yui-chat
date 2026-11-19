@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util"
 import { langfuseReporter } from "../observability/langfuse.js"
 import { installationInstaller } from "../../extensions/installation/installer.js"
 import { loadPersonaPunishments } from "../chat/persona-punishments.js"
@@ -29,6 +30,7 @@ type UnknownRecord = Record<string, unknown>
  * 更宽的对象，但不会把宿主对象泄漏到核心状态机中。
  */
 export interface RuntimeLifecycleOptions extends UnknownRecord {
+  previousConfig?: UnknownRecord
   startLogs?: boolean
   reinitTools?: boolean
   reinitFilters?: boolean
@@ -79,34 +81,58 @@ export async function applyRuntimeConfig(config: UnknownRecord = {}, opts: Runti
     groupCapture: false,
     logs: false,
   }
-  await loadPersonaPunishments()
-  const logRetentionChanged = opts.startLogs !== false ? modelLogStore.start(config) : modelLogStore.configure(config)
-  if (logRetentionChanged) modelLogStore.cleanupExpired().catch(err => modelLogStore.noteError(err))
-  result.logs = true
-  langfuseReporter.start()
-  if (opts.reinitTools !== false) {
-    await toolRegistry.init()
-    result.tools = true
+  const read = (value: unknown, path: string): unknown => path.split(".").reduce<unknown>((node, key) => node && typeof node === "object" ? (node as UnknownRecord)[key] : undefined, value)
+  const changed = (path: string): boolean => !opts.previousConfig || !isDeepStrictEqual(read(opts.previousConfig, path), read(config, path))
+  if (!opts.previousConfig) await loadPersonaPunishments()
+  if (changed("logging.level") || changed("logging.history")) {
+    const retentionChanged = opts.startLogs !== false ? modelLogStore.start(config) : modelLogStore.configure(config)
+    if (retentionChanged) modelLogStore.cleanupExpired().catch(err => modelLogStore.noteError(err))
+    result.logs = true
   }
-  if (opts.reinitFilters !== false) {
+  if (changed("logging.langfuse")) langfuseReporter.start()
+  if (opts.reinitTools !== false) {
+    if (!opts.previousConfig || opts.reinitTools === true || changed("tools.custom")) {
+      await toolRegistry.init({ reloadMcp: changed("mcp") })
+      result.tools = true
+    } else if (changed("mcp")) {
+      await toolRegistry.refreshMcp(opts.previousConfig?.mcp)
+      result.tools = true
+    } else if (changed("skills")) {
+      await toolRegistry.refreshSkills()
+      result.tools = true
+    }
+  }
+  if (opts.reinitFilters !== false && (!opts.previousConfig || opts.reinitFilters === true)) {
     await filterRegistry.init()
     result.filters = true
   }
+  initiativeGreetingScheduler.configure(config)
   if (opts.restartInitiativeGreeting !== false) {
-    result.initiativeGreeting = initiativeGreetingScheduler.start(config)
+    if (["enabled", "scheduledEnabled", "intervalHours"].some(key => changed(`persona.initiativeGreeting.${key}`))) result.initiativeGreeting = initiativeGreetingScheduler.start(config)
   }
-  if (opts.restartStickerExpression !== false) {
+  if (opts.restartStickerExpression !== false && changed("persona.stickerExpression")) {
     result.stickerExpression = stickerExpressionCoordinator.start(config)
   }
+  scheduleTaskService.configure(config)
   if (opts.restartScheduleTasks !== false) {
-    result.scheduleTasks = scheduleTaskService.start(config)
+    if (changed("tools.builtin.scheduleTask.enabled") || changed("tools.builtin.scheduleTask.tickMs")) result.scheduleTasks = scheduleTaskService.start(config)
   }
   if (groupCaptureStore.initialized) {
-    await groupCaptureStore.applyConfig(config)
-    groupCaptureStore.startScanner()
-    result.groupCapture = true
+    if (changed("memory.groupCapture.defaultRetentionDays")) {
+      await groupCaptureStore.applyConfig(config)
+      result.groupCapture = true
+    } else if (["memory.groupCapture.defaultTokenLimit", "memory.groupCapture.promptTemplate", "memory.groupCapture.consolidation.modelName",
+      "memory.groupCapture.consolidation.maxTokens", "memory.groupCapture.consolidation.minConfidence", "memory.retrieval.resultLimit"].some(changed)) {
+      // 更新继承默认值的内存策略，保持扫描计时和已触发日程不变。
+      await groupCaptureStore.refreshPolicies()
+      result.groupCapture = true
+    }
+    if (changed("memory.groupCapture.scanIntervalMs") || changed("memory.groupCapture.consolidation.schedule")) {
+      groupCaptureStore.startScanner()
+      result.groupCapture = true
+    }
   }
-  result.actions = await applyActionCommands(config as import("../../config/types.js").RuntimeConfigObject)
+  if (changed("actions")) result.actions = await applyActionCommands(config as import("../../config/types.js").RuntimeConfigObject)
   return result
 }
 

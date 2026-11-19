@@ -1,5 +1,5 @@
 import { computed, onUnmounted, reactive, ref, watch } from "vue"
-import { confirmAction, store, request, toast, saveConfigPatch, refreshTab, setDirtyScope } from "../../app/store/store.js"
+import { confirmAction, store, request, toast, saveConfigPatch, refreshSlices, setDirtyScope } from "../../app/store/store.js"
 import { asRecord, asRecords, errorMessage, type UnknownRecord } from "../../shared/data.js"
 import { splitTokens, shortId } from "../../shared/format.js"
 import { KnowledgeBaseWorkspace } from "./knowledge-base-workspace.js"
@@ -747,7 +747,7 @@ export const KnowledgeTab = {
             dimensions: Number(draft.commandEmbeddingDimensions || 0),
           }),
         }) as KnowledgeApiResponse
-        await refreshTab()
+        await refreshSlices(["config", "knowledge"])
         await loadBases()
         toast(result.index?.status === "queued" ? "已保存检索设置，语义索引已排队" : "检索设置已保存，所有入口立即生效")
       } catch (err) { toast(errorMessage(err)) }

@@ -2,7 +2,7 @@ import { PermissionPresetPanel } from "./permission-preset-panel.js"
 import { PermissionUserPanel } from "./permission-user-panel.js"
 import { PermissionOverview } from "./permission-overview.js"
 import { computed, inject, reactive, ref, watch, onBeforeUnmount } from "vue"
-import { confirmAction, setDirtyScope, refreshTab, request, saveConfigPatch, store, toast } from "../../app/store/store.js"
+import { confirmAction, setDirtyScope, request, saveConfigPatch, store, toast } from "../../app/store/store.js"
 import { isFoldedRenderTool, toolDisplayName, toolSource } from "./shared.js"
 import { asRecord, asRecords, errorMessage } from "../../shared/data.js"
 import {
@@ -118,7 +118,6 @@ export const BoundaryAccessPanel = {
         savedDraft.value = submitted
         setDirtyScope("tool-permissions", draftContent() !== submitted)
         toast("角色权限已保存")
-        await refreshTab("tools")
         await reload()
       } catch (err) { toast(errorMessage(err)) }
       finally { saving.value = false }

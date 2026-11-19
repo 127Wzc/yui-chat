@@ -27,7 +27,9 @@ export const ToolsTab = {
     provide("capabilityAccessMatrix", accessMatrix)
     provide("capabilityAccessSaving", accessSaving)
     provide("reloadCapabilityAccess", reloadAccess)
-    watch([() => store.config, () => store.tools], () => { if (!accessSaving.value) void reloadAccess() }, { immediate: true })
+    watch([() => store.tools, () => store.sliceLoading.tools], () => {
+      if (store.tools && !store.sliceLoading.tools && !accessSaving.value) void reloadAccess()
+    }, { immediate: true })
     const activeCapabilityView = ref("discover")
     const showGlobalSettings = ref(false)
     const showToolDetail = ref(false)

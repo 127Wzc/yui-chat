@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util"
 import { specializedModelAdapter, specializedAdapterPurpose } from "../protocol/specialized-adapters.js"
 import { defaults } from "../../config/defaults.js"
 import { sanitizeIdentifier, shortHash } from "../../core/shared/identifiers.js"
@@ -153,6 +154,8 @@ export function applyConfigPatch(base: UnknownRecord, patch: UnknownRecord = {})
     const pathParts = pathKey.split(".").map(item => item.trim()).filter(Boolean)
     if (!pathParts.length) throw new Error("patch path cannot be empty")
     if (pathParts.some(part => unsafeConfigPathKeys.has(part))) throw new Error(`unsafe patch path: ${pathKey}`)
+    const current = pathParts.reduce<unknown>((value, key) => isRecord(value) ? value[key] : undefined, next)
+    if (isDeepStrictEqual(current, value)) continue
     let cursor: UnknownRecord = next
     for (const part of pathParts.slice(0, -1)) {
       if (!isRecord(cursor[part])) cursor[part] = {}

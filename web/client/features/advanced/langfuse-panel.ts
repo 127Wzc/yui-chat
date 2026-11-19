@@ -1,42 +1,49 @@
 import { computed, onBeforeUnmount, reactive, ref, watch } from "vue"
-import { refreshSlices, saveConfigPatch, setDirtyScope, store, toast } from "../../app/store/store.js"
-import { asRecord, errorMessage, type UnknownRecord } from "../../shared/data.js"
+import { saveConfigPatch, setDirtyScope, store, toast } from "../../app/store/store.js"
+import { asRecord, errorMessage, sameJsonValue, type UnknownRecord } from "../../shared/data.js"
 
 export const LangfusePanel = {
   name: "LangfusePanel",
   props: { section: { type: String, default: "connection" } },
-  setup() {
+  setup(props: { section?: string } = {}) {
     const config = computed(() => asRecord(asRecord(store.config).logging).langfuse as UnknownRecord || {})
     const status = computed(() => asRecord(asRecord(asRecord(store.diagnostics).runtime).langfuse))
     const draft = reactive({ enabled: false, baseUrl: "", environment: "", sampleRate: 0, backgroundSampleRate: 0,
       monthlyUnitLimit: 0, captureContent: false, publicKey: "", secretKey: "" })
-    const baseline = ref("")
+    const baseline = reactive({ ...draft })
     const saving = ref(false)
-    const snapshot = (): string => JSON.stringify(draft)
-    function sync(): void {
-      const current = config.value
-      Object.assign(draft, { enabled: current.enabled === true, baseUrl: String(current.baseUrl || ""), environment: String(current.environment || ""),
-        sampleRate: Number(current.sampleRate), backgroundSampleRate: Number(current.backgroundSampleRate), monthlyUnitLimit: Number(current.monthlyUnitLimit),
-        captureContent: current.captureContent === true, publicKey: "", secretKey: "" })
-      baseline.value = snapshot()
+    const fields: Record<string, Array<keyof typeof draft>> = {
+      connection: ["enabled", "baseUrl", "environment", "publicKey", "secretKey"],
+      sampling: ["sampleRate", "backgroundSampleRate", "monthlyUnitLimit", "captureContent"], status: [],
     }
-    sync()
-    const dirty = computed(() => snapshot() !== baseline.value)
-    watch(dirty, value => setDirtyScope("system:langfuse", value), { immediate: true })
-    watch(config, () => { if (!dirty.value || saving.value) sync() })
+    const keys = () => fields[props.section || "connection"] || []
+    const sectionDirty = (section: string): boolean => fields[section].some(key => !sameJsonValue(draft[key], baseline[key]))
+    function sync(section: string): void {
+      const current = config.value
+      for (const key of fields[section]) {
+        const value = key === "publicKey" || key === "secretKey" ? "" : current[key]
+        Object.assign(draft, { [key]: value })
+        Object.assign(baseline, { [key]: value })
+      }
+    }
+    sync("connection"); sync("sampling")
+    const dirty = computed(() => keys().some(key => !sameJsonValue(draft[key], baseline[key])))
+    watch(() => sectionDirty("connection") || sectionDirty("sampling"), value => setDirtyScope("system:langfuse", value), { immediate: true })
+    watch(config, () => { for (const section of ["connection", "sampling"]) if (!sectionDirty(section)) sync(section) })
     onBeforeUnmount(() => setDirtyScope("system:langfuse", false))
     async function save(): Promise<void> {
+      if (saving.value || !dirty.value) return
+      const section = props.section || "connection"
       saving.value = true
       try {
         const patch: UnknownRecord = {}
-        draft.baseUrl = draft.baseUrl.trim()
-        for (const key of ["enabled", "baseUrl", "environment", "captureContent"] as const) patch[`logging.langfuse.${key}`] = draft[key]
-        for (const key of ["sampleRate", "backgroundSampleRate", "monthlyUnitLimit"] as const) patch[`logging.langfuse.${key}`] = Number(draft[key])
-        // 服务端回读仅含掩码；留空保留现有密钥，不把掩码或空值覆盖回去。
-        for (const key of ["publicKey", "secretKey"] as const) if (draft[key].trim()) patch[`logging.langfuse.${key}`] = draft[key].trim()
+        for (const key of fields[section]) {
+          const value = ["sampleRate", "backgroundSampleRate", "monthlyUnitLimit"].includes(key) ? Number(draft[key]) : typeof draft[key] === "string" ? String(draft[key]).trim() : draft[key]
+          if ((key === "publicKey" || key === "secretKey") && !value) continue
+          patch[`logging.langfuse.${key}`] = value
+        }
         await saveConfigPatch(patch, "langfuse")
-        sync()
-        await refreshSlices(["diagnostics"])
+        sync(section)
         toast("Langfuse 设置已保存", "success")
       } catch (error) { toast(errorMessage(error)) }
       finally { saving.value = false }
@@ -96,7 +103,7 @@ export const LangfusePanel = {
         </Collapse>
       </div>
 
-      <footer class="langfuse-save-bar"><span class="muted small">{{ dirty ? '有未保存的更改' : '设置已同步' }}</span><button class="btn primary" type="button" :disabled="!dirty || saving" @click="save"><Icon name="save" :size="14" />{{ saving ? '保存中…' : '保存设置' }}</button></footer>
+      <footer v-if="section !== 'status'" class="langfuse-save-bar"><span class="muted small">{{ dirty ? '有未保存的更改' : '设置已同步' }}</span><button class="btn primary" type="button" :disabled="!dirty || saving" @click="save"><Icon name="save" :size="14" />{{ saving ? '保存中…' : '保存设置' }}</button></footer>
     </section>
   `,
 }

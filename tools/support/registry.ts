@@ -114,14 +114,14 @@ export class ToolRegistry {
     this.skillErrors = skillManager.errors
   }
 
-  async init(): Promise<void> {
+  async init({ reloadMcp = true }: { reloadMcp?: boolean } = {}): Promise<void> {
     this.tools.clear()
     this.registryErrors = []
     for (const tool of createBuiltinTools()) this.register(tool)
     const custom = await customToolManager.loadTools()
     this.customErrors = custom.errors
     for (const tool of custom.tools) this.register(tool)
-    await mcpManager.init()
+    if (reloadMcp) await mcpManager.init()
     for (const tool of mcpManager.getTools()) this.register(tool)
     this.mcpToolsRevision = mcpManager.toolsRevision
     await skillManager.refresh()
@@ -131,6 +131,11 @@ export class ToolRegistry {
         `[yui-chat] ${this.registryErrors.length} 个同名工具被跳过：${this.registryErrors.map(item => item.tool).join(", ")}`,
       )
     }
+  }
+
+  async refreshMcp(previousConfig?: unknown): Promise<void> {
+    await mcpManager.init(previousConfig)
+    this.syncMcpTools()
   }
 
   async destroy(): Promise<void> {

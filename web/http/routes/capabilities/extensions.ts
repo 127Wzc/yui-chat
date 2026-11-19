@@ -115,7 +115,7 @@ export function registerExtensionRoutes(app: RouteApp): void {
   }))
   // 供控制台主动同步磁盘上的扩展变更；避免仅刷新页面时仍展示旧的内存注册表。
   app.post("/api/tools/reload", auth, handleRoute(async (_req, res) => {
-    await toolRegistry.init()
+    await toolRegistry.init({ reloadMcp: false })
     res.json({ ok: true, tools: await toolRegistry.list(), extensionDigest: toolRegistry.extensionDigest() })
   }, { errorStatus: 400 }))
   app.get("/api/tools/access-preview", auth, handleRoute(async (req, res) => {
@@ -274,17 +274,17 @@ export function registerExtensionRoutes(app: RouteApp): void {
     const dryRun = req.body?.dryRun === true
     const result = await customToolManager.createTemplate(String(req.body?.toolId || req.body?.id || "hello-tool"), { dryRun })
     if (dryRun) return res.json({ ok: true, result })
-    await toolRegistry.init()
+    await toolRegistry.init({ reloadMcp: false })
     res.json({ ok: true, result, custom: toolRegistry.customStatus(), tools: await toolRegistry.list() })
   }, { errorStatus: 400 }))
   app.post("/api/custom-tools", auth, handleRoute(async (req, res) => {
     const result = await customToolManager.createPackage(req.body || {})
-    await toolRegistry.init()
+    await toolRegistry.init({ reloadMcp: false })
     res.json({ ok: true, result, custom: toolRegistry.customStatus(), tools: await toolRegistry.list() })
   }, { errorStatus: 400 }))
   app.post("/api/custom-tools/:id/enabled", auth, handleRoute(async (req, res) => {
     const result = await customToolManager.setPackageEnabled(req.params.id, req.body?.enabled)
-    await toolRegistry.init()
+    await toolRegistry.init({ reloadMcp: false })
     res.json({ ok: true, result, custom: toolRegistry.customStatus(), tools: await toolRegistry.list() })
   }, { errorStatus: 400 }))
   app.get("/api/custom-tools/:id", auth, handleRoute(async (req, res) => {
@@ -292,7 +292,7 @@ export function registerExtensionRoutes(app: RouteApp): void {
   }, { errorStatus: 400 }))
   app.put("/api/custom-tools/:id", auth, handleRoute(async (req, res) => {
     const result = await customToolManager.updatePackage(req.params.id, req.body || {})
-    await toolRegistry.init()
+    await toolRegistry.init({ reloadMcp: false })
     res.json({ ok: true, result, custom: toolRegistry.customStatus(), tools: await toolRegistry.list() })
   }, { errorStatus: 400 }))
   app.post("/api/custom-tools/:id/test", auth, handleRoute(async (req, res) => {
@@ -312,7 +312,7 @@ export function registerExtensionRoutes(app: RouteApp): void {
   }, { errorStatus: 400 }))
   app.delete("/api/custom-tools/:id", auth, handleRoute(async (req, res) => {
     const result = await customToolManager.deletePackage(req.params.id)
-    await toolRegistry.init()
+    await toolRegistry.init({ reloadMcp: false })
     res.json({ ok: true, result, custom: toolRegistry.customStatus(), tools: await toolRegistry.list() })
   }, { errorStatus: 400 }))
   registerMcpRoutes(app)

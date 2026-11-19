@@ -559,10 +559,10 @@ try {
   assert.equal(originExports.testDocumentOrigin({source_type:"command"}).file,"未提供来源")
   // A failed runtime apply must be retried even when the next save has identical values.
   const runtimeExports={};let runtimeCalls=0,failRuntime=true,settings={knowledge:{enabled:true},other:true}
-  vm.runInNewContext(ts.transpileModule(await fs.readFile(new URL("../web/http/runtime-config.ts",import.meta.url),"utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText,{exports:runtimeExports,require:spec=>spec.includes("lifecycle")?{applyRuntimeConfig:async()=>{runtimeCalls++;if(failRuntime)throw Error("runtime apply failed");return {}}}:{configStore:{save:async next=>(settings=next),update:async updater=>(settings=await updater(settings))}}})
+  vm.runInNewContext(ts.transpileModule(await fs.readFile(new URL("../web/http/runtime-config.ts",import.meta.url),"utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText,{exports:runtimeExports,require:spec=>spec.includes("json-values")?{cloneJsonValue:value=>structuredClone(value)}:spec.includes("lifecycle")?{applyRuntimeConfig:async()=>{runtimeCalls++;if(failRuntime)throw Error("runtime apply failed");return {}}}:{configStore:{save:async next=>(settings=next),update:async updater=>(settings=await updater(settings))}}})
   await assert.rejects(runtimeExports.saveConfigAndApply(settings),/runtime apply failed/);failRuntime=false
   await runtimeExports.updateConfigAndApply(config=>config);assert.equal(runtimeCalls,2)
-  await runtimeExports.updateConfigAndApply(config=>({...config,knowledge:{enabled:false}}));assert.equal(runtimeCalls,2,"knowledge settings do not reload unrelated services")
+  await runtimeExports.updateConfigAndApply(config=>({...config,knowledge:{enabled:false}}));assert.equal(runtimeCalls,3,"knowledge settings use the same scoped runtime application as other changes")
   // Render the real shared dialog and fields, including their teleported content.
   const primitives={},components={}
   vm.runInNewContext(ts.transpileModule(await fs.readFile(new URL("../web/client/ui/primitives.ts",import.meta.url),"utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText,{exports:primitives,require:()=>vue})

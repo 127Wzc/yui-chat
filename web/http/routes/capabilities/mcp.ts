@@ -91,7 +91,6 @@ export function registerMcpRoutes(app: RouteApp): void {
       ...config,
       mcp: {
         ...record(config.mcp),
-        enabled: body.mcpEnabled === undefined ? Boolean(record(config.mcp).enabled ?? true) : Boolean(body.mcpEnabled),
         servers: { ...record(record(config.mcp).servers), [id]: server },
       },
     }))
@@ -146,7 +145,6 @@ export function registerMcpRoutes(app: RouteApp): void {
         ...config,
         mcp: {
           ...mcp,
-          enabled: req.body?.mcpEnabled === undefined ? Boolean(mcp.enabled ?? true) : Boolean(req.body.mcpEnabled),
           servers: { ...servers, [id]: { ...current, enabled: req.body?.enabled !== false } },
         },
       })

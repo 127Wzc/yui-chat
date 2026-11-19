@@ -1,5 +1,5 @@
 import { computed, onMounted, reactive, ref, watch } from "vue"
-import { confirmAction, request, store, toast } from "../../app/store/store.js"
+import { confirmAction, ensureSlices, request, store, toast } from "../../app/store/store.js"
 import { asRecord, asRecords, errorMessage, type UnknownRecord } from "../../shared/data.js"
 import { parseJsonText, splitTokens, toJson } from "../../shared/format.js"
 import {
@@ -239,11 +239,21 @@ export const CustomFiltersPanel = {
       }
     }
 
-    async function load({ quiet = false } = {}) {
+    watch(() => [store.filters?.custom, store.filters?.customImplementations], ([custom, implementationsValue]) => {
+      catalog.value = asRecords<CustomFilterItem>(asRecord(custom).catalog)
+      implementations.value = asRecords<CustomImplementation>(implementationsValue)
+    })
+
+    async function load({ quiet = false, initial = false } = {}) {
       loading.value = true
       apiError.value = ""
       try {
-        const result = await request("/api/custom-filters") as CustomFiltersResponse
+        let result: CustomFiltersResponse
+        if (initial) {
+          await ensureSlices(["filters"])
+          const current = asRecord(store.filters)
+          result = asRecord<CustomFiltersResponse>({ custom: current.custom, implementations: current.customImplementations })
+        } else result = await request("/api/custom-filters") as CustomFiltersResponse
         catalog.value = result.custom?.catalog || result.catalog || []
         implementations.value = result.implementations || []
         store.filters = {
@@ -581,7 +591,7 @@ export const CustomFiltersPanel = {
     watch(() => props.createIntent?.nonce, nonce => {
       if (nonce) createFilter(props.createIntent?.stage || "output", props.createIntent?.view || "code")
     })
-    onMounted(() => load({ quiet: true }))
+    onMounted(() => load({ quiet: true, initial: true }))
 
     return {
       catalog,

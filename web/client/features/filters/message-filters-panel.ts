@@ -1,5 +1,5 @@
-import { computed, onMounted, reactive, ref } from "vue"
-import { confirmAction, request, store, toast } from "../../app/store/store.js"
+import { computed, onMounted, reactive, ref, watch } from "vue"
+import { confirmAction, ensureSlices, request, store, toast } from "../../app/store/store.js"
 import { asRecord, asRecords, errorMessage, type UnknownRecord } from "../../shared/data.js"
 import { Field, Icon, JsonBlock, Panel, SideDrawer, Switch } from "../../ui/components.js"
 
@@ -344,8 +344,9 @@ export const MessageFiltersPanel = {
     }
 
     function placeFilter(item: MessageFilter): void {
-      const previous = editingIndex.value >= 0 ? filters.value[editingIndex.value] : null
-      if (editingIndex.value >= 0) filters.value.splice(editingIndex.value, 1)
+      const index = editingIndex.value >= 0 ? filters.value.findIndex(filter => filter.id === item.id) : -1
+      const previous = index >= 0 ? filters.value[index] : null
+      if (index >= 0) filters.value.splice(index, 1)
       if (previous && previous.stage !== item.stage) {
         const source = filters.value
           .map((filter, index) => ({ filter, index }))
@@ -363,7 +364,7 @@ export const MessageFiltersPanel = {
         normalizeStagePriority(item.stage, target)
         return
       }
-      if (editingIndex.value >= 0) filters.value.splice(editingIndex.value, 0, item)
+      if (index >= 0) filters.value.splice(index, 0, item)
       else filters.value.push(item)
     }
 
@@ -405,13 +406,22 @@ export const MessageFiltersPanel = {
       templates.value = result.templates || []
     }
 
+    function syncFilters(result: MessageFiltersResponse): void {
+      enabled.value = result.filtering?.enabled !== false
+      filters.value = result.filtering?.filters || []
+      setCatalog(result)
+    }
+    watch(() => store.filters, result => {
+      if (result && !saving.value) syncFilters(asRecord<MessageFiltersResponse>(result))
+    })
+
     async function persist() {
       saving.value = true
       try {
         const result = await request("/api/message-filters", { method: "PUT", body: JSON.stringify({ enabled: enabled.value, filters: filters.value }) }) as MessageFiltersResponse
         filters.value = result.filtering?.filters || []
         store.config = result.config || store.config
-        store.filters = result
+        store.filters = { ...asRecord(store.filters), ...result }
         setCatalog(result)
         toast("代码过滤器规则已保存")
       } catch (err) {
@@ -506,14 +516,14 @@ export const MessageFiltersPanel = {
       document.querySelector<HTMLInputElement>(".processor-catalog-filter input")?.focus()
     }
 
-    async function load() {
+    async function load({ initial = false } = {}) {
       loading.value = true
       try {
-        const result = await request("/api/message-filters") as MessageFiltersResponse
-        enabled.value = result.filtering?.enabled !== false
-        filters.value = result.filtering?.filters || []
-        store.filters = result
-        setCatalog(result)
+        let result: MessageFiltersResponse
+        if (initial) { await ensureSlices(["filters"]); result = asRecord<MessageFiltersResponse>(store.filters) }
+        else result = await request("/api/message-filters") as MessageFiltersResponse
+        syncFilters(result)
+        store.filters = { ...asRecord(store.filters), ...result }
       } catch (err) {
         toast(errorMessage(err))
       } finally {
@@ -536,7 +546,7 @@ export const MessageFiltersPanel = {
       return implementation?.displayNameZh || implementation?.displayName || id || "未选择实现"
     }
 
-    onMounted(load)
+    onMounted(() => load({ initial: true }))
     return {
       loading,
       saving,

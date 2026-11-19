@@ -2,7 +2,7 @@ import { CapabilityFilterBar } from "./capability-filter-bar.js"
 import { CapabilityList, CapabilityRisk } from "./capability-list.js"
 import { CapabilityRoleButtons } from "./capability-role-buttons.js"
 import { reactive, computed, watch } from "vue"
-import { confirmAction, store, request, toast, refreshTab } from "../../app/store/store.js"
+import { confirmAction, applyConfigResponse, store, request, toast, refreshSlices } from "../../app/store/store.js"
 import { asRecord, asRecords, errorMessage } from "../../shared/data.js"
 import {
   BUILTIN_CATEGORY_META,
@@ -78,9 +78,10 @@ export const ToolListPanel = {
         }
       }
       try {
-        await request("/api/tools/enabled", { method: "POST", body: JSON.stringify({ tool, enabled }) })
+        const result = await request("/api/tools/enabled", { method: "POST", body: JSON.stringify({ tool, enabled }) })
         toast(`${enabled ? "已启用" : "已停用"} ${tool}，已立即生效（无需重启）`)
-        await refreshTab("tools")
+        applyConfigResponse(result)
+        if (Array.isArray(result.tools)) store.tools = { ...asRecord(store.tools), tools: result.tools }
       } catch (err) { toast(errorMessage(err)) }
     }
     function emitCategoryChange() { emit("category-change", filter.tag) }
@@ -90,7 +91,7 @@ export const ToolListPanel = {
     const subAgentEnabled = computed(() => asRecord<ToolConfigRoot>(store.config).subAgent?.enabled === true)
     async function reloadTools() {
       try {
-        await refreshTab("tools")
+        await refreshSlices(["config", "tools"])
         toast("内置能力列表已刷新")
       } catch (err) { toast(errorMessage(err)) }
     }

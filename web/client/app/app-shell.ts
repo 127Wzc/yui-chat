@@ -1,7 +1,7 @@
 import { onMounted, onUnmounted, computed, nextTick, ref } from "vue"
 import {
   store,
-  tabSlices,
+  getTabSlices,
   request,
   setTab,
   loadInitial,
@@ -89,7 +89,7 @@ export const AppShell = {
     const activeComponent = computed(() => nameMap[store.activeTab] || "OverviewTab")
     const activeTabMeta = computed(() => tabs.find(tab => tab.id === store.activeTab) || tabs[0])
     const pendingTabMeta = computed(() => tabs.find(tab => tab.id === store.pendingTab) || null)
-    const activeSliceKeys = computed(() => tabSlices[store.activeTab] || tabSlices.overview)
+    const activeSliceKeys = computed(() => getTabSlices())
     const activeErrors = computed(() => activeSliceKeys.value
       .filter(key => store.sliceErrors[key])
       .map(key => ({ key, message: store.sliceErrors[key] })))
@@ -126,7 +126,6 @@ export const AppShell = {
       try {
         if (!store.ready) await loadInitial()
         else {
-          if (store.activeTab === "tools") await request("/api/tools/reload", { method: "POST" })
           await refreshTab()
         }
         toast("已刷新")

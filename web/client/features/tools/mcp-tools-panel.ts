@@ -1,7 +1,7 @@
 import { CapabilityList, CapabilityRisk } from "./capability-list.js"
 import { CapabilityRoleButtons } from "./capability-role-buttons.js"
 import { computed, ref } from "vue"
-import { store, request, refreshTab, toast, confirmAction } from "../../app/store/store.js"
+import { store, request, refreshSlices, toast, confirmAction } from "../../app/store/store.js"
 import { asRecord, asRecords, errorMessage } from "../../shared/data.js"
 
 /** 独立即时保存，修改名单不覆盖连接信息或尚未提交的服务编辑。 */
@@ -38,7 +38,7 @@ export const McpToolsPanel = {
       busy.value = true
       try {
         await request(`/api/mcp/${encodeURIComponent(props.serverId)}/tools`, { method: "POST", body: JSON.stringify({ allowedTools }) })
-        await refreshTab("tools")
+        await refreshSlices(["config", "mcp", "tools"])
         toast("MCP 工具开放配置已保存")
       } catch (error) { toast(errorMessage(error)) }
       finally { busy.value = false }

@@ -52,7 +52,7 @@ export function registerConfigRoutes(app: RouteApp): void {
     })
     const session = issueWebAccessToken("web-token-rotated")
     setWebSessionCookie(req, res, session)
-    res.json({ ok: true, authToken: String(saved.web?.authToken || ""), runtime, meta: configStore.meta() })
+    res.json({ ok: true, authToken: String(saved.web?.authToken || ""), config: publicConfig(saved), runtime, meta: configStore.meta() })
   }, { errorStatus: 400 }))
   app.get("/api/config", auth, async (_req: RouteRequest, res: RouteResponse) => {
     res.json({ ok: true, config: configStore.getPublic(), schema, schemaManifest: getSchemaManifest(), meta: configStore.meta(), backups: await configStore.listBackups({ limit: 0 }) })

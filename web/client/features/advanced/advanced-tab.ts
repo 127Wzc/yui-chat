@@ -1,6 +1,6 @@
 import { LangfusePanel } from "./langfuse-panel.js"
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue"
-import { confirmAction, refreshSlices, request, saveConfigPatch, setDeveloperMode, setDirtyScope, setTab, store, toast } from "../../app/store/store.js"
+import { applyConfigResponse, confirmAction, useDataSlices, refreshSlices, request, saveConfigPatch, setDeveloperMode, setDirtyScope, setTab, store, toast } from "../../app/store/store.js"
 import { toJson } from "../../shared/format.js"
 import { asRecord, asRecords, errorMessage, type UnknownRecord } from "../../shared/data.js"
 import { SystemRenderStrategyPanel } from "../tools/system-render-strategy-panel.js"
@@ -155,16 +155,28 @@ export const AdvancedTab = {
     const webTokenLoaded = ref(false)
     const webTokenBusy = ref(false)
     const systemRenderPanel = ref<SystemRenderStrategyPanelHandle | null>(null)
-    const draftGroups = ["web-address", "web-token", "link-safety", "backup", "memory-capture", "developer", "config-json"]
-    function groupForKey(key: string): string {
-      if (key.startsWith("capture") || key.startsWith("memoryRerank")) return "memory-capture"
-      if (key.startsWith("link")) return "link-safety"
-      if (key.startsWith("backup")) return "backup"
-      return ({ webPublicBaseUrl: "web-address", webAuthToken: "web-token", configJson: "config-json" } as Record<string, string>)[key] || "developer"
+    const fieldGroups: Record<string, string[]> = {
+      "web-address": ["webPublicBaseUrl"], "web-token": ["webAuthToken"], "config-json": ["configJson"],
+      "link-network": ["linkAllowPrivateHosts", "linkTrustedPrivateDnsBypass"], "link-screenshot": ["linkScreenshotAllowedHosts"],
+      backup: ["backupMaxFiles", "backupMaxAgeDays"],
+      "memory-retention": ["captureRetentionDays", "captureExpiredFactDays"],
+      "memory-extraction": ["captureTokenLimit", "captureModelName", "captureUseBuiltInPrompt", "capturePromptTemplate", "captureMaxTokens", "captureMinConfidence"],
+      "memory-schedule": ["captureMaxWindowsPerScan", "captureTokensPerDay", "captureRelatedFactLimit", "captureScheduleMode", "captureScheduleTime", "captureScheduleCron"],
+      "memory-recall": ["captureRetrievalResultLimit", "capturePromptTokenBudget", "captureEmbeddingModel"],
+      "memory-rerank": ["memoryRerankEnabled", "memoryRerankModel", "memoryRerankCandidates", "memoryRerankTokenBudget", "memoryRerankTimeout", "memoryRerankCache", "memoryRerankMinScore"],
+      "developer-logs": ["loggingLevel", "memoryEmbeddingTokensPerDay", "knowledgeEmbeddingTokensPerDay"], "developer-render": [],
     }
+    const draftGroups = Object.keys(fieldGroups)
+    const sectionGroups: Record<string, string[]> = {
+      status: ["web-address", "web-token"], "link-safety": ["link-network", "link-screenshot"],
+      "memory-capture": draftGroups.filter(group => group.startsWith("memory-")),
+      developer: ["developer-logs", "developer-render", "config-json"],
+    }
+    const groupsFor = (group: string): string[] => sectionGroups[group] || [group]
+    function groupForKey(key: string): string { return draftGroups.find(group => fieldGroups[group].includes(key)) || "" }
     function draftState(group: string): string {
       const fields: UnknownRecord = Object.fromEntries(Object.entries(draft).filter(([key]) => groupForKey(key) === group))
-      if (group === "developer") fields.render = systemRenderPanel.value?.getPatch?.() || {
+      if (group === "developer-render") fields.render = systemRenderPanel.value?.getPatch?.() || {
         "response.render.system.engine": String(asRecord(asRecord(asRecord(config.value.response).render).system).engine || "html"),
       }
       return JSON.stringify(fields)
@@ -174,12 +186,11 @@ export const AdvancedTab = {
       baselines[group] = draftState(group)
       setDirtyScope(`system:${group}`, false)
     }
-    const isDirty = (group: string): boolean => draftState(group) !== baselines[group]
+    const isDirty = (group: string): boolean => groupsFor(group).some(key => draftState(key) !== baselines[key])
     for (const group of draftGroups) watch(() => [draftState(group), baselines[group]], () => setDirtyScope(`system:${group}`, isDirty(group)), { flush: "sync", immediate: true })
     onBeforeUnmount(() => { for (const group of draftGroups) setDirtyScope(`system:${group}`, false) })
     function sectionDirty(section: string): boolean {
-      const groups: Record<string, string[]> = { status: ["web-address", "web-token"], developer: ["developer", "config-json"] }
-      return (groups[section] || [section]).some(group => store.dirtyScopes[`system:${group}`])
+      return groupsFor(section).some(group => store.dirtyScopes[`system:${group}`])
     }
     const configMeta = computed(() => asRecord<ConfigMeta>(store.configMeta))
     const backups = computed(() => store.configBackups)
@@ -243,7 +254,7 @@ export const AdvancedTab = {
       { value: "memory-capture", label: "群记忆默认", description: "采集、提炼与召回", icon: "database", badge: "默认" },
       { value: "developer", label: "开发者设置", description: "日志、预算与 JSON", icon: "sliders", badge: store.developerMode ? "已开启" : "已隐藏", tone: store.developerMode ? "warn" : "" },
     ])
-    const captureSummary = computed(() => asRecord<MemorySummary>(store.memory).capture || {})
+    const captureSummary = computed(() => asRecord<MemorySummary["capture"] & UnknownRecord>(store.captureDefaults || asRecord<MemorySummary>(store.memory).capture))
     const captureDefaults = computed<CaptureDefaults>(() => captureSummary.value.defaultPolicy ? {
       retentionDays: Number(captureSummary.value.defaultPolicy.retentionDays ?? 30),
       tokenLimit: Number(captureSummary.value.defaultPolicy.tokenLimit) || 200000,
@@ -293,7 +304,7 @@ export const AdvancedTab = {
     })
 
     async function syncDraft(forceGroup = "") {
-      const groups = draftGroups.filter(group => forceGroup === "all" || group === forceGroup || !isDirty(group))
+      const groups = draftGroups.filter(group => forceGroup === "all" || groupsFor(forceGroup).includes(group) || !isDirty(group))
       const next = { ...draft }
       next.configJson = toJson(store.config)
       next.webPublicBaseUrl = String(config.value.web?.publicBaseUrl || "")
@@ -339,19 +350,19 @@ export const AdvancedTab = {
       for (const group of groups) markClean(group)
     }
     async function saveDeveloperSettings() {
+      const child = activeSubsection.value
       try {
         const memory = Number(draft.memoryEmbeddingTokensPerDay)
         const knowledge = Number(draft.knowledgeEmbeddingTokensPerDay)
-        if (![memory, knowledge].every(value => Number.isInteger(value) && value >= 0 && value <= 100000000)) {
+        if (child === "logs" && ![memory, knowledge].every(value => Number.isInteger(value) && value >= 0 && value <= 100000000)) {
           throw new Error("Embedding 每日预算必须是 0 到 100000000 之间的整数")
         }
-        await saveConfigPatch({
+        await saveConfigPatch(child === "render" ? systemRenderPanel.value?.getPatch?.() || {} : {
           "logging.level": draft.loggingLevel,
           "memory.retrieval.embeddingTokensPerDay": memory,
           "knowledge.indexing.globalEmbeddingTokensPerDay": knowledge,
-          ...(systemRenderPanel.value?.getPatch?.() || {}),
         }, "developer-settings")
-        await syncDraft("developer")
+        await syncDraft(`developer-${child}`)
         toast("开发者设置已保存", "success")
       } catch (err) { toast(errorMessage(err)) }
     }
@@ -386,11 +397,11 @@ export const AdvancedTab = {
       webTokenBusy.value = true
       try {
         const result = await request("/api/config/auth-token", { method: "PUT", body: JSON.stringify({ authToken }) })
+        if (result.config) applyConfigResponse(result)
         draft.webAuthToken = String(result.authToken || authToken)
         markClean("web-token")
         webTokenLoaded.value = true
         toast(authToken ? "Web 静态访问令牌已更新" : "静态 Token 登录已禁用", "success")
-        await refreshSlices(["config"])
       } catch (err) { toast(errorMessage(err)) }
       finally { webTokenBusy.value = false }
     }
@@ -411,16 +422,16 @@ export const AdvancedTab = {
         await saveConfigPatch({ "web.publicBaseUrl": normalized }, "web-public-base-url")
         draft.webPublicBaseUrl = normalized
         markClean("web-address")
-        await refreshSlices(["config"])
         toast(normalized ? "服务器地址前缀已保存" : "已恢复自动获取服务器地址", "success")
       } catch (err) { toast(errorMessage(err)) }
     }
     async function saveLinkSafety() {
+      const child = activeSubsection.value
       const screenshotAllowedHosts = [...new Set(String(draft.linkScreenshotAllowedHosts || "")
         .split(/[\n,]+/u)
         .map(value => value.trim().toLowerCase())
         .filter(Boolean))]
-      if (draft.linkAllowPrivateHosts || draft.linkTrustedPrivateDnsBypass) {
+      if (child === "network" && (draft.linkAllowPrivateHosts || draft.linkTrustedPrivateDnsBypass)) {
         const accepted = await confirmAction({
           title: "开启链接安全例外？",
           message: draft.linkAllowPrivateHosts
@@ -433,13 +444,11 @@ export const AdvancedTab = {
         if (!accepted) return
       }
       try {
-        await saveConfigPatch({
+        await saveConfigPatch(child === "screenshot" ? { "security.linkSafety.screenshotAllowedHosts": screenshotAllowedHosts } : {
           "security.linkSafety.allowPrivateHosts": draft.linkAllowPrivateHosts,
           "security.linkSafety.trustedPrivateDnsBypass": draft.linkTrustedPrivateDnsBypass,
-          "security.linkSafety.screenshotAllowedHosts": screenshotAllowedHosts,
         }, "link-safety")
-        await syncDraft("link-safety")
-        await refreshSlices(["config", "render", "diagnostics"])
+        await syncDraft(`link-${child}`)
         toast("链接安全策略已保存", "success")
       } catch (err) { toast(errorMessage(err)) }
     }
@@ -464,7 +473,6 @@ export const AdvancedTab = {
           "system.backups.maxAgeDays": maxAgeDays,
         }, "backup-retention")
         await syncDraft("backup")
-        await loadBackupDetails()
         toast("备份保留策略已保存并生效")
       } catch (err) { toast(errorMessage(err)) }
     }
@@ -482,6 +490,7 @@ export const AdvancedTab = {
       } catch (err) { toast(errorMessage(err)) }
     }
     async function saveCaptureDefaults() {
+      const child = activeSubsection.value
       try {
         const retentionDays = Math.round(Math.min(100000000, Math.max(0, Number(draft.captureRetentionDays) || 0)))
         const tokenLimit = Math.round(Math.min(1000000, Math.max(3000, Number(draft.captureTokenLimit) || 200000)))
@@ -492,13 +501,13 @@ export const AdvancedTab = {
         const retrievalResultLimit = Math.round(Math.min(20, Math.max(1, Number(draft.captureRetrievalResultLimit) || 3)))
         const promptTokenBudget = Math.round(Math.min(10000, Math.max(30, Number(draft.capturePromptTokenBudget) || 2000)))
         const promptTemplate = draft.captureUseBuiltInPrompt ? "" : String(draft.capturePromptTemplate || "").trim()
-        if (!draft.captureUseBuiltInPrompt && !promptTemplate) throw new Error("请填写自定义提示词，或切换为内置默认提示词")
+        if (child === "extraction" && !draft.captureUseBuiltInPrompt && !promptTemplate) throw new Error("请填写自定义提示词，或切换为内置默认提示词")
         const scheduleMode = ["interval", "time", "cron"].includes(String(draft.captureScheduleMode)) ? String(draft.captureScheduleMode) : "interval"
         const scheduleTime = String(draft.captureScheduleTime || "03:00").trim()
-        if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(scheduleTime)) throw new Error("记忆提炼固定时间必须是 HH:mm（00:00–23:59）")
+        if (child === "schedule" && !/^([01]\d|2[0-3]):[0-5]\d$/.test(scheduleTime)) throw new Error("记忆提炼固定时间必须是 HH:mm（00:00–23:59）")
         const scheduleCron = String(draft.captureScheduleCron || "0 3 * * *").trim()
-        if (scheduleMode === "cron" && scheduleCron.split(/\s+/).length !== 5) throw new Error("Cron 必须填写五段：分 时 日 月 周")
-        await saveConfigPatch({
+        if (child === "schedule" && scheduleMode === "cron" && scheduleCron.split(/\s+/).length !== 5) throw new Error("Cron 必须填写五段：分 时 日 月 周")
+        const patch: UnknownRecord = {
           "memory.groupCapture.defaultRetentionDays": retentionDays,
           "memory.groupCapture.defaultTokenLimit": tokenLimit,
           "memory.groupCapture.promptTemplate": promptTemplate,
@@ -522,13 +531,21 @@ export const AdvancedTab = {
           "memory.retrieval.rerankTimeoutMs": Number(draft.memoryRerankTimeout),
           "memory.retrieval.rerankCacheTtlMs": Number(draft.memoryRerankCache),
           "memory.retrieval.rerankMinScore": draft.memoryRerankMinScore === "" ? null : Number(draft.memoryRerankMinScore),
-        })
-        await syncDraft("memory-capture")
+        }
+        const paths: Record<string, string[]> = {
+          retention: ["memory.groupCapture.defaultRetentionDays", "memory.retention.expiredFactDays"],
+          extraction: ["memory.groupCapture.defaultTokenLimit", "memory.groupCapture.promptTemplate", "memory.groupCapture.consolidation.modelName", "memory.groupCapture.consolidation.maxTokens", "memory.groupCapture.consolidation.minConfidence"],
+          schedule: ["memory.groupCapture.consolidation.maxWindowsPerScan", "memory.groupCapture.consolidation.tokensPerDay", "memory.groupCapture.consolidation.relatedFactLimit", "memory.groupCapture.consolidation.schedule.mode", "memory.groupCapture.consolidation.schedule.time", "memory.groupCapture.consolidation.schedule.cron"],
+          recall: ["memory.retrieval.resultLimit", "memory.retrieval.promptTokenBudget", "memory.retrieval.embeddingModel"],
+          rerank: Object.keys(patch).filter(key => key.startsWith("memory.retrieval.rerank")),
+        }
+        await saveConfigPatch(Object.fromEntries((paths[child] || []).map(key => [key, patch[key]])))
+        await syncDraft(`memory-${child}`)
         toast("群记忆系统默认已保存；继承默认的群会自动同步", "success")
       } catch (err) { toast(errorMessage(err)) }
     }
     async function refreshSystem(forceGroup = "") {
-      await refreshSlices(["config", "diagnostics", "output"])
+      await refreshSlices(["diagnostics"])
       await syncDraft(forceGroup)
     }
     async function saveJson() {
@@ -537,9 +554,7 @@ export const AdvancedTab = {
         if (!accepted) return
         const config = JSON.parse(draft.configJson)
         const saved = await request("/api/config", { method: "POST", body: JSON.stringify({ config }) })
-        store.config = asRecord(saved.config)
-        store.configMeta = asRecord(saved.meta)
-        store.configBackups = asRecords(saved.backups)
+        applyConfigResponse(saved)
         toast("JSON 配置已保存")
         draft.webAuthToken = ""
         webTokenLoaded.value = false
@@ -581,9 +596,7 @@ export const AdvancedTab = {
       if (!accepted) return
       try {
         const result = await request("/api/config/restore", { method: "POST", body: JSON.stringify({ fileName }) })
-        store.config = asRecord(result.config)
-        store.configMeta = asRecord(result.meta)
-        store.configBackups = asRecords(result.backups)
+        applyConfigResponse(result)
         toast("配置已回滚，运行配置已重新载入")
         draft.webAuthToken = ""
         webTokenLoaded.value = false
@@ -656,6 +669,7 @@ export const AdvancedTab = {
       return parts.join(" · ")
     }
     watch(config, () => { void syncDraft() })
+    watch(captureDefaults, () => { void syncDraft() })
     watch(() => store.systemSettingsSection, section => {
       if (!section) return
       selectSection(section)
@@ -666,6 +680,9 @@ export const AdvancedTab = {
       if (section === "backup" && child === "manage") void loadBackupDetails()
       void syncDraft()
     }, { immediate: true })
+    useDataSlices(() => activeSection.value === "memory-capture" && activeSubsection.value === "extraction" ? ["captureDefaults"]
+      : activeSection.value === "developer" && store.developerMode && activeSubsection.value === "diagnostics" ? ["output", "diagnostics"]
+        : activeSection.value === "langfuse" && activeSubsection.value === "status" ? ["diagnostics"] : [])
 
     return {
       draft, showJsonDrawer, webTokenVisible, webTokenLoaded, webTokenBusy, systemRenderPanel, webAddressPreview, configMeta, backups, manifest, activeSection, systemSectionItems, subsections, activeSubsection, subsection, selectSection, selectedSubsections, isDirty, sectionDirty,
@@ -748,7 +765,7 @@ export const AdvancedTab = {
 
           </div>
           <div v-show="activeSubsection === 'screenshot'"><Field label="URL 截图允许域名" type="textarea" :rows="8" v-model="draft.linkScreenshotAllowedHosts" placeholder="*\nexample.com\n*.example.com" hint="* 允许全部域名；也可用精确域名或 *.example.com 子域通配，每行或逗号分隔。" /></div>
-          <footer class="system-settings-save-bar"><span>{{ isDirty('link-safety') ? '有未保存的更改' : '设置已同步' }}</span><button class="btn primary" type="button" @click="saveLinkSafety"><Icon name="save" :size="14" />保存链接策略</button></footer>
+          <footer class="system-settings-save-bar"><span>{{ isDirty('link-' + activeSubsection) ? '有未保存的更改' : '设置已同步' }}</span><button class="btn primary" type="button" @click="saveLinkSafety"><Icon name="save" :size="14" />保存当前分区</button></footer>
         </div>
 
         <div v-show="activeSection === 'backup'" class="system-settings-pane">
@@ -809,7 +826,7 @@ export const AdvancedTab = {
             </div></details>
 
           </div>
-          <footer class="system-settings-save-bar"><span>{{ isDirty('memory-capture') ? '有未保存的更改' : '设置已同步' }}</span><button class="btn primary" type="button" @click="saveCaptureDefaults"><Icon name="save" :size="14" />保存群记忆默认</button></footer>
+          <footer class="system-settings-save-bar"><span>{{ isDirty('memory-' + activeSubsection) ? '有未保存的更改' : '设置已同步' }}</span><button class="btn primary" type="button" @click="saveCaptureDefaults"><Icon name="save" :size="14" />保存当前分区</button></footer>
         </div>
 
         <div v-show="activeSection === 'developer'" class="system-settings-pane">
@@ -839,7 +856,7 @@ export const AdvancedTab = {
 
               <JsonBlock title="原始调试数据 · Schema / 输出 / 诊断" :value="{ schema: store.schema, output: store.output, diagnostics: store.diagnostics }" />
             </div>
-            <footer v-if="activeSubsection === 'logs' || activeSubsection === 'render'" class="system-settings-save-bar"><span>{{ isDirty('developer') ? '有未保存的更改' : '设置已同步' }}</span><button class="btn primary" type="button" @click="saveDeveloperSettings"><Icon name="save" :size="14" />保存开发者设置</button></footer>
+            <footer v-if="activeSubsection === 'logs' || activeSubsection === 'render'" class="system-settings-save-bar"><span>{{ isDirty('developer-' + activeSubsection) ? '有未保存的更改' : '设置已同步' }}</span><button class="btn primary" type="button" @click="saveDeveloperSettings"><Icon name="save" :size="14" />保存当前分区</button></footer>
           </div>
           <SideDrawer v-if="store.developerMode" :open="showJsonDrawer && activeSection === 'developer'" title="完整配置 JSON" subtitle="保存时执行完整配置校验；关闭未保存草稿前会提醒。" icon="sliders" width="760px" @close="closeJsonDrawer">
             <Field type="textarea" v-model="draft.configJson" :rows="22" />

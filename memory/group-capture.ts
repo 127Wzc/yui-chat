@@ -2668,6 +2668,10 @@ export class GroupCaptureStore {
     return resultItemsWithTargetNames(applied, targetNames)
   }
 
+  defaults(): UnknownRecord {
+    return { defaultPromptTemplate: DEFAULT_GROUP_MEMORY_PROMPT, defaultPolicy: policyDefaults() }
+  }
+
   async summary(options: UnknownRecord = {}): Promise<UnknownRecord> {
     if (!sqliteClient.status.available) {
       return { available: false, initialized: false, pendingMessages: 0, lastError: sqliteClient.status.error || "SQLite 不可用", policies: [], windows: {} }
@@ -2683,8 +2687,7 @@ export class GroupCaptureStore {
       initialized: this.initialized,
       pendingMessages: this.queue.length,
       lastError: this.lastError,
-      defaultPromptTemplate: DEFAULT_GROUP_MEMORY_PROMPT,
-      defaultPolicy: policyDefaults(),
+      ...this.defaults(),
       consolidationSchedule: consolidationSchedule(),
       dailyBudget:{day:localDayString(),limit:Number(record(groupConfig().consolidation).tokensPerDay||0),used:Number(budget?.used_tokens||0),reserved:Number(budget?.reserved_tokens||0)},
       historyBackfillMaxMessages: integer(groupConfig().historyBackfillMaxMessages, 500, 1, 5000),

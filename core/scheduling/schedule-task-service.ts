@@ -326,6 +326,8 @@ export class ScheduleTaskService {
     return this.store
   }
 
+  configure(config: unknown): void { this.config = config }
+
   start(config: unknown = {}): UnknownRecord {
     this.config = config
     const cfg = scheduleConfig(config)

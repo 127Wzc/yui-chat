@@ -69,7 +69,8 @@ let heldRequests = null
 const app = {
   store: vue.reactive({ config: {}, tools: [], providers: {} }),
   toast(message) { throw new Error(message) },
-  refreshTab: async () => {},
+  useDataSlices() {},
+  applyConfigResponse: response => { app.store.config = response.config },
   request: async (url, options) => {
     const body = JSON.parse(options.body)
     if (url.endsWith('/reasoning-options')) {
@@ -101,8 +102,16 @@ for (const target of ['auto', 'openai', 'deepseek', 'claude']) {
   const editor = scope.run(() => ModelEditor.setup({ model: { ...model, adapter: target === 'claude' ? 'claude' : model.adapter, reasoning: { target, effort: '' } } }, { emit() {} }))
   await settle()
   assert.equal(editor.draft.reasoningEffort, '', 'explicit default survives reopening')
+  savedPatch = undefined
   await editor.save()
-  assert.equal(savedPatch.reasoning.effort, '', 'explicit default survives saving unrelated fields')
+  assert.equal(savedPatch, undefined, 'unchanged model must not be resubmitted')
+  editor.draft.priceIn = 1
+  await editor.save()
+  assert.equal(savedPatch.priceIn, 1)
+  assert(!Object.hasOwn(savedPatch, 'reasoning'), 'saving a price must preserve the explicit reasoning default without resubmitting it')
+  editor.draft.reasoningEffort = editor.reasoningEffortOptions.value.find(option => option.value)?.value || 'high'
+  await editor.save()
+  assert.equal(savedPatch.reasoning.effort, editor.draft.reasoningEffort)
   assert.equal(savedPatch.reasoning.target, target)
   scope.stop()
 }

@@ -1,7 +1,19 @@
 import { modelDisplayLabel } from "../../shared/model-display.js"
-import { request } from "../../app/store/store.js"
+import { applyConfigResponse, request, store } from "../../app/store/store.js"
+
+import { asRecord } from "../../shared/data.js"
 
 type UnknownRecord = Record<string, unknown>
+
+/** 供应商写接口携带完整诊断，列表可直接更新，不重复请求相同数据。 */
+export function applyProviderResponse(result: UnknownRecord): void {
+  applyConfigResponse(result)
+  if (!result.diagnostics) return
+  const diagnostics = asRecord(result.diagnostics)
+  store.providers = { ...asRecord(store.providers), diagnostics,
+    channels: diagnostics.channels || [], routing: diagnostics.routingDigest, routingPreview: diagnostics.routingPreview,
+    modelTasks: store.config?.modelTasks, defaultTask: asRecord(store.config?.chat).defaultTask }
+}
 
 export interface SelectOption {
   value: string

@@ -1,6 +1,6 @@
 import { computed, reactive, ref, watch } from "vue"
-import { request, refreshTab, saveConfigPatch, store, toast } from "../../app/store/store.js"
-import { asRecord, errorMessage, type UnknownRecord } from "../../shared/data.js"
+import { request, refreshSlices, saveConfigPatch, store, toast } from "../../app/store/store.js"
+import { asRecord, errorMessage, sameJsonValue, type UnknownRecord } from "../../shared/data.js"
 import { collectRuntimeValues, integerValue, runtimeDraftValues, runtimeFieldRow, toolCommon, type RuntimeFieldRow } from "./shared.js"
 
 interface ConfigField {
@@ -227,7 +227,9 @@ export const ToolConfigurationPanel = {
       Object.assign(runtimeDraft, runtimeDraftValues(toolCommon(props.tool).configSchema, cloneRuntime(props.tool)))
     }
 
-    watch(() => [props.tool, store.config], () => { syncChannels(); syncRuntime() }, { immediate: true, deep: true })
+    watch(() => JSON.stringify([props.tool.name, profile.value ? readPath(store.config, profile.value.path) : null,
+      profile.value?.channels.map(channel => channel.enabledPath ? readValuePath(store.config, channel.enabledPath) : null)]), syncChannels, { immediate: true })
+    watch(() => JSON.stringify([props.tool.name, toolCommon(props.tool).configSchema, cloneRuntime(props.tool)]), syncRuntime, { immediate: true })
 
     function channelEnabled(id: string): boolean {
       return channelDraft.enabledSources.includes(id)
@@ -322,7 +324,7 @@ export const ToolConfigurationPanel = {
     }
 
     async function saveRuntimeConfig(): Promise<ToolRecord | null> {
-      if (!runtimeRows.value.length) return null
+      if (!runtimeRows.value.length || sameJsonValue(runtimeDraft, runtimeDraftValues(toolCommon(props.tool).configSchema, cloneRuntime(props.tool)))) return null
       const value = collectRuntimeValues(toolCommon(props.tool).configSchema, runtimeDraft)
       const response = asRecord(await request(`/api/tools/${encodeURIComponent(String(props.tool.name || ""))}/runtime-config`, {
         method: "PUT",
@@ -335,6 +337,7 @@ export const ToolConfigurationPanel = {
     async function saveAll() {
       if (saving.value) return
       const currentProfile = profile.value
+      if (!currentProfile && sameJsonValue(runtimeDraft, runtimeDraftValues(toolCommon(props.tool).configSchema, cloneRuntime(props.tool)))) return
       if (currentProfile && !channelDraft.enabledSources.length) return toast("请至少启用一个实现渠道", "warn")
       saving.value = true
       try {
@@ -356,7 +359,7 @@ export const ToolConfigurationPanel = {
           syncChannels()
         } else {
           toast("运行变量已保存")
-          await refreshTab("tools")
+          await refreshSlices(["tools"])
         }
       } catch (error) { toast(errorMessage(error)) }
       finally { saving.value = false }

@@ -88,6 +88,10 @@ try {
     value.mcp.enabled = false
     value.mcp.servers = { 'fixture.with.dot': { enabled: false, transport: 'stdio', command: 'disabled-fixture' } }
   })
+  // Production boot registers the catalog before serving HTTP; permission writes must not initialize it.
+  const { toolRegistry } = await import('../output/runtime/tools/support/registry.js')
+  await toolRegistry.init()
+  assert(toolRegistry.get('weather'), 'bootstrap provides the existing tool catalog')
   const { createWebApp } = await import('../output/runtime/web/http/app.js')
   const app = express()
   app.use('/yui-chat', createWebApp())

@@ -1,6 +1,6 @@
 import { reactive, computed, watch } from "vue"
 import { confirmAction, store, toast, saveConfigPatch } from "../../app/store/store.js"
-import { asRecord, errorMessage } from "../../shared/data.js"
+import { asRecord, errorMessage, sameJsonValue } from "../../shared/data.js"
 import { BOOL_OPTIONS, integerValue, type ToolConfigRoot } from "./shared.js"
 
 // 真正跨工具生效的设置：执行预算、工具总开关和安全兜底只在这里出现一次。
@@ -27,13 +27,14 @@ export const GlobalToolSettingsPanel = {
       promptSelectionMaxDefinitionTokens: 1200,
     })
 
-    function syncDraft() {
+    let baseline: Record<string, unknown> = {}
+    function syncDraft(force = true) {
       const config = asRecord<ToolConfigRoot>(store.config)
       const policy = config.tools?.policy || {}
       const promptSelection = config.tools?.promptSelection || {}
       const openaiHosted = config.tools?.hosted?.openai || {}
       const execution = asRecord(config.chat?.execution)
-      Object.assign(draft, {
+      const next = {
         toolsEnabled: String(config.tools?.enabled !== false),
         allowExternalNetwork: String(policy.allowExternalNetwork !== false),
         allowCustomTools: String(policy.allowCustomTools !== false),
@@ -49,10 +50,12 @@ export const GlobalToolSettingsPanel = {
         promptSelectionEnabled: String(promptSelection.enabled !== false),
         promptSelectionMaxTools: promptSelection.maxTools ?? 12,
         promptSelectionMaxDefinitionTokens: promptSelection.maxDefinitionTokens ?? 1200,
-      })
+      }
+      for (const [key, value] of Object.entries(next)) if (force || sameJsonValue(asRecord(draft)[key], baseline[key])) Object.assign(draft, { [key]: value })
+      baseline = next
     }
     syncDraft()
-    watch(() => store.config, syncDraft, { deep: true })
+    watch(() => store.config, () => syncDraft(false))
 
     const pills = computed(() => [
       { label: draft.toolsEnabled === "true" ? "工具调用开" : "工具调用关", active: draft.toolsEnabled === "true" },
@@ -85,8 +88,8 @@ export const GlobalToolSettingsPanel = {
           "tools.promptSelection.enabled": draft.promptSelectionEnabled === "true",
           "tools.promptSelection.maxTools": integerValue(draft.promptSelectionMaxTools, 12, 1, 100),
           "tools.promptSelection.maxDefinitionTokens": integerValue(draft.promptSelectionMaxDefinitionTokens, 1200, 100, 100000),
-        })
-        syncDraft()
+        }, "global-tools", ["tools"])
+        syncDraft(false)
         emit("close")
       } catch (err) { toast(errorMessage(err)) }
     }
