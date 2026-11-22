@@ -8,6 +8,16 @@ import { KnowledgeCommandEditor } from "./knowledge-command-editor.js"
 
 const BOOL_OFF_OPTIONS = [{ value: "false", label: "关闭" }, { value: "true", label: "开启" }]
 
+const RETRIEVAL_HEALTH: Record<string, { state: string; label: string; tip: string }> = {
+  fts_ready: { state: "on", label: "全文可用", tip: "使用全文检索，未配置向量模型。" },
+  unavailable: { state: "bad", label: "向量异常", tip: "向量数据库不可用；仍可使用全文检索。" },
+  missing: { state: "warn", label: "待构建", tip: "当前没有可用向量空间；仍可使用全文检索。" },
+  incompatible: { state: "warn", label: "需重建", tip: "向量空间与当前模型配置不兼容；仍可使用全文检索。" },
+  updating: { state: "warn", label: "更新中", tip: "增量更新尚未完成；可检索已有内容。" },
+  update_failed: { state: "bad", label: "更新异常", tip: "增量更新重试已耗尽；可在索引页检查并补齐缺失。" },
+  ready: { state: "on", label: "可检索", tip: "向量空间兼容且没有待处理更新；完整性可在索引页按需检查。" },
+}
+
 /** 管理台知识库的 API 结构会随索引能力扩展；这里将边界收敛成页面内部模型。 */
 type KnowledgeRecord = Record<string, any>
 
@@ -35,6 +45,7 @@ interface KnowledgeBase extends KnowledgeRecord {
   stats?: KnowledgeRecord
   config?: KnowledgeRecord
   index?: KnowledgeRecord
+  retrievalState?: string
 }
 
 interface KnowledgeDocument extends KnowledgeItem {
@@ -344,11 +355,8 @@ export const KnowledgeTab = {
     ])
 
     function baseHealth(base: KnowledgeBase = { id: "" }) {
-      const status = base.index?.status || "fts_ready"
-      if (["failed", "paused_budget", "paused_no_model"].includes(status)) return { state: "bad", label: status === "failed" ? "索引异常" : "索引暂停" }
-      if (!Number(base.stats?.documents || 0)) return { state: "warn", label: "暂无内容" }
-      if (base.config?.embeddingModel && (!base.active_vector_space_id || !["completed", "ready"].includes(status))) return { state: "warn", label: "待构建" }
-      return { state: "on", label: base.config?.embeddingModel ? "可检索" : "全文可用" }
+      if (!Number(base.stats?.documents || 0)) return { state: "warn", label: "暂无内容", tip: "导入内容后即可使用全文检索。" }
+      return RETRIEVAL_HEALTH[base.retrievalState || ""] || { state: "warn", label: "状态未知", tip: "刷新以获取检索可用性。" }
     }
 
     function jobLabel(status = "") {

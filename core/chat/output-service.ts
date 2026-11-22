@@ -1,4 +1,3 @@
-import { formatHostedSearchCitations } from "./search-citations.js"
 export { formatHostedSearchCitations } from "./search-citations.js"
 import { recentContextStore } from "./recent-context.js"
 import { applyOutputFilters } from "../../filters/message/message-filter-service.js"
@@ -295,7 +294,7 @@ export async function sendChatOutput(event: unknown, result: unknown, config: un
   const source = text(options.source || resultValue.source)
   const processed = await applyOutputFilters(outputText, { event, e: event, config: rootConfig, result: resultValue, source })
   for (const delivery of processed.deliveries) await sendRecordDelivery(event, delivery.data, response.quoteReply, replyOptions, rootConfig)
-  const displayText = formatHostedSearchCitations(processed.text, resultValue.hostedSearchSources)
+  const displayText = processed.text.trim()
   if (!displayText) {
     markReplied(event)
     const sourcesDelivered = await deliverHostedSearchSources(event, resultValue, rootConfig)

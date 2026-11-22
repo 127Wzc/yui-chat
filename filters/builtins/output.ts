@@ -2,6 +2,7 @@ import { stripForSpeech, synthesizeSpeech } from "../../core/media/tts-service.j
 import { replaceWithSafeRegex } from "../../core/shared/safe-regex.js"
 import type { FilterApplyContext, FilterApplyInput } from "../core/contract.js"
 import type { UnknownRecord } from "../../core/message/types.js"
+import { cleanBodyLinks } from "./body-links.js"
 
 const textParameter: UnknownRecord = {
   type: "string",
@@ -16,6 +17,26 @@ function record(value: unknown): UnknownRecord {
 /** 创建内置消息处理过滤器；这些实现不注册为模型 Tool。 */
 export function createOutputFilters(): UnknownRecord[] {
   return [
+    {
+      id: "body_link_cleanup",
+      displayName: "OpenAI 搜索引用清理",
+      displayNameZh: "OpenAI 搜索引用清理",
+      description: "Remove body citations whose URL has utm_source=openai; leave other content unchanged.",
+      descriptionZh: "只移除带 utm_source=openai 的正文链接引用；普通链接、数字、代码、图片和独立来源转发保持原样。",
+      stages: ["output"],
+      effects: ["pure"],
+      resultKinds: ["text"],
+      parameters: {
+        type: "object",
+        properties: {
+          text: textParameter,
+        },
+        required: ["text"],
+      },
+      apply({ text }: FilterApplyInput, context: FilterApplyContext = {}) {
+        return { kind: "text", text: context.inForward === true || context.target === "media" ? text : cleanBodyLinks(text) }
+      },
+    },
     {
       id: "voice_output",
       displayName: "语音输出",

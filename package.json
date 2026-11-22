@@ -40,7 +40,7 @@
     "check:command-benchmark": "node scripts/check-command-benchmark.mjs",
     "check:memory-retrieval": "node scripts/check-memory-retrieval.mjs && node scripts/check-memory-image.mjs",
     "check:artifacts": "node scripts/check-artifacts.mjs",
-    "check:message-chain": "node scripts/check-message-chain.mjs",
+    "check:message-chain": "node scripts/check-message-chain.mjs && node scripts/check-body-link-filter.mjs",
     "check:reply-settings": "node scripts/check-reply-settings.mjs",
     "check:logs": "node scripts/check-log-workspace.mjs",
     "check:langfuse": "node scripts/check-langfuse.mjs",

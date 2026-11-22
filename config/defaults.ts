@@ -432,7 +432,17 @@ export const defaults = {
     messageFilters: {
       enabled: true,
       runtimeVariables: {},
-      filters: [],
+      filters: [{
+        id: "body-link-cleanup",
+        name: "OpenAI 搜索引用清理",
+        enabled: true,
+        stage: "output",
+        target: "text",
+        priority: -1000,
+        condition: { minTextLength: 0 },
+        implementation: { type: "filter", id: "body_link_cleanup", arguments: {} },
+        onFailure: "continue",
+      }],
     },
     tts: {
       enabled: false,

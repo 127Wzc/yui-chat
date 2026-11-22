@@ -201,6 +201,8 @@ export interface DeliveryReceipt {
   error?: string
   blocked?: boolean
   filterTraces?: readonly Record<string, unknown>[]
+  /** 已执行输出过滤且成功发送的顶层文字，供会话保存实际答复。 */
+  deliveredText?: string
 }
 
 export interface ToolOutput {

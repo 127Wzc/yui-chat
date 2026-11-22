@@ -42,6 +42,8 @@ export interface KnowledgeIndexInspection {
   checkedAt: number
 }
 
+export type KnowledgeRetrievalState = "fts_ready" | "unavailable" | "missing" | "incompatible" | "updating" | "update_failed" | "ready"
+
 type QueueOptions = KnowledgeIndexJobOptions
 
 interface ProgressPatch extends UnknownRecord {
@@ -156,6 +158,32 @@ export class KnowledgeIndexJobs {
       release()
       if (this.queueLocks.get(key) === current) this.queueLocks.delete(key)
     }
+  }
+
+  /** 页面可用性摘要：只读空间元信息和增量队列，不扫描分块或向量，也不依赖历史重建记录。 */
+  async retrievalStates(bases: readonly UnknownRecord[]): Promise<Map<string, KnowledgeRetrievalState>> {
+    const states = new Map<string, KnowledgeRetrievalState>()
+    if (!bases.length) return states
+    const vectorAvailable = Boolean(sqliteClient.status.vector?.available)
+    const pending = vectorAvailable && bases.some(base => record(base.config).embeddingModel)
+      ? await sqliteClient.all("SELECT knowledge_base_id, MAX(attempts>=3) AS failed FROM knowledge_vector_tasks GROUP BY knowledge_base_id")
+      : []
+    const updates = new Map(pending.map(row => [text(row.knowledge_base_id), row.failed ? "update_failed" as const : "updating" as const]))
+    await Promise.all(bases.map(async base => {
+      const id = text(base.id), config = record(base.config)
+      let state: KnowledgeRetrievalState
+      if (!config.embeddingModel) state = "fts_ready"
+      else if (!vectorAvailable) state = "unavailable"
+      else {
+        const space = await vectorIndex.getSpace(base.active_vector_space_id)
+        if (!space) state = "missing"
+        else if (!vectorSpaceMatches(space, { modelName: config.embeddingModel, dimensions: config.dimensions, distanceMetric: config.distanceMetric })
+          || !space.scopeKey.endsWith(`:fp-${embeddingIdentity(config.embeddingModel)}`)) state = "incompatible"
+        else state = updates.get(id) || "ready"
+      }
+      states.set(id, state)
+    }))
+    return states
   }
 
   /** 只读检查所有已保存分块，不受屏蔽开关影响，不触发分片或模型请求。 */

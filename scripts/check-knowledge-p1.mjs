@@ -387,8 +387,53 @@ try {
   const lostTable = await vectorIndex.getSpace((await knowledgeRepository.getBase(repairBase.id)).active_vector_space_id)
   await sqliteClient.exec(`DROP TABLE ${lostTable.table}`, "vectors")
   assert.equal((await knowledgeIndexJobs.inspect(repairBase.id)).missing, 4, "a missing vec0 table must be reported as missing vectors")
+  assert.equal((await knowledgeIndexJobs.retrievalStates([await knowledgeRepository.getBase(repairBase.id)])).get(repairBase.id), "missing")
   assert.equal((await knowledgeIndexJobs.repair(repairBase.id, { immediate: true })).status, "completed")
   assert.equal((await knowledgeIndexJobs.inspect(repairBase.id)).state, "ready")
+
+  // Availability survives task retention and failed rebuilds; only metadata and pending updates are read.
+  const availabilityBase = await knowledgeRepository.getBase(repairBase.id)
+  const availabilityCalls = adapterCalls.length
+  const availabilityState = async (base = availabilityBase) => (await knowledgeIndexJobs.retrievalStates([base])).get(base.id)
+  for (const row of await sqliteClient.all("SELECT id FROM knowledge_index_jobs WHERE knowledge_base_id=?", [repairBase.id])) await knowledgeIndexJobs.remove(row.id)
+  assert.equal(await availabilityState(), "ready", "deleting completed history must not make a published index unbuilt")
+  const failedRebuild = await knowledgeIndexJobs.queue(repairBase.id)
+  await sqliteClient.run("UPDATE knowledge_index_jobs SET status='failed',error='fixture failure' WHERE id=?", [failedRebuild.id])
+  assert.equal(await availabilityState(), "ready", "a failed rebuild does not disable the previous compatible index")
+  assert.equal(await availabilityState({ ...availabilityBase, active_vector_space_id: null }), "missing")
+  assert.equal(await availabilityState({ ...availabilityBase, config: { ...availabilityBase.config, dimensions: 3 } }), "incompatible")
+  const currentModelIdentifier = configStore.get().models.find(model => model.name === "knowledge-p1-a").modelIdentifier
+  try {
+    await configStore.update(config => { config.models.find(model => model.name === "knowledge-p1-a").modelIdentifier = "changed-upstream" })
+    assert.equal(await availabilityState(), "incompatible", "same model name must still check the current configuration fingerprint")
+  } finally {
+    await configStore.update(config => { config.models.find(model => model.name === "knowledge-p1-a").modelIdentifier = currentModelIdentifier })
+  }
+  await sqliteClient.run("INSERT INTO knowledge_vector_tasks(kind,owner_id,knowledge_base_id,content_hash,updated_at) VALUES('document','availability-fixture',?,'fixture',?)", [repairBase.id, Date.now()])
+  assert.equal(await availabilityState(), "updating")
+  await sqliteClient.run("UPDATE knowledge_vector_tasks SET attempts=2,retry_at=? WHERE owner_id='availability-fixture'", [Date.now() + 60000])
+  assert.equal(await availabilityState(), "updating", "waiting retries are pending, not terminal failures")
+  await sqliteClient.run("UPDATE knowledge_vector_tasks SET attempts=3 WHERE owner_id='availability-fixture'")
+  assert.equal(await availabilityState(), "update_failed")
+  await sqliteClient.run("DELETE FROM knowledge_vector_tasks WHERE owner_id='availability-fixture'")
+  assert.equal(await availabilityState(), "ready", "finishing incrementals restores availability without a rebuild record")
+  const ftsBase = { ...availabilityBase, id: "fts-fixture", config: { embeddingModel: "" } }
+  const availabilityOnlineStatus = sqliteClient.status
+  try {
+    sqliteClient.status = { ...availabilityOnlineStatus, vector: { available: false } }
+    const offlineStates = await knowledgeIndexJobs.retrievalStates([availabilityBase, ftsBase])
+    assert.equal(offlineStates.get(repairBase.id), "unavailable")
+    assert.equal(offlineStates.get(ftsBase.id), "fts_ready")
+  } finally { sqliteClient.status = availabilityOnlineStatus }
+  const summaryAll = sqliteClient.all, summaryGet = sqliteClient.get
+  const forbidIndexScan = sql => assert(!/\b(?:knowledge_chunks|embedding_records|vec_[a-f0-9]+)\b/i.test(sql), "availability must not scan chunks or vector contents")
+  try {
+    sqliteClient.all = function (sql, ...args) { forbidIndexScan(sql); return summaryAll.call(this, sql, ...args) }
+    sqliteClient.get = function (sql, ...args) { forbidIndexScan(sql); return summaryGet.call(this, sql, ...args) }
+    const summary = await knowledgeIndexJobs.retrievalStates([availabilityBase, ftsBase])
+    assert.equal(summary.get(repairBase.id), "ready"); assert.equal(summary.get(ftsBase.id), "fts_ready")
+  } finally { sqliteClient.all = summaryAll; sqliteClient.get = summaryGet }
+  assert.equal(adapterCalls.length, availabilityCalls, "availability checks never call embedding models")
 
   // Paused staging can also lose a vec row while retaining embedding_records.
   const resumeBase = await knowledgeStore.create({ name: "P1 缺失向量续传", config: { embeddingModel: "knowledge-p1-a", dimensions: 2 } })

@@ -2,6 +2,7 @@ import { commandAvailability, commandEnabledSql, readCommandAvailability, type C
 import { searchKnowledgeDetailed } from "../../../../knowledge/retrieval.js"
 import { knowledgeRepository } from "../../../../knowledge/repository.js"
 import { knowledgeStore } from "../../../../knowledge/store.js"
+import { knowledgeIndexJobs } from "../../../../knowledge/index-jobs.js"
 import { requireWebAuth as auth } from "../../auth.js"
 import { handleRoute } from "../../route-handler.js"
 import type { RouteApp } from "../../route-handler.js"
@@ -47,6 +48,8 @@ export function registerKnowledgeBaseRoutes(app: RouteApp): void {
   app.get("/api/knowledge/bases", auth, handleRoute(async (_req, res) => {
     const mode = (configStore.get().knowledge?.commandRetrieval as Record<string, unknown>)?.mode || "hybrid"
     const bases = await knowledgeStore.list()
+    const retrievalStates = await knowledgeIndexJobs.retrievalStates(bases)
+    for (const base of bases) base.retrievalState = retrievalStates.get(String(base.id))
     const builtin = bases.find(base => base.id === "builtin-commands")
     if (builtin) Object.assign(builtin, { retrievalMode: mode, stats: await builtinCommandStats() })
     res.json({ ok: true, bases })

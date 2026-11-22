@@ -353,6 +353,27 @@ try {
   const token=issueWebAccessToken("fixture").token
   const app=express();app.use(express.json({limit:"12mb"}));registerKnowledgeRoutes(app);registerConfigRoutes(app);server=app.listen(0,"127.0.0.1");await once(server,"listening")
   const api=async(url,method="GET",body,authorized=true)=>{const response=await fetch(`http://127.0.0.1:${server.address().port}${url}`,{method,headers:{...(authorized?{"yui-chat-token":token}:{}),"content-type":"application/json"},...(body?{body:JSON.stringify(body)}:{})});return {status:response.status,data:await response.json().catch(()=>({}))}}
+  assert.equal((await api("/api/knowledge/bases","GET",null,false)).status,401)
+  await jobs.runAvailable()
+  const availabilityCalls=embeddingCalls,availabilityJobs=await sqliteClient.all("SELECT id,status FROM knowledge_index_jobs ORDER BY id")
+  const inspectBeforeSummary=jobs.inspect,hashesBeforeSummary=vectorIndex.indexedContentHashes
+  try {
+    jobs.inspect=async()=>{throw Error("listing bases must not run integrity checks")}
+    vectorIndex.indexedContentHashes=async()=>{throw Error("listing bases must not inspect vector contents")}
+    const readAvailability=async()=>{const response=await api("/api/knowledge/bases");assert.equal(response.status,200);return response.data.bases.find(row=>row.id===base).retrievalState}
+    assert.equal(await readAvailability(),"ready")
+    await sqliteClient.run("INSERT INTO knowledge_vector_tasks(kind,owner_id,knowledge_base_id,content_hash,updated_at) VALUES('document','http-availability',?,'fixture',?)",[base,Date.now()])
+    assert.equal(await readAvailability(),"updating")
+    await sqliteClient.run("UPDATE knowledge_vector_tasks SET attempts=3 WHERE owner_id='http-availability'")
+    assert.equal(await readAvailability(),"update_failed")
+    await sqliteClient.run("DELETE FROM knowledge_vector_tasks WHERE owner_id='http-availability'")
+    assert.equal(await readAvailability(),"ready")
+  } finally {
+    jobs.inspect=inspectBeforeSummary;vectorIndex.indexedContentHashes=hashesBeforeSummary
+    await sqliteClient.run("DELETE FROM knowledge_vector_tasks WHERE owner_id='http-availability'")
+  }
+  assert.equal(embeddingCalls,availabilityCalls,"availability summaries must never request embeddings")
+  assert.deepEqual(await sqliteClient.all("SELECT id,status FROM knowledge_index_jobs ORDER BY id"),availabilityJobs,"availability summaries must not create or change rebuild jobs")
   assert.equal((await api("/api/knowledge/commands/catalog","GET",null,false)).status,401)
   assert.equal((await api("/api/knowledge/commands/collect","POST",{},false)).status,401)
   const guideUrl="/api/knowledge/bases/builtin-commands/retrieval"
@@ -587,6 +608,22 @@ try {
       detailApp.component("PagedList",{props:["rows","pageSize","label"],setup(props,{slots}){return()=>props.rows.flatMap(item=>slots.default({item}))}})
       const detailHtml=await renderToString(detailApp)
       assert(detailHtml.includes("扣分明细"));assert(detailHtml.includes(allQuality.at(-1).qualityDeductions[0].reason));assert(detailHtml.includes(allQuality.at(-1).qualityDeductions[0].suggestion))
+      const healthFixture={id:base,name:"可用性测试",protected:true,config:{embeddingModel:"embedding"},stats:{documents:1},index:{status:"failed",error:"historical-rebuild-error"}}
+      const renderHealthPane=async(activeBasePane,indexJobs=[])=>{
+        const page=vue.createSSRApp(component,{draft:{},filteredBases:[healthFixture],selectedBase:healthFixture,selectedBaseId:base,activeBasePane,indexJobs,
+          indexInspection:{state:"ready",total:1,indexed:1,missing:0},baseHealth:()=>({state:"on",label:"可检索",tip:"检索可用性说明"}),documentOrigin:()=>null,canEditBuiltinCommand:()=>false,jobLabel:String,jobProgress:()=>100,jobProgressTone:()=>"done",jobProgressLabel:String,shortId:String})
+        for(const name of ["Icon","IconButton","SearchInput","SectionNav","PagedList"])page.component(name,{template:"<span />"})
+        page.component("StatusDot",components.StatusDot);page.component("Field",components.Field)
+        page.component("Panel",{template:"<section><slot /></section>"});page.component("Dialog",primitives.Dialog);page.component("SideDrawer",components.SideDrawer)
+        return renderToString(page)
+      }
+      const healthHtml=await renderHealthPane("documents")
+      assert.equal((healthHtml.match(/>可检索</g)||[]).length,2,"sidebar and header share the retrieval availability label")
+      assert.equal((healthHtml.match(/data-tip="检索可用性说明"/g)||[]).length,2)
+      assert(!healthHtml.includes("historical-rebuild-error"));assert(!healthHtml.includes("索引完整。"),"integrity results stay inside the index pane")
+      const integrityHtml=await renderHealthPane("index")
+      assert(integrityHtml.includes("索引完整。"));assert(integrityHtml.includes("暂无重建任务记录"))
+      assert(!(await renderHealthPane("index",[{id:"completed-fixture",status:"completed"}])).includes("暂无重建任务记录"),"a short task list must not also display its empty state")
     }
     if(file==="knowledge-command-workbench"){
       let prompt=""
@@ -624,6 +661,14 @@ try {
     vm.runInNewContext(ts.transpileModule(await fs.readFile(new URL("../web/client/features/knowledge/knowledge-tab.ts",import.meta.url),"utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText,{exports,setInterval,clearInterval,require:spec=>spec==="vue"?{...vue,onUnmounted:fn=>cleanup.push(fn)}:spec.includes("app/store")?uiBoundary:spec.includes("shared/data")?{asRecord:v=>v||{},asRecords:v=>Array.isArray(v)?v:[],errorMessage:e=>e.message}:spec.includes("shared/format")?{splitTokens:v=>String(v).split(/[,\n]/),shortId:String}:{}})
     const scope=vue.effectScope(),ui=scope.run(()=>exports.KnowledgeTab.setup())
     try{
+      const healthBase={id:base,stats:{documents:1},config:{embeddingModel:"embedding"},index:{status:"failed",error:"historical failure"}}
+      for(const [retrievalState,label] of Object.entries({fts_ready:"全文可用",unavailable:"向量异常",missing:"待构建",incompatible:"需重建",updating:"更新中",update_failed:"更新异常",ready:"可检索"})){
+        const health=ui.baseHealth({...healthBase,retrievalState})
+        assert.equal(health.label,label);assert(!health.tip.includes("historical failure"))
+      }
+      assert.equal(ui.baseHealth({...healthBase,retrievalState:"ready",index:{status:"not_built"}}).label,"可检索","missing history must not override retrieval availability")
+      assert.equal(ui.baseHealth({...healthBase,retrievalState:"ready",stats:{documents:0}}).label,"暂无内容")
+      assert.equal(ui.baseHealth(healthBase).label,"状态未知","missing availability must not claim the index is unbuilt")
       await ui.loadBases();assert(!ui.globalSettingsDirty.value)
       ui.openGlobalSettings();assert(ui.globalSettingsOpen.value)
       ui.draft.retrievalRerankResultLimit=2;await vue.nextTick()

@@ -99,7 +99,7 @@ export const KnowledgeBaseWorkspace = {
             <div v-if="filteredBases.length" class="knowledge-base-list">
               <div v-for="base in filteredBases" :key="base.id" class="knowledge-base-card-shell" :class="{ active: selectedBaseId === base.id }">
                 <button type="button" class="knowledge-base-card" :class="{ active: selectedBaseId === base.id }" :aria-current="selectedBaseId === base.id ? 'true' : undefined" @click="$emit('select-base', base.id)">
-                  <div class="knowledge-base-card-head"><div class="knowledge-base-name truncate">{{ base.name }}</div><StatusDot :state="baseHealth(base).state" :label="baseHealth(base).label" :tip="base.index?.error" /></div>
+                  <div class="knowledge-base-card-head"><div class="knowledge-base-name truncate">{{ base.name }}</div><StatusDot :state="baseHealth(base).state" :label="baseHealth(base).label" :tip="baseHealth(base).tip" /></div>
                   <div class="knowledge-base-meta"><span>{{ base.stats?.documents || 0 }} 篇内容</span><span>{{ base.protected ? '内置' : base.config?.embeddingModel ? '语义检索' : '全文检索' }}</span></div>
                 </button>
               </div>
@@ -118,7 +118,7 @@ export const KnowledgeBaseWorkspace = {
                 </div>
               </div>
               <div class="knowledge-health-row">
-                <StatusDot :state="baseHealth(selectedBase).state" :label="baseHealth(selectedBase).label" :tip="selectedBase.index?.error" />
+                <StatusDot :state="baseHealth(selectedBase).state" :label="baseHealth(selectedBase).label" :tip="baseHealth(selectedBase).tip" />
                 <span>{{ selectedBase.stats?.documents || 0 }} 篇内容</span>
                 <details class="knowledge-index-summary"><summary>索引详情<Icon name="chevron-down" :size="12" /></summary><div class="knowledge-index-facts">
                 <span class="badge">{{ selectedBase.stats?.chunks || 0 }} 个分块</span>
@@ -128,7 +128,6 @@ export const KnowledgeBaseWorkspace = {
                 <span v-if="selectedBase.config?.embeddingModel" class="badge">Cosine（余弦）</span>
                 </div></details>
               </div>
-              <div v-if="selectedBase.index?.error" class="hint-banner warn"><Icon name="alert" :size="14" /><span>{{ selectedBase.index.error }}</span></div>
             </div>
 
             <SectionNav class="knowledge-pane-switch" :model-value="activeBasePane" :items="basePaneItems" variant="tabs" label="当前知识库操作" @update:model-value="$emit('set-base-pane', $event)" />
@@ -190,7 +189,7 @@ export const KnowledgeBaseWorkspace = {
                 </div>
               </div>
               <div v-if="indexJobPagination.total > 10" class="memory-pagebar"><span>第 {{ indexJobPagination.page }} / {{ Math.ceil(indexJobPagination.total / 10) }} 页 · 共 {{ indexJobPagination.total }} 条</span><div><button class="icon-btn sm" type="button" :disabled="indexJobPagination.page <= 1" @click="$emit('change-job-page', indexJobPagination.page - 1)"><Icon name="chevron-left" :size="15" /></button><button class="icon-btn sm" type="button" :disabled="indexJobPagination.page >= Math.ceil(indexJobPagination.total / 10)" @click="$emit('change-job-page', indexJobPagination.page + 1)"><Icon name="chevron-right" :size="15" /></button></div></div>
-              <div v-else-if="selectedBase.config?.embeddingModel" class="provider-empty-state"><Icon name="activity" :size="24" /><strong>还没有向量索引任务</strong><p>点击“重建当前库”开始构建。</p></div>
+              <div v-else-if="!indexJobs.length && selectedBase.config?.embeddingModel" class="provider-empty-state"><Icon name="activity" :size="24" /><strong>暂无重建任务记录</strong><p>增量更新不生成重建记录，已结束记录保留 7 天；可先检查完整性，再按需补齐或重建。</p></div>
             </section>
           </section>
 

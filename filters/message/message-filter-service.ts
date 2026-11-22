@@ -159,7 +159,7 @@ export async function applyOutputChainFilters(chain: MessageChain, context: Unkn
   let blocked = false
   let reason = ""
   const apply = async (value: string, target: MessageFilterTarget, path: string): Promise<MessageFilterResult> => {
-    const result = await applyOutputFilters(value, context, target)
+    const result = await applyOutputFilters(value, { ...context, inForward: path.includes(".nodes[") }, target)
     traces.push(...result.traces.map(trace => ({ ...trace, target, path })))
     if (result.blocked) { blocked = true; reason = result.reason }
     return result

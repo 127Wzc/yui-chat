@@ -21,7 +21,7 @@ let originalRuntimeRootEnvironment
 let originalSmokeRuntimeRootEnvironment
 let originalPluginRootEnvironment
 const tinyPngDataUrl = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
-const builtinFilterIds = ["text_transform", "keyword_filter", "regex_replace", "voice_output"]
+const builtinFilterIds = ["text_transform", "keyword_filter", "regex_replace", "voice_output", "body_link_cleanup"]
 const retiredPersonaConfigKeys = [
   "systemPrompt",
   "expression",
@@ -3221,6 +3221,8 @@ async function checkOutputSemantics() {
   const { sendChatOutput, splitNaturalReply, splitConfiguredReply, configuredSegmentationDelayMs, formatHostedSearchCitations } = await import("../output/runtime/core/chat/output-service.js")
   const { convertCQCodes, findUnsupportedMediaCQCodes } = await import("../output/runtime/core/message/cq-code.js")
   const { configStore } = await import("../output/runtime/config/store.js")
+  const { filterRegistry } = await import("../output/runtime/filters/core/registry.js")
+  await filterRegistry.init()
   const config = JSON.parse(JSON.stringify(await configStore.load()))
   assert(normalizeResponseText("<EMPTY>") === "", "<EMPTY> should normalize to empty")
   assert(normalizeResponseText("<EMPTY>补充说明<EMPTY>") === "补充说明", "outer <EMPTY> markers should be trimmed")
@@ -3383,11 +3385,11 @@ async function checkOutputSemantics() {
       { title: "来源二", url: "https://example.com/two" },
     ],
   }, config)
-  assert(hostedReplies.length === 2 && String(hostedReplies[0]).includes("远程检索结论。") && String(hostedReplies[0]).includes("第二条结论。") && !String(hostedReplies[0]).includes("https://example.com") && !/(?:来源一|来源二|\]\(|[¹²])/u.test(String(hostedReplies[0])), "hosted search URLs should leave the visible answer without citation markup")
+  assert(hostedReplies.length === 2 && String(hostedReplies[0]).includes("远程检索结论。") && !String(hostedReplies[0]).includes("utm_source=openai") && String(hostedReplies[0]).includes("第二条结论。([来源二](https://example.com/two))"), "only OpenAI-tagged source links should leave the visible answer; other source links must remain unchanged")
   assert(hostedForwardNodes.length === 2 && hostedForwardNodes[0]?.nickname === "OpenAI 远程搜索来源 1" && String(hostedForwardNodes[0]?.message).includes("https://example.com/one"), "hosted search sources should use a deduplicated local merged-forward message")
   const residualReplies = []
   await sendChatOutput({ isGroup: true, group_id: "20001", user_id: "990001-residual", group: { makeForwardMsg: async nodes => ({ type: "node", data: nodes }) }, reply: async message => residualReplies.push(message) }, { channel: "responses", text: screenshotResidual, hostedSearchSources: residualSources }, config)
-  assert(String(residualReplies[0]).includes("结论。") && !String(residualReplies[0]).includes("utm_source"), "normal reply must clean the literal screenshot residue")
+  assert(String(residualReplies[0]).includes(screenshotResidual), "non-HTTP legacy marker text must remain unchanged under the targeted rule")
   assert(residualReplies.length === 2 && residualReplies[1].data.length === 6 && JSON.stringify(residualReplies[1]).includes("chartexchange.com/symbol/nasdaq-sndk/"), "original source URLs must remain in the separate forward")
   const cqReplies = []
   const originalAt = global.segment.at
@@ -4602,14 +4604,16 @@ async function checkConversations() {
       ...originalHostedMessageSend,
       name: "message_send",
       common: { ...originalHostedMessageSend.common, delivery: "media", requiresFinalReply: false },
-      async execute(args = {}) {
-        hostedMessageDeliveries.push(args)
+      async execute(args = {}, context = {}) {
+        const { applyOutputChainFilters } = await import("../output/runtime/filters/message/message-filter-service.js")
+        const filtered = await applyOutputChainFilters(args.parts, { config: context.config })
+        hostedMessageDeliveries.push({ ...args, parts: filtered.chain })
         return {
           kind: "delivery",
-          chain: args.parts,
+          chain: filtered.chain,
           isError: hostedMessageReceipt === "failed",
           issues: [],
-          receipt: { id: "smoke-hosted-message-delivery", status: hostedMessageReceipt, partCount: args.parts?.length || 0, sentCount: hostedMessageReceipt === "sent" ? args.parts.length : hostedMessageReceipt === "partial" ? 1 : 0, failedCount: hostedMessageReceipt === "sent" ? 0 : args.parts.length - (hostedMessageReceipt === "partial" ? 1 : 0) },
+          receipt: { id: "smoke-hosted-message-delivery", status: hostedMessageReceipt, partCount: args.parts?.length || 0, sentCount: hostedMessageReceipt === "sent" ? args.parts.length : hostedMessageReceipt === "partial" ? 1 : 0, failedCount: hostedMessageReceipt === "sent" ? 0 : args.parts.length - (hostedMessageReceipt === "partial" ? 1 : 0), deliveredText: hostedMessageReceipt === "sent" ? filtered.chain.filter(part => part.type === "text").map(part => part.text).join("\n") : "" },
         }
       },
     })
@@ -4680,13 +4684,14 @@ async function checkConversations() {
           channel: { id: hostedMessageAdapter.id, type: hostedMessageAdapter.id, model: "smoke", modelConfig: { toolUse: true, toolPolicy: { routes: { web_search: { source: "hosted" }, tool_search: { source: "disabled" } } } }, timeoutMs: 1000 },
         })
       }
-      hostedMessageParts = [{ type: "reply", messageId: "555011254" }, { type: "text", text: "这是已经发送的最终锐评。([来源](https://example.com/hosted-answer-source?utm_source=openai))" }]
+      hostedMessageParts = [{ type: "reply", messageId: "555011254" }, { type: "text", text: "这是已经发送的最终锐评。([来源](https://example.com/hosted-answer-source?utm_source=openai))([来源二](https://unlisted.example/other))" }]
+      const deliveredHostedText = "这是已经发送的最终锐评。([来源二](https://unlisted.example/other))"
       for (const emptyReply of ["", "<EMPTY>"]) {
         hostedMessageSecondText = emptyReply
         const textResult = await runHostedMessage()
         assert(hostedMessageRequests.length === 1 && hostedMessageDeliveries.length === 1 && textResult.text === "" && textResult.requiresFinalReply === false, "hosted search with an already delivered text answer must stop before a second model request or empty recovery")
-        assert(hostedMessageDeliveries[0].parts[1].text === "这是已经发送的最终锐评。", "native hosted search citations must be cleaned before Registry sends message_send")
-        assert(textResult.deliveredReplyText === "这是已经发送的最终锐评。" && textResult.agentTurn.finalReplyDelivered === true && textResult.agentTurn.phase === "completed" && textResult.agentTurn.emptyFinalRecoveryCount === 0 && textResult.toolFinalizationReason === "FINAL_REPLY_DELIVERED", "delivered answers should remain distinguishable from true silent turns")
+        assert(hostedMessageDeliveries[0].parts[1].text === deliveredHostedText, "tool delivery must remove tagged citations and retain ordinary source links")
+        assert(textResult.deliveredReplyText === deliveredHostedText && textResult.agentTurn.finalReplyDelivered === true && textResult.agentTurn.phase === "completed" && textResult.agentTurn.emptyFinalRecoveryCount === 0 && textResult.toolFinalizationReason === "FINAL_REPLY_DELIVERED", "delivered answers should remain distinguishable from true silent turns")
         const { sendChatOutput } = await import("../output/runtime/core/chat/output-service.js")
         const outputReplies = []
         await sendChatOutput({ isGroup: true, user_id: "10001", group_id: "20001", group: { makeForwardMsg: async nodes => ({ type: "node", data: nodes }) }, reply: async message => { outputReplies.push(message); return true } }, textResult, hostedMessageConfig)
@@ -4698,6 +4703,11 @@ async function checkConversations() {
         assert(outputReplies.length === 0, "hosted sources already forwarded with the text answer must not be delivered twice")
       }
       const oneCallConfig = structuredClone(hostedMessageConfig)
+      const disabledLinkConfig = structuredClone(hostedMessageConfig)
+      disabledLinkConfig.response.messageFilters.filters.find(filter => filter.implementation?.id === "body_link_cleanup").enabled = false
+      const disabledLinkResult = await runHostedMessage(disabledLinkConfig)
+      assert(hostedMessageDeliveries[0].parts[1].text.includes("utm_source=openai"), "disabling the tool output rule must not leave a fixed pre-dispatch cleanup active")
+      assert(disabledLinkResult.deliveredReplyText === hostedMessageParts[1].text, "disabled filtering must preserve the actual delivered reply in history")
       oneCallConfig.chat.execution.maxToolCalls = 1
       const quotaResult = await runHostedMessage(oneCallConfig)
       assert(quotaResult.modelCalls.length === 1 && quotaResult.replyDelivered === true && !quotaResult.toolFinalizationAttempted, "a successful final text delivery at the tool-call limit must not trigger another model request")

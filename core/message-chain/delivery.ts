@@ -189,6 +189,10 @@ export async function deliverMessageChain(chain: MessageChain, context: MessageC
     failedCount,
     parts,
     filterTraces: filtered.traces,
+    deliveredText: parts.filter(part => part.status === "sent").flatMap(part => {
+      const item = chain[part.index]
+      return item?.type === "text" ? [item.text] : []
+    }).join("\n"),
     ...(messageIds.length ? { messageIds: [...new Set(messageIds)] } : {}),
     ...(failedCount ? { error: parts.map(item => item.error).filter(Boolean).join("；") || "部分消息链片段无法发送。" } : {}),
   }

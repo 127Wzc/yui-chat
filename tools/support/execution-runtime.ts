@@ -372,6 +372,7 @@ export function normalizeToolResult(value: unknown): NormalizedToolResult {
         receiptPartCount: asInt(receipt.partCount),
         receiptSentCount: asInt(receipt.sentCount),
         receiptFailedCount: asInt(receipt.failedCount),
+        ...(typeof receipt.deliveredText === "string" ? { deliveredText: receipt.deliveredText } : {}),
         normalizationIssues: Array.isArray(source.issues) ? source.issues : [],
       },
     }
