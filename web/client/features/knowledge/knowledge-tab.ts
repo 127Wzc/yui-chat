@@ -5,6 +5,7 @@ import { splitTokens, shortId } from "../../shared/format.js"
 import { KnowledgeBaseWorkspace } from "./knowledge-base-workspace.js"
 import { KnowledgeCommandMaintenance } from "./knowledge-command-maintenance.js"
 import { KnowledgeCommandEditor } from "./knowledge-command-editor.js"
+import { KnowledgeEvaluation } from "./knowledge-evaluation.js"
 
 const BOOL_OFF_OPTIONS = [{ value: "false", label: "关闭" }, { value: "true", label: "开启" }]
 
@@ -181,7 +182,7 @@ function documentOrigin(item: KnowledgeItem = { id: "" }) {
 
 export const KnowledgeTab = {
   name: "KnowledgeTab",
-  components: { KnowledgeBaseWorkspace, KnowledgeCommandMaintenance, KnowledgeCommandEditor },
+  components: { KnowledgeBaseWorkspace, KnowledgeCommandMaintenance, KnowledgeCommandEditor, KnowledgeEvaluation },
   setup() {
     const cfg = computed<KnowledgeConfig>(() => record<KnowledgeRecord>(store.config).knowledge as KnowledgeConfig || {})
     const knowledge = computed<KnowledgeSlice>(() => record<KnowledgeSlice>(store.knowledge))
@@ -195,6 +196,7 @@ export const KnowledgeTab = {
     const showDocumentDrawer = ref(false)
     const showGrantDrawer = ref(false)
     const showCommandMaintenanceDrawer = ref(false)
+    const showEvaluation = ref(false)
     const bases = ref<KnowledgeBase[]>([])
     let contentRevision = 0
     let detailRevision = 0
@@ -839,7 +841,7 @@ export const KnowledgeTab = {
       return confidence === "high" ? "" : confidence === "low" ? "risk-medium" : ""
     }
     return {
-      cfg, knowledge, digest, quality, recommendation, draft, rerankModelOptions,
+      cfg, knowledge, digest, quality, recommendation, draft, rerankModelOptions, showEvaluation,
       globalSettingsOpen, globalSettingsBusy, globalSettingsDirty, globalResultLimit, saveGlobalSettings, openGlobalSettings, closeGlobalSettings,
       showManualDrawer, currentCommand, commandRevision, commandDescriptionChanged, commandAvailabilityChanged, showBaseDrawer, showDocumentDrawer, showGrantDrawer, showCommandMaintenanceDrawer,
       activeMaintenancePane, maintenancePaneItems, bases, selectedBaseId, selectedBase, baseQuery, filteredBases, activeBasePane, basePaneItems,
@@ -853,6 +855,7 @@ export const KnowledgeTab = {
   },
   template: `
     <div class="stack">
+      <KnowledgeEvaluation v-if="showEvaluation" :open="showEvaluation" @close="showEvaluation = false" />
       <SideDrawer
         :open="showBaseDrawer"
         variant="dialog"
@@ -990,6 +993,7 @@ export const KnowledgeTab = {
         :job-progress-label="jobProgressLabel"
         :short-id="shortId"
         @refresh-bases="loadBases"
+        @open-evaluation="showEvaluation = true"
         @open-global-settings="openGlobalSettings"
         @close-global-settings="closeGlobalSettings"
         @save-global-settings="saveGlobalSettings"

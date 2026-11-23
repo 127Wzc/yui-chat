@@ -8,6 +8,8 @@
 
 ## ER 图
 
+`017-knowledge-evaluation.sql` 增加 `knowledge_evaluation_state` 和 `knowledge_evaluation_runs`：前者保存当前题库 JSON、修订号和更新时间，后者保存独立题库/结果快照、数据指纹、任务状态、进度和有界错误说明。两者没有随当前题目更新而联动的外键，也不进入配置包白名单；通过评测专用鉴权接口导出。内置题库与初始成绩是只读资源，查看时不写数据库。
+
 实线是数据库外键；虚线是同库内的投影或以业务键关联的关系（不以外键强制）。`memory_fts`、`knowledge_fts` 和每个 `vec_<space>` 均是可重建索引。
 
 ```mermaid

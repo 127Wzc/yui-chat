@@ -1,5 +1,6 @@
 import { parentPort, workerData } from "node:worker_threads"
 import fs from "node:fs"
+import path from "node:path"
 import Database from "better-sqlite3"
 import { closeSqliteDatabase, openSqliteDatabase } from "./connection.js"
 import { preflightStateMigrations, preflightVectorMigrations, runStateMigrations, runVectorMigrations } from "./migration-runner.js"
@@ -100,7 +101,7 @@ async function initialize(): Promise<{ migrations: SqliteMigration[]; integrity:
 
 function requestKind(value: unknown): SqliteRequestKind {
   const kind = text(value)
-  if (["all", "get", "run", "exec", "transaction", "status", "close"].includes(kind)) return kind as SqliteRequestKind
+  if (["all", "get", "run", "exec", "transaction", "status", "close", "evaluation-snapshot"].includes(kind)) return kind as SqliteRequestKind
   throw new Error(`未知 SQLite worker 请求：${kind}`)
 }
 
@@ -114,6 +115,14 @@ async function handle(rawMessage: unknown): Promise<unknown> {
   const kind = requestKind(message.kind)
   const db = database(message.target)
   switch (kind) {
+    case "evaluation-snapshot": {
+      const destination = path.resolve(text(message.destination))
+      const allowed = path.resolve(path.dirname(workerContext().stateFile), "../cache/temp")
+      if (!destination.startsWith(allowed + path.sep) || !destination.endsWith(".sqlite3") || fs.existsSync(destination)) throw new Error("评测副本必须使用新的运行临时路径")
+      await db.backup(destination)
+      fs.chmodSync(destination, 0o600)
+      return { ok: true }
+    }
     case "all": return db.prepare(text(message.sql)).all(...normalizeParams(message.params))
     case "get": return db.prepare(text(message.sql)).get(...normalizeParams(message.params))
     case "run": return db.prepare(text(message.sql)).run(...normalizeParams(message.params))

@@ -160,6 +160,7 @@
     "knowledge/command-query-service.ts",
     "knowledge/command-hybrid-retrieval.ts",
     "knowledge/store.ts",
+    "knowledge/evaluation-worker.ts",
     "knowledge/index-jobs.ts",
     "types/**/*.d.ts"
   ]

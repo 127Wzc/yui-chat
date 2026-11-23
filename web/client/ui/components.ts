@@ -242,6 +242,7 @@ export const SearchMultiSelect = defineComponent({
     modelValue: { type: Array, default: () => [] },
     options: { type: Array, default: () => [] },
     placeholder: { type: String, default: "搜索选项" },
+    emptyLabel: { type: String, default: "请选择工具" },
     tip: String,
     emptyText: { type: String, default: "没有匹配项" },
     disabled: Boolean,
@@ -283,7 +284,7 @@ export const SearchMultiSelect = defineComponent({
     },
     summaryText() {
       const count = this.selectedValues.size
-      if (!count) return "请选择工具"
+      if (!count) return this.emptyLabel
       if (count === 1) return this.selectedOptions[0]?.label || [...this.selectedValues][0]
       return `已选择 ${count} 项`
     },
@@ -302,14 +303,22 @@ export const SearchMultiSelect = defineComponent({
     clearSelection() {
       if (!this.disabled) this.$emit("update:modelValue", [])
     },
+    closeMenu(event: KeyboardEvent) {
+      const menu = event.currentTarget instanceof HTMLDetailsElement ? event.currentTarget : null
+      if (!menu?.open) return
+      event.preventDefault()
+      event.stopPropagation()
+      menu.open = false
+      menu.querySelector("summary")?.focus()
+    },
   },
   template: `
     <div class="field search-multi-field">
       <span class="field-label" v-if="label">{{ label }}
         <HelpTip v-if="tip" :tip="tip" />
       </span>
-      <details class="search-multi-select" :class="{ disabled }">
-        <summary :aria-label="label || '多选列表'" :aria-disabled="disabled">
+      <details class="search-multi-select" :class="{ disabled }" @keydown.esc="closeMenu">
+        <summary :aria-label="label || '多选列表'" :aria-disabled="disabled" :tabindex="disabled ? -1 : 0" @click="disabled && $event.preventDefault()">
           <span :class="{ muted: !selectedValues.size }">{{ summaryText }}</span>
           <span class="search-multi-summary-meta"><b>{{ selectedValues.size }}</b><Icon name="chevron-down" :size="14" /></span>
         </summary>
@@ -317,9 +326,9 @@ export const SearchMultiSelect = defineComponent({
           <div class="search-multi-toolbar">
             <div class="filter-search">
               <Icon name="search" :size="14" />
-              <input v-model="query" :placeholder="placeholder" autocomplete="off" @keydown.stop />
+              <input v-model="query" :placeholder="placeholder" :aria-label="placeholder" :disabled="disabled" autocomplete="off" @keydown="($event.key !== 'Escape') && $event.stopPropagation()" />
             </div>
-            <button v-if="selectedValues.size" class="btn small outline" type="button" @click="clearSelection">清空</button>
+            <button v-if="selectedValues.size" class="btn small outline" type="button" :disabled="disabled" @click="clearSelection">清空</button>
           </div>
           <div class="search-multi-options" role="group" :aria-label="label || '多选列表'">
             <label v-for="option in filteredOptions" :key="option.value" class="search-multi-option" :class="{ selected: isSelected(option.value), disabled: option.disabled }">

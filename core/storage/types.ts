@@ -35,10 +35,11 @@ export interface SqliteOperation {
 }
 
 /** Worker 支持的请求种类；status 用于只读诊断，不修改数据库。 */
-export type SqliteRequestKind = "all" | "get" | "run" | "exec" | "transaction" | "status" | "close"
+export type SqliteRequestKind = "all" | "get" | "run" | "exec" | "transaction" | "status" | "close" | "evaluation-snapshot"
 
 /** 发往 SQLite Worker 的可序列化请求。 */
 export interface SqliteWorkerRequest {
+  destination?: string
   id: number
   kind: SqliteRequestKind
   sql?: string

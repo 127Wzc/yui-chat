@@ -177,6 +177,7 @@ for (const relative of [
   "core/storage/sqlite/migrations/014-memory-maintenance-review.sql",
   "core/storage/sqlite/migrations/015-memory-incremental-updates.sql",
   "core/storage/sqlite/migrations/016-langfuse.sql",
+  "core/storage/sqlite/migrations/017-knowledge-evaluation.sql",
   "memory/maintenance.js",
   "memory/maintenance-data.js",
   "memory/maintenance-plan.js",

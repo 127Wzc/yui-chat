@@ -101,6 +101,7 @@ label, .field { display: grid; gap: 4px; min-width: 0; }
 }
 .search-multi-select > summary::-webkit-details-marker { display: none; }
 .search-multi-select > summary::marker { content: ""; }
+.search-multi-select > summary:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; border-radius: var(--radius-sm); }
 .search-multi-select[open] > summary { border-bottom: 1px solid var(--border); }
 .search-multi-select[open] > summary .search-multi-summary-meta .icon { transform: rotate(180deg); }
 .search-multi-summary-meta { display: inline-flex; align-items: center; gap: 7px; color: var(--muted-foreground); }
@@ -123,6 +124,7 @@ label, .field { display: grid; gap: 4px; min-width: 0; }
   cursor: pointer;
 }
 .search-multi-option:hover { border-color: var(--ring); }
+.search-multi-option:has(> input:focus-visible) { outline: 2px solid var(--ring); outline-offset: -2px; }
 .search-multi-option.selected { border-color: var(--ring); background: var(--primary-weak); }
 .search-multi-option.disabled { opacity: .55; cursor: not-allowed; }
 .search-multi-option > input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }

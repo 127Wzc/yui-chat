@@ -224,6 +224,11 @@ export class SqliteClient implements SqliteClientContract {
     return this.request("transaction", { operations, target }) as Promise<unknown[]>
   }
 
+  /** 只供手动评测使用的一致性临时副本；Worker 将目的地限制在运行临时目录。 */
+  evaluationSnapshot(destination: string, target: SqliteTarget = "state"): Promise<unknown> {
+    return this.request("evaluation-snapshot", { destination, target })
+  }
+
   /** 关闭 Worker，先尽力通知数据库，再拒绝所有尚未完成的调用。 */
   async close(): Promise<void> {
     const worker = this.worker

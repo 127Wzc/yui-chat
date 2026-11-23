@@ -40,6 +40,7 @@ export const KnowledgeBaseWorkspace = {
     shortId: { type: Function, required: true },
   },
   emits: [
+    "open-evaluation",
     "open-global-settings",
     "close-global-settings",
     "save-global-settings",
@@ -73,7 +74,7 @@ export const KnowledgeBaseWorkspace = {
     <div class="section-stage knowledge-stage">
       <header class="ui-page-header">
         <h2>知识库</h2>
-        <div class="row"><button class="btn small outline" type="button" aria-haspopup="dialog" :aria-expanded="globalSettingsOpen" @click="$emit('open-global-settings')"><Icon name="sliders" :size="14" />全局配置</button><button class="btn small outline" type="button" @click="$emit('refresh-bases')"><Icon name="refresh" :size="14" />刷新</button><button class="btn primary small" type="button" @click="$emit('create-base')"><Icon name="plus" :size="14" />新建知识库</button></div>
+        <div class="row"><button class="btn small outline" type="button" @click="$emit('open-evaluation')"><Icon name="search" :size="14" />检索评测</button><button class="btn small outline" type="button" aria-haspopup="dialog" :aria-expanded="globalSettingsOpen" @click="$emit('open-global-settings')"><Icon name="sliders" :size="14" />全局配置</button><button class="btn small outline" type="button" @click="$emit('refresh-bases')"><Icon name="refresh" :size="14" />刷新</button><button class="btn primary small" type="button" @click="$emit('create-base')"><Icon name="plus" :size="14" />新建知识库</button></div>
       </header>
       <Dialog :open="globalSettingsOpen" title="知识库全局配置" description="所有知识库、帮助指令、AI 工具和自动召回共用。保存立即生效，无需重建索引。" size="lg" @close="$emit('close-global-settings')">
         <div class="form-grid dense knowledge-global-settings-fields">

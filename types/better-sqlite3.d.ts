@@ -18,6 +18,7 @@ declare module "better-sqlite3" {
     exec(sql: string): void
     pragma(sql: string): unknown
     transaction<T>(operation: () => T): () => T
+    backup(destination: string): Promise<{ totalPages: number; remainingPages: number }>
     close(): void
   }
 
@@ -28,6 +29,7 @@ declare module "better-sqlite3" {
     exec(sql: string): void
     pragma(sql: string): unknown
     transaction<T>(operation: () => T): () => T
+    backup(destination: string): Promise<{ totalPages: number; remainingPages: number }>
     close(): void
   }
 

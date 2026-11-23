@@ -8,6 +8,8 @@ import { chatService } from "../chat/chat-service.js"
 import { recentContextStore } from "../chat/recent-context.js"
 import { clearResponseState, responseStateStats } from "../chat/response-pipeline.js"
 import { commandObserver } from "../../knowledge/command-observer.js"
+import { evaluationRunner } from "../../knowledge/evaluation-runner.js"
+import { hostRuntime } from "./host-runtime.js"
 import { mcpManager } from "../../mcp/index.js"
 import { toolRegistry } from "../../tools/support/registry.js"
 import { filterRegistry } from "../../filters/core/registry.js"
@@ -64,7 +66,7 @@ export function runtimeStats(): RuntimeStats {
     stickerExpression: stickerExpressionCoordinator.stats(),
     scheduleTasks: scheduleTaskService.stats(),
     access: mutedStats(),
-    knowledge: commandObserver.stats(),
+    knowledge: { ...commandObserver.stats(), evaluation: { activeId: evaluationRunner.activeId() } },
     groupCapture: groupCaptureStore.stats(),
     mcp: mcpManager.status(),
     logs: modelLogStore.stats(),
@@ -83,7 +85,10 @@ export async function applyRuntimeConfig(config: UnknownRecord = {}, opts: Runti
   }
   const read = (value: unknown, path: string): unknown => path.split(".").reduce<unknown>((node, key) => node && typeof node === "object" ? (node as UnknownRecord)[key] : undefined, value)
   const changed = (path: string): boolean => !opts.previousConfig || !isDeepStrictEqual(read(opts.previousConfig, path), read(config, path))
-  if (!opts.previousConfig) await loadPersonaPunishments()
+  if (!opts.previousConfig) {
+    await loadPersonaPunishments()
+    await evaluationRunner.recoverInterrupted().catch(() => hostRuntime.logger?.warn?.("[yui-chat] 中断评测的临时副本清理失败，请检查存储"))
+  }
   if (changed("logging.level") || changed("logging.history")) {
     const retentionChanged = opts.startLogs !== false ? modelLogStore.start(config) : modelLogStore.configure(config)
     if (retentionChanged) modelLogStore.cleanupExpired().catch(err => modelLogStore.noteError(err))
