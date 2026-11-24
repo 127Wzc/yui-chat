@@ -21,10 +21,12 @@ import {
   summarizeMediaForResult,
 } from "./chat-support.js"
 import { errorSummary } from "../shared/error-details.js"
+import { completedToolTrace, toolHistoryMessages, toolHistoryResult, trimConversationHistory, type BackgroundToolCompletion } from "./tool-history.js"
 
 export interface ConversationRequestRuntime {
   conversations: Map<string, unknown>
   enqueueConversationMutation<T>(operation: () => Promise<T> | T): Promise<T>
+  retainConversationWrite(key: string, turnId: string, retry: (() => Promise<void>) | null): void
   captureConversationVersion(event: unknown, key: string): unknown
   conversationVersionCurrent(version: unknown): boolean
   releaseConversationVersion(version: unknown): void
@@ -58,8 +60,10 @@ function withoutCause(value: UnknownRecord): UnknownRecord {
   return rest
 }
 
-function updatedProtocolState(value: unknown, responseStateValue: unknown): UnknownRecord {
+function updatedProtocolState(value: unknown, responseStateValue: unknown, toolResultsVersion: number): UnknownRecord {
   const current = record(value)
+  // 请求期间有后台结果写回时，该请求的上游状态没有见过新结果，不能覆盖它。
+  if (number(current.toolResultsVersion) !== toolResultsVersion) return { ...current, responses: {} }
   const responseState = record(responseStateValue)
   const key = text(responseState.key).trim()
   if (!key) return current
@@ -245,6 +249,71 @@ export async function sendConversation(
     }
 
     const sessionId = text(conversation.sessionId) || crypto.randomUUID()
+    const turnId = crypto.randomUUID()
+    const toolResultsVersion = number(record(conversation.protocolState).toolResultsVersion)
+    const pendingBackground = new Map<string, BackgroundToolCompletion>()
+    const observedToolChain: UnknownRecord[] = []
+    let toolProgress: UnknownRecord = {}
+    let historyCommitted = false
+    const persistBackgroundCompletions = async (): Promise<void> => {
+      if (!historyCommitted || !pendingBackground.size) return
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await runtime.enqueueConversationMutation(async () => {
+            const completions = [...pendingBackground.values()]
+            if (!completions.length) return
+            // 只更新仍存在的同一会话与轮次；清除、过期或裁剪后不重建旧记录。
+            const previous = await conversationStore.get(key)
+            if (!previous || previous.sessionId !== sessionId) {
+              pendingBackground.clear()
+              return
+            }
+            const patches = new Map<string, UnknownRecord>()
+            const turns = previous.turns.map(value => {
+              const turn = record(value)
+              if (turn.id !== turnId) return turn
+              const toolChain = list(turn.toolChain).map(value => {
+                const trace = record(value)
+                const completion = completions.find(item => item.toolCallId === trace.id && item.taskId === record(trace.metadata).taskId)
+                if (!completion) return trace
+                const updated = completedToolTrace(trace, completion)
+                patches.set(completion.taskId, updated)
+                return updated
+              })
+              return { ...turn, toolChain }
+            })
+            if (patches.size) {
+              const history = previous.history.map(value => {
+                const message = record(value)
+                const metadata = record(message.metadata)
+                const patch = metadata.turnId === turnId && message.role === "tool" ? patches.get(text(metadata.taskId)) : undefined
+                return patch ? { ...message, content: toolHistoryResult(patch) } : value
+              })
+              const protocolState = { ...previous.protocolState, responses: {}, toolResultsVersion: number(previous.protocolState.toolResultsVersion) + 1 }
+              await conversationStore.save({ id: key, ...previous, history, turns, protocolState })
+              runtime.conversations.set(key, { ...previous, history, turns, protocolState, lastSeen: Date.now() })
+            }
+            for (const completion of completions) pendingBackground.delete(completion.taskId)
+          })
+          runtime.retainConversationWrite(key, turnId, null)
+          return
+        } catch (error) {
+          runtime.conversations.delete(key)
+          hostRuntime.logger?.warn?.("[yui-chat] 后台工具结果写回 SQLite 失败", errorSummary(error))
+          // 短暂故障最多重试两次，之后保留到同一会话下次读取时恢复。
+          if (attempt >= 2) {
+            runtime.retainConversationWrite(key, turnId, persistBackgroundCompletions)
+            throw error
+          }
+          await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)))
+        }
+      }
+    }
+    const onBackgroundToolComplete = async (completion: BackgroundToolCompletion): Promise<void> => {
+      if (options.transient === true) return
+      pendingBackground.set(completion.taskId, completion)
+      await persistBackgroundCompletions()
+    }
     if (trace && typeof trace === "object") (trace as unknown as UnknownRecord).sessionId = sessionId
     const artifacts = artifactStore.open({
       key,
@@ -311,8 +380,14 @@ export async function sendConversation(
       disableTools: options.disableTools === true,
       trace,
       artifacts,
+      onBackgroundToolComplete,
+      onToolRoundComplete: (progress: UnknownRecord) => {
+        observedToolChain.push(...list(progress.toolChain).map(record))
+        toolProgress = progress
+      },
     })
     const stepResults = [record(result)]
+    let taskError: ConversationTaskError | undefined
     if (result.status === "error") {
       const resultError = record(result.error)
       const message = text(resultError.message || "unknown error")
@@ -327,20 +402,26 @@ export async function sendConversation(
         error: diagnostic,
       })
       hostRuntime.logger?.error?.(`[yui-chat] task ${text(result.stepId)} failed: ${diagnostic}`)
-      throw new ConversationTaskError(`Task ${text(result.stepId)} failed: ${message}`, result.cause, {
+      taskError = new ConversationTaskError(`Task ${text(result.stepId)} failed: ${message}`, result.cause, {
         name: text(step.task),
         failedStep: text(result.stepId),
         steps: publicStepResult(stepResults),
       })
+      if (!observedToolChain.length) throw taskError
     }
 
     const successfulSteps = stepResults.filter(item => item.status === "ok")
-    const final = [...successfulSteps].reverse().find(item => text(item.mode) === "final" && text(item.text)) || successfulSteps.at(-1) || {}
+    const final = taskError
+      ? { ...result, ...toolProgress, usage: toolProgress.usage || emptyUsage(), modelCalls: toolProgress.modelCalls || [], requiresFinalReply: false }
+      : [...successfulSteps].reverse().find(item => text(item.mode) === "final" && text(item.text)) || successfulSteps.at(-1) || {}
     const finalRequiresFinalReply = final.requiresFinalReply !== false
-    const finalToolChain = list(final.toolChain).map(record)
+    // 回合观察保留失败渠道已执行的事实；成功步骤中的托管工具记录也继续保留。
+    const finalStepTools = list(final.toolChain).map(record)
+    const finalStepToolSet = new Set(finalStepTools)
+    const finalToolChain = [...observedToolChain.filter(trace => !finalStepToolSet.has(trace)), ...finalStepTools]
     const errorSteps = stepResults.filter(item => item.status === "error")
     const deliveredReplyText = final.replyDelivered === true ? normalizeResponseText(final.deliveredReplyText) : ""
-    const rawFinalText = deliveredReplyText || text(final.text) || (finalRequiresFinalReply
+    const rawFinalText = taskError ? "" : deliveredReplyText || text(final.text) || (finalRequiresFinalReply
       ? errorSteps.length
         ? `默认任务没有可用回复：${errorSteps.map(item => `${text(item.stepId)} ${text(record(item.error).message)}`).join("；")}`
         : finalToolChain.length
@@ -349,7 +430,7 @@ export async function sendConversation(
       : "")
     const finalText = normalizeResponseText(rawFinalText)
 
-    conversationLog.completed(config, {
+    if (!taskError) conversationLog.completed(config, {
       scope: scopeFor(event),
       channel: text(final.channel || firstChannel.id),
       durationMs: Date.now() - requestStarted,
@@ -371,7 +452,7 @@ export async function sendConversation(
       searchDeliveryStatus: text(final.searchDeliveryStatus || "not-needed"),
       execution: final.execution || {},
     })
-    modelLogStore.finishTrace(trace, {
+    if (!taskError) modelLogStore.finishTrace(trace, {
       status: isEmptyResponse(rawFinalText) ? "silent" : "ok",
       response: finalText,
       metadata: {
@@ -414,12 +495,16 @@ export async function sendConversation(
       steps: publicStepResult(stepResults),
     })
 
-    if (options.transient === true) return resultPayload()
+    if (options.transient === true) {
+      if (taskError) throw taskError
+      return resultPayload()
+    }
 
-    if (!isEmptyResponse(rawFinalText)) {
+    if (!isEmptyResponse(rawFinalText) || finalToolChain.length) {
       const maxHistoryMessages = Math.max(2, number(chat.maxHistoryMessages, 12))
       const turn: UnknownRecord = {
-        id: text(final.id) || crypto.randomUUID(),
+        id: turnId,
+        responseId: text(final.id),
         at: nowIso(),
         channel: text(final.channel || firstChannel.id),
         adapter: text(final.adapter),
@@ -435,23 +520,37 @@ export async function sendConversation(
           if (!runtime.conversationVersionCurrent(conversationVersion)) return
           const previous = record(previousValue)
           const baseHistory = Array.isArray(previousValue) ? previousValue : list(previous.history)
-          const nextHistory = [
+          const savedToolChain = finalToolChain.map(trace => {
+            const completion = pendingBackground.get(text(record(trace.metadata).taskId))
+            return completion ? completedToolTrace(trace, completion) : trace
+          })
+          const nextHistory = trimConversationHistory([
             ...baseHistory,
-            { role: "user", content: text(final.historyUserContent) || prompt, metadata: { messageId: text(record(event).message_id), requesterId: text(record(event).user_id), imageReferences: list(final.imageReferences) } },
-            { role: "assistant", content: finalText },
-          ].slice(-maxHistoryMessages)
-          const turns = [...list(previous.turns), turn].slice(-Math.max(1, Math.floor(maxHistoryMessages / 2)))
+            { role: "user", content: text(final.historyUserContent) || prompt, metadata: { turnId, messageId: text(record(event).message_id), requesterId: text(record(event).user_id), imageReferences: list(final.imageReferences) } },
+            ...toolHistoryMessages(savedToolChain, turnId),
+            ...(finalText ? [{ role: "assistant", content: finalText, metadata: { turnId } }] : []),
+          ], maxHistoryMessages)
+          const turns = [...list(previous.turns), { ...turn, toolChain: savedToolChain }].slice(-Math.max(1, Math.floor(maxHistoryMessages / 2)))
           const usage = emptyUsage()
           for (const item of turns) addUsage(usage, record(item).usage)
-          const protocolState = updatedProtocolState(previous.protocolState, final.responseState)
+          let protocolState = updatedProtocolState(previous.protocolState, final.responseState, toolResultsVersion)
+          if (savedToolChain.length) {
+            // 已被最终模型请求消费的普通工具继续续接；直投与后台结果走本地回放。
+            const needsLocalReplay = !finalRequiresFinalReply || savedToolChain.some(trace => record(trace.metadata).background === true)
+            protocolState = { ...protocolState, ...(needsLocalReplay ? { responses: {} } : {}), toolResultsVersion: number(protocolState.toolResultsVersion) + 1 }
+          }
           const toolCalls = turns.reduce((sum: number, item) => sum + list(record(item).toolChain).length, 0)
           await conversationStore.save({ id: key, sessionId, history: nextHistory, turns, usage, toolCalls, protocolState })
           runtime.conversations.set(key, { sessionId, history: nextHistory, turns, usage, toolCalls, protocolState, lastSeen: Date.now() })
+          historyCommitted = true
         } catch (error) {
           runtime.conversations.delete(key)
           historySaved = false
           hostRuntime.logger?.warn?.("[yui-chat] 会话读取或写入 SQLite 失败，本轮历史未保存", error)
         }
+      })
+      await persistBackgroundCompletions().catch(error => {
+        hostRuntime.logger?.warn?.("[yui-chat] 后台工具结果等待下次会话读取补写，真实结果仍可查询调用日志", errorSummary(error))
       })
     } else {
       await runtime.enqueueConversationMutation(async () => {
@@ -461,7 +560,7 @@ export async function sendConversation(
           if (!runtime.conversationVersionCurrent(conversationVersion)) return
           const previous = record(previousValue)
           const currentHistory = Array.isArray(previousValue) ? previousValue : list(previous.history)
-          const protocolState = updatedProtocolState(previous.protocolState, final.responseState)
+          const protocolState = updatedProtocolState(previous.protocolState, final.responseState, toolResultsVersion)
           const next = { ...previous, sessionId, history: currentHistory, protocolState, lastSeen: Date.now() }
           await conversationStore.save({
             id: key,
@@ -480,6 +579,7 @@ export async function sendConversation(
         }
       })
     }
+    if (taskError) throw taskError
     return resultPayload()
   } finally {
     runtime.releaseConversationVersion(conversationVersion)

@@ -228,8 +228,9 @@ export class BackgroundTaskService {
   private async run(task: BackgroundTask, queue: TaskQueue): Promise<void> {
     if (task.controller.signal.aborted) {
       task.status = "canceled"
+      task.error = "后台任务已取消"
       task.endedAt = now()
-      releaseCallbacks(task)
+      await this.notifyComplete(task)
       return
     }
     task.status = "running"
@@ -243,22 +244,29 @@ export class BackgroundTaskService {
       task.result = await task.execute(task.controller.signal)
       task.status = task.controller.signal.aborted ? "canceled" : "ok"
     } catch (error) {
+      // 工具已产出结果但随后投递失败时，仍保留产出与失败回执供会话回溯。
+      task.result = record(error).backgroundResult ?? task.result
       task.error = redactErrorText(errorMessage(error))
       task.errorDetails = errorDetails(error)
       task.status = task.controller.signal.aborted ? "canceled" : "error"
       hostRuntime.logger?.warn?.(`[yui-chat] 后台工具任务 ${task.name} ${task.status}`, task.error)
     } finally {
       task.endedAt = now()
-      const onComplete = task.onComplete
-      try {
-        await onComplete?.(this.public(task))
-      } catch (error) {
-        hostRuntime.logger?.warn?.(`[yui-chat] 后台工具任务回调失败：${task.name}`, error)
-      } finally {
-        // 状态仍按保留期可查，但完成后不再持有执行上下文、事件与参考图闭包。
-        releaseCallbacks(task)
-      }
+      await this.notifyComplete(task)
       this.prune(this.safeLimits(queue).retentionMs)
+    }
+  }
+
+  private async notifyComplete(task: BackgroundTask): Promise<void> {
+    const onComplete = task.onComplete
+    task.onComplete = null
+    try {
+      await onComplete?.(this.public(task))
+    } catch (error) {
+      hostRuntime.logger?.warn?.(`[yui-chat] 后台工具任务回调失败：${task.name}`, redactErrorText(errorMessage(error)))
+    } finally {
+      // 状态仍按保留期可查，但完成后不再持有执行上下文、事件与参考图闭包。
+      releaseCallbacks(task)
     }
   }
 
@@ -268,13 +276,14 @@ export class BackgroundTaskService {
     task.controller.abort(new Error("后台任务已取消"))
     if (task.status === "queued") {
       task.status = "canceled"
+      task.error = "后台任务已取消"
       task.endedAt = now()
       const queue = this.queues.get(task.queueKey)
       if (queue) {
         queue.queue = queue.queue.filter(item => item.id !== task.id)
         this.cleanupQueue(queue)
       }
-      releaseCallbacks(task)
+      void this.notifyComplete(task)
     }
     return true
   }

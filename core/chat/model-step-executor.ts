@@ -38,6 +38,7 @@ import {
   scopeFor,
 } from "./chat-support.js"
 import { errorSummary } from "../shared/error-details.js"
+import type { BackgroundToolCompletion } from "./tool-history.js"
 
 interface ModelStepOptions {
   e?: unknown
@@ -60,6 +61,8 @@ interface ModelStepOptions {
   channelAttempt?: unknown
   selectionStrategy?: unknown
   artifacts?: ArtifactContext
+  onBackgroundToolComplete?: (completion: BackgroundToolCompletion) => Promise<void>
+  onToolRoundComplete?: (progress: UnknownRecord) => void
 }
 
 function record(value: unknown): UnknownRecord {
@@ -590,6 +593,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
     agent: hasAgentContext ? agentContext : null,
     executionRuntime,
     artifacts: options.artifacts,
+    onBackgroundToolComplete: options.onBackgroundToolComplete,
     observability: {
       trace,
       source,
@@ -992,6 +996,14 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
     const before = workingMessages.length
     const result = await executeToolRound({ ...input, workingMessages })
     if (workingRecoveryMessages !== workingMessages) workingRecoveryMessages.push(...workingMessages.slice(before))
+    options.onToolRoundComplete?.({
+      toolChain: result.traces,
+      historyUserContent: contentToText(historyMessage.content),
+      channel: channel.id,
+      adapter: adapter.id,
+      usage: { ...usage },
+      modelCalls: [...modelCalls],
+    })
     return result
   }
 

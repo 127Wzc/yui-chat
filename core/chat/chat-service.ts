@@ -214,6 +214,7 @@ export class ChatService {
     const runtime: ConversationRequestRuntime = {
       conversations: this.conversations,
       enqueueConversationMutation: operation => this.enqueueConversationMutation(operation),
+      retainConversationWrite: (key, turnId, retry) => this.conversationState.retainWrite(key, turnId, retry),
       captureConversationVersion: (value, key) => this.captureConversationVersion(value, key),
       conversationVersionCurrent: version => this.conversationVersionCurrent(version),
       releaseConversationVersion: version => this.releaseConversationVersion(version),

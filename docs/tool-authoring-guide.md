@@ -160,9 +160,9 @@ parameters = {
 
 Custom 编辑器提供一个“后台静默执行”开关，保存到该工具的 `execution.backgroundSilent`，显式设置优先于入口源码默认值。后台工具不显示“需要最终回复”，保存时也不写入这项；前台工具才保留该配置。执行保护策略中的其他字段不变；没有 `action` 参数时不显示按 action 覆盖。
 
-静默后台复用有界队列，`timeoutMs` 从入队开始计时，排队过期后不执行。网络请求必须传递 `context.agent.signal`；忽略取消信号的自定义代码无法被强制终止，但超时后运行时不会再投递其媒体计划。队列满、失败和超时只记录诊断，不重试、不要求模型补救。它不会随正常对话结束而取消，也不在重启后恢复。实际执行及媒体发送前重新校验启用状态和权限。
+静默后台复用有界队列，`timeoutMs` 从入队开始计时，排队过期后不执行。网络请求必须传递 `context.agent.signal`；忽略取消信号的自定义代码无法被强制终止，但超时后运行时不会再投递其媒体计划。队列满、失败和超时不主动发提示、不重新执行工具，也不要求模型补救；执行状态保留在下文的会话与日志记录中。它不会随正常对话结束而取消，也不在重启后恢复。实际执行及媒体发送前重新校验启用状态和权限。
 
-需要后台发图时继续声明 `autoDelivery: { via: "message_send", batching: "merge", continueConversation: false }`，结果返回下文的 `metadata.messageSendPlan.parts`。运行时后台执行 `message_send`，仍检查其权限和模型工具策略；不直接调用宿主发送。静默模式忽略最终回复和自动投递续答要求，模型只收到简短受理结果；真实完成状态保留在关联日志中。普通 `background` 工具行为不变。
+需要后台发图时继续声明 `autoDelivery: { via: "message_send", batching: "merge", continueConversation: false }`，结果返回下文的 `metadata.messageSendPlan.parts`。运行时后台执行 `message_send`，仍检查其权限和模型工具策略；不直接调用宿主发送。静默模式忽略最终回复和自动投递续答要求，本轮模型只收到简短受理结果；完成后真实结果写回当前会话的工具记录并保留在关联日志中，供后续对话回溯，不主动追加说明文字。普通 `background` 工具也写回真实结果；会话保留、清空和 `<EMPTY>` 规则见[工具执行记录](architecture.md#工具动作与扩展)。
 
 支持显式次数的工具还应声明：
 

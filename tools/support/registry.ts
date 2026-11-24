@@ -24,6 +24,9 @@ import { backgroundTaskService, type BackgroundTaskLimitsProvider, type PublicBa
 import { modelToolAllowed } from "../../models/configuration/tool-policy.js"
 import { normalizeEventScope } from "../../core/message/event-scope.js"
 import type { ToolExecutionContext } from "./tool-contract.js"
+import { normalizeToolResult } from "./execution-runtime.js"
+import { serializeForModel } from "../../core/message-chain/serialize.js"
+import { redactErrorText } from "../../core/shared/error-details.js"
 
 type UnknownRecord = Record<string, unknown>
 
@@ -372,7 +375,7 @@ export class ToolRegistry {
               await ensureAllowed()
               const result = record(value)
               if (result.isError === true || ["error", "failed"].includes(text(result.status)) || result.kind === "error") {
-                throw new Error("后台工具返回失败结果")
+                throw Object.assign(new Error(redactErrorText(serializeForModel(normalizeToolResult(value).content), 16000, true) || "后台工具返回失败结果"), { backgroundResult: value })
               }
               const plan = record(record(result.metadata).messageSendPlan)
               if (record(getToolCommon(tool).autoDelivery).via === "message_send" && Array.isArray(plan.parts) && plan.parts.length) {
@@ -386,8 +389,17 @@ export class ToolRegistry {
                   agent: { ...record(context.agent), signal },
                   execution: { background: false, beforeInvoke: ensureAllowed },
                 }, this)
-                if (delivery.status !== "success") throw new Error("后台媒体投递失败")
-                return { result: value, delivery: delivery.value }
+                const deliveryResult = {
+                  status: delivery.status,
+                  content: { result: value, delivery: delivery.value ?? delivery.content },
+                  executedCount: delivery.executedCount,
+                  retryAllowed: false,
+                  metadata: delivery.metadata,
+                }
+                if (delivery.status !== "success") {
+                  throw Object.assign(new Error("后台媒体投递失败"), { backgroundResult: deliveryResult })
+                }
+                return deliveryResult
               }
               return value
             }

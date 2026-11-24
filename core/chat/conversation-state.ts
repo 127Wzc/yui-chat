@@ -6,6 +6,8 @@ import type { UnknownRecord } from "../message/types.js"
 import { conversationScopeMatches, conversationStore, parseConversationKey } from "./conversation-store.js"
 import { scopeFor } from "./chat-support.js"
 import { artifactStore } from "../../tools/support/artifact-store.js"
+import { errorSummary } from "../shared/error-details.js"
+import { hostRuntime } from "../runtime/host-runtime.js"
 
 export interface ConversationEntry extends UnknownRecord {
   sessionId?: string
@@ -61,6 +63,20 @@ export class ConversationState {
   private readonly keyGenerations = new Map<string, number>()
   private readonly scopeGenerations = new Map<string, number>()
   private readonly activeVersions = new Set<ConversationVersion>()
+  private readonly pendingWrites = new Map<string, Map<string, { at: number; retry: () => Promise<void> }>>()
+
+  /** 写回耗尽短重试后由当前会话下次读取恢复；仍使用原来的 mutationQueue。 */
+  retainWrite(key: string, turnId: string, retry: (() => Promise<void>) | null): void {
+    if (!retry) {
+      const writes = this.pendingWrites.get(key)
+      writes?.delete(turnId)
+      if (!writes?.size) this.pendingWrites.delete(key)
+      return
+    }
+    const writes = this.pendingWrites.get(key) || new Map()
+    writes.set(turnId, { at: Date.now(), retry })
+    this.pendingWrites.set(key, writes)
+  }
 
   enqueue<T>(operation: () => Promise<T> | T): Promise<T> {
     const pending = this.mutationQueue.then(() => operation(), () => operation())
@@ -117,6 +133,10 @@ export class ConversationState {
     const ttlMs = Math.max(60000, number(chat.conversationTtlMs, 6 * 60 * 60 * 1000))
     const maxScopes = Math.max(10, number(chat.maxConversationScopes, 1000))
     const now = Date.now()
+    for (const [key, writes] of this.pendingWrites) {
+      for (const [turnId, write] of writes) if (now - write.at > ttlMs) writes.delete(turnId)
+      if (!writes.size) this.pendingWrites.delete(key)
+    }
     for (const [key, value] of this.conversations) {
       const entry = Array.isArray(value) ? null : value
       const lastSeen = entry ? number(entry.lastSeen) : now
@@ -140,6 +160,10 @@ export class ConversationState {
 
   async getConversation(key: string, version: ConversationVersion | null = null): Promise<ConversationEntry> {
     if (!sqliteClient.status.available) throw new Error("SQLite 不可用，无法读取会话。")
+    for (const write of [...(this.pendingWrites.get(key)?.values() || [])]) {
+      try { await write.retry() }
+      catch (error) { hostRuntime.logger?.warn?.("[yui-chat] 会话待写工具结果仍未恢复", errorSummary(error)) }
+    }
     const value = this.conversations.get(key)
     if (value) {
       const entry = Array.isArray(value) ? { history: value } : value
@@ -193,6 +217,9 @@ export class ConversationState {
         await langfuseReporter.resetScopes(scopeKeys)
         artifactStore.clearKeys(clearedKeys)
         artifactStore.clearWhere(key => userIds.some(userId => this.scopeMatches(parseConversationKey(key), event, userId)))
+        for (const key of this.pendingWrites.keys()) {
+          if (userIds.some(userId => this.scopeMatches(parseConversationKey(key), event, userId))) this.pendingWrites.delete(key)
+        }
         return clearedKeys.size
       } finally {
         this.cleanupGenerations({ scopeKeys })
@@ -208,6 +235,7 @@ export class ConversationState {
       const clearedKeys = new Set(await conversationStore.clearAllKeys())
       for (const key of this.conversations.keys()) clearedKeys.add(key)
       this.conversations.clear()
+      this.pendingWrites.clear()
       if (!options.preserveObservationSessions) await langfuseReporter.resetScopes()
       artifactStore.clear()
       return clearedKeys.size
@@ -222,6 +250,7 @@ export class ConversationState {
         const clearedKeys = new Set(await conversationStore.clearKeys(normalized))
         for (const key of normalized) {
           if (this.conversations.delete(key)) clearedKeys.add(key)
+          this.pendingWrites.delete(key)
         }
         await langfuseReporter.resetScopes(normalized.map(key => parseConversationKey(key).scope).filter(Boolean))
         artifactStore.clearKeys(normalized)
@@ -244,14 +273,15 @@ export class ConversationState {
       const entry = Array.isArray(value) ? {} : value
       const history = Array.isArray(value) ? value : list(entry.history)
       const turns = Array.isArray(entry.turns) ? entry.turns : []
+      const visibleHistory = history.map(record).filter(message => ["user", "assistant"].includes(text(message.role)) && text(message.content).trim())
       const lastSeen = Array.isArray(value) ? 0 : number(entry.lastSeen)
       rows.push({
         ...parsed,
-        historyMessages: history.length,
-        turns: Math.floor(history.length / 2),
+        historyMessages: visibleHistory.length,
+        turns: Math.max(turns.length, visibleHistory.filter(message => message.role === "user").length),
         lastSeen,
         lastSeenAt: lastSeen ? new Date(lastSeen).toISOString() : "",
-        preview: text(record(history.at(-1)).content).slice(0, 80),
+        preview: text(visibleHistory.at(-1)?.content).slice(0, 80),
         usage: entry.usage || emptyUsage(),
         toolCalls: number(entry.toolCalls),
         lastTurn: turns.at(-1) || null,

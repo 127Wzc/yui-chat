@@ -6,6 +6,9 @@ import { getToolCommon } from "../../tools/support/contract.js"
 import { toolRegistry, type RegistryExecutionContext } from "../../tools/support/registry.js"
 import type { UnknownRecord } from "../message/types.js"
 import { errorSummary, redactErrorText } from "../shared/error-details.js"
+import { resolveToolExecutionOutcome } from "../../tools/support/execution-runtime.js"
+import type { ToolExecutionPolicy } from "../../tools/support/tool-contract.js"
+import { toolHistoryText, type BackgroundToolCompletion } from "./tool-history.js"
 
 interface ToolCall extends UnknownRecord {
   id?: unknown
@@ -19,6 +22,7 @@ interface ToolContext extends UnknownRecord {
   executionRuntime?: unknown
   observability?: UnknownRecord
   dynamicTools?: Set<string>
+  onBackgroundToolComplete?: (completion: BackgroundToolCompletion) => Promise<void>
 }
 
 interface ExecutionRuntimeLike {
@@ -29,7 +33,7 @@ interface ExecutionRuntimeLike {
   recordExecution(input: UnknownRecord): unknown
   formatToolContent(value: unknown): string
   formatToolResult(value: UnknownRecord): string
-  policyFor(tool: unknown, args?: UnknownRecord): { execution: UnknownRecord }
+  policyFor(tool: unknown, args?: UnknownRecord): { execution: ToolExecutionPolicy }
   shouldFinalize(): boolean
   waitForNextRound(signal?: AbortSignal): Promise<void>
 }
@@ -141,6 +145,11 @@ export async function executeToolRound(options: {
     if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("子代理执行已终止")
     const started = Date.now()
     const common = getToolCommon(tool)
+    const executionPolicy = runtime.policyFor(tool, callArguments(call)).execution
+    const backgroundOperations = (Array.isArray(guard.operations) ? guard.operations : []).map(value => {
+      const operation = record(value)
+      return { id: text(operation.id), targetKey: text(operation.targetKey), requestedTotal: number(operation.requestedTotal), completedTotal: number(operation.completedTotal) }
+    })
     let result: UnknownRecord
     let executionRecord: UnknownRecord
     const name = callName(call)
@@ -171,8 +180,15 @@ export async function executeToolRound(options: {
               toolCallId: text(call.id),
               onBackgroundComplete: async (task: unknown) => {
                 const background = record(task)
-                const taskText = runtime.formatToolContent(background.result || background.error || "后台任务已结束")
-                const taskStarted = number(background.startedAt, started)
+                const outcome = resolveToolExecutionOutcome(executionPolicy, backgroundOperations, {
+                  value: background.result ?? background.error ?? "后台任务已结束",
+                  ...(background.status === "ok" ? {} : { status: background.status === "error" ? "failed" : background.status, retryAllowed: false }),
+                }, number(guard.plannedCount))
+                const taskText = runtime.formatToolContent(background.result ?? background.error ?? "后台任务已结束")
+                const completedStatus = outcome.status === "success" ? record(outcome.normalized.metadata).receiptStatus === "partial" ? "partial" : "ok"
+                  : background.status === "error" && outcome.status === "failed" ? "error" : outcome.status
+                const taskError = text(background.error) || (outcome.status === "failed" ? runtime.formatToolContent(outcome.content) : "")
+                const taskStarted = number(background.startedAt) || number(background.createdAt, started)
                 const taskEnded = number(background.endedAt, Date.now())
                 modelLogStore.recordToolCall(backgroundTrace, {
                   modelCallId: backgroundModelCallId,
@@ -183,7 +199,7 @@ export async function executeToolRound(options: {
                   toolName: name,
                   source: text(common.source),
                   category: text(common.category),
-                  status: background.status === "ok" ? "ok" : text(background.status),
+                  status: completedStatus,
                   startedAt: taskStarted,
                   endedAt: taskEnded,
                   durationMs: Math.max(0, taskEnded - taskStarted),
@@ -192,8 +208,22 @@ export async function executeToolRound(options: {
                   arguments: executionRecord?.normalizedArgs || callArguments(call),
                   result: taskText,
                   resultChars: taskText.length,
-                  error: background.error || "",
-                  metadata: { background: true, taskId: text(background.id), backgroundStatus: text(background.status), parentToolId: text(call.id), errorDetails: record(background.errorDetails) },
+                  error: taskError,
+                  metadata: { ...record(outcome.normalized.metadata), background: true, taskId: text(background.id), backgroundStatus: text(background.status), parentToolId: text(call.id), errorDetails: record(background.errorDetails) },
+                })
+                await toolContext.onBackgroundToolComplete?.({
+                  toolCallId: text(call.id),
+                  taskId: text(background.id),
+                  status: completedStatus,
+                  result: taskText,
+                  error: taskError,
+                  endedAt: taskEnded,
+                  startedAt: taskStarted,
+                  executedCount: outcome.actualTotal,
+                  completedCount: outcome.completed.reduce((sum, operation) => sum + operation.completedTotal, 0),
+                  remainingCount: outcome.completed.reduce((sum, operation) => sum + operation.remaining, 0),
+                  retryAllowed: outcome.retryAllowed,
+                  metadata: { ...record(outcome.normalized.metadata), backgroundStatus: text(background.status) },
                 })
               },
             }
@@ -243,8 +273,6 @@ export async function executeToolRound(options: {
       : ["success", "accepted"].includes(internalStatus) ? common.requiresFinalReply !== false : true
     const ended = Date.now()
     const durationMs = ended - started
-    const policy = runtime.policyFor(tool, callArguments(call))
-    const executionPolicy = record(policy.execution)
     const deduplicated = internalStatus === "skipped"
     const error = result.error ? redactErrorText(errorMessage(result.error)) : ""
     conversationLog.toolCompleted(toolContext.config, {
@@ -318,6 +346,7 @@ export async function executeToolRound(options: {
         ...record(executionRecord.metadata),
       },
     })
+    const historyResultText = toolHistoryText(rawResultText)
     return {
       trace: {
         round,
@@ -327,7 +356,8 @@ export async function executeToolRound(options: {
         status,
         error,
         durationMs,
-        resultPreview: rawResultText.slice(0, 300),
+        resultPreview: historyResultText.slice(0, 300),
+        result: historyResultText,
         resultChars: rawResultText.length,
         delivery: text(common.delivery || "silent"),
         requiresFinalReply,

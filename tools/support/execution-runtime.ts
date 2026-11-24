@@ -395,6 +395,44 @@ export function normalizeToolResult(value: unknown): NormalizedToolResult {
   return { content, status: looksLikeFailure ? "failed" : "success", executedCount: 0, targetCounts: {}, retryAllowed: true, structured: false, dispatched: false, metadata: {} }
 }
 
+/** 前台记账与后台完成回执共用结果契约；只计算，不修改运行时账本。 */
+export function resolveToolExecutionOutcome(
+  execution: ToolExecutionPolicy,
+  operations: readonly Pick<ExecutionOperation, "id" | "targetKey" | "requestedTotal" | "completedTotal">[],
+  result: UnknownRecord,
+  plannedCount = 0,
+) {
+  const normalized = normalizeToolResult(result.value ?? result)
+  let status = !normalized.structured && normalized.status === "failed" ? "failed" : text(result.status || normalized.status || "success")
+  const isSideEffect = execution.effect !== toolExecutionEffects.read
+  let content = normalized.content ?? result.value ?? result
+  if (status === "success" && isSideEffect && execution.supportsCount && !normalized.structured) {
+    status = "failed"
+    content = "工具未返回结构化执行结果，无法确认实际完成次数，已停止继续执行。"
+  }
+  if ((status === "failed" || status === "ambiguous") && normalized.executedCount > 0) status = "partial"
+  const targetCount = operations.length || 1
+  const successful = status === "success" || status === "partial"
+  const accepted = status === "accepted"
+  const reportedTotal = successful && isSideEffect ? normalized.structured ? Math.max(0, normalized.executedCount) : targetCount : 0
+  const plannedTotal = plannedCount || (isSideEffect ? targetCount : 0)
+  const actualTotal = Math.min(reportedTotal, plannedTotal || reportedTotal)
+  const completed: OperationProgress[] = operations.map(operation => {
+    const explicitIncrement = Object.hasOwn(normalized.targetCounts, operation.targetKey)
+    const inferredIncrement = successful ? isSideEffect ? execution.supportsCount ? (actualTotal ? Math.ceil(actualTotal / targetCount) : 0) : 1 : 0 : 0
+    const increment = explicitIncrement ? Math.max(0, asInt(normalized.targetCounts[operation.targetKey])) : inferredIncrement
+    const completedTotal = Math.min(operation.requestedTotal, operation.completedTotal + increment)
+    return { operationId: operation.id, targetKey: operation.targetKey, requestedTotal: operation.requestedTotal, completedTotal, remaining: Math.max(0, operation.requestedTotal - completedTotal) }
+  })
+  const hasRemaining = completed.some(operation => operation.remaining > 0)
+  const validationError = record(normalized.metadata).validationError === true
+  const retryableValidation = status === "failed" && validationError && result.dispatched !== true && normalized.dispatched !== true
+  const retryAllowed = result.retryAllowed !== false && normalized.retryAllowed !== false
+    && (retryableValidation || (!["failed", "ambiguous", "denied", "canceled"].includes(status)
+      && (execution.effect === toolExecutionEffects.read ? execution.repeatPolicy !== toolRepeatPolicies.dedupe : hasRemaining)))
+  return { normalized, status, content, successful, accepted, plannedTotal, actualTotal, completed, retryAllowed }
+}
+
 /** 工具执行保护运行时：跨模型轮次维护操作额度、去重签名、重试和完整账本。 */
 export function createExecutionRuntime(options: ExecutionRuntimeOptions = {}) {
   const config = record(options.config)
@@ -627,38 +665,18 @@ export function createExecutionRuntime(options: ExecutionRuntimeOptions = {}) {
     const guard = input.guard
     const call = input.call || {}
     const result = input.result || {}
-    const normalized = normalizeToolResult(result.value ?? result)
-    let status = !normalized.structured && normalized.status === "failed" ? "failed" : text(result.status || normalized.status || "success")
     const execution = guard.policy.execution
-    const isSideEffect = execution.effect !== toolExecutionEffects.read
-    let content = normalized.content ?? result.value ?? result
-    if (status === "success" && isSideEffect && execution.supportsCount && !normalized.structured) {
-      status = "failed"
-      content = "工具未返回结构化执行结果，无法确认实际完成次数，已停止继续执行。"
-    }
-    if ((status === "failed" || status === "ambiguous") && normalized.executedCount > 0) status = "partial"
-    const targetCount = guard.operations.length || 1
-    const successful = status === "success" || status === "partial"
-    const accepted = status === "accepted"
-    const reportedTotal = successful && isSideEffect ? normalized.structured ? Math.max(0, normalized.executedCount) : targetCount : 0
-    const plannedTotal = guard.plannedCount || (isSideEffect ? targetCount : 0)
-    const actualTotal = Math.min(reportedTotal, plannedTotal || reportedTotal)
-    const actualPerTarget = normalized.targetCounts
-    const completed: OperationProgress[] = []
+    const { normalized, status, content, successful, accepted, plannedTotal, actualTotal, completed, retryAllowed } = resolveToolExecutionOutcome(execution, guard.operations, result, guard.plannedCount)
     const resultFingerprint = fingerprint(content)
     let sameReadResult = false
-    for (const operation of guard.operations) {
+    for (const [index, operation] of guard.operations.entries()) {
       sameReadResult = sameReadResult || Boolean(operation.lastResultFingerprint && operation.lastResultFingerprint === resultFingerprint)
-      const explicitIncrement = Object.hasOwn(actualPerTarget, operation.targetKey)
-      const inferredIncrement = successful ? isSideEffect ? execution.supportsCount ? (actualTotal ? Math.ceil(actualTotal / targetCount) : 0) : 1 : 0 : 0
-      const increment = explicitIncrement ? Math.max(0, asInt(actualPerTarget[operation.targetKey])) : inferredIncrement
-      if (increment) operation.completedTotal = Math.min(operation.requestedTotal, operation.completedTotal + increment)
-      operation.remaining = Math.max(0, operation.requestedTotal - operation.completedTotal)
+      operation.completedTotal = completed[index].completedTotal
+      operation.remaining = completed[index].remaining
       operation.attempts += Math.max(1, asInt(result.attempt, 1))
       if (execution.polling) operation.polls++
       operation.status = status === "accepted" ? "queued" : status === "success" ? operation.remaining ? "partial" : "success" : status as OperationStatus
       operation.lastResultFingerprint = resultFingerprint
-      completed.push({ operationId: operation.id, targetKey: operation.targetKey, requestedTotal: operation.requestedTotal, completedTotal: operation.completedTotal, remaining: operation.remaining })
     }
     state.toolCallCount++
     const accountedSideEffectCount = accepted ? Math.max(1, plannedTotal) : actualTotal
@@ -669,12 +687,6 @@ export function createExecutionRuntime(options: ExecutionRuntimeOptions = {}) {
       else state.noProgressStreak = sameReadResult ? state.noProgressStreak + 1 : 0
     } else if (successful && actualTotal > 0) state.noProgressStreak = 0
     if (state.noProgressStreak >= state.maxNoProgress) enterFinalization("NO_PROGRESS")
-    const hasRemaining = completed.some(operation => operation.remaining > 0)
-    const validationError = record(normalized.metadata).validationError === true
-    const retryableValidation = status === "failed" && validationError && result.dispatched !== true && normalized.dispatched !== true
-    const retryAllowed = result.retryAllowed !== false && normalized.retryAllowed !== false
-      && (retryableValidation || (!["failed", "ambiguous", "denied", "canceled"].includes(status)
-        && (execution.effect === toolExecutionEffects.read ? execution.repeatPolicy !== toolRepeatPolicies.dedupe : hasRemaining)))
     for (const operation of guard.operations) operation.retryAllowed = retryAllowed
     const entry: LedgerEntry = {
       runId: state.runId,
