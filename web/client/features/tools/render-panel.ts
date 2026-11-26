@@ -1,7 +1,7 @@
-import { computed, reactive, ref, watch } from "vue"
+import { computed, onBeforeUnmount, reactive, ref, watch } from "vue"
 import { useDataSlices, request, saveConfigPatch, store, toast } from "../../app/store/store.js"
 import { parseJsonText, toJson } from "../../shared/format.js"
-import { asRecord, errorMessage, type UnknownRecord } from "../../shared/data.js"
+import { asRecord, changedConfigPatch, errorMessage, type UnknownRecord } from "../../shared/data.js"
 import { SystemRenderStrategyPanel } from "./system-render-strategy-panel.js"
 
 interface RenderTemplate extends UnknownRecord {
@@ -50,7 +50,8 @@ const PREVIEW_TEMPLATE_KINDS = ["html", "markdown", "mindmap", "text-card"]
 export const RenderPanel = {
   name: "RenderPanel",
   components: { SystemRenderStrategyPanel },
-  setup() {
+  emits: ["dirty", "saving"],
+  setup(_props: unknown, { emit }: { emit: (event: string, value: boolean) => void }) {
     useDataSlices(() => ["render"])
     const render = computed<RenderConfig>(() => ({ ...asRecord(asRecord(store.config).response).render as RenderConfig, catalog: asRecord<RenderSlice>(store.render).render?.catalog || [] }))
     const catalog = computed<RenderTemplate[]>(() => {
@@ -64,7 +65,11 @@ export const RenderPanel = {
     const settings = reactive({
       aiEngine: "html",
     })
+    const saving = ref(false)
     const systemRenderPanel = ref<{ getPatch?: () => UnknownRecord } | null>(null)
+    const dirty = computed(() => Object.keys(changedConfigPatch({ "response.render.engine": settings.aiEngine, ...(systemRenderPanel.value?.getPatch?.() || {}) }, store.config)).length > 0)
+    watch(dirty, value => emit("dirty", value))
+    onBeforeUnmount(() => emit("dirty", false))
     const previewImage = ref("")
     const previewMeta = ref<RenderPreview | null>(null)
     const showPreviewDrawer = ref(false)
@@ -84,13 +89,16 @@ export const RenderPanel = {
     watch(() => render.value.engine, syncSettings)
 
     async function saveSettings() {
+      if (saving.value || !dirty.value) return
+      saving.value = true
+      emit("saving", true)
       try {
         await saveConfigPatch({
           "response.render.engine": settings.aiEngine,
           ...(systemRenderPanel.value?.getPatch?.() || {}),
         })
-        toast("render_image 策略已保存")
       } catch (err) { toast(errorMessage(err)) }
+      finally { saving.value = false; emit("saving", false) }
     }
     function chooseTemplate(item: RenderTemplate = { kind: "text-card" }) {
       draft.format = item.kind === "text-card" ? "text" : item.kind
@@ -109,12 +117,12 @@ export const RenderPanel = {
         toast(`${draft.format} 预览已生成`)
       } catch (err) { toast(errorMessage(err)) }
     }
-    return { render, catalog, templates, draft, settings, systemRenderPanel, previewImage, previewMeta, showPreviewDrawer, pills, chooseTemplate, loadSample, saveSettings, preview }
+    return { saving, dirty, render, catalog, templates, draft, settings, systemRenderPanel, previewImage, previewMeta, showPreviewDrawer, pills, chooseTemplate, loadSample, saveSettings, preview }
   },
   template: `
     <Panel title="图片渲染" icon="sparkles">
       <template #actions>
-        <button class="btn small outline" type="button" @click="showPreviewDrawer = true"><Icon name="eye" :size="14" />渲染预览</button>
+        <button class="btn small outline" type="button" :disabled="saving" @click="showPreviewDrawer = true"><Icon name="eye" :size="14" />渲染预览</button>
       </template>
       <SideDrawer :open="showPreviewDrawer" title="渲染预览" subtitle="HTML、Markdown、思维导图与文本卡片。" icon="sparkles" width="620px" @close="showPreviewDrawer = false">
         <div class="render-template-gallery">
@@ -131,6 +139,7 @@ export const RenderPanel = {
       </SideDrawer>
       <p class="muted tiny">支持的格式</p>
       <PillList :items="pills" />
+      <fieldset :disabled="saving" class="behavior-form">
       <div class="render-settings">
         <div class="form-grid">
           <Field label="工具引擎" type="select" :options="[{ value: 'html', label: 'HTML' }, { value: 'svg', label: 'SVG' }]" v-model="settings.aiEngine" tip="HTML 文档使用 HTML；其他格式按此设置渲染。" />
@@ -139,7 +148,8 @@ export const RenderPanel = {
       <div class="render-settings">
         <SystemRenderStrategyPanel ref="systemRenderPanel" embedded :show-save="false" />
       </div>
-      <div class="action-bar"><button class="btn primary small" type="button" @click="saveSettings"><Icon name="save" :size="14" />保存渲染策略</button></div>
+      <div class="action-bar"><button class="btn primary small" type="button" :disabled="saving || !dirty" @click="saveSettings"><Icon name="save" :size="14" />{{ saving ? '正在保存…' : '保存渲染策略' }}</button></div>
+      </fieldset>
       <p class="muted tiny">图片按需生成，不保存渲染文件。</p>
     </Panel>
   `,

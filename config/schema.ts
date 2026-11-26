@@ -167,6 +167,7 @@ export const schema: SchemaGroup[] = [
       { path: "tools.enabled", label: "启用工具调用", type: "boolean" },
       { path: "tools.enabledTools", label: "启用工具名", type: "json" },
       { path: "tools.customToolPackages", label: "自定义工具包提示", type: "json" },
+      { path: "tools.behavior", label: "工具分层执行设置", type: "json" },
       { path: "tools.runtimeVariables", label: "工具运行变量", type: "json" },
       { path: "tools.activePresets", label: "已应用工具预设", type: "json" },
       { path: "tools.policy", label: "工具调用策略", type: "json" },

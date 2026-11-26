@@ -73,7 +73,7 @@ export const ExtensionEditorDrawer = {
             <div class="form-grid"><Field label="工具 name" v-model="customBuilder.toolName" tip="代码导出的工具名；建议只用小写字母、数字和下划线。" /><Field label="工具说明" v-model="customBuilder.toolDescription" /></div>
           </div>
           <div class="form-section">
-            <div class="section-title">响应与执行</div>
+            <div class="section-title">源码默认行为</div><p class="muted tiny">这里维护扩展的默认声明；已保存工具的日常执行设置请使用列表行“配置”，其中的管理覆盖优先。</p>
             <div class="form-grid">
               <Field label="后台静默执行" type="select" :options="boolOptions" v-model="customBuilder.backgroundSilent" tip="立即交给后台，不等待、不发送开始或失败提示；适合表情包、贴表情等可丢弃动作。" />
               <Field v-if="!customIsBackground" label="需要最终回复" type="select" :options="boolOptions" v-model="customBuilder.requiresFinalReply" tip="关闭后，本轮只执行工具，不要求模型再补一段文字回复。" />

@@ -1,5 +1,6 @@
-import { computed, reactive, ref, watch } from "vue"
-import { request, refreshSlices, saveConfigPatch, store, toast } from "../../app/store/store.js"
+import { RuntimeVariableFields } from "./runtime-variable-fields.js"
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue"
+import { applyConfigResponse, request, saveConfigPatch, store, toast } from "../../app/store/store.js"
 import { asRecord, errorMessage, sameJsonValue, type UnknownRecord } from "../../shared/data.js"
 import { collectRuntimeValues, integerValue, runtimeDraftValues, runtimeFieldRow, toolCommon, type RuntimeFieldRow } from "./shared.js"
 
@@ -12,6 +13,7 @@ interface ConfigField {
   max?: number
   placeholder?: string
   tip?: string
+  requires?: string
   options?: Array<{ value: string; label: string }>
 }
 
@@ -82,8 +84,8 @@ const CHANNEL_PROFILES: Record<string, ChannelProfile> = {
       { key: "maxResults", label: "最多候选数", kind: "number", default: 5, min: 1, max: 10 },
       { key: "timeoutMs", label: "搜索超时（毫秒）", kind: "number", default: 12000, min: 1000, max: 60000 },
       { key: "cacheSelectedImages", label: "本地缓存已选图片", kind: "boolean", default: false, tip: "默认关闭，直接发送搜索结果的原始 URL。开启后才会先下载到插件媒体缓存，可用于绕过部分站点防盗链。" },
-      { key: "downloadTimeoutMs", label: "缓存下载超时（毫秒）", kind: "number", default: 30000, min: 1000, max: 120000, tip: "仅开启本地缓存时生效。" },
-      { key: "maxImageBytes", label: "单图缓存上限（bytes）", kind: "number", default: 33554432, min: 1048576, max: 134217728, tip: "仅开启本地缓存时生效，默认 32 MiB。" },
+      { key: "downloadTimeoutMs", requires: "cacheSelectedImages", label: "缓存下载超时（毫秒）", kind: "number", default: 30000, min: 1000, max: 120000, tip: "仅开启本地缓存时生效。" },
+      { key: "maxImageBytes", requires: "cacheSelectedImages", label: "单图缓存上限（bytes）", kind: "number", default: 33554432, min: 1048576, max: 134217728, tip: "仅开启本地缓存时生效，默认 32 MiB。" },
     ],
   },
   web_search: {
@@ -173,17 +175,25 @@ function cloneRuntime(tool: ToolRecord): UnknownRecord {
 
 export const ToolConfigurationPanel = {
   name: "ToolConfigurationPanel",
+  components: { RuntimeVariableFields },
   props: { tool: { type: Object, required: true } },
-  emits: ["updated"],
+  emits: ["updated", "dirty", "saving"],
   setup(props: { tool: ToolRecord }, { emit, expose }: { emit: (event: string, payload?: unknown) => void; expose: (value: UnknownRecord) => void }) {
     const channelDraft = reactive<{ enabledSources: string[]; order: string[]; values: UnknownRecord }>({ enabledSources: [], order: [], values: {} })
     const runtimeDraft = reactive<Record<string, string>>({})
     const expandedChannel = ref("")
     const draggedChannel = ref("")
     const saving = ref(false)
+    watch(saving, value => emit("saving", value))
+    const savedDraft = ref("")
+    const snapshot = () => JSON.stringify([channelDraft, runtimeDraft])
+    const dirty = computed(() => savedDraft.value !== snapshot())
+    watch(dirty, value => emit("dirty", value))
+    onBeforeUnmount(() => emit("dirty", false))
     const profile = computed(() => CHANNEL_PROFILES[String(props.tool?.name || "")] || null)
     const runtimeRows = computed<RuntimeFieldRow[]>(() => Object.entries(asRecord(toolCommon(props.tool).configSchema).properties || {})
       .map(([name, field]) => runtimeFieldRow(name, field, cloneRuntime(props.tool)[name] !== undefined)))
+    const visibleGlobalFields = computed(() => (profile.value?.globalFields || []).filter(field => !field.requires || channelDraft.values[field.requires] === true || channelDraft.values[field.requires] === "true"))
     const runtimeRowsByName = computed(() => new Map(runtimeRows.value.map(row => [row.name, row])))
     const assignedRuntimeNames = computed(() => new Set(profile.value?.channels.flatMap(channel => channel.runtimeFields || []) || []))
     const unassignedRuntimeRows = computed(() => runtimeRows.value.filter(row => !assignedRuntimeNames.value.has(row.name)))
@@ -228,8 +238,10 @@ export const ToolConfigurationPanel = {
     }
 
     watch(() => JSON.stringify([props.tool.name, profile.value ? readPath(store.config, profile.value.path) : null,
-      profile.value?.channels.map(channel => channel.enabledPath ? readValuePath(store.config, channel.enabledPath) : null)]), syncChannels, { immediate: true })
-    watch(() => JSON.stringify([props.tool.name, toolCommon(props.tool).configSchema, cloneRuntime(props.tool)]), syncRuntime, { immediate: true })
+      profile.value?.channels.map(channel => channel.enabledPath ? readValuePath(store.config, channel.enabledPath) : null)]), () => { if (!saving.value) syncChannels() }, { immediate: true })
+    watch(() => JSON.stringify([props.tool.name, toolCommon(props.tool).configSchema, cloneRuntime(props.tool)]), () => { if (!saving.value) syncRuntime() }, { immediate: true })
+
+    savedDraft.value = snapshot()
 
     function channelEnabled(id: string): boolean {
       return channelDraft.enabledSources.includes(id)
@@ -330,7 +342,9 @@ export const ToolConfigurationPanel = {
         method: "PUT",
         body: JSON.stringify({ value }),
       }))
+      applyConfigResponse(response)
       const tools = Array.isArray(response.tools) ? response.tools.map(asRecord<ToolRecord>) : []
+      if (Array.isArray(response.tools)) store.tools = { ...asRecord(store.tools), tools: response.tools }
       return tools.find(item => item.name === props.tool.name) || null
     }
 
@@ -359,8 +373,10 @@ export const ToolConfigurationPanel = {
           syncChannels()
         } else {
           toast("运行变量已保存")
-          await refreshSlices(["tools"])
         }
+        await nextTick()
+        syncRuntime()
+        savedDraft.value = snapshot()
       } catch (error) { toast(errorMessage(error)) }
       finally { saving.value = false }
     }
@@ -370,6 +386,7 @@ export const ToolConfigurationPanel = {
     return {
       channelDraft,
       profile,
+      visibleGlobalFields,
       runtimeDraft,
       runtimeRows,
       unassignedRuntimeRows,
@@ -393,7 +410,7 @@ export const ToolConfigurationPanel = {
     }
   },
   template: `
-    <div class="tool-config-workspace">
+    <fieldset :disabled="saving" class="tool-config-workspace behavior-form">
       <template v-if="profile">
         <section class="tool-config-card tool-global-config-card">
           <div class="tool-config-card-head">
@@ -405,7 +422,7 @@ export const ToolConfigurationPanel = {
             <span v-else class="danger">至少启用一个渠道</span>
           </div>
           <div class="tool-global-fields">
-            <template v-for="field in profile.globalFields" :key="field.key">
+            <template v-for="field in visibleGlobalFields" :key="field.key">
               <Field v-if="field.kind === 'boolean'" :label="field.label" type="select" :options="[{ value: 'true', label: '开启' }, { value: 'false', label: '关闭' }]" v-model="channelDraft.values[field.key]" :tip="field.tip" />
               <Field v-else-if="field.kind === 'select'" :label="field.label" type="select" :options="field.options" v-model="channelDraft.values[field.key]" :tip="field.tip" />
               <Field v-else-if="field.kind === 'number'" :label="field.label" type="number" v-model="channelDraft.values[field.key]" :tip="field.tip" />
@@ -454,12 +471,7 @@ export const ToolConfigurationPanel = {
                     <Field v-else-if="field.kind === 'number'" :label="field.label" type="number" v-model="channelDraft.values[field.key]" :tip="field.tip" />
                     <Field v-else :label="field.label" type="text" :placeholder="field.placeholder" v-model="channelDraft.values[field.key]" :tip="field.tip" />
                   </template>
-                  <template v-for="row in channelRuntimeRows(channel)" :key="row.name">
-                    <Field v-if="row.kind === 'select'" :label="row.label" type="select" :options="row.options" v-model="runtimeDraft[row.name]" :tip="row.tip" />
-                    <Field v-else-if="row.kind === 'number'" :label="row.label" type="number" :placeholder="row.placeholder" v-model="runtimeDraft[row.name]" :tip="row.tip" />
-                    <Field v-else-if="row.kind === 'textarea'" :label="row.label" type="textarea" :rows="3" :placeholder="row.placeholder" v-model="runtimeDraft[row.name]" :tip="row.tip" />
-                    <Field v-else :label="row.label" :type="row.kind === 'secret' ? 'password' : 'text'" :placeholder="row.placeholder" v-model="runtimeDraft[row.name]" :tip="row.tip" />
-                  </template>
+                  <RuntimeVariableFields :rows="channelRuntimeRows(channel)" :draft="runtimeDraft" />
                 </div>
                 <div v-else class="tool-channel-no-fields"><Icon name="check" :size="16" /><span>此渠道无需额外参数，启用并保存即可使用。</span></div>
               </div>
@@ -470,12 +482,7 @@ export const ToolConfigurationPanel = {
         <section v-if="unassignedRuntimeRows.length" class="tool-config-card">
           <div class="tool-config-card-head"><div><span class="eyebrow">公共运行变量</span><h3>未绑定到单一渠道的参数</h3><p>这些参数作用于整个工具，而不是某一个搜索渠道。</p></div></div>
           <div class="form-grid tool-runtime-grid">
-            <template v-for="row in unassignedRuntimeRows" :key="row.name">
-              <Field v-if="row.kind === 'select'" :label="row.label" type="select" :options="row.options" v-model="runtimeDraft[row.name]" :tip="row.tip" />
-              <Field v-else-if="row.kind === 'number'" :label="row.label" type="number" :placeholder="row.placeholder" v-model="runtimeDraft[row.name]" :tip="row.tip" />
-              <Field v-else-if="row.kind === 'textarea'" :label="row.label" type="textarea" :rows="3" :placeholder="row.placeholder" v-model="runtimeDraft[row.name]" :tip="row.tip" />
-              <Field v-else :label="row.label" :type="row.kind === 'secret' ? 'password' : 'text'" :placeholder="row.placeholder" v-model="runtimeDraft[row.name]" :tip="row.tip" />
-            </template>
+            <RuntimeVariableFields :rows="unassignedRuntimeRows" :draft="runtimeDraft" />
           </div>
         </section>
       </template>
@@ -485,16 +492,11 @@ export const ToolConfigurationPanel = {
           <div><span class="eyebrow">运行变量</span><h3>密钥与连接参数</h3><p>只保存在服务端，执行时注入工具；不会进入模型可见的工具定义。</p></div>
         </div>
         <div class="form-grid tool-runtime-grid">
-          <template v-for="row in runtimeRows" :key="row.name">
-            <Field v-if="row.kind === 'select'" :label="row.label" type="select" :options="row.options" v-model="runtimeDraft[row.name]" :tip="row.tip" />
-            <Field v-else-if="row.kind === 'number'" :label="row.label" type="number" :placeholder="row.placeholder" v-model="runtimeDraft[row.name]" :tip="row.tip" />
-            <Field v-else-if="row.kind === 'textarea'" :label="row.label" type="textarea" :rows="3" :placeholder="row.placeholder" v-model="runtimeDraft[row.name]" :tip="row.tip" />
-            <Field v-else :label="row.label" :type="row.kind === 'secret' ? 'password' : 'text'" :placeholder="row.placeholder" v-model="runtimeDraft[row.name]" :tip="row.tip" />
-          </template>
+          <RuntimeVariableFields :rows="runtimeRows" :draft="runtimeDraft" />
         </div>
       </section>
 
       <div v-if="!hasConfiguration" class="tool-config-empty"><Icon name="sliders" :size="22" /><strong>这个工具没有额外配置</strong><p>它直接使用调用参数和系统公共设置，不需要单独维护渠道或密钥。</p></div>
-    </div>
+    </fieldset>
   `,
 }

@@ -1,8 +1,6 @@
-import { computed, nextTick, reactive, ref, watch } from "vue"
+import { computed, inject, nextTick, reactive, ref, watch } from "vue"
 import { request, toast, store, setTab } from "../../app/store/store.js"
 import { asRecord, errorMessage, type UnknownRecord } from "../../shared/data.js"
-import { ToolConfigurationPanel } from "./tool-configuration-panel.js"
-import { RenderPanel } from "./render-panel.js"
 import {
   policyBadges,
   sourceLabel,
@@ -36,10 +34,6 @@ interface SourcePreview extends UnknownRecord {
   reason?: string
 }
 
-interface ConfigurationPanelHandle {
-  saveAll: () => Promise<void> | void
-}
-
 function cloneTool(tool: unknown = {}): ToolRecord {
   const source = asRecord<ToolRecord>(tool)
   const common = toolCommon(source)
@@ -65,36 +59,30 @@ const EMPTY_TOOL = cloneTool()
 
 export const ToolDetailModal = {
   name: "ToolDetailModal",
-  components: { ToolConfigurationPanel, RenderPanel },
   props: {
     open: Boolean,
     tool: { type: Object, default: () => EMPTY_TOOL },
-    initialTab: { type: String, default: "overview" },
   },
-  emits: ["close", "updated"],
-  setup(props: { open: boolean; tool?: unknown; initialTab?: string }, { emit }: { emit: (event: string, payload?: unknown) => void }) {
+  emits: ["close"],
+  setup(props: { open: boolean; tool?: unknown }, { emit }: { emit: (event: string, payload?: unknown) => void }) {
+    const configureBehavior = inject<(target: {scope: string; id: string}) => void>("configureToolBehavior")
+    function openConfiguration() { configureBehavior?.({scope: "tools", id: toolDetail.name}); emit("close") }
     const toolDetail = reactive<ToolRecord>(cloneTool())
     const modalRoot = ref<HTMLElement | null>(null)
-    const configurationPanel = ref<ConfigurationPanelHandle | null>(null)
     const activeTab = ref("overview")
     const sourcePreview = reactive<SourcePreview>({})
     const sourceLoading = ref(false)
     let sourceRequestId = 0
 
     const title = computed(() => toolDisplayName(toolDetail) || toolDetail.name || "能力详情")
-    const isRenderImage = computed(() => toolDetail.name === "render_image")
     const subtitle = computed(() => {
       const provenance = toolProvenance(toolDetail)
       return `${sourceLabel(toolSource(toolDetail))}能力 · ${provenance.packageId || provenance.skillId || "系统内置"}`
     })
-    const hasRuntimeFields = computed(() => Object.keys(asRecord(toolCommon(toolDetail).configSchema).properties || {}).length > 0)
-    const hasChannelConfig = computed(() => ["image_media", "web_search", "tool_search"].includes(toolDetail.name))
-    const hasConfig = computed(() => hasRuntimeFields.value || hasChannelConfig.value)
     const accessBadges = computed(() => policyBadges(toolCommon(toolDetail).policy))
     const tabs = computed(() => [
       { id: "overview", label: "能力概览", icon: "info" },
-      ...(isRenderImage.value ? [{ id: "render", label: "渲染设置", icon: "sparkles", badge: "统一入口" }] : []),
-      { id: "configuration", label: "渠道与变量", icon: "sliders", badge: hasConfig.value ? "可配置" : "无额外项" },
+      { id: "configuration", label: "工具配置", icon: "sliders", badge: "可配置" },
       { id: "source", label: "定义与源码", icon: "code" },
     ])
 
@@ -133,24 +121,15 @@ export const ToolDetailModal = {
     }
 
     function selectTab(tab: string) {
+      if (tab === "configuration") return openConfiguration()
       activeTab.value = tab
       if (tab === "source") void loadSource()
       resetScroll()
     }
 
-    function updateTool(value: unknown) {
-      syncTool(value)
-      emit("updated", value)
-    }
-
-    function saveConfiguration() {
-      void configurationPanel.value?.saveAll()
-    }
-
-    watch(() => [props.open, props.tool, props.initialTab], () => {
+    watch(() => [props.open, props.tool], () => {
       syncTool()
-      activeTab.value = ["render", "configuration", "source"].includes(String(props.initialTab)) && (String(props.initialTab) !== "render" || isRenderImage.value) ? String(props.initialTab) : "overview"
-      if (activeTab.value === "source") void loadSource()
+      activeTab.value = "overview"
       if (props.open) resetScroll()
     }, { immediate: true, deep: true })
 
@@ -161,22 +140,18 @@ export const ToolDetailModal = {
     }
 
     return {
+      openConfiguration,
       createAction,
       toolDetail,
       modalRoot,
-      configurationPanel,
       activeTab,
       sourcePreview,
       sourceLoading,
       title,
       subtitle,
       tabs,
-      isRenderImage,
       accessBadges,
-      hasConfig,
       selectTab,
-      saveConfiguration,
-      updateTool,
       sourceLabel,
       toolCommon,
       toolDeliveryLabel,
@@ -212,15 +187,7 @@ export const ToolDetailModal = {
             <article class="tool-overview-card"><span class="eyebrow">权限边界</span><div v-if="accessBadges.length" class="tool-badge-cloud"><span v-for="badge in accessBadges" :key="badge" class="badge">{{ badge }}</span></div><p v-else>没有额外角色限制，仍受全局工具开关与会话策略控制。</p></article>
             <article class="tool-overview-card"><span class="eyebrow">来源</span><dl><div><dt>类型</dt><dd>{{ sourceLabel(toolSource(toolDetail)) }}</dd></div><div><dt>归属</dt><dd>{{ toolProvenance(toolDetail).packageId || toolProvenance(toolDetail).skillId || 'builtin' }}</dd></div><div><dt>标签</dt><dd>{{ (toolCommon(toolDetail).tags || []).join(' · ') || '无' }}</dd></div></dl></article>
           </div>
-          <div v-if="hasConfig" class="tool-detail-next"><Icon name="sliders" :size="17" /><div><strong>此能力支持独立配置</strong><p>渠道开关、默认来源与密钥集中在“渠道与变量”，保存后生效。</p></div><button class="btn small outline" type="button" @click="selectTab('configuration')">去配置<Icon name="chevron-right" :size="13" /></button></div>
-        </section>
-
-        <section v-else-if="activeTab === 'render'" class="tool-detail-page">
-          <RenderPanel />
-        </section>
-
-        <section v-else-if="activeTab === 'configuration'" class="tool-detail-page">
-          <ToolConfigurationPanel ref="configurationPanel" :tool="toolDetail" @updated="updateTool" />
+          <div class="tool-detail-next"><Icon name="sliders" :size="17" /><div><strong>此能力支持独立配置</strong><p>执行策略、渲染、渠道与运行变量在统一配置弹窗管理。</p></div><button class="btn small outline" type="button" @click="openConfiguration">去配置<Icon name="chevron-right" :size="13" /></button></div>
         </section>
 
         <section v-else class="tool-detail-page tool-source-workspace">
@@ -240,7 +207,6 @@ export const ToolDetailModal = {
       </div>
       <template #actions>
         <button class="btn outline" type="button" @click="createAction"><Icon name="sparkles" :size="14" />创建动作</button>
-        <button v-if="activeTab === 'configuration' && hasConfig" class="btn primary" type="button" @click="saveConfiguration"><Icon name="save" :size="14" />保存配置</button>
         <button class="btn outline" type="button" @click="$emit('close')"><Icon name="x" :size="14" />关闭</button>
       </template>
     </SideDrawer>

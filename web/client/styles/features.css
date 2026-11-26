@@ -1063,6 +1063,11 @@
 .tool-detail-next p { margin-top: 2px; color: var(--muted-foreground); font-size: 10.5px; }
 .tool-config-workspace { display: grid; gap: 12px; }
 .tool-config-card, .tool-definition-card { padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); }
+.behavior-form { min-width: 0; margin: 0; padding: 0; border: 0; }
+.behavior-fields h3 { margin-bottom: 16px; }
+.behavior-field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+@media (max-width: 640px) { .behavior-field-grid { grid-template-columns: minmax(0, 1fr); } }
+.behavior-target { display: flex; align-items: center; gap: 10px; padding: 10px; border-bottom: 1px solid var(--border); cursor: pointer; }
 .tool-config-card-head, .tool-definition-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
 .tool-config-card-head p { max-width: 680px; margin-top: 5px; color: var(--muted-foreground); font-size: 10.5px; line-height: 1.55; }
 .tool-global-config-card { background: linear-gradient(145deg, color-mix(in srgb, var(--primary-weak) 25%, var(--card)), var(--card) 45%); }

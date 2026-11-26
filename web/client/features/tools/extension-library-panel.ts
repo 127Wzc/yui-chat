@@ -1,3 +1,4 @@
+import { BehaviorConfigButton } from "./behavior-config-button.js"
 import { CapabilityFilterBar } from "./capability-filter-bar.js"
 import { CapabilityList, CapabilityRisk, capabilityRisk } from "./capability-list.js"
 import { CapabilityRoleButtons } from "./capability-role-buttons.js"
@@ -61,7 +62,7 @@ function packageRisk(item: ExtensionRow) {
 
 // 扩展列表：筛选条 + 目录表格 + 空态；行操作全部上浮给父组件。
 export const ExtensionLibraryPanel = {
-  components: { CapabilityFilterBar, CapabilityRoleButtons, CapabilityList, CapabilityRisk },
+  components: { BehaviorConfigButton, CapabilityFilterBar, CapabilityRoleButtons, CapabilityList, CapabilityRisk },
   name: "ExtensionLibraryPanel",
   props: {
     rows: { type: Array, default: () => [] },
@@ -96,6 +97,8 @@ export const ExtensionLibraryPanel = {
         <template #risk="{ item }"><span class="badge" :class="item.extensionType === 'skill' ? '' : packageRisk(item).tone" :title="item.extensionType === 'skill' ? 'Skill 提供指令，工具调用仍按工具风险和权限检查' : '按已知工具的最高风险显示，展开查看各项风险'">{{ item.extensionType === 'skill' ? '指令扩展' : packageRisk(item).label }}</span></template>
         <template #status="{ item }"><span class="badge">{{ item.extensionType === 'skill' ? 'Skill' : 'Custom' }}</span><span v-if="item.extensionType === 'skill'" class="badge">{{ item.sourceState === 'recorded' ? '有安装收据' : '来源未知' }}</span><Pill v-bind="catalogStatus(item)" /></template>
         <template #actions="{ item }">
+          <BehaviorConfigButton v-if="item.extensionType !== 'skill'" :target="{scope: 'customPackages', id: item.id}" label="范围配置" />
+          <BehaviorConfigButton v-else :target="{scope: 'skills', id: item.id}" />
           <button class="btn small outline" @click="$emit('edit', item)">编辑</button>
           <button class="icon-btn danger" title="删除扩展" @click="$emit('remove', item)"><Icon name="trash" :size="14" /></button>
           <Switch :model-value="item.enabled" @update:model-value="$emit('toggle', item)" />
@@ -105,6 +108,7 @@ export const ExtensionLibraryPanel = {
           <details v-if="item.extensionType !== 'skill'" class="capability-list-details"><summary>包含工具 · {{ packageToolSummary(item) }}</summary>
             <CapabilityList :rows="item.loadedTools?.length ? item.loadedTools : (item.tools || [])" label="工具" empty="未声明工具或尚未加载。">
               <template #identity="{ item: tool }"><strong>{{ toolCommon(tool).displayNameZh || tool.name }}</strong><div class="cell-sub">{{ tool.name }}</div><div class="cell-sub">{{ toolCommon(tool).descriptionZh || toolCommon(tool).description }}</div></template>
+              <template #actions="{ item: tool }"><BehaviorConfigButton :target="{scope: 'tools', id: tool.name, owner: {scope: 'customPackages', id: item.id}}" /></template>
               <template #risk="{ item: tool }"><CapabilityRisk :tool="tool" /></template>
               <template #roles="{ item: tool }"><CapabilityRoleButtons v-if="tool.name" :id="tool.name" /></template>
             </CapabilityList>

@@ -1,3 +1,4 @@
+import { BehaviorConfigButton } from "./behavior-config-button.js"
 import { CapabilityList, CapabilityRisk } from "./capability-list.js"
 import { CapabilityRoleButtons } from "./capability-role-buttons.js"
 import { computed, ref } from "vue"
@@ -6,7 +7,7 @@ import { asRecord, asRecords, errorMessage } from "../../shared/data.js"
 
 /** 独立即时保存，修改名单不覆盖连接信息或尚未提交的服务编辑。 */
 export const McpToolsPanel = {
-  components: { CapabilityRoleButtons, CapabilityList, CapabilityRisk },
+  components: { BehaviorConfigButton, CapabilityRoleButtons, CapabilityList, CapabilityRisk },
   props: { serverId: { type: String, required: true } },
   setup(props: { serverId: string }) {
     const busy = ref(false)
@@ -71,6 +72,7 @@ export const McpToolsPanel = {
     <Collapse title="工具开放配置" hint="查看工具与控制注入；修改立即保存" nested>
       <p class="muted small">{{ connection }}</p><p v-if="managed" class="muted small">受管理服务仅开放明确审阅的工具；定义变化后需要重新发现和选择。</p>
       <div class="row">
+        <BehaviorConfigButton :target="{scope: 'mcpServers', id: serverId}" label="服务默认配置" />
         <button class="btn small" :disabled="busy" @click="discover">测试连接 / 发现工具</button>
         <button class="btn small" :disabled="busy || all || managed" @click="save(null)">全部开放（含未来新增）</button>
         <button class="btn small" :disabled="busy || (!all && !managed)" @click="save(catalog.map(tool => tool.originalName))">仅开放当前清单</button>
@@ -81,7 +83,7 @@ export const McpToolsPanel = {
         <template #identity="{ item }"><strong>{{ item.originalName }}</strong><div class="cell-sub">{{ item.name }}</div><div class="cell-sub">{{ item.description }}</div><p v-if="item.status === 'unavailable'" class="danger tiny">当前异常：{{ item.error || '服务连接暂时不可用' }}；后续调用会自动重连。</p></template>
         <template #risk="{ item }"><CapabilityRisk :tool="toolRisk(item)" /></template>
         <template #status="{ item }"><span v-if="item.reviewRequired" class="badge">定义变化，待审阅</span><span v-if="item.missing" class="badge">未发现</span></template>
-        <template #actions="{ item }"><label><input type="checkbox" :disabled="busy" :checked="all || (!item.reviewRequired && selected.includes(item.originalName))" @click.prevent="toggle(item.originalName, !(all || (!item.reviewRequired && selected.includes(item.originalName))))" /> 开放</label></template>
+        <template #actions="{ item }"><BehaviorConfigButton :disabled="!item.name || item.missing" :hint="item.missing ? '当前未发现工具，请先发现工具定义' : '配置此工具'" :target="{scope: 'tools', id: item.name, owner: {scope: 'mcpServers', id: serverId}}" /><label><input type="checkbox" :disabled="busy" :checked="all || (!item.reviewRequired && selected.includes(item.originalName))" @click.prevent="toggle(item.originalName, !(all || (!item.reviewRequired && selected.includes(item.originalName))))" /> 开放</label></template>
         <template #details="{ item }"><JsonBlock v-if="item.inputSchema" title="参数定义" :value="item.inputSchema" /><JsonBlock v-if="item.annotations" title="服务端声明" :value="item.annotations" /></template>
         <template #roles="{ item }"><CapabilityRoleButtons v-if="item.name" :id="item.name" /></template>
       </CapabilityList>

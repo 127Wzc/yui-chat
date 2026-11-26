@@ -1,3 +1,4 @@
+import { BehaviorConfigButton } from "./behavior-config-button.js"
 import { CapabilityFilterBar } from "./capability-filter-bar.js"
 import { CapabilityList, CapabilityRisk } from "./capability-list.js"
 import { CapabilityRoleButtons } from "./capability-role-buttons.js"
@@ -27,7 +28,7 @@ import {
 
 // 工具列表：标签筛选 + 单一清晰表格 + 行内开关。
 export const ToolListPanel = {
-  components: { CapabilityFilterBar, CapabilityRoleButtons, CapabilityList, CapabilityRisk },
+  components: { BehaviorConfigButton, CapabilityFilterBar, CapabilityRoleButtons, CapabilityList, CapabilityRisk },
   name: "ToolListPanel",
   props: { selectedCategory: { type: String, default: "all" } },
   emits: ["open-tool-detail", "category-change"],
@@ -135,7 +136,7 @@ export const ToolListPanel = {
           <template #actions="{ item: tool }"><div class="capability-row-actions">
                       <button class="btn small outline" type="button" title="查看工具详情" @click="openToolDetail(tool)"><Icon name="info" :size="13" />查看</button>
                       <button v-if="toolSource(tool) === 'custom'" class="btn small outline" type="button" title="编辑 Custom 工具" @click="openToolDetail(tool, 'edit')"><Icon name="pencil" :size="13" />编辑</button>
-                      <button v-if="hasWebConfig(tool)" class="btn small outline" type="button" :title="tool.name === 'render_image' ? '调整工具和系统渲染策略' : '设置密钥等运行变量'" @click="openToolDetail(tool, 'config')"><Icon name="sliders" :size="13" />配置</button>
+                      <BehaviorConfigButton :target="{scope: 'tools', id: tool.name}" />
                     </div>
                     <Switch :model-value="tool.enabled" @update:model-value="toggleTool(tool.name, $event)" />
                   </template>

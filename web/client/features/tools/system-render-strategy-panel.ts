@@ -45,7 +45,6 @@ export const SystemRenderStrategyPanel = {
     async function saveSettings() {
       try {
         await saveConfigPatch(buildPatch(), "system-render-strategy")
-        toast("系统渲染策略已保存", "success")
       } catch (err) { toast(errorMessage(err)) }
     }
 

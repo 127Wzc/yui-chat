@@ -1,3 +1,4 @@
+import { validateBehaviorConfig } from "../tools/support/behavior-settings.js"
 import { validLangfuseBaseUrl } from "./langfuse.js"
 import { findPortraitType } from "../memory/portrait-types.js"
 import { specializedModelAdapter, specializedAdapterPurpose } from "../models/protocol/specialized-adapters.js"
@@ -713,6 +714,10 @@ function validateTools(config: ConfigRecord, issues: ValidationIssue[]): void {
   }
   const boundaryAccess = config.tools?.boundaryAccess || {}
   if (boundaryAccess !== undefined && !isObject(boundaryAccess)) add(issues, "error", "tools.boundaryAccess", "tools.boundaryAccess 必须是对象")
+  if (config.tools?.behavior !== undefined) {
+    try { validateBehaviorConfig(config.tools.behavior) }
+    catch (error) { add(issues, "error", "tools.behavior", error instanceof Error ? error.message : String(error)) }
+  }
   if (config.tools?.promptSelection !== undefined) {
     if (!isObject(config.tools.promptSelection)) add(issues, "error", "tools.promptSelection", "tools.promptSelection 必须是对象")
     else {

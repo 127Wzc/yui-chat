@@ -1,3 +1,4 @@
+import { applyToolBehavior } from "./behavior-settings.js"
 import { configStore } from "../../config/store.js"
 import type { RuntimeConfigObject } from "../../config/types.js"
 import { mcpManager } from "../../mcp/index.js"
@@ -112,9 +113,10 @@ export class ToolRegistry {
   registryErrors: RegistryError[] = []
   private mcpToolsRevision = mcpManager.toolsRevision
 
-  async refreshSkills(): Promise<void> {
-    await skillManager.refresh()
+  async refreshSkills(): Promise<unknown[]> {
+    const skills = await skillManager.refresh()
     this.skillErrors = skillManager.errors
+    return skills
   }
 
   async init({ reloadMcp = true }: { reloadMcp?: boolean } = {}): Promise<void> {
@@ -186,9 +188,10 @@ export class ToolRegistry {
     return count
   }
 
-  get(name: string): NormalizedTool | null {
+  get(name: string, config: unknown = configStore.get()): NormalizedTool | null {
     this.syncMcpTools()
-    return this.tools.get(name) || null
+    const tool = this.tools.get(name)
+    return tool ? applyToolBehavior(tool, config) : null
   }
 
   async list(context: RegistryExecutionContext | null = null): Promise<UnknownRecord[]> {
@@ -196,7 +199,8 @@ export class ToolRegistry {
     const config = await configStore.load()
     const toolsConfig = record(config.tools)
     const runtimeVariables = record(toolsConfig.runtimeVariables)
-    return [...this.tools.values()].map(tool => {
+    return [...this.tools.values()].map(baseTool => {
+      const tool = applyToolBehavior(baseTool, config)
       const modelGuide = modelToolLoadingGuide(tool)
       const common = getToolCommon(tool)
       return {
@@ -223,7 +227,7 @@ export class ToolRegistry {
     this.syncMcpTools()
     const current = config || await configStore.load()
     if (record(current.tools).enabled !== true) return []
-    return [...this.tools.values()].filter(tool => isToolEnabledByConfig(current, tool))
+    return [...this.tools.values()].map(tool => applyToolBehavior(tool, current)).filter(tool => isToolEnabledByConfig(current, tool))
   }
 
   async getAllowedTools(context: RegistryExecutionContext = {}): Promise<NormalizedTool[]> {
@@ -246,7 +250,7 @@ export class ToolRegistry {
   getToolsByNames(names: string[] = [], context: RegistryExecutionContext = {}): NormalizedTool[] {
     this.syncMcpTools()
     const wanted = new Set(names)
-    return [...this.tools.values()].filter(tool => {
+    return [...this.tools.values()].map(tool => applyToolBehavior(tool, context.config || configStore.get())).filter(tool => {
       if (!wanted.has(tool.name)) return false
       if (getToolCommon(tool).hiddenFromModel === true) return false
       try {
@@ -310,7 +314,7 @@ export class ToolRegistry {
 
   /** 执行前完成权限、参数、派发标记和后台队列接入。 */
   async execute(name: string, args: unknown = {}, context: RegistryExecutionContext = {}): Promise<unknown> {
-    const tool = this.get(name)
+    const tool = this.get(name, context.config || configStore.get())
     if (context.e && typeof context.e === "object") normalizeEventScope(context.e as UnknownRecord)
     const observation = record(context.observability)
     if (!tool) throw new Error(`Tool ${name} not found`)

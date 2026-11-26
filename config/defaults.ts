@@ -309,6 +309,7 @@ export const defaults = {
     enabled: true,
     enabledTools: ["knowledge_manage", "memory_manage", "bilibili_media", "music_play", "message_send", "generate_image", "query_userinfo", "render_image", "schedule_task", "image_media", "web_search", "file_search", "tool_search", "dispatch_subagent"],
     customToolPackages: [],
+    behavior: { tools: {}, customPackages: {}, mcpServers: {} },
     runtimeVariables: { persona_punish: { ...defaultPersonaPunishmentConfig } },
     activePresets: ["core"],
     promptSelection: {

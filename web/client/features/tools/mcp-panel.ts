@@ -368,11 +368,12 @@ export const McpPanel = {
             <Field v-if="editor.connection === 'stdio'" label="命令参数" type="textarea" rows="4" v-model="editor.args" placeholder="server.js\n--port\n3000" tip="每行一个参数；保存时会按空白拆分为命令参数。" />
             <Field v-if="editor.connection === 'stdio'" label="环境变量" type="textarea" rows="4" v-model="editor.env" placeholder="KEY=value\nANOTHER_KEY=value" tip="每行一个 KEY=value，仅启动本地命令时通常需要。" />
           </div>
-          <Collapse title="高级设置" hint="分类、风险、标签、服务策略和工具级策略" nested>
+          <Collapse title="高级设置" hint="开发者声明：分类、风险、标签与原始策略" nested>
             <div class="form-grid">
               <Field label="分类" v-model="editor.category" tip="默认保留 mcp 即可；只有想按业务细分时再改。" />
               <Field label="风险" type="select" :options="MCP_RISK_OPTIONS" v-model="editor.risk" tip="涉及外部网络或管理动作时，请按实际风险选择。" />
-              <Field label="需要最终回复" type="select" :options="BOOL_OPTIONS" v-model="editor.requiresFinalReply" tip="默认开启。关闭后，只有本轮单独调用该 MCP 工具时才允许不发送模型文字回复；工具级 toolPolicies.requiresFinalReply 可以覆盖单个工具。" />
+              <p class="muted tiny">这里维护服务原始默认声明；日常执行设置请使用“服务默认配置”或工具行“配置”，其中的管理覆盖优先。</p>
+              <Field label="默认需要最终回复" type="select" :options="BOOL_OPTIONS" v-model="editor.requiresFinalReply" tip="默认开启。关闭后，只有本轮单独调用该 MCP 工具时才允许不发送模型文字回复；工具级 toolPolicies.requiresFinalReply 可以覆盖单个工具。" />
               <Field label="执行策略 JSON" type="textarea" rows="6" v-model="editor.execution" tip="统一配置 effect、repeatPolicy、supportsCount、countField、maxCount、targetFields、retryPolicy、maxAttempts 等执行属性；普通查询工具可留空。" />
               <Field label="按 action 覆盖 JSON" type="textarea" rows="5" v-model="editor.executionByAction" tip="复合 MCP 工具可按 action 覆盖执行效果和重试策略；工具级 toolPolicies.execution 优先级更高。" />
               <Field label="标签" v-model="editor.tags" tip="逗号分隔，用来标记来源、用途或供应商。" />

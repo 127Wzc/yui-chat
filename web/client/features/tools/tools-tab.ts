@@ -1,3 +1,5 @@
+import { BehaviorDrawer, type BehaviorTarget } from "./behavior-drawer.js"
+import { BehaviorConfigButton } from "./behavior-config-button.js"
 import { InstallationPanel } from "./installation-panel.js"
 import { ref, computed, nextTick, onMounted, provide, watch } from "vue"
 import { store, request, toast } from "../../app/store/store.js"
@@ -8,33 +10,53 @@ import { ToolDetailModal } from "./tool-detail-modal.js"
 import { BoundaryAccessPanel } from "./permission-panel.js"
 import { ToolListPanel } from "./tools-list-panel.js"
 import { GlobalToolSettingsPanel } from "./global-tool-settings-panel.js"
-import { isFoldedRenderTool, toolSource, type ToolConfigRoot, type ToolRecord, type ToolsSlice } from "./shared.js"
+import { isFoldedRenderTool, toolCommon, toolSource, type ToolConfigRoot, type ToolRecord, type ToolsSlice } from "./shared.js"
 
 export const ToolsTab = {
   name: "ToolsTab",
-  components: { InstallationPanel, ToolListPanel, ExtensionPanel, ToolDetailModal, BoundaryAccessPanel, GlobalToolSettingsPanel, McpPanel },
+  components: { BehaviorDrawer, BehaviorConfigButton, InstallationPanel, ToolListPanel, ExtensionPanel, ToolDetailModal, BoundaryAccessPanel, GlobalToolSettingsPanel, McpPanel },
   setup() {
+    const behaviorOpen = ref(false)
+    const behaviorTarget = ref<BehaviorTarget | null>(null)
+    provide("configureToolBehavior", (target: BehaviorTarget | null) => { behaviorTarget.value = target; behaviorOpen.value = true })
     const accessMatrix = ref<Record<string, unknown> | null>(null)
     const accessSaving = ref(false)
+    const accessKey = computed(() => {
+      const tools = asRecord(store.config?.tools)
+      const punishment = asRecord(asRecord(tools.runtimeVariables).persona_punish)
+      // 只比较权限预览使用的目录与策略；执行参数、密钥和预算不影响角色决策。
+      return JSON.stringify([
+        asRecords(store.tools?.tools).map(tool => {
+          const common = toolCommon(tool)
+          return [tool.name, tool.enabled, common.source, common.policy, common.provenance, common.risk, common.displayNameZh]
+        }),
+        tools.enabled, tools.policy, tools.boundaryAccess,
+        punishment.enabled, punishment.allowIgnore, punishment.allowMute,
+      ])
+    })
     let matrixGeneration = 0
-    async function reloadAccess() {
+    let matrixKey = "", matrixRequest: Promise<void> | undefined
+    function reloadAccess(): Promise<void> {
+      if (matrixKey === accessKey.value && matrixRequest) return matrixRequest
+      matrixKey = accessKey.value
       const generation = ++matrixGeneration
-      try {
-        const result = await request("/api/tools/access-matrix")
+      matrixRequest = request("/api/tools/access-matrix").then(result => {
         if (generation === matrixGeneration) accessMatrix.value = asRecord(result.matrix)
-      } catch { if (generation === matrixGeneration) { accessMatrix.value = null; toast("权限验证加载失败，请刷新重试") } }
+      }).catch(() => {
+        if (generation === matrixGeneration) { matrixKey = ""; accessMatrix.value = null; toast("权限验证加载失败，请刷新重试") }
+      })
+      return matrixRequest
     }
     provide("capabilityAccessMatrix", accessMatrix)
     provide("capabilityAccessSaving", accessSaving)
     provide("reloadCapabilityAccess", reloadAccess)
-    watch([() => store.tools, () => store.sliceLoading.tools], () => {
+    watch([accessKey, () => store.sliceLoading.tools, accessSaving], () => {
       if (store.tools && !store.sliceLoading.tools && !accessSaving.value) void reloadAccess()
     }, { immediate: true })
     const activeCapabilityView = ref("discover")
     const showGlobalSettings = ref(false)
     const showToolDetail = ref(false)
     const selectedTool = ref<ToolRecord | null>(null)
-    const selectedToolTab = ref("overview")
     const isPermissionPage = computed(() => store.activeTab === "tool-permissions")
     const globalToolsEnabled = computed(() => asRecord<ToolConfigRoot>(store.config).tools?.enabled !== false)
     const allTools = computed<ToolRecord[]>(() => asRecords<ToolRecord>(asRecord<ToolsSlice>(store.tools).tools).filter(item => toolSource(item) === "builtin" && !isFoldedRenderTool(item)))
@@ -59,8 +81,12 @@ export const ToolsTab = {
         return
       }
       if (toolSource(tool) === "builtin") {
+        if (payload?.action === "config") {
+          behaviorTarget.value = { scope: "tools", id: tool.name }
+          behaviorOpen.value = true
+          return
+        }
         selectedTool.value = tool
-        selectedToolTab.value = payload?.action === "config" ? (tool.name === "render_image" ? "render" : "configuration") : (tool.name === "render_image" ? "render" : "overview")
         showToolDetail.value = true
         return
       }
@@ -71,12 +97,12 @@ export const ToolsTab = {
       if (target) { store.toolDetailSeed = null; void openToolDetail(target) }
     })
     return {
+      behaviorOpen, behaviorTarget,
       isPermissionPage,
       activeCapabilityView,
       showGlobalSettings,
       showToolDetail,
       selectedTool,
-      selectedToolTab,
       globalToolsEnabled,
       capabilityViewItems,
       openToolDetail,
@@ -96,6 +122,7 @@ export const ToolsTab = {
         ><Icon :name="item.icon" :size="15" /><span>{{ item.label }}</span><b v-if="item.badge !== ''">{{ item.badge }}</b></button>
         <span class="capability-mode-spacer" aria-hidden="true"></span>
         <button class="capability-global-settings" type="button" :aria-label="globalToolsEnabled ? '打开全局工具设置' : '打开全局工具设置，当前已关闭'" @click="showGlobalSettings = true"><Icon name="gear" :size="15" /><span>全局配置</span><b>{{ globalToolsEnabled ? '已启用' : '已关闭' }}</b></button>
+        <BehaviorConfigButton label="批量配置" />
       </nav>
       <p v-if="!isPermissionPage && activeCapabilityView !== 'installations'" class="muted small">点击角色圆点切换权限；实心表示允许，空心表示禁止，半实心表示部分可用，虚线表示仍有限制。悬停查看角色和原因，↺ 恢复默认。</p>
       <div v-if="!isPermissionPage" class="section-stage capability-workspace">
@@ -111,7 +138,8 @@ export const ToolsTab = {
         <div v-else-if="activeCapabilityView === 'installations'" class="section-stage capability-source-stage"><InstallationPanel /></div>
       </div>
       <GlobalToolSettingsPanel v-if="!isPermissionPage" :open="showGlobalSettings" @close="showGlobalSettings = false" />
-      <ToolDetailModal v-if="!isPermissionPage" :open="showToolDetail" :tool="selectedTool" :initial-tab="selectedToolTab" @updated="selectedTool = $event" @close="showToolDetail = false" />
+      <BehaviorDrawer v-if="!isPermissionPage" :open="behaviorOpen" :target="behaviorTarget" @close="behaviorOpen = false" />
+      <ToolDetailModal v-if="!isPermissionPage" :open="showToolDetail" :tool="selectedTool" @close="showToolDetail = false" />
 
       <div v-else class="section-stage capability-permission-workspace">
         <BoundaryAccessPanel />

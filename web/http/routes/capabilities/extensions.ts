@@ -1,3 +1,4 @@
+import { registerToolBehaviorRoutes } from "./tool-behavior.js"
 import { registerInstallationRoutes, installationWebActor } from "./installation.js"
 import { installationInstaller } from "../../../../extensions/installation/installer.js"
 import { recordExtensionManagement } from "../../../../extensions/installation/management.js"
@@ -88,6 +89,7 @@ async function builtinToolSourcePreview(name: string): Promise<UnknownRecord> {
 
 /** 注册工具、Custom Tool、Skill、MCP 与后台任务管理接口。 */
 export function registerExtensionRoutes(app: RouteApp): void {
+  registerToolBehaviorRoutes(app)
   registerInstallationRoutes(app)
   app.get("/api/tools", auth, handleRoute(async (_req, res) => {
     res.json({
@@ -262,8 +264,8 @@ export function registerExtensionRoutes(app: RouteApp): void {
       else delete runtimeVariables[name]
       return configValue({ ...config, tools: { ...configTools, runtimeVariables } })
     })
-    // 工具限额属于运行态；保存后立即唤醒等待队列，让新配置生效。
-    backgroundTaskService.refresh()
+    // 只有声明了独立队列的工具才需唤醒队列，应用最新运行限额。
+    if (typeof toolRegistry.get(name)?.backgroundQueue === "function") backgroundTaskService.refresh()
     res.json({ ok: true, config: redactConfigSecrets(saved), runtime, tools: await toolRegistry.list() })
   }, { errorStatus: 400 }))
   app.get("/api/custom-tools", auth, handleRoute(async (_req, res) => {
@@ -350,7 +352,7 @@ export function registerExtensionRoutes(app: RouteApp): void {
     const skill = (await listSkills()).find(item => item.id === id)
     if (!skill) throw new Error(`Skill ${id} not found`)
     const current = record(record(configStore.get().skills).runtimeVariables)[id] || {}
-    const value = applyToolRuntimeConfigUpdate({ name: id, configSchema: skill.configSchema }, req.body?.value, current)
+    const value = applyToolRuntimeConfigUpdate({ name: id, configSchema: record(skill.metadata).configSchema }, req.body?.value, current)
     const { saved, runtime } = await updateConfigAndApply(config => {
       const skills = record(config.skills)
       const runtimeVariables = { ...record(skills.runtimeVariables) }
@@ -358,8 +360,9 @@ export function registerExtensionRoutes(app: RouteApp): void {
       else delete runtimeVariables[id]
       return configValue({ ...config, skills: { ...skills, runtimeVariables } })
     }, {}, { reinitTools: false, reinitFilters: false })
-    await toolRegistry.refreshSkills()
-    res.json({ ok: true, config: redactConfigSecrets(saved), runtime, skills: await listSkills() })
+    const skills = await toolRegistry.refreshSkills()
+    const skillResult = (toolRegistry.skillStatus().catalog as UnknownRecord[]).find(item => item.id === id)
+    res.json({ ok: true, config: redactConfigSecrets(saved), runtime, skills, skill: skillResult })
     })
   }, { errorStatus: 400 }))
   app.post("/api/skills/:id/update-remote", auth, handleRoute(async (req, res) => {
