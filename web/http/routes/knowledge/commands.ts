@@ -1,3 +1,4 @@
+import { collectCommandSource, listCommandSources } from "../../../../knowledge/command-sources/registry.js"
 import { builtinCommandStats } from "./bases.js"
 import { sqliteClient } from "../../../../core/storage/sqlite/client.js"
 import { knowledgeIndexJobs } from "../../../../knowledge/index-jobs.js"
@@ -9,8 +10,10 @@ import { commandObserver } from "../../../../knowledge/command-observer.js"
 const validRevision = (value: unknown): value is string => typeof value === "string" && /^[a-f0-9]{64}$/.test(value)
 
 export function registerCommandKnowledgeRoutes(app: RouteApp): void {
-  app.post("/api/knowledge/commands/collect", auth, handleRoute(async (_req, res) => {
-    const bundle = await commandObserver.collectLoadedCommands()
+  app.get("/api/knowledge/commands/sources", auth, handleRoute(async (_req,res)=>{ res.json({ok:true,sources:listCommandSources()}) }))
+  app.post("/api/knowledge/commands/collect", auth, handleRoute(async (req, res) => {
+    const source = String(req.body?.source || "yunzai")
+    const bundle = await collectCommandSource(source, req.body || {})
     res.json({ ok: true, bundle, collectedAt: new Date().toISOString(), pluginCount: new Set(bundle.documents.map(row => row.metadata.pluginKey)).size })
   }, { errorStatus: 400 }))
   app.get("/api/knowledge/commands/vector-status", auth, handleRoute(async (_req, res) => {

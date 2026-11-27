@@ -51,13 +51,13 @@
     "check:knowledge-evaluation": "node scripts/check-knowledge-evaluation.mjs"
   },
   "dependencies": {
+    "@lezer/python": "1.1.20",
     "@modelcontextprotocol/sdk": "^1.24.0",
     "better-sqlite3": "12.10.0",
     "sharp": "^0.33.5",
     "sqlite-vec": "0.1.9",
+    "typescript": "^5.6.2",
     "vue": "^3.5.35",
-    "yaml": "^2.9.0",
-    "typescript": "^5.6.2"
-  },
-  "devDependencies": {}
+    "yaml": "^2.9.0"
+  }
 }
