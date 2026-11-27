@@ -53,6 +53,7 @@ interface RuntimeAdapter {
 }
 
 interface ModelSendOptions {
+  onProgress?: (event: Record<string, unknown>) => void
   channel?: ModelChannel
   messages?: ModelMessage[]
   replayMessages?: ModelMessage[]
@@ -157,6 +158,18 @@ function unknownImageUsage() {
  *
  * 它不参与模型选择、不决定工具权限；这些职责分别由路由和工具运行时承担。
  */
+function progressTools(value: unknown, namespace = ""): Record<string, unknown>[] {
+  return (Array.isArray(value) ? value : []).flatMap(value => {
+    const item = record(value)
+    if (item.type === "namespace") return progressTools(item.tools, String(item.name || ""))
+    if (Array.isArray(item.functionDeclarations)) return progressTools(item.functionDeclarations, namespace)
+    const tool = record(item.function || item)
+    const common = record(tool.common)
+    const name = String(tool.name || tool.type || "")
+    return [{ name: namespace ? `${namespace}.${name}` : name, description: tool.description || common.description || "", parameters: tool.parameters || tool.input_schema || common.parameters || {} }]
+  })
+}
+
 export class AdapterRegistry {
   readonly adapters = new Map<string, RuntimeAdapter>()
 
@@ -198,18 +211,27 @@ export class AdapterRegistry {
     }))
   }
 
-  async sendMessage({ channel, messages = [], replayMessages, tools = [], toolChoice, maxTokens = 0, signal, event, purpose = "chat", source = "", taskName = "", trace = null, parentToolId = "", metadata = {}, snapshotMetadata = {} }: ModelSendOptions = {}): Promise<ModelResponse> {
+  async sendMessage({ onProgress, channel, messages = [], replayMessages, tools = [], toolChoice, maxTokens = 0, signal, event, purpose = "chat", source = "", taskName = "", trace = null, parentToolId = "", metadata = {}, snapshotMetadata = {} }: ModelSendOptions = {}): Promise<ModelResponse> {
     if (!channel) throw new Error("channel is required")
     const adapter = this.get(channel.type)
+    if (onProgress && adapter.supportsStreaming) channel = { ...channel, stream: true }
+    const emit = (event: Record<string, unknown>) => { try { onProgress?.(event) } catch { /* 观察失败不影响模型执行。 */ } }
     const modelVisibleTools = adapter.supportsNativeToolSearch ? toolsForResponses(tools, channel) : tools
     const observation = await langfuseReporter.begin({ trace, source, purpose, taskName, operation: "chat", channel, input: messages, tools: modelVisibleTools })
     const call = modelLogStore.beginModelCall({ trace, event, source, purpose, taskName, operation: "chat", channel, messages, tools: modelVisibleTools, parentToolId, metadata, snapshotMetadata, request: { maxTokens, toolChoice, protocol: adapter.protocol } })
+    const id = call?.id || crypto.randomUUID()
+    emit({ type: "model-start", id, channel: channel.model, phase: record(metadata.route).phase || "", source, purpose, parentToolId, stream: channel.stream === true, messageCount: messages.length, tools: progressTools(modelVisibleTools) })
     try {
-      const result = normalizeModelResponse(await adapter.sendMessage({ channel, messages, replayMessages, tools, toolChoice, maxTokens, signal, event, onRequest: capture => modelLogStore.captureModelRequest(call, capture) }))
+      const result = normalizeModelResponse(await adapter.sendMessage({ channel, messages, replayMessages, tools, toolChoice, maxTokens, signal, event, onDelta: delta => emit({ type: "model-delta", id, delta }), onRequest: capture => {
+        modelLogStore.captureModelRequest(call, capture)
+        emit({ type: "model-start", id, phase: capture.phase || record(metadata.route).phase || "", tools: progressTools(record(capture.body).tools) })
+      } }))
+      emit({ type: "model-end", id, text: result.text, reasoning: result.reasoningText || "", usage: result.usage, status: "ok" })
       langfuseReporter.complete(observation, result)
       modelLogStore.completeModelCall(call, { response: result })
       return result
     } catch (error) {
+      emit({ type: "model-end", id, status: signal?.aborted ? "canceled" : "failed", error: error instanceof Error ? error.message : String(error) })
       langfuseReporter.complete(observation, undefined, error)
       modelLogStore.completeModelCall(call, { error })
       throw error

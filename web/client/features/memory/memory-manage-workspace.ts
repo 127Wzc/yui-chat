@@ -14,13 +14,14 @@ export const MemoryManageWorkspace = {
       <header class="group-memory-toolbar">
         <MemoryGroupPicker :view="view" />
         <span v-if="view.selectedPolicy" class="muted small group-memory-context">{{ view.selectedPolicy.enabled ? '正在采集' : '采集已暂停' }}</span>
+        <Checkbox v-model="view.includeArchivedMemories" label="显示归档记忆" :disabled="Boolean(view.selectedMember) && view.memberScope === 'portrait'" />
         <button class="icon-btn" type="button" :disabled="view.busy" data-tip="刷新群和记忆列表" @click="view.refreshWorkspace"><Icon name="refresh" :size="16" :class="{ 'icon-spin': view.busy }" /></button>
       </header>
 
       <div v-if="view.selectedGroupId && view.groupWorkspace" class="group-memory-body">
         <section class="group-memory-section">
           <div class="memory-section-head group-memory-section-head">
-            <div><h2>群公共记忆</h2><p>展示本群记忆及归档、到期历史；只有有效记忆参与召回。</p></div>
+            <div><h2>群公共记忆</h2><p>展示本群记忆，归档历史可勾选查看；只有有效记忆参与召回。</p></div>
             <div class="row"><MemoryMaintenanceDialog :group-id="view.selectedGroupId" name="本群公共记忆" @submitted="view.openMaintenanceTasks" /><MemoryMaintenanceDialog :group-id="view.selectedGroupId" :batch="true" name="本群已记录成员及公共记忆" @submitted="view.openMaintenanceTasks" /><button class="btn primary small" type="button" @click="view.openMemoryEditor(null, view.targetForGroup())"><Icon name="plus" :size="14" />添加群记忆</button></div>
           </div>
           <div class="memory-list-tools">
@@ -48,7 +49,7 @@ export const MemoryManageWorkspace = {
           </aside>
 
           <section v-if="view.selectedMember && view.memberWorkspace" class="member-memory-panel">
-            <header class="member-memory-head"><div><h2>{{ view.selectedMemberName }}</h2><p>{{ view.memberScope === 'portrait' ? '结合本群发言和有效记忆生成，各类型每人每群每月一次。' : (view.memberScope === 'user_group' ? '展示本群个人记忆及历史，有效记忆仅在当前群召回' : '展示全局个人记忆及历史，有效记忆可跨群召回') + '；热度随时间降低，长期事实仍可查询；到期与归档另行标记。' }}</p></div><div v-if="view.memberScope !== 'portrait'" class="row"><MemoryMaintenanceDialog :group-id="view.selectedGroupId" :user-id="view.selectedMember.userId" :name="view.selectedMemberName" @submitted="view.openMaintenanceTasks" /><button class="btn small outline" type="button" @click="view.openProfileEditor"><Icon name="bot" :size="14" />编辑画像</button><button class="btn primary small" type="button" @click="view.openMemoryEditor(null, view.targetForMember())"><Icon name="plus" :size="14" />添加记忆</button></div></header>
+            <header class="member-memory-head"><div><h2>{{ view.selectedMemberName }}</h2><p>{{ view.memberScope === 'portrait' ? '结合本群发言和有效记忆生成，各类型每人每群每月一次。' : (view.memberScope === 'user_group' ? '展示本群个人记忆，有效记忆仅在当前群召回' : '展示全局个人记忆，有效记忆可跨群召回') + '；归档历史可勾选查看；热度随时间降低，长期事实仍可查询，到期另行标记。' }}</p></div><div v-if="view.memberScope !== 'portrait'" class="row"><MemoryMaintenanceDialog :group-id="view.selectedGroupId" :user-id="view.selectedMember.userId" :name="view.selectedMemberName" @submitted="view.openMaintenanceTasks" /><button class="btn small outline" type="button" @click="view.openProfileEditor"><Icon name="bot" :size="14" />编辑画像</button><button class="btn primary small" type="button" @click="view.openMemoryEditor(null, view.targetForMember())"><Icon name="plus" :size="14" />添加记忆</button></div></header>
             <div class="segmented member-memory-tabs" aria-label="成员记忆范围"><button type="button" :class="{ active: view.memberScope === 'user_group' }" @click="view.memberScope = 'user_group'">本群记忆 <span>{{ view.memberWorkspace.groupMemory.total }}</span></button><button type="button" :class="{ active: view.memberScope === 'user' }" @click="view.memberScope = 'user'">全局记忆 <span>{{ view.memberWorkspace.globalMemory.total }}</span></button><button type="button" :class="{ active: view.memberScope === 'portrait' }" @click="view.memberScope = 'portrait'">聊天画像</button></div>
             <MemoryPortraitWorkspace v-if="view.memberScope === 'portrait'" :group-id="view.selectedGroupId" :user-id="view.selectedMember.userId" :name="view.selectedMemberName" :enabled="Boolean(view.selectedPolicy?.enabled)" />
             <template v-else>
@@ -60,9 +61,11 @@ export const MemoryManageWorkspace = {
             <div v-if="view.currentMemberMemory.total > view.currentMemberMemory.pageSize" class="memory-pagebar"><span>第 {{ view.currentMemberMemory.page }} / {{ Math.ceil(view.currentMemberMemory.total / view.currentMemberMemory.pageSize) }} 页</span><div><button class="icon-btn sm" type="button" :disabled="view.currentMemberMemory.page <= 1" @click="view.changeMemberPage(view.currentMemberMemory.page - 1)"><Icon name="chevron-left" :size="15" /></button><button class="icon-btn sm" type="button" :disabled="view.currentMemberMemory.page >= Math.ceil(view.currentMemberMemory.total / view.currentMemberMemory.pageSize)" @click="view.changeMemberPage(view.currentMemberMemory.page + 1)"><Icon name="chevron-right" :size="15" /></button></div></div>
             </template>
           </section>
+          <section v-else-if="view.selectedMember" class="member-memory-empty"><template v-if="view.memberWorkspaceError"><p role="alert">成员记忆加载失败：{{ view.memberWorkspaceError }}</p><button class="btn small outline" type="button" @click="view.loadMemberWorkspace()">重试</button></template><p v-else role="status">正在加载成员记忆…</p></section>
           <section v-else class="member-memory-empty"><Icon name="bot" :size="24" /><strong>选择一位群成员</strong><p>可分别维护其在本群的记忆和跨群可用的全局记忆。</p></section>
         </div>
       </div>
+      <div v-else-if="view.selectedGroupId" class="member-memory-empty group-memory-empty"><template v-if="view.groupWorkspaceError"><p role="alert">群记忆加载失败：{{ view.groupWorkspaceError }}</p><button class="btn small outline" type="button" @click="view.loadGroupWorkspace()">重试</button></template><p v-else role="status">正在加载群记忆…</p></div>
       <div v-else class="member-memory-empty group-memory-empty"><Icon name="message" :size="28" /><strong>先添加一个采集群</strong><p>添加并保存采集配置后，即可在这里维护群公共记忆和成员记忆。</p><button class="btn primary small" type="button" @click="view.openCaptureSettings()"><Icon name="plus" :size="14" />新增采集配置</button></div>
     </template>
   `,

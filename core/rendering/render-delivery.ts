@@ -4,6 +4,7 @@ import type { MessageChain, ImagePart, ResourceRef, MessageDestination } from ".
 import { configStore } from "../../config/store.js"
 import { renderImageByKind } from "./render-service.js"
 import { hostRuntime } from "../runtime/host-runtime.js"
+import type { MessageAdapter } from "../message-chain/adapter.js"
 
 type UnknownRecord = Record<string, unknown>
 
@@ -45,6 +46,9 @@ interface DeliveryOptions extends UnknownRecord {
 interface DeliveryContext extends UnknownRecord {
   e?: RenderEvent
   config?: RenderConfig
+  delivery?: { adapter?: MessageAdapter }
+  signal?: AbortSignal
+  agent?: { signal?: AbortSignal }
 }
 
 interface ResolvedTarget {
@@ -123,12 +127,12 @@ function normalizeImages(input: unknown = []): MessageChain {
   return images
 }
 
-async function targetFromOptions(e: RenderEvent, opts: DeliveryOptions = {}, config: RenderConfig | unknown = {}): Promise<ResolvedTarget> {
+async function targetFromOptions(e: RenderEvent, opts: DeliveryOptions = {}, config: RenderConfig | unknown = {}, adapter?: MessageAdapter): Promise<ResolvedTarget> {
   const targetType = text(opts.targetType).trim().toLowerCase()
   const targetId = text(opts.targetId || opts.groupId || opts.userId).trim()
   if (!targetType && !targetId) {
-    if (!hostRuntime.canSendMessage(e)) throw new Error("当前事件不支持回复。")
-    return { label: currentRenderTarget(e) }
+    if (!(adapter ? adapter.canSend({ e }) : hostRuntime.canSendMessage(e))) throw new Error("当前事件不支持回复。")
+    return { label: adapter?.id === "web" ? "当前网页" : currentRenderTarget(e) }
   }
 
   const cfg = deliveryConfig(config)
@@ -139,6 +143,7 @@ async function targetFromOptions(e: RenderEvent, opts: DeliveryOptions = {}, con
   const type = targetType === "group" || opts.groupId ? "group" : targetType === "user" || opts.userId ? "user" : ""
   if (type) {
     const destination: MessageDestination = { type, id: targetId }
+    if (adapter && !adapter.canSend({ e, destination })) throw new Error("当前出口不支持跨目标发送。")
     await hostRuntime.requireMessageDestination(destination, e)
     return { label: `${type === "group" ? "群" : "用户"} ${targetId}`, destination }
   }
@@ -154,11 +159,12 @@ export async function deliverRenderedImage(result: RenderResult = {}, context: D
   const config = context.config || configStore.get() as RenderConfig
   assertRenderImage(result)
   const event = context.e
-  if (!event || !hostRuntime.canSendMessage(event)) {
+  const adapter = context.delivery?.adapter
+  if (!event || !(adapter ? adapter.canSend({ e: event }) : hostRuntime.canSendMessage(event))) {
     return `${text(opts.label) || "图片"}渲染完成：${Buffer.isBuffer(result.buffer) ? result.buffer.length : 0} bytes`
   }
-  const target = await targetFromOptions(event, opts, config)
-  await replyMessageChain([{ type: "image", source: renderResource(result) }], { e: event, config: config as UnknownRecord, destination: target.destination, quote: opts.quote ?? deliveryConfig(config).quoteReply, recordImages: !opts.targetType && !opts.targetId && !opts.groupId && !opts.userId })
+  const target = await targetFromOptions(event, opts, config, adapter)
+  await replyMessageChain([{ type: "image", source: renderResource(result) }], { e: event, adapter, signal: context.agent?.signal || context.signal, config: config as UnknownRecord, destination: target.destination, quote: opts.quote ?? deliveryConfig(config).quoteReply, recordImages: !opts.targetType && !opts.targetId && !opts.groupId && !opts.userId })
   return `已向 ${target.label} 发送${text(opts.label) || "渲染图片"}。`
 }
 
@@ -173,9 +179,10 @@ export async function deliverImages(images: unknown = [], context: DeliveryConte
   const payload = normalizeImages(images)
   if (!payload.length) return "没有可发送的图片。"
   const event = context.e
-  if (!event || !hostRuntime.canSendMessage(event)) return `图片准备完成：${payload.length} 张。`
-  const target = await targetFromOptions(event, opts, config)
-  await replyMessageChain(payload, { e: event, config: config as UnknownRecord, destination: target.destination, quote: opts.quote ?? deliveryConfig(config).quoteReply, recordImages: !opts.targetType && !opts.targetId && !opts.groupId && !opts.userId })
+  const adapter = context.delivery?.adapter
+  if (!event || !(adapter ? adapter.canSend({ e: event }) : hostRuntime.canSendMessage(event))) return `图片准备完成：${payload.length} 张。`
+  const target = await targetFromOptions(event, opts, config, adapter)
+  await replyMessageChain(payload, { e: event, adapter, signal: context.agent?.signal || context.signal, config: config as UnknownRecord, destination: target.destination, quote: opts.quote ?? deliveryConfig(config).quoteReply, recordImages: !opts.targetType && !opts.targetId && !opts.groupId && !opts.userId })
   return `已向 ${target.label} 发送 ${payload.length} 张图片。`
 }
 

@@ -62,7 +62,7 @@ export class OpenAIResponsesAdapter extends OpenAICompatibleAdapter {
         signal,
         consume: async response => {
           const contentType = String(response.headers.get("content-type") || "").toLowerCase()
-          if (channel.stream === true && contentType.includes("text/event-stream")) return parseResponsesStreamResponse(response)
+          if (channel.stream === true && contentType.includes("text/event-stream")) return parseResponsesStreamResponse(response, request.onDelta)
           const data = await readJson(response)
           if (!response.ok) throw responseError(data, response.status)
           return parseResponsesResponse(data)

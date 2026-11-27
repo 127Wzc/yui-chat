@@ -5,7 +5,7 @@ import { applyReasoningPayload } from "../../../configuration/reasoning.js"
 import { modelToolDefinition } from "../../../../tools/support/contract.js"
 import { ModelAdapter, contentToText, messagesForOpenAI, normalizeListedModels, notifyModelRequest, parseDataUrl, parseResponseData, safeJson, tokenUsage } from "../../base.js"
 import type { JsonValue } from "../../../../core/message-chain/types.js"
-import type { GeneratedImage, ImageGenerationRequest, ImageGenerationResponse, ModelChannel, ModelRequest, ModelResponse } from "../../../protocol/types.js"
+import type { GeneratedImage, ImageGenerationRequest, ImageGenerationResponse, ModelChannel, ModelDelta, ModelRequest, ModelResponse } from "../../../protocol/types.js"
 import type { ToolDefinition } from "../../../../tools/support/tool-contract.js"
 import { normalizeModelStopReason } from "../../../protocol/normalize.js"
 
@@ -78,7 +78,7 @@ function mergeStreamToolCalls(target: Map<number, StreamToolCall>, deltas: reado
 }
 
 /** 解析 OpenAI-compatible SSE；工具调用参数按 index 增量拼接后再交给统一协议。 */
-export async function parseOpenAIStreamResponse(response: Response): Promise<ModelResponse> {
+export async function parseOpenAIStreamResponse(response: Response, onDelta?: (delta: ModelDelta) => void): Promise<ModelResponse> {
   if (!response.ok) throw responseError(await readJsonResponse(response), response.status)
   if (!response.body) throw new Error("流式响应没有可读取的正文")
   const reader = response.body.getReader()
@@ -91,6 +91,7 @@ export async function parseOpenAIStreamResponse(response: Response): Promise<Mod
   let rawUsage: unknown = undefined
   let chunks = 0
   let finishReason = ""
+  let reasoningText = ""
 
   const consumeLine = (line: string): boolean => {
     const trimmed = String(line || "").trim()
@@ -110,7 +111,12 @@ export async function parseOpenAIStreamResponse(response: Response): Promise<Mod
     if (data.usage) { rawUsage = data.usage; usage = tokenUsage(data) }
     const choice = array(data.choices).length ? record(array(data.choices)[0]) : {}
     const delta = record(choice.delta)
-    text += contentToText(delta.content || "")
+    const chunk = contentToText(delta.content || "")
+    const reasoning = stringValue(delta.reasoning_content || delta.reasoning || "")
+    text += chunk
+    reasoningText += reasoning
+    if (chunk) onDelta?.({ type: "text", text: chunk })
+    if (reasoning) onDelta?.({ type: "reasoning", text: reasoning })
     mergeStreamToolCalls(toolCalls, array(delta.tool_calls))
     if (choice.finish_reason) finishReason = stringValue(choice.finish_reason)
     return false
@@ -137,6 +143,7 @@ export async function parseOpenAIStreamResponse(response: Response): Promise<Mod
   return {
     id: id || crypto.randomUUID(),
     text,
+    ...(reasoningText ? { reasoningText } : {}),
     raw: { stream: true, chunks, finishReason, usage: rawUsage, text },
     usage,
     stopReason: normalizeModelStopReason(finishReason, toolCalls.size),
@@ -265,7 +272,7 @@ export class OpenAICompatibleAdapter extends ModelAdapter {
     return headers
   }
 
-  override async sendMessage({ channel, messages, tools = [], toolChoice, maxTokens = 0, signal, onRequest }: ModelRequest): Promise<ModelResponse> {
+  override async sendMessage({ channel, messages, tools = [], toolChoice, maxTokens = 0, signal, onRequest, onDelta }: ModelRequest): Promise<ModelResponse> {
     const body = applyReasoningPayload({ model: channel.model || "gpt-4o-mini", messages: messagesForOpenAI(messages as unknown as readonly UnknownRecord[]), ...channelRecord(channel, "params") }, channel)
     const stream = channel.stream === true
     if (stream) {
@@ -298,7 +305,7 @@ export class OpenAICompatibleAdapter extends ModelAdapter {
       signal,
       consume: async response => {
         const contentType = String(response.headers.get("content-type") || "").toLowerCase()
-        if (stream && contentType.includes("text/event-stream")) return parseOpenAIStreamResponse(response)
+        if (stream && contentType.includes("text/event-stream")) return parseOpenAIStreamResponse(response, onDelta)
         const data = await readJsonResponse(response)
         if (!response.ok) throw responseError(data, response.status)
         const choice = array(data.choices).length ? record(array(data.choices)[0]) : {}
@@ -307,6 +314,7 @@ export class OpenAICompatibleAdapter extends ModelAdapter {
         return {
           id: stringValue(data.id) || crypto.randomUUID(),
           text: contentToText(message.content || ""),
+          ...(typeof message.reasoning_content === "string" ? { reasoningText: message.reasoning_content } : {}),
           raw: data,
           usage: tokenUsage(data),
           stopReason: normalizeModelStopReason(choice.finish_reason, rawCalls.length),

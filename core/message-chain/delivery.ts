@@ -122,7 +122,7 @@ export async function deliverMessageChain(chain: MessageChain, context: MessageC
   }
   chain = filtered.chain
   const adapter = context.adapter || yunzaiMessageAdapter
-  const adapterContext = { e: context.e, destination: context.destination, replyOptions: context.replyOptions, quoteStandalone: context.quoteStandalone }
+  const adapterContext = { e: context.e, destination: context.destination, replyOptions: context.replyOptions, quoteStandalone: context.quoteStandalone, signal: context.signal }
   const parts: PartDeliveryReceipt[] = []
   const prepared: Array<PreparedMessagePart & { index: number }> = []
   for (let index = 0; index < chain.length; index++) {
@@ -166,7 +166,7 @@ export async function deliverMessageChain(chain: MessageChain, context: MessageC
       quotePending = false
       const messageId = sentIds.length === 1 ? sentIds[0] : ""
       messageIds.push(...sentIds)
-      if (context.recordImages !== false) await recentContextStore.recordDeliveredImages(context.e, result, batch.items.filter(item => chain[item.index].type === "image").length)
+      if (adapter.id === "yunzai" && context.recordImages !== false) await recentContextStore.recordDeliveredImages(context.e, result, batch.items.filter(item => chain[item.index].type === "image").length)
       for (const item of batch.items) {
         const receipt = parts.find(part => part.index === item.index)
         if (receipt && messageId) receipt.messageId = messageId

@@ -22,6 +22,8 @@ import {
 } from "./chat-support.js"
 import { errorSummary } from "../shared/error-details.js"
 import { completedToolTrace, toolHistoryMessages, toolHistoryResult, trimConversationHistory, type BackgroundToolCompletion } from "./tool-history.js"
+import { createChatProgress, type ChatProgressObserver } from "./chat-progress.js"
+import type { MessageAdapter } from "../message-chain/adapter.js"
 
 export interface ConversationRequestRuntime {
   conversations: Map<string, unknown>
@@ -235,6 +237,8 @@ export async function sendConversation(
   const key = runtime.conversationKey(event, firstChannel.id)
   if (trace && typeof trace === "object") (trace as unknown as UnknownRecord).conversationKey = key
   const conversationVersion = runtime.captureConversationVersion(event, key)
+  const progress = createChatProgress(typeof options.onProgress === "function" ? options.onProgress as ChatProgressObserver : undefined)
+  const onProgress = typeof options.onProgress === "function" ? progress.emit : undefined
   try {
     runtime.prune(config)
     // 清理操作先进入同一队列；新请求必须等清理完成，避免旧历史在本轮结束时写回。
@@ -250,6 +254,8 @@ export async function sendConversation(
 
     const sessionId = text(conversation.sessionId) || crypto.randomUUID()
     const turnId = crypto.randomUUID()
+    const messageAdapter = options.messageAdapter as MessageAdapter | undefined
+    const displayContent = () => messageAdapter?.getDisplayContent?.() || []
     const toolResultsVersion = number(record(conversation.protocolState).toolResultsVersion)
     const pendingBackground = new Map<string, BackgroundToolCompletion>()
     const observedToolChain: UnknownRecord[] = []
@@ -280,7 +286,7 @@ export async function sendConversation(
                 patches.set(completion.taskId, updated)
                 return updated
               })
-              return { ...turn, toolChain }
+              return { ...turn, toolChain, ...(onProgress ? { progress: progress.snapshot() } : {}), ...(messageAdapter?.getDisplayContent ? { displayContent: displayContent() } : {}) }
             })
             if (patches.size) {
               const history = previous.history.map(value => {
@@ -378,6 +384,9 @@ export async function sendConversation(
       purpose,
       extraSystemPrompt: text(options.extraSystemPrompt),
       disableTools: options.disableTools === true,
+      messageAdapter: options.messageAdapter,
+      onProgress,
+      signal: options.signal,
       trace,
       artifacts,
       onBackgroundToolComplete,
@@ -489,6 +498,8 @@ export async function sendConversation(
       searchDeliveryStatus: text(final.searchDeliveryStatus || "not-needed"),
       toolRounds: stepResults.reduce((sum, item) => sum + number(item.toolRounds), 0),
       toolChain: finalToolChain,
+      ...(onProgress ? { progress: progress.snapshot() } : {}),
+      ...(messageAdapter?.getDisplayContent ? { displayContent: displayContent() } : {}),
       hostedSearchSources: list(final.hostedSearchSources),
       execution: final.execution || null,
       usage: final.usage || emptyUsage(),
@@ -503,6 +514,7 @@ export async function sendConversation(
     if (!isEmptyResponse(rawFinalText) || finalToolChain.length) {
       const maxHistoryMessages = Math.max(2, number(chat.maxHistoryMessages, 12))
       const turn: UnknownRecord = {
+        ...(Array.isArray(options.userDisplayContent) ? { userDisplayContent: options.userDisplayContent } : {}),
         id: turnId,
         responseId: text(final.id),
         at: nowIso(),
@@ -511,6 +523,8 @@ export async function sendConversation(
         usage: final.usage || emptyUsage(),
         modelCalls: final.modelCalls || [],
         toolChain: finalToolChain,
+        ...(onProgress ? { progress: progress.snapshot() } : {}),
+        ...(messageAdapter?.getDisplayContent ? { displayContent: displayContent() } : {}),
       }
       await runtime.enqueueConversationMutation(async () => {
         if (!runtime.conversationVersionCurrent(conversationVersion)) return
@@ -582,6 +596,7 @@ export async function sendConversation(
     if (taskError) throw taskError
     return resultPayload()
   } finally {
+    progress.finish()
     runtime.releaseConversationVersion(conversationVersion)
   }
 }

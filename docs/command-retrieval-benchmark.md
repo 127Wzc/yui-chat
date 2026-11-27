@@ -53,7 +53,7 @@ npm run check:command-benchmark
 node scripts/check-command-benchmark.mjs --results cache/command-benchmark-results.json --split evaluation > cache/command-benchmark-report.json
 ```
 
-不传 `--split` 时处理全部测试；也可传 `development`。输入文件可以包含全部测试结果，脚本只统计选定集合。`--host-root` 可指定待核对的宿主根目录。默认校验在已安装的来源发生变化时失败，缺失来源单独列出。计分仍可用于研究旧快照结果，但 `sourceReviewRequired` 会提示当前源码与基准不一致，不能当作当前版本验收。
+不传 `--split` 时处理全部测试；也可传 `development`。输入文件可以包含全部测试结果，脚本只统计选定集合。默认检查验证自带题库和计分器，宿主来源的缺失或变化单独列出，不影响项目检查。验收当前宿主时使用 `node scripts/check-command-benchmark.mjs --verify-host`，可加 `--host-root` 指定宿主根目录；来源缺失或摘要变化均使严格核对失败。计分仍可用于研究旧快照结果，但 `sourceReviewRequired` 会提示当前源码与基准不一致，不能当作当前版本验收。
 
 静态校验只验证源码与计分器，**不能证明真实 embedding/重排模型的检索质量**，也不会发起模型请求。真实质量成绩须来自显式实测，并记录模型实际用量、价格口径及冷/热缓存状态；计分脚本不根据问法条数猜测费用。
 

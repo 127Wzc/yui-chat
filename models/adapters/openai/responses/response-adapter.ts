@@ -1,7 +1,7 @@
 import crypto from "node:crypto"
 import { safeJson, tokenUsage } from "../../base.js"
 import { consumeServerSentEvents } from "../../sse.js"
-import type { ModelHostedToolCall, ModelResponse, ModelSearchSource, ModelStopReason } from "../../../protocol/types.js"
+import type { ModelHostedToolCall, ModelDelta, ModelResponse, ModelSearchSource, ModelStopReason } from "../../../protocol/types.js"
 
 type UnknownRecord = Record<string, unknown>
 
@@ -160,6 +160,7 @@ export function parseResponsesResponse(data: unknown): ModelResponse {
   return {
     id: upstreamResponseId || crypto.randomUUID(),
     text: outputText(items),
+    reasoningText: items.filter(item => item.type === "reasoning").flatMap(item => Array.isArray(item.summary) ? item.summary : []).map(item => text(record(item).text)).join(""),
     toolCalls,
     hostedToolCalls: hostedToolCalls(items),
     hostedSearchSources: searchSources(items),
@@ -227,7 +228,7 @@ function patchStreamOutput(
  * response.completed 等事件逐步构造 output items；这里先收敛成完整响应，
  * 再复用同一套 hosted tool、Function Call、reasoning 和 usage 归一化逻辑。
  */
-export async function parseResponsesStreamResponse(response: Response): Promise<ModelResponse> {
+export async function parseResponsesStreamResponse(response: Response, onDelta?: (delta: ModelDelta) => void): Promise<ModelResponse> {
   if (!response.ok) {
     const body = await response.text()
     let data: unknown = {}
@@ -242,6 +243,7 @@ export async function parseResponsesStreamResponse(response: Response): Promise<
   const functionArguments = new Map<string, string>()
   let responseState: UnknownRecord = {}
   let eventCount = 0
+  let reasoningText = ""
 
   const resolveKey = (data: UnknownRecord, item: UnknownRecord = {}): string => {
     const itemId = text(item.id || data.item_id).trim()
@@ -278,6 +280,9 @@ export async function parseResponsesStreamResponse(response: Response): Promise<
     const type = text(data.type || event).trim()
     if (type === "error" || data.error) throw streamResponseError(data, response.status)
 
+    if (type === "response.reasoning_summary_text.delta") {
+      const chunk = text(data.delta); reasoningText += chunk; onDelta?.({ type: "reasoning", text: chunk }); return
+    }
     const nestedResponse = record(data.response)
     if (type === "response.created" || type === "response.in_progress") responseState = { ...responseState, ...nestedResponse }
     if (type === "response.completed" || type === "response.failed" || type === "response.incomplete") {
@@ -294,6 +299,7 @@ export async function parseResponsesStreamResponse(response: Response): Promise<
     if (type === "response.output_text.delta" || type === "response.output_text.done") {
       const key = resolveKey(data)
       const delta = type.endsWith(".done") ? text(data.text) : text(data.delta)
+      if (delta && type.endsWith(".delta")) onDelta?.({ type: "text", text: delta })
       if (delta) textDeltas.set(key, type.endsWith(".done") ? delta : `${textDeltas.get(key) || ""}${delta}`)
       const item = eventItems.get(key) || { type: "message", role: "assistant", content: [] }
       eventItems.set(key, ensureOutputText(item, textDeltas.get(key) || ""))
@@ -331,5 +337,5 @@ export async function parseResponsesStreamResponse(response: Response): Promise<
       }).filter(item => item.type)
   const data: UnknownRecord = { ...responseState, output }
   const parsed = parseResponsesResponse(data)
-  return { ...parsed, raw: { ...data, stream: true, eventCount } }
+  return { ...parsed, ...(reasoningText ? { reasoningText } : {}), raw: { ...data, stream: true, eventCount } }
 }

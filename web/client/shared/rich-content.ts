@@ -13,6 +13,11 @@ export interface ImageSource {
   alt?: string
 }
 
+export interface RichContentOptions {
+  cacheRemoteMedia?: boolean
+  mediaUrls?: Record<string, string>
+}
+
 const MAX_TEXT_LENGTH = 240_000
 const MAX_IMAGE_DATA_LENGTH = 12_000_000
 const IMAGE_MIME = /^image\/(?:png|jpe?g|gif|webp|avif|bmp|x-icon|svg\+xml)$/i
@@ -50,7 +55,7 @@ function escapeAttribute(value: unknown): string {
 }
 
 function validHttpUrl(value: string): boolean {
-  return /^https?:\/\//i.test(value) || /^blob:/i.test(value)
+  return /^https?:\/\//i.test(value) || /^blob:/i.test(value) || /^\/(?!\/)[A-Za-z0-9._~!$&()*+,;=:@%/-]*\/api\/chat\/media\/[a-f0-9]{64}$/.test(value)
 }
 
 function dataImage(value: string, mimeHint = "image/png"): ImageSource | null {
@@ -110,7 +115,7 @@ function imageSource(value: unknown, mimeHint = "image/png", depth = 0, allowBar
   const explicitImage = allowBareUrl || hasImageMarker(source)
 
   // OpenAI image_url / Responses input_image、以及常见的自定义 image 字段。
-  for (const key of explicitImage ? ["image_url", "imageUrl", "url", "src", "source"] : ["image_url", "imageUrl"]) {
+  for (const key of explicitImage ? ["image_url", "imageUrl", "url", "src", "source", "value"] : ["image_url", "imageUrl"]) {
     if (source[key] === undefined) continue
     const nested = imageSource(source[key], hintedMime, depth + 1, explicitImage)
     if (nested) return nested
@@ -167,11 +172,20 @@ function imageSources(value: unknown, mimeHint = "image/png", depth = 0, allowBa
   })
 }
 
-function imageHtml(source: ImageSource, alt = "图片"): string {
+function mediaPreview(url: string, label: string, options: RichContentOptions): { url: string; placeholder?: string } {
+  if (!options.cacheRemoteMedia || !/^https?:\/\//i.test(url)) return { url }
+  const cached = options.mediaUrls?.[url]
+  if (cached && /^\/(?!\/)[^?#]*\/api\/chat\/media\/[a-f0-9]{64}$/.test(cached)) return { url: cached }
+  return { url: "", placeholder: `<button type="button" class="btn ghost sm" data-chat-media-url="${escapeAttribute(url)}">加载${escapeHtml(label)}</button>` }
+}
+
+function imageHtml(source: ImageSource, alt = "图片", options: RichContentOptions = {}): string {
   const safeAlt = text(alt).trim() || "图片"
-  const src = escapeAttribute(source.src)
+  const preview = mediaPreview(source.src, "图片", options)
+  if (preview.placeholder) return preview.placeholder
+  const src = escapeAttribute(preview.url)
   const image = `<img class="yui-rich-image" src="${src}" alt="${escapeAttribute(safeAlt)}" loading="lazy" decoding="async" referrerpolicy="no-referrer">`
-  return /^https?:\/\//i.test(source.src)
+  return /^(?:https?:\/\/|\/)/i.test(preview.url)
     ? `<a class="yui-rich-image-link" href="${src}" target="_blank" rel="noopener noreferrer nofollow" title="点击预览原图">${image}</a>`
     : image
 }
@@ -235,7 +249,7 @@ function parsedImageJson(value: string): unknown | null {
   }
 }
 
-function renderInline(value: string, references: Map<string, string>, depth = 0): string {
+function renderInline(value: string, references: Map<string, string>, depth = 0, options: RichContentOptions = {}): string {
   if (depth > 3) return escapeHtml(value)
   const source = value.slice(0, MAX_TEXT_LENGTH)
   let output = ""
@@ -282,7 +296,7 @@ function renderInline(value: string, references: Map<string, string>, depth = 0)
         }
         const image = url ? imageSource(url) : null
         if (image && end > 0) {
-          output += imageHtml(image, source.slice(index + 2, closeAlt))
+          output += imageHtml(image, source.slice(index + 2, closeAlt), options)
           index = end + 1
           continue
         }
@@ -296,7 +310,7 @@ function renderInline(value: string, references: Map<string, string>, depth = 0)
       if (match && match.index === index) {
         const image = imageSource(match[0])
         if (image) {
-          output += imageHtml(image)
+          output += imageHtml(image, "图片", options)
           index += match[0].length
           continue
         }
@@ -324,7 +338,7 @@ function renderInline(value: string, references: Map<string, string>, depth = 0)
       if (htmlImage) {
         const image = imageSource(htmlImage[2], "image/png", 0, true)
         if (image) {
-          output += imageHtml(image)
+          output += imageHtml(image, "图片", options)
           index += htmlImage[0].length
           continue
         }
@@ -345,7 +359,7 @@ function renderInline(value: string, references: Map<string, string>, depth = 0)
           const label = source.slice(index + 1, closeText)
           const href = source.slice(closeText + 2, closeUrl).trim().replace(/\s+["'](?:[^"']*)["']\s*$/, "")
           if (/^(?:https?:\/\/|mailto:)/i.test(href)) {
-            output += `<a class="yui-rich-link" href="${escapeAttribute(href)}" target="_blank" rel="noopener noreferrer nofollow">${renderInline(label, references, depth + 1)}</a>`
+            output += `<a class="yui-rich-link" href="${escapeAttribute(href)}" target="_blank" rel="noopener noreferrer nofollow">${renderInline(label, references, depth + 1, options)}</a>`
             index = closeUrl + 1
             continue
           }
@@ -357,7 +371,7 @@ function renderInline(value: string, references: Map<string, string>, depth = 0)
     const emphasis = source.slice(index).match(/^(\*\*|__|~~|\*|_)(?=\S)([\s\S]+?)\1/)
     if (emphasis) {
       const marker = emphasis[1]
-      const inner = renderInline(emphasis[2], references, depth + 1)
+      const inner = renderInline(emphasis[2], references, depth + 1, options)
       output += marker === "~~" ? `<del>${inner}</del>` : marker.length === 2 ? `<strong>${inner}</strong>` : `<em>${inner}</em>`
       index += emphasis[0].length
       continue
@@ -375,7 +389,7 @@ function renderInline(value: string, references: Map<string, string>, depth = 0)
   return output
 }
 
-function renderMarkdown(value: string, depth = 0): string {
+function renderMarkdown(value: string, depth = 0, options: RichContentOptions = {}): string {
   if (depth > 3) return `<p>${escapeHtml(value)}</p>`
   const normalized = normalizeMarkdownMath(value.slice(0, MAX_TEXT_LENGTH)).replace(/\r\n?/g, "\n")
   const lines = normalized.split("\n")
@@ -409,14 +423,14 @@ function renderMarkdown(value: string, depth = 0): string {
     const heading = line.match(/^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$/)
     if (heading) {
       const level = heading[1].length
-      blocks.push(`<h${level}>${renderInline(heading[2], references)}</h${level}>`)
+      blocks.push(`<h${level}>${renderInline(heading[2], references, 0, options)}</h${level}>`)
       index += 1
       continue
     }
 
     if (index + 1 < lines.length && line.trim() && /^\s*(?:=+|-+)\s*$/.test(lines[index + 1])) {
       const level = lines[index + 1].trim().startsWith("=") ? 1 : 2
-      blocks.push(`<h${level}>${renderInline(line.trim(), references)}</h${level}>`)
+      blocks.push(`<h${level}>${renderInline(line.trim(), references, 0, options)}</h${level}>`)
       index += 2
       continue
     }
@@ -433,7 +447,7 @@ function renderMarkdown(value: string, depth = 0): string {
         quote.push(lines[index].replace(/^\s*>\s?/, ""))
         index += 1
       }
-      blocks.push(`<blockquote>${renderMarkdown(quote.join("\n"), depth + 1)}</blockquote>`)
+      blocks.push(`<blockquote>${renderMarkdown(quote.join("\n"), depth + 1, options)}</blockquote>`)
       continue
     }
 
@@ -445,8 +459,8 @@ function renderMarkdown(value: string, depth = 0): string {
         rows.push(splitTableRow(lines[index]))
         index += 1
       }
-      const headHtml = header.map(cell => `<th>${renderInline(cell, references)}</th>`).join("")
-      const bodyHtml = rows.map(row => `<tr>${header.map((_, cellIndex) => `<td>${renderInline(row[cellIndex] || "", references)}</td>`).join("")}</tr>`).join("")
+      const headHtml = header.map(cell => `<th>${renderInline(cell, references, 0, options)}</th>`).join("")
+      const bodyHtml = rows.map(row => `<tr>${header.map((_, cellIndex) => `<td>${renderInline(row[cellIndex] || "", references, 0, options)}</td>`).join("")}</tr>`).join("")
       blocks.push(`<div class="yui-rich-table-wrap"><table class="yui-rich-table"><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}</tbody></table></div>`)
       continue
     }
@@ -459,7 +473,7 @@ function renderMarkdown(value: string, depth = 0): string {
       while (index < lines.length) {
         const item = lines[index].match(orderedList ? /^\s{0,3}\d+[.)]\s+(.+)$/ : /^\s{0,3}[-+*]\s+(.+)$/)
         if (!item) break
-        items.push(listItemHtml(item[1], references))
+        items.push(listItemHtml(item[1], references, options))
         index += 1
       }
       blocks.push(`<${orderedList ? "ol" : "ul"}>${items.join("")}</${orderedList ? "ol" : "ul"}>`)
@@ -476,7 +490,7 @@ function renderMarkdown(value: string, depth = 0): string {
       paragraph.push(next)
       index += 1
     }
-    blocks.push(`<p>${paragraph.map(item => renderInline(item, references)).join("<br>")}</p>`)
+    blocks.push(`<p>${paragraph.map(item => renderInline(item, references, 0, options)).join("<br>")}</p>`)
   }
   return blocks.join("") || "<p class=\"yui-rich-empty\">暂无内容</p>"
 }
@@ -492,37 +506,97 @@ function hasImageField(value: RichRecord): boolean {
   return ["image_url", "imageUrl", "url", "src", "source", "inlineData", "inline_data", "data", "base64", "b64_json", "b64Json", "image", "result", "results", "candidates", "contents", "parts", "outputs", "output"].some(key => value[key] !== undefined)
 }
 
-function listItemHtml(value: string, references: Map<string, string>): string {
+function listItemHtml(value: string, references: Map<string, string>, options: RichContentOptions): string {
   const task = value.match(/^\[([ xX])\]\s+([\s\S]+)$/)
-  if (!task) return `<li>${renderInline(value, references)}</li>`
+  if (!task) return `<li>${renderInline(value, references, 0, options)}</li>`
   const checked = task[1].toLowerCase() === "x"
-  return `<li class="yui-rich-task-item"><input class="yui-rich-task" type="checkbox" disabled${checked ? " checked" : ""}> <span>${renderInline(task[2], references)}</span></li>`
+  return `<li class="yui-rich-task-item"><input class="yui-rich-task" type="checkbox" disabled${checked ? " checked" : ""}> <span>${renderInline(task[2], references, 0, options)}</span></li>`
 }
 
 function prettyObject(value: unknown): string {
   try { return JSON.stringify(value, null, 2) || "" } catch { return text(value) }
 }
 
-/** 将文本、消息 content 数组或工具返回对象转成安全的可视化 HTML。 */
-export function renderRichContent(value: unknown): string {
+function boundedContent(value: unknown, budget = { nodes: 2048, chars: MAX_IMAGE_DATA_LENGTH }, depth = 0): unknown {
+  if (budget.nodes-- <= 0 || depth > 24 || budget.chars <= 0) return "[内容过长或层级过深，已省略]"
+  if (typeof value === "string") {
+    const output = value.slice(0, budget.chars)
+    budget.chars -= output.length
+    return output.length < value.length ? `${output}[内容已省略]` : output
+  }
+  if (!value || typeof value !== "object") return value
+  if (Array.isArray(value)) {
+    const output = []
+    for (const [index, item] of value.entries()) {
+      output.push(boundedContent(item, budget, depth + 1))
+      if (budget.nodes <= 0 || budget.chars <= 0) {
+        if (index + 1 < value.length) output.push("[内容过长，已省略]")
+        break
+      }
+    }
+    return output
+  }
+  const output: RichRecord = {}
+  const keys = Object.keys(value)
+  for (const key of keys.slice(0, 80)) {
+    Object.defineProperty(output, key, { value: boundedContent(record(value)[key], budget, depth + 1), enumerable: true, configurable: true, writable: true })
+    if (budget.nodes <= 0 || budget.chars <= 0) break
+  }
+  if (keys.length > Object.keys(output).length) output["…"] = "[内容过长，已省略]"
+  return output
+}
+
+/** 将文本、消息 content 数组或工具返回对象转成有界的安全 HTML。 */
+export function renderRichContent(value: unknown, options: RichContentOptions = {}): string {
+  return renderRichValue(boundedContent(value), options)
+}
+
+function renderRichValue(value: unknown, options: RichContentOptions): string {
   if (value === null || value === undefined || value === "") return "<p class=\"yui-rich-empty\">暂无内容</p>"
   if (typeof value === "string") {
     const parsed = parsedImageJson(value)
-    return parsed === null ? renderMarkdown(value) : renderRichContent(parsed)
+    return parsed === null ? renderMarkdown(value, 0, options) : renderRichValue(boundedContent(parsed), options)
   }
   if (typeof value === "number" || typeof value === "boolean") return `<p>${renderInline(String(value), new Map())}</p>`
   if (Array.isArray(value)) {
-    const parts = value.map(item => renderRichContent(item)).filter(Boolean)
+    const parts = value.map(item => renderRichValue(item, options)).filter(Boolean)
     return parts.length ? parts.join("") : "<p class=\"yui-rich-empty\">暂无内容</p>"
   }
   const source = record(value)
+  const type = text(source.type)
+  if (type === "forward" && Array.isArray(source.nodes)) {
+    return `<div class="yui-rich-forward">${source.nodes.slice(0, 50).map(value => {
+      const node = record(value)
+      return `<section><b>${escapeHtml(node.nickname || "转发消息")}</b>${renderRichValue(node.parts, options)}</section>`
+    }).join("")}</div>`
+  }
+  if (type === "mention") return `<span class="yui-rich-mention">@${escapeHtml(source.userId)}</span>`
+  if (type === "reply") return `<blockquote>${escapeHtml(source.selectedText || `引用消息 ${text(source.messageId)}`)}</blockquote>`
+  if (type === "dice" || type === "rps") return `<p>${type === "dice" ? "🎲 骰子" : ["猜拳", "✊ 石头", "✌️ 剪刀", "✋ 布"][Number(source.value)] || "猜拳"}</p>`
+  if (type === "json") return `<pre class="yui-rich-json">${escapeHtml(prettyObject(source.data))}</pre>`
+  if (["audio", "video", "file", "resource"].includes(type)) {
+    const resource = record(source.source)
+    const url = text(resource.value || source.url)
+    const label = text(source.name || resource.name || source.description || (type === "audio" ? "音频" : type === "video" ? "视频" : "下载文件"))
+    if (!validHttpUrl(url)) return `<p>${escapeHtml(label)}（资源不可用）</p>`
+    const preview = mediaPreview(url, type === "audio" ? "音频" : type === "video" ? "视频" : "文件", options)
+    if (preview.placeholder) return preview.placeholder
+    const href = escapeAttribute(preview.url)
+    const player = type === "audio" || type === "video" ? `<${type} controls preload="none" src="${href}"></${type}>` : ""
+    return `${player}<p><a href="${href}" target="_blank" rel="noopener noreferrer nofollow">${escapeHtml(label)}</a></p>`
+  }
+  if (type === "music") {
+    const title = escapeHtml(source.title || `${text(source.platform)} 音乐 ${text(source.id)}`)
+    const url = text(source.url)
+    return `<p>${validHttpUrl(url) ? `<a href="${escapeAttribute(url)}" target="_blank" rel="noopener noreferrer nofollow">${title}</a>` : title}${source.singer ? ` · ${escapeHtml(source.singer)}` : ""}</p>`
+  }
   const body = objectText(source)
-  if (Array.isArray(source.parts)) return renderRichContent(source.parts)
-  if (Array.isArray(source.content)) return renderRichContent(source.content)
+  if (Array.isArray(source.parts)) return renderRichValue(source.parts, options)
+  if (Array.isArray(source.content)) return renderRichValue(source.content, options)
   const images = imageSources(source)
-  if (body && images.length && (typeof source.content !== "string" || hasImageField(source))) return `${renderRichContent(body)}${images.map(image => imageHtml(image, text(source.alt || source.title || "图片"))).join("")}`
-  if (body) return renderRichContent(body)
-  if (images.length) return images.map(image => imageHtml(image, text(source.alt || source.title || "图片"))).join("")
+  if (body && images.length && (typeof source.content !== "string" || hasImageField(source))) return `${renderRichValue(body, options)}${images.map(image => imageHtml(image, text(source.alt || source.title || "图片"), options)).join("")}`
+  if (body) return renderRichValue(body, options)
+  if (images.length) return images.map(image => imageHtml(image, text(source.alt || source.title || "图片"), options)).join("")
   return `<pre class="yui-rich-json">${escapeHtml(prettyObject(value))}</pre>`
 }
 
@@ -536,6 +610,8 @@ export function plainTextContent(value: unknown, depth = 0): string {
   if (typeof value === "number" || typeof value === "boolean") return String(value)
   if (Array.isArray(value)) return value.map(item => plainTextContent(item, depth + 1)).filter(Boolean).join("\n")
   const source = record(value)
+  if (source.type === "forward" && Array.isArray(source.nodes)) return source.nodes.map(node => plainTextContent(record(node).parts, depth + 1)).join("\n")
+  if (source.type === "mention") return `@${text(source.userId)}`
   const body = objectText(source)
   if (Array.isArray(source.parts)) return plainTextContent(source.parts, depth + 1)
   if (Array.isArray(source.content)) return plainTextContent(source.content, depth + 1)

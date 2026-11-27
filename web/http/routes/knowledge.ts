@@ -178,6 +178,7 @@ export function registerKnowledgeRoutes(app: RouteApp): void {
     const workspace = await memoryStore.getGroupWorkspace(req.params.groupId, {
       groupQuery: req.query.groupQuery,
       includeHistory: req.query.includeHistory !== "false",
+      includeArchived: req.query.includeArchived === "true",
       groupPage: Number(req.query.groupPage || 1),
       memberQuery: req.query.memberQuery,
       memberLimit: Number(req.query.memberLimit || 80),
@@ -189,6 +190,7 @@ export function registerKnowledgeRoutes(app: RouteApp): void {
     const workspace = await memoryStore.getGroupMemberWorkspace(req.params.groupId, req.params.userId, {
       groupQuery: req.query.groupQuery,
       includeHistory: req.query.includeHistory !== "false",
+      includeArchived: req.query.includeArchived === "true",
       groupPage: Number(req.query.groupPage || 1),
       globalQuery: req.query.globalQuery,
       globalPage: Number(req.query.globalPage || 1),

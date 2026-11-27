@@ -5,7 +5,7 @@ import { getToolCommon, modelToolDescription } from "../../tools/support/contrac
 import { ModelAdapter, contentParts, contentToText, normalizeListedModels, notifyModelRequest, parseDataUrl, parseResponseData, safeJson, tokenUsage } from "./base.js"
 import { consumeServerSentEvents } from "./sse.js"
 import type { ContentPart, JsonValue } from "../../core/message-chain/types.js"
-import type { GeneratedImage, ImageGenerationRequest, ImageGenerationResponse, ModelChannel, ModelMessage, ModelRequest, ModelResponse } from "../protocol/types.js"
+import type { GeneratedImage, ImageGenerationRequest, ImageGenerationResponse, ModelChannel, ModelMessage, ModelDelta, ModelRequest, ModelResponse } from "../protocol/types.js"
 import type { ToolDefinition } from "../../tools/support/tool-contract.js"
 import { normalizeModelStopReason } from "../protocol/normalize.js"
 
@@ -164,7 +164,7 @@ function mergeGeminiArguments(target: UnknownRecord, value: unknown): { argument
 }
 
 /** 解析 Gemini streamGenerateContent 的 SSE chunks，并收敛为普通 GenerateContent 响应。 */
-export async function parseGeminiStreamResponse(response: Response): Promise<ModelResponse> {
+export async function parseGeminiStreamResponse(response: Response, onDelta?: (delta: ModelDelta) => void): Promise<ModelResponse> {
   if (!response.ok) {
     const body = await response.text()
     let data: unknown = {}
@@ -174,6 +174,7 @@ export async function parseGeminiStreamResponse(response: Response): Promise<Mod
   const candidates = new Map<number, GeminiStreamCandidate>()
   let usage: UnknownRecord = {}
   let chunks = 0
+  let reasoningText = ""
   await consumeServerSentEvents(response, ({ data: rawData }) => {
     const payload = rawData.trim()
     if (!payload || payload === "[DONE]") return
@@ -194,7 +195,11 @@ export async function parseGeminiStreamResponse(response: Response): Promise<Mod
       const content = record(candidate.content)
       for (const rawPart of array(content.parts)) {
         const part = record(rawPart)
-        if (part.text) current.text += stringValue(part.text)
+        if (part.text) {
+          const chunk = stringValue(part.text)
+          if (part.thought === true) { if (index === 0) { reasoningText += chunk; onDelta?.({ type: "reasoning", text: chunk }) } }
+          else { current.text += chunk; if (index === 0) onDelta?.({ type: "text", text: chunk }) }
+        }
         const functionCall = record(part.functionCall || part.function_call)
         const name = stringValue(functionCall.name).trim()
         if (name) {
@@ -238,6 +243,7 @@ export async function parseGeminiStreamResponse(response: Response): Promise<Mod
   const parsed = {
     id: crypto.randomUUID(),
     text: firstParts.map(part => stringValue(part.text || "")).join(""),
+    ...(reasoningText ? { reasoningText } : {}),
     raw: { ...data, stream: true, chunks, finishReason: first.finishReason || "" },
     usage: tokenUsage(data, "gemini"),
     stopReason: normalizeModelStopReason(first.finishReason, parseGeminiToolCalls(data).length),
@@ -391,7 +397,7 @@ export class GeminiAdapter extends ModelAdapter {
     return url
   }
 
-  override async sendMessage({ channel, messages, tools = [], toolChoice, maxTokens = 0, signal, onRequest }: ModelRequest): Promise<ModelResponse> {
+  override async sendMessage({ channel, messages, tools = [], toolChoice, maxTokens = 0, signal, onRequest, onDelta }: ModelRequest): Promise<ModelResponse> {
     if (!channel.apiKey) throw new Error("Gemini channel apiKey is required")
     const baseURL = (channel.baseURL || "https://generativelanguage.googleapis.com").replace(/\/$/, "")
     const model = channel.model || "gemini-flash-latest"
@@ -429,7 +435,7 @@ export class GeminiAdapter extends ModelAdapter {
       signal,
       consume: async response => {
         const contentType = String(response.headers.get("content-type") || "").toLowerCase()
-        if (channel.stream === true && contentType.includes("text/event-stream")) return parseGeminiStreamResponse(response)
+        if (channel.stream === true && contentType.includes("text/event-stream")) return parseGeminiStreamResponse(response, onDelta)
         const data = await readJsonResponse(response)
         if (!response.ok) throw responseError(data, response.status)
         const candidates = array(data.candidates)
@@ -439,7 +445,8 @@ export class GeminiAdapter extends ModelAdapter {
         const toolCalls = parseGeminiToolCalls(data)
         return {
           id: crypto.randomUUID(),
-          text: parts.map(part => stringValue(part.text || "")).join(""),
+          text: parts.filter(part => part.thought !== true).map(part => stringValue(part.text || "")).join(""),
+          reasoningText: parts.filter(part => part.thought === true).map(part => stringValue(part.text || "")).join(""),
           raw: data,
           usage: tokenUsage(data, "gemini"),
           stopReason: normalizeModelStopReason(first.finishReason, toolCalls.length),

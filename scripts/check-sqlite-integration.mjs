@@ -82,7 +82,9 @@ try {
   assert.equal(baselineConversation?.toolCalls, 1, "conversation tool call totals must survive a SQLite round trip")
   assert.equal(baselineConversation?.protocolState.responses["responses:provider:model"].previousResponseId, "resp_baseline", "Responses upstream state must remain attached to the local conversation record")
   await conversationStore.save({ id: "baseline-chat:p:web-test-baseline-history", history: [{ role: "user", content: "SQLite 历史测试" }, { role: "assistant", content: "已保存。" }] })
-  const webTestSession = (await conversationStore.listWebTestSessions()).find(item => item.sessionId === "baseline-history")
+  const summary = (await conversationStore.listWebTestSessions()).find(item => item.sessionId === "baseline-history")
+  assert(!("messages" in summary), "history lists contain summaries only")
+  const webTestSession = await conversationStore.getWebTestSession(summary.key)
   assert.equal(webTestSession?.messages.length, 2, "web test history must be read from the unified SQLite conversation record")
   assert.equal(await conversationStore.deleteWebTestSession(webTestSession?.key), 1, "a web test history record must be deletable without affecting other conversations")
 

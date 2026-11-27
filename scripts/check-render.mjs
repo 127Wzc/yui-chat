@@ -151,6 +151,21 @@ try {
   assert(captures.at(-1).html.includes('&lt;Title&gt;'))
   assert(captures.at(-1).html.includes('&lt;h1&gt;HTML 正常&lt;/h1&gt;'))
   assert(captures.at(-1).html.includes('<div class="window-tag">HTML</div>'), 'ordinary HTML keeps its default header tag')
+  const { createWebMessageAdapter } = await import('../output/runtime/web/http/chat-message-adapter.js')
+  const { createWebTestEvent } = await import('../output/runtime/web/http/request-context.js')
+  const { readWebDeliveryMedia } = await import('../output/runtime/core/media/media-cache.js')
+  const webAdapter = createWebMessageAdapter(config)
+  const webRender = await toolRegistry.execute('render_image', htmlArgs, { ...master, e: createWebTestEvent('render-tool'), delivery: { adapter: webAdapter } })
+  assert.match(webRender, /当前网页/)
+  const webImage = webAdapter.getDisplayContent().find(part => part.type === 'image')
+  assert.match(webImage.source.value, /^\/yui-chat\/api\/chat\/media\/[a-f0-9]{64}$/)
+  assert.equal(Buffer.from((await readWebDeliveryMedia(webImage.source.value.split('/').at(-1))).bytes).subarray(0, 8).toString('hex'), '89504e470d0a1a0a', 'the actual render tool delivers a cached PNG through the Web adapter')
+  const deniedWebRender = await toolRegistry.execute('render_image', htmlArgs, {
+    ...master, e: { isMaster: true, reply: () => { throw new Error('adapter denial must not fall back to host') } },
+    delivery: { adapter: { ...webAdapter, canSend: () => false } },
+  })
+  assert.match(deniedWebRender, /渲染完成/)
+  assert.equal(webAdapter.getDisplayContent().length, 1, 'a denied render cannot claim or perform another delivery')
   const fullDocument = '<!doctype html><html><head><style>#custom-heading{color:rgb(0,128,0)}</style></head><body><h1 id="custom-heading">完整文档</h1></body></html>'
   const preview = await renderPreview({ format: 'html', data: { content: fullDocument } }, config)
   assert.equal(preview.engine, 'html')

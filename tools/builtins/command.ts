@@ -1,5 +1,6 @@
 import { hostRuntime } from "../../core/runtime/host-runtime.js"
 import { replyMessageChain } from "../../core/message-chain/delivery.js"
+import type { MessageAdapter } from "../../core/message-chain/adapter.js"
 import { commandObserver } from "../../knowledge/command-observer.js"
 import { configStore } from "../../config/store.js"
 import { knowledgeStore, BUILTIN_COMMANDS_ID } from "../../knowledge/store.js"
@@ -12,7 +13,7 @@ import { COMMAND_COMPLETENESS_ISSUE_LABELS } from "../../knowledge/command-query
 interface CommandToolContext extends ToolExecutionContext {
   e?: UnknownRecord
   config?: UnknownRecord
-  delivery?: UnknownRecord
+  delivery?: { adapter?: MessageAdapter; allowCurrentChat?: boolean; [key: string]: unknown }
 }
 
 type ToolArgs = UnknownRecord
@@ -160,10 +161,11 @@ export class CommandHandoffTool {
     const command = text(args.command).trim()
     if (!command) return "缺少要转交的指令。"
     const shouldSend = args.send ?? handoff.allowSend
+    const adapter = context.delivery?.adapter
     if (shouldSend && context.delivery?.allowCurrentChat !== false && context.e) {
-      if (!hostRuntime.canSendMessage(context.e)) return `建议使用指令：${command}`
-      await replyMessageChain([{ type: "text", text: command }], { e: context.e, config, quote: response.quoteReply === true, textFiltered: true })
-      return `已转交执行指令：${command}`
+      if (!(adapter ? adapter.canSend({ e: context.e }) : hostRuntime.canSendMessage(context.e))) return `建议使用指令：${command}`
+      await replyMessageChain([{ type: "text", text: command }], { e: context.e, adapter, config, quote: response.quoteReply === true, textFiltered: true })
+      return adapter ? `已发送指令文本：${command}` : `已转交执行指令：${command}`
     }
     const note = shouldSend && context.delivery?.allowCurrentChat === false
       ? "（当前对话会在最终回复中给出建议，不直接发送指令。）"

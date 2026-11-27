@@ -41,6 +41,9 @@ import { errorSummary } from "../shared/error-details.js"
 import type { BackgroundToolCompletion } from "./tool-history.js"
 
 interface ModelStepOptions {
+  onProgress?: (event: UnknownRecord) => void
+  signal?: AbortSignal
+  messageAdapter?: import("../message-chain/adapter.js").MessageAdapter
   e?: unknown
   prompt?: unknown
   config?: unknown
@@ -492,6 +495,8 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
   const source = text(options.source)
   const purpose = text(options.purpose || (source === "subagent" ? "subagent" : "chat"))
   const agentContext = record(options.agentContext)
+  const signals = [options.signal, agentContext.signal].filter((signal): signal is AbortSignal => signal instanceof AbortSignal)
+  const requestSignal = signals.length ? AbortSignal.any(signals) : undefined
   const hasAgentContext = Boolean(options.agentContext)
   const prior = Array.isArray(options.prior) ? options.prior : []
   const history = Array.isArray(options.history) ? options.history.map(record).map(item => {
@@ -586,6 +591,8 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
   }
   const toolContext: UnknownRecord & { dynamicTools?: Set<string> } = {
     e: options.e,
+    signal: requestSignal,
+    onProgress: options.onProgress,
     prompt,
     channel,
     media: options.media,
@@ -601,6 +608,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
       toolCallId: text(options.parentToolId),
     },
     delivery: {
+      adapter: options.messageAdapter,
       // 当前会话文字由输出层统一发送，避免即时发送工具与最终回答重复。
       allowCurrentChat: !isInteractiveConversation,
     },
@@ -808,6 +816,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
     stream: channel.stream,
   })
   let response = await adapterRegistry.sendMessage({
+    onProgress: options.onProgress,
     channel: modelChannel(channel),
     messages: modelMessages(messages),
     ...(adapter.protocol === "responses" ? { replayMessages: modelMessages(recoveryMessages) } : {}),
@@ -815,7 +824,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
     toolChoice: initialToolChoice,
     event: options.e,
     maxTokens,
-    signal: agentContext.signal instanceof AbortSignal ? agentContext.signal : undefined,
+    signal: requestSignal,
     source,
     purpose,
     taskName: text(step.task),
@@ -947,13 +956,14 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
           let hostedResponse
           try {
             hostedResponse = await adapterRegistry.sendMessage({
+              onProgress: options.onProgress,
               channel: workerChannel,
               messages: modelMessages(workerMessages),
               tools: [],
               toolChoice: "required",
               event: options.e,
               maxTokens,
-              signal: agentContext.signal instanceof AbortSignal ? agentContext.signal : undefined,
+              signal: requestSignal,
               source,
               purpose: "search-aggregate",
               taskName: text(step.task),
@@ -1175,7 +1185,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
     const boundedRecoveryMessages = adapter.protocol === "responses"
       ? await budgeted(recoveryNextMessages, `responses-recovery-${phase}`)
       : boundedMessages
-    await executionRuntime.waitForNextRound(agentContext.signal instanceof AbortSignal ? agentContext.signal : undefined)
+    await executionRuntime.waitForNextRound(requestSignal)
     const availableAfterTools = currentTools()
     const forcedToolName = pendingSearchDelivery && !allowSearchCorrection ? "message_send" : ""
     const afterTools = forcedToolName
@@ -1199,6 +1209,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
       phase,
     })
     response = await adapterRegistry.sendMessage({
+      onProgress: options.onProgress,
       channel: modelChannel(channel),
       messages: modelMessages(boundedMessages),
       ...(adapter.protocol === "responses" ? { replayMessages: modelMessages(boundedRecoveryMessages) } : {}),
@@ -1206,7 +1217,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
       toolChoice: forcedToolName ? { type: "function", name: forcedToolName } : allowSearchCorrection ? "required" : undefined,
       event: options.e,
       maxTokens,
-      signal: agentContext.signal instanceof AbortSignal ? agentContext.signal : undefined,
+      signal: requestSignal,
       source,
       purpose,
       taskName: text(step.task),
@@ -1298,13 +1309,14 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
     })
     try {
       const correctionResponse = await adapterRegistry.sendMessage({
+        onProgress: options.onProgress,
         channel: modelChannel(channel),
         messages: modelMessages(correctionMessages),
         ...(adapter.protocol === "responses" ? { replayMessages: modelMessages(correctionRecoveryMessages) } : {}),
         tools: toolDefinitions(correctionTools),
         event: options.e,
         maxTokens,
-        signal: agentContext.signal instanceof AbortSignal ? agentContext.signal : undefined,
+        signal: requestSignal,
         source,
         purpose,
         taskName: text(step.task),
@@ -1416,6 +1428,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
     })
     try {
       response = await adapterRegistry.sendMessage({
+        onProgress: options.onProgress,
         channel: modelChannel({
           ...channel,
           responsesRuntime: { ...record(channel.responsesRuntime), webSearchAllowed: false, fileSearchAllowed: false, toolSearchAllowed: false },
@@ -1425,7 +1438,7 @@ export async function runModelStepWithChannelInternal(options: ModelStepOptions 
         tools: [],
         event: options.e,
         maxTokens,
-        signal: agentContext.signal instanceof AbortSignal ? agentContext.signal : undefined,
+        signal: requestSignal,
         source,
         purpose,
         taskName: text(step.task),

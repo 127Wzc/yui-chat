@@ -5,6 +5,7 @@ import type { ResolvedMediaContext } from "../../core/message/media-context.js"
 import type { UnknownRecord } from "../../core/message/types.js"
 import { MessageChainBuilder } from "../../core/message-chain/builder.js"
 import type { ResourceRef } from "../../core/message-chain/types.js"
+import type { MessageAdapter } from "../../core/message-chain/adapter.js"
 import { adapterRegistry } from "../../models/adapters/registry.js"
 import { providerResolver } from "../../models/routing/provider-resolver.js"
 import type { ImageGenerationReference, ModelChannel } from "../../models/protocol/types.js"
@@ -22,7 +23,7 @@ interface ImageToolContext extends ToolExecutionContext {
   e?: UnknownRecord
   config?: UnknownRecord
   media?: Partial<ResolvedMediaContext>
-  delivery?: UnknownRecord
+  delivery?: { adapter?: MessageAdapter; [key: string]: unknown }
 }
 
 function record(value: unknown): UnknownRecord {
@@ -80,7 +81,8 @@ function resourceForImage(image: { data?: string; url?: string; mimeType?: strin
 function canDeliverToCurrentChat(context: ImageToolContext): boolean {
   // 生图完成通知本身就是显式的媒体投递；不受模型轮次中“当前会话即时发送”
   // 的抑制开关影响，避免后台任务完成后只记日志却没有图片。
-  return hostRuntime.canSendMessage(context.e)
+  const adapter = context.delivery?.adapter
+  return adapter ? adapter.canSend({ e: context.e }) : hostRuntime.canSendMessage(context.e)
 }
 
 function imageErrorText(error: unknown): string {

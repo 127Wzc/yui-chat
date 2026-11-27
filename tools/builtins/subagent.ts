@@ -66,7 +66,7 @@ export class DispatchSubagentTool {
     try {
       const { chatService } = await import("../../core/chat/chat-service.js")
       if (tasks.length === 1) {
-        const result = await chatService.runSubAgent({ task: brief(tasks[0]), e: context.e, config, depth, trace: context.observability?.trace || null, parentToolId: context.observability?.toolCallId || "" })
+        const result = await chatService.runSubAgent({ task: brief(tasks[0]), e: context.e, config, depth, messageAdapter: record(context.delivery).adapter, onProgress: context.onProgress, signal: context.signal || context.agent?.signal, trace: context.observability?.trace || null, parentToolId: context.observability?.toolCallId || "" })
         const resultText = text(result?.text).trim()
         if (!resultText) return "子代理没有产出有效结论。"
         const used = result?.toolRounds ? `（子代理用了 ${result.toolRounds} 轮工具）` : ""
@@ -78,7 +78,7 @@ export class DispatchSubagentTool {
       for (let i = 0; i < tasks.length; i += concurrency) {
         const batch = tasks.slice(i, i + concurrency)
         const batchResults = await Promise.all(batch.map(task =>
-          chatService.runSubAgent({ task: brief(task), e: context.e, config, depth, trace: context.observability?.trace || null, parentToolId: context.observability?.toolCallId || "" })
+          chatService.runSubAgent({ task: brief(task), e: context.e, config, depth, messageAdapter: record(context.delivery).adapter, onProgress: context.onProgress, signal: context.signal || context.agent?.signal, trace: context.observability?.trace || null, parentToolId: context.observability?.toolCallId || "" })
             .catch(error => ({ text: `执行失败：${errorMessage(error)}` })),
         ))
         results.push(...batchResults)

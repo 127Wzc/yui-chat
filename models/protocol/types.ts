@@ -73,6 +73,8 @@ export type ModelStopReason = "tool_calls" | "end_turn" | "max_tokens" | "pause_
 export interface ModelResponse {
   id: string
   text: string
+  /** 仅包含供应商显式返回的可见思考文本或摘要，不含签名和加密推理项。 */
+  reasoningText?: string
   toolCalls: ModelToolCall[]
   stopReason: ModelStopReason
   usage: ModelUsage
@@ -120,6 +122,7 @@ export interface ModelRequestCapture {
 
 /** 供应商无关的模型请求。 */
 export interface ModelRequest {
+  onDelta?: (delta: ModelDelta) => void
   channel: ModelChannel
   messages: ModelMessage[]
   /** 上游链失效时使用的完整、有界本地上下文；正常链接请求不会发送。 */
@@ -130,6 +133,11 @@ export interface ModelRequest {
   signal?: AbortSignal
   metadata?: Record<string, JsonValue>
   onRequest?: (capture: ModelRequestCapture) => void
+}
+
+export interface ModelDelta {
+  type: "text" | "reasoning"
+  text: string
 }
 
 /** embedding 请求。 */

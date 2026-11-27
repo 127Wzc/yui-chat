@@ -354,6 +354,20 @@ try {
   const app=express();app.use(express.json({limit:"12mb"}));registerKnowledgeRoutes(app);registerConfigRoutes(app);server=app.listen(0,"127.0.0.1");await once(server,"listening")
   const api=async(url,method="GET",body,authorized=true)=>{const response=await fetch(`http://127.0.0.1:${server.address().port}${url}`,{method,headers:{...(authorized?{"yui-chat-token":token}:{}),"content-type":"application/json"},...(body?{body:JSON.stringify(body)}:{})});return {status:response.status,data:await response.json().catch(()=>({}))}}
   assert.equal((await api("/api/knowledge/bases","GET",null,false)).status,401)
+  const {memoryRepository}=await import("../output/runtime/memory/repository.js")
+  const archiveGroup="http-archive-filter",archiveUser="http-archive-member"
+  for(const scopeType of ["group","user_group","user"]){
+    await memoryRepository.insert({scopeType,ownerId:scopeType==="group"?archiveGroup:archiveUser,groupId:scopeType==="user"?"":archiveGroup,text:"归档的测试记忆",status:"archived",validityReason:"superseded"})
+  }
+  for(const route of [`/api/memory/groups/${archiveGroup}/workspace`,`/api/memory/groups/${archiveGroup}/members/${archiveUser}`]){
+    assert.equal((await api(route,"GET",null,false)).status,401)
+    for(const includeArchived of ["","false","true"]){
+      const response=await api(route+(includeArchived?`?includeArchived=${includeArchived}`:""))
+      assert.equal(response.status,200)
+      assert.equal(response.data.workspace.groupMemory.total,includeArchived==="true"?1:0,"workspace HTTP defaults to hiding archives")
+      if(response.data.workspace.globalMemory)assert.equal(response.data.workspace.globalMemory.total,includeArchived==="true"?1:0,"global memory uses the same archive flag")
+    }
+  }
   await jobs.runAvailable()
   const availabilityCalls=embeddingCalls,availabilityJobs=await sqliteClient.all("SELECT id,status FROM knowledge_index_jobs ORDER BY id")
   const inspectBeforeSummary=jobs.inspect,hashesBeforeSummary=vectorIndex.indexedContentHashes

@@ -6696,7 +6696,8 @@ async function checkWebAndBoot() {
   )
   assert(!webExtensionPanelSource.includes("内置工具") && !webExtensionPanelSource.includes("已加载工具总览"), "custom extensions and built-in tools should remain in separate management views")
   assert(!webExtensionPanelSource.includes("open-external") && !webExtensionCreateSource.includes("MCP"), "extension creation should not duplicate or link to MCP resources managed on the MCP page")
-  assert(webToolsSource.includes("hasRuntimeConfig(tool)") && webToolsSource.includes("yui-chat:open-tool-detail") && webToolsSource.includes("saveConfiguration") && webToolsSource.includes("保存配置"), "tools with runtime variables and multi-channel sources should expose a fixed modal-footer save action")
+  // 执行真实弹窗保存/失败/关闭保护的回归位于 check-tool-save-client.mjs。
+  assert(webToolsSource.includes("hasRuntimeConfig(tool)") && webToolsSource.includes("yui-chat:open-tool-detail") && webToolsSource.includes("ToolConfigurationPanel") && webToolsSource.includes("saveAll"), "tools with runtime variables and multi-channel sources should use the shared configuration popup and save entry")
   assert(webToolsSource.includes("confirmAction") && webToolsSource.includes("确认永久删除") && webToolsSource.includes("确认停用") && !webToolsSource.includes("window.confirm"), "tools page destructive and disabling actions should use the shared confirmation modal")
   assert(
     webToolsSource.includes('store.activeTab === "tool-permissions"')
@@ -6777,21 +6778,23 @@ async function checkWebAndBoot() {
     const webTestHistoryResponse = await fetch(`http://127.0.0.1:${port}/api/chat/test/sessions`, { headers: { cookie } })
     const webTestHistoryPayload = await webTestHistoryResponse.json()
     const webTestSession = webTestHistoryPayload.sessions?.find(item => item.sessionId === webTestSessionId)
-    assert(webTestHistoryResponse.ok && webTestSession?.messages?.length === 2, "web chat history API should read persisted SQLite transcripts")
+    assert(webTestHistoryResponse.ok && webTestSession?.messageCount === 2 && !("messages" in webTestSession), "web chat history API should return compact SQLite summaries")
+    const webTestDetailResponse = await fetch(`http://127.0.0.1:${port}/api/chat/test/sessions/${encodeURIComponent(webTestSession.key)}`, { headers: { cookie } })
+    assert(webTestDetailResponse.ok && (await webTestDetailResponse.json()).session.messages.length === 2, "web chat details should read only the selected transcript")
     const webTestDeleteResponse = await fetch(`http://127.0.0.1:${port}/api/chat/test/sessions/${encodeURIComponent(webTestSession.key)}`, { method: "DELETE", headers: { cookie } })
     const webTestDeletePayload = await webTestDeleteResponse.json()
     assert(webTestDeleteResponse.ok && webTestDeletePayload.cleared === 1, "web chat history API should delete one persisted SQLite transcript")
     const { conversationStore } = await import("../output/runtime/core/chat/conversation-store.js")
-    const originalSessionRead = conversationStore.listWebTestSessions
+    const originalSessionRead = conversationStore.getWebTestSession
     try {
-      conversationStore.listWebTestSessions = async () => { throw new Error("injected history read failure") }
+      conversationStore.getWebTestSession = async () => { throw new Error("injected history read failure") }
       const response = await fetch(`http://127.0.0.1:${port}/api/chat/test`, {
         method: "POST", headers: { "content-type": "application/json", cookie },
         body: JSON.stringify({ prompt: "请回复测试内容。", sessionId: "smoke-web-read-failure" }),
       })
       const payload = await response.json()
       assert(response.ok && payload.result?.text && payload.historyUnavailable === true, "a failed history lookup should retain the generated reply and report the unavailable history")
-    } finally { conversationStore.listWebTestSessions = originalSessionRead }
+    } finally { conversationStore.getWebTestSession = originalSessionRead }
     const originalSessionSave = conversationStore.save
     try {
       conversationStore.save = async () => { throw new Error("injected history write failure") }

@@ -107,6 +107,7 @@ export const store = reactive<ClientStore>({
 
 const client = createApiClient({ getToken: () => store.token })
 export const request = client.request
+export const requestStream = client.requestStream
 export const apiUrl = client.api
 
 // ---- Toast ----

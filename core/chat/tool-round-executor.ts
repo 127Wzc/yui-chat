@@ -17,6 +17,8 @@ interface ToolCall extends UnknownRecord {
 }
 
 interface ToolContext extends UnknownRecord {
+  signal?: AbortSignal
+  onProgress?: (event: UnknownRecord) => void
   config?: unknown
   agent?: UnknownRecord
   executionRuntime?: unknown
@@ -141,7 +143,7 @@ export async function executeToolRound(options: {
   const executeOne = async (item: PlannedToolCall): Promise<ExecutedToolCall> => {
     const { call, callIndex, guard, tool } = item
     const agent = record(toolContext.agent)
-    const signal = agent.signal instanceof AbortSignal ? agent.signal : undefined
+    const signal = toolContext.signal || (agent.signal instanceof AbortSignal ? agent.signal : undefined)
     if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("子代理执行已终止")
     const started = Date.now()
     const common = getToolCommon(tool)
@@ -154,6 +156,7 @@ export async function executeToolRound(options: {
     let executionRecord: UnknownRecord
     const name = callName(call)
     const decision = text(guard.decision)
+    toolContext.onProgress?.({ type: "tool-start", id: text(call.id), round, name, arguments: callArguments(call), decision })
     if (decision === "skip" || decision === "finalize") {
       const ended = Date.now()
       executionRecord = record(runtime.recordGuard({ guard, call, startedAt: started, endedAt: ended }))
@@ -211,6 +214,7 @@ export async function executeToolRound(options: {
                   error: taskError,
                   metadata: { ...record(outcome.normalized.metadata), background: true, taskId: text(background.id), backgroundStatus: text(background.status), parentToolId: text(call.id), errorDetails: record(background.errorDetails) },
                 })
+                toolContext.onProgress?.({ type: "tool-end", id: text(call.id), round, name, status: completedStatus, result: taskText, error: taskError, durationMs: Math.max(0, taskEnded - taskStarted) })
                 await toolContext.onBackgroundToolComplete?.({
                   toolCallId: text(call.id),
                   taskId: text(background.id),
@@ -229,7 +233,7 @@ export async function executeToolRound(options: {
             }
             return await toolRegistry.execute(name, args || {}, toolExecutionContext({
               ...toolContext,
-              signal: executionContext?.signal || signal,
+              signal: executionContext.signal instanceof AbortSignal ? executionContext.signal : signal,
               agent: Object.keys(agent).length ? { ...agent, signal: executionContext?.signal || signal } : toolContext.agent,
               round,
               execution,
@@ -347,6 +351,7 @@ export async function executeToolRound(options: {
       },
     })
     const historyResultText = toolHistoryText(rawResultText)
+    toolContext.onProgress?.({ type: "tool-end", id: text(call.id), round, name, status: backgroundStatus || status, result: historyResultText, error, durationMs })
     return {
       trace: {
         round,

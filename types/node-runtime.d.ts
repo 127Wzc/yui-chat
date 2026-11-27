@@ -14,6 +14,7 @@ declare module "node:path" {
 
 declare module "node:fs/promises" {
   interface FileHandle {
+    readFile(options?: { signal?: AbortSignal }): Promise<Uint8Array>
     stat(): Promise<FileStat>
     read(buffer: Uint8Array, offset?: number, length?: number, position?: number): Promise<{ bytesRead: number; buffer: Uint8Array }>
     sync(): Promise<void>

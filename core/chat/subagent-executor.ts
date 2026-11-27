@@ -1,3 +1,4 @@
+import crypto from "node:crypto"
 import { providerResolver } from "../../models/routing/provider-resolver.js"
 import { modelLogStore } from "../observability/model-log.js"
 import type { UnknownRecord } from "../message/types.js"
@@ -37,6 +38,8 @@ export async function runSubAgent(
   runtime: SubAgentRuntime,
 ): Promise<UnknownRecord> {
   const opts = record(options)
+  const onProgress = typeof opts.onProgress === "function" ? opts.onProgress as (event: UnknownRecord) => void : undefined
+  const progressScope = onProgress ? crypto.randomUUID() : ""
   const config = record(opts.config)
   const sub = record(config.subAgent)
   const event = opts.e
@@ -100,6 +103,9 @@ export async function runSubAgent(
       source: "subagent",
       purpose: "subagent",
       trace: childTrace,
+      messageAdapter: opts.messageAdapter,
+      onProgress: onProgress ? (event: UnknownRecord) => onProgress({ ...event, progressScope: event.progressScope || progressScope, parentToolId: event.parentToolId || text(opts.parentToolId) }) : undefined,
+      signal: opts.signal instanceof AbortSignal ? opts.signal : undefined,
       parentToolId: text(opts.parentToolId),
       extraSystemPrompt: text(sub.systemPrompt),
       agentContext: {

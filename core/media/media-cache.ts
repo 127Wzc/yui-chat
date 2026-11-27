@@ -30,6 +30,7 @@ type BufferLike = Uint8Array & {
 }
 
 export const mediaCacheDir = path.join(tempDir, "media-cache")
+const MAX_REMOTE_DELIVERY_BYTES = 20 * 1024 * 1024
 const defaultAllowedMime = ["image/jpeg", "image/png", "image/webp", "image/gif"]
 
 function record(value: unknown): UnknownRecord {
@@ -134,6 +135,63 @@ async function writeCached(url: string, mimeType: string, bytes: Uint8Array): Pr
   const files = await cachePaths(url)
   await fs.writeFile(files.dataFile, bytes)
   await fs.writeFile(files.metaFile, `${JSON.stringify({ url: /^data:/i.test(url) ? undefined : url, mimeType, size: bytes.length, cachedAt: Date.now() }, null, 2)}\n`, "utf8")
+}
+
+/** 缓存已通过消息投递路径校验的资源，Web 仅取得随机标识，不暴露原始路径或地址。 */
+export async function cacheWebDeliveryMedia(value: string, options: { mimeType?: string; name?: string; config?: unknown; signal?: AbortSignal } = {}): Promise<string> {
+  options.signal?.throwIfAborted()
+  let bytes: Uint8Array
+  const extension = path.extname(options.name || value).toLowerCase()
+  const mimeTypes: Record<string, string> = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".avif": "image/avif", ".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg", ".mp4": "video/mp4", ".webm": "video/webm" }
+  let mimeType = options.mimeType || mimeTypes[extension] || "application/octet-stream"
+  if (/^https?:\/\//i.test(value)) {
+    const response = await fetchSafeHttp(value, {
+      allowPrivateHosts: linkSafetyConfig(options.config).allowPrivateHosts,
+      maxBytes: MAX_REMOTE_DELIVERY_BYTES, timeoutMs: 15000, signal: options.signal,
+    })
+    if (!response.ok) throw new Error(`媒体下载失败：HTTP ${response.status}`)
+    mimeType = text(response.headers.get("content-type")).split(";")[0] || mimeType
+    bytes = new Uint8Array(await response.arrayBuffer())
+  } else if (value.startsWith("data:")) {
+    const match = value.match(/^data:([^;,]+);base64,([a-zA-Z0-9+/=\s]+)$/)
+    if (!match) throw new Error("内联媒体无效。")
+    mimeType = match[1]
+    bytes = bufferFrom(match[2], "base64")
+  } else {
+    // value 已经过 realpath 与允许目录检查；按文件实际大小读取，不预分配固定上限。
+    const file = await fs.open(value, "r")
+    try {
+      if (!(await file.stat()).isFile()) throw new Error("媒体不是文件。")
+      bytes = await file.readFile({ signal: options.signal })
+    } finally { await file.close() }
+  }
+  if (!bytes.length) throw new Error("媒体为空。")
+  if (mimeType === "application/octet-stream") {
+    const signature = bufferFrom(bytes.subarray(0, 12)).toString("hex")
+    if (signature.startsWith("89504e470d0a1a0a")) mimeType = "image/png"
+    else if (signature.startsWith("ffd8ff")) mimeType = "image/jpeg"
+    else if (/^474946383[79]61/.test(signature)) mimeType = "image/gif"
+    else if (/^52494646[0-9a-f]{8}57454250/.test(signature)) mimeType = "image/webp"
+  }
+  options.signal?.throwIfAborted()
+  const files = await cachePaths(`web-delivery:${crypto.randomUUID()}`)
+  await fs.writeFile(files.metaFile, JSON.stringify({ webDelivery: true, mimeType, name: options.name || "", size: bytes.length, cachedAt: Date.now() }))
+  await fs.writeFile(files.dataFile, toByteView(bytes))
+  return files.id
+}
+
+/** 仅允许读取 Web 投递创建的缓存，不提供任意路径、URL 或其它缓存的读取入口。 */
+export async function readWebDeliveryMedia(id: string): Promise<{ bytes: Uint8Array; mimeType: string; name: string } | null> {
+  if (!/^[a-f0-9]{64}$/.test(id)) return null
+  try {
+    const meta = record(JSON.parse(await fs.readFile(path.join(mediaCacheDir, `${id}.json`), "utf8")))
+    if (meta.webDelivery !== true) return null
+    const file = path.join(mediaCacheDir, `${id}.bin`)
+    return { bytes: await fs.readFile(file), mimeType: text(meta.mimeType), name: text(meta.name) }
+  } catch (error) {
+    if (record(error).code === "ENOENT") return null
+    throw error
+  }
 }
 
 function parseDataImageUrl(dataUrl: unknown): { mimeType: string; bytes: BufferLike } | null {

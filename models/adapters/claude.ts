@@ -4,7 +4,7 @@ import { applyReasoningPayload } from "../configuration/reasoning.js"
 import { getToolCommon, modelToolDescription } from "../../tools/support/contract.js"
 import { ModelAdapter, contentParts, contentToText, normalizeListedModels, notifyModelRequest, parseDataUrl, parseResponseData, safeJson, tokenUsage } from "./base.js"
 import { consumeServerSentEvents } from "./sse.js"
-import type { ModelChannel, ModelMessage, ModelRequest, ModelResponse } from "../protocol/types.js"
+import type { ModelChannel, ModelMessage, ModelDelta, ModelRequest, ModelResponse } from "../protocol/types.js"
 import type { ToolDefinition } from "../../tools/support/tool-contract.js"
 import { normalizeModelStopReason } from "../protocol/normalize.js"
 
@@ -136,7 +136,7 @@ function streamResponseError(data: unknown, status = 0): Error {
 }
 
 /** 解析 Claude Messages 的 message/content block SSE，并复用普通 JSON 响应归一化。 */
-export async function parseClaudeStreamResponse(response: Response): Promise<ModelResponse> {
+export async function parseClaudeStreamResponse(response: Response, onDelta?: (delta: ModelDelta) => void): Promise<ModelResponse> {
   if (!response.ok) {
     const body = await response.text()
     let data: unknown = {}
@@ -149,6 +149,7 @@ export async function parseClaudeStreamResponse(response: Response): Promise<Mod
   let stopReason = ""
   let usage: UnknownRecord = {}
   let events = 0
+  let reasoningText = ""
 
   await consumeServerSentEvents(response, ({ event, data: rawData }) => {
     const payload = rawData.trim()
@@ -175,6 +176,8 @@ export async function parseClaudeStreamResponse(response: Response): Promise<Mod
       const block = record(data.content_block)
       if (!blocks.has(index)) order.push(index)
       blocks.set(index, { ...(blocks.get(index) || {}), ...block })
+      if (block.type === "text" && block.text) onDelta?.({ type: "text", text: stringValue(block.text) })
+      if (block.type === "thinking" && block.thinking) { reasoningText += stringValue(block.thinking); onDelta?.({ type: "reasoning", text: stringValue(block.thinking) }) }
       return
     }
     if (type === "content_block_delta") {
@@ -183,6 +186,8 @@ export async function parseClaudeStreamResponse(response: Response): Promise<Mod
       const delta = record(data.delta)
       const block = blocks.get(index) || { type: stringValue(delta.type) === "input_json_delta" ? "tool_use" : "text" }
       if (!blocks.has(index)) order.push(index)
+      if (delta.type === "text_delta") onDelta?.({ type: "text", text: stringValue(delta.text) })
+      if (delta.type === "thinking_delta") { reasoningText += stringValue(delta.thinking); onDelta?.({ type: "reasoning", text: stringValue(delta.thinking) }) }
       if (delta.type === "text_delta") block.text = `${stringValue(block.text)}${stringValue(delta.text)}`
       else if (delta.type === "input_json_delta") block.__partialJson = `${stringValue(block.__partialJson)}${stringValue(delta.partial_json)}`
       else if (delta.type === "thinking_delta") block.__thinking = `${stringValue(block.__thinking)}${stringValue(delta.thinking)}`
@@ -214,7 +219,7 @@ export async function parseClaudeStreamResponse(response: Response): Promise<Mod
     ...(Object.keys(usage).length ? { usage } : {}),
   }
   const parsed = parseClaudeResponse(data)
-  return { ...parsed, raw: { ...data, stream: true, events, stopReason } }
+  return { ...parsed, ...(reasoningText ? { reasoningText } : {}), raw: { ...data, stream: true, events, stopReason } }
 }
 
 function parseClaudeResponse(data: UnknownRecord): ModelResponse {
@@ -222,7 +227,8 @@ function parseClaudeResponse(data: UnknownRecord): ModelResponse {
   const toolCalls = parseClaudeToolCalls(data)
   return {
     id: stringValue(data.id) || crypto.randomUUID(),
-    text: content.map(part => stringValue(part.text || "")).join(""),
+    text: content.filter(part => part.type === "text").map(part => stringValue(part.text || "")).join(""),
+    reasoningText: content.filter(part => part.type === "thinking").map(part => stringValue(part.thinking || "")).join(""),
     raw: data,
     usage: tokenUsage(data, "claude"),
     stopReason: normalizeModelStopReason(data.stop_reason, toolCalls.length),
@@ -262,7 +268,7 @@ export class ClaudeAdapter extends ModelAdapter {
     }
   }
 
-  override async sendMessage({ channel, messages, tools = [], toolChoice, maxTokens = 0, signal, onRequest }: ModelRequest): Promise<ModelResponse> {
+  override async sendMessage({ channel, messages, tools = [], toolChoice, maxTokens = 0, signal, onRequest, onDelta }: ModelRequest): Promise<ModelResponse> {
     if (!channel.apiKey) throw new Error("Claude channel apiKey is required")
     const baseURL = (channel.baseURL || "https://api.anthropic.com/v1").replace(/\/$/, "")
     const systemValue = messages.filter(item => item.role === "system").map(item => contentToText(item.content)).filter(Boolean).join("\n\n")
@@ -291,7 +297,7 @@ export class ClaudeAdapter extends ModelAdapter {
       signal,
       consume: async response => {
         const contentType = String(response.headers.get("content-type") || "").toLowerCase()
-        if (channel.stream === true && contentType.includes("text/event-stream")) return parseClaudeStreamResponse(response)
+        if (channel.stream === true && contentType.includes("text/event-stream")) return parseClaudeStreamResponse(response, onDelta)
         const data = await readJsonResponse(response)
         if (!response.ok) throw responseError(data, response.status)
         return parseClaudeResponse(data)

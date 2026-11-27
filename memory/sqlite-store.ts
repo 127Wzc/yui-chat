@@ -36,6 +36,7 @@ interface MemoryRow extends UnknownRecord {
 }
 
 interface StoreOptions extends UnknownRecord {
+  includeArchived?: boolean
   owner?: unknown
   source?: unknown
   type?: unknown
@@ -341,9 +342,9 @@ export class SqliteMemoryStore {
     if (!key) throw new Error("群号不能为空。")
     const groupMemory = await memoryRepository.listPage(
       { scopeType: "group", ownerId: key, groupId: key },
-      { query: options.groupQuery, page: options.groupPage, pageSize: options.pageSize, includeCold: true,includeHistory:options.includeHistory!==false },
+      { query: options.groupQuery, page: options.groupPage, pageSize: options.pageSize, includeCold: true,includeHistory:options.includeHistory!==false, includeArchived: options.includeArchived === true },
     )
-    const members = await memoryRepository.listGroupMembers(key, { query: options.memberQuery, limit: options.memberLimit, includeHistory:options.includeHistory!==false })
+    const members = await memoryRepository.listGroupMembers(key, { query: options.memberQuery, limit: options.memberLimit, includeHistory:options.includeHistory!==false, includeArchived: options.includeArchived === true })
     return { groupId: key, groupMemory: pageView(groupMemory), members }
   }
 
@@ -354,10 +355,10 @@ export class SqliteMemoryStore {
     if (!group || !user) throw new Error("群号和用户 QQ 不能为空。")
     const [groupMemory, globalMemory, profile] = await Promise.all([
       memoryRepository.listPage({ scopeType: "user_group", ownerId: user, groupId: group }, {
-        query: options.groupQuery, page: options.groupPage, pageSize: options.pageSize, includeCold: true,includeHistory:options.includeHistory!==false,
+        query: options.groupQuery, page: options.groupPage, pageSize: options.pageSize, includeCold: true,includeHistory:options.includeHistory!==false, includeArchived: options.includeArchived === true,
       }),
       memoryRepository.listPage({ scopeType: "user", ownerId: user, groupId: "" }, {
-        query: options.globalQuery, page: options.globalPage, pageSize: options.pageSize, includeCold: true,includeHistory:options.includeHistory!==false,
+        query: options.globalQuery, page: options.globalPage, pageSize: options.pageSize, includeCold: true,includeHistory:options.includeHistory!==false, includeArchived: options.includeArchived === true,
       }),
       this.getProfile(user),
     ])

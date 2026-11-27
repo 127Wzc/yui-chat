@@ -154,6 +154,7 @@ export function normalizeModelResponse(value: unknown): ModelResponse {
   return {
     id: text(response.id).trim() || `model-response-${Date.now()}`,
     text: normalizeText(response.text ?? response.content),
+    ...(typeof response.reasoningText === "string" ? { reasoningText: response.reasoningText } : {}),
     toolCalls,
     ...(hostedToolCalls.length ? { hostedToolCalls } : {}),
     ...(hostedSearchSources.length ? { hostedSearchSources } : {}),

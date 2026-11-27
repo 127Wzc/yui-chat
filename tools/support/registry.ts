@@ -28,6 +28,7 @@ import type { ToolExecutionContext } from "./tool-contract.js"
 import { normalizeToolResult } from "./execution-runtime.js"
 import { serializeForModel } from "../../core/message-chain/serialize.js"
 import { redactErrorText } from "../../core/shared/error-details.js"
+import type { MessageAdapter } from "../../core/message-chain/adapter.js"
 
 type UnknownRecord = Record<string, unknown>
 
@@ -464,6 +465,10 @@ export class ToolRegistry {
       // startMessage 只接收单行、简短的“任务已开始”提示，不得声称任务完成。
       // 需要最终回复时直接采用该提示，避免模型再生成一条重复确认。
       const autoSendBackgroundMessage = backgroundMessage && getToolCommon(tool).requiresFinalReply === false
+      const messageAdapter = record(context.delivery).adapter as MessageAdapter | undefined
+      const canSendBackgroundMessage = autoSendBackgroundMessage && (messageAdapter
+        ? messageAdapter.canSend({ e: record(context.e) })
+        : hostRuntime.canSendMessage(context.e))
       return {
         status: "accepted",
         content: backgroundMessage || `已加入后台任务：${task.id}`,
@@ -476,7 +481,7 @@ export class ToolRegistry {
           backgroundStatus: task.status,
           queue: backgroundTaskService.queueStatus(task.id),
           parentToolId: task.parentToolId,
-          ...(autoSendBackgroundMessage && hostRuntime.canSendMessage(context.e)
+          ...(canSendBackgroundMessage
             ? { messageSendPlan: { parts: [{ type: "text", text: backgroundMessage }] } }
             : {}),
         },

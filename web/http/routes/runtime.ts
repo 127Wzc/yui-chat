@@ -11,6 +11,15 @@ import { createWebTestEvent as webTestEvent, sanitizeWebId as sanitizeId } from 
 import { handleRoute } from "../route-handler.js"
 import type { RouteApp, RouteRequest, RouteResponse } from "../route-handler.js"
 import { toolRegistry } from "../../../tools/support/registry.js"
+import { createWebMessageAdapter } from "../chat-message-adapter.js"
+import { cacheWebDeliveryMedia, readWebDeliveryMedia } from "../../../core/media/media-cache.js"
+import { sendWebChatResponse } from "../chat-stream.js"
+
+const chatImageMime = /^image\/(?:png|jpeg|webp|gif)$/
+function chatImageLimit(): number {
+  const recognition = configStore.get().mediaRecognition as { remoteFetch?: { maxBytes?: unknown } } | undefined
+  return Math.min(20 * 1024 * 1024, Math.max(1, Number(recognition?.remoteFetch?.maxBytes) || 4 * 1024 * 1024))
+}
 
 /** 注册运行状态、Web 测试会话、媒体缓存与渲染预览接口。 */
 export function registerRuntimeRoutes(app: RouteApp): void {
@@ -128,32 +137,89 @@ export function registerRuntimeRoutes(app: RouteApp): void {
     if (prompt.length > 4000) throw new Error("单条测试消息不能超过 4000 个字符。")
     const sessionId = sanitizeId(req.body?.sessionId || crypto.randomUUID())
     const channelId = String(req.body?.channelId || "").trim().slice(0, 120)
-    const { chatService } = await import("../../../core/chat/chat-service.js")
-    const event = webTestEvent(sessionId, prompt)
-    const result = await chatService.send(event, prompt, {
-      channelId: channelId || undefined,
-      source: "web-test",
-      disableTools: true,
-    })
-    const { recordWebChatTest } = await import("../../../core/runtime/setup-guide.js")
-    recordWebChatTest(result)
-    // 回查必须用 chatService 实际持久化的键：任务配置 fallback 时 result.channel
-    // 是实际应答渠道，而持久化键固定使用首选渠道 id，按渠道重算会 miss。
-    let session: Awaited<ReturnType<typeof conversationStore.listWebTestSessions>>[number] | null = null
-    let historyUnavailable = false
-    if (result.conversationKey && result.historySaved !== false) {
-      try {
-        session = (await conversationStore.listWebTestSessions({ limit: 100 })).find(item => item.key === result.conversationKey) || null
-      } catch {
-        // 模型回复已经完成；保留结果并由页面提示历史暂时无法读取。
-        historyUnavailable = true
+    const attachmentIds = req.body?.attachments ?? []
+    if (!Array.isArray(attachmentIds) || attachmentIds.length > 3) throw new Error("每条消息最多附带 3 张图片。")
+    if (attachmentIds.some(id => typeof id !== "string" || !/^[a-f0-9]{64}$/.test(id))) throw new Error("图片附件无效。")
+    // 先建立断连监听，再异步准备附件；已取消的请求不能继续启动模型和工具。
+    return sendWebChatResponse(req, res, async transport => {
+      const images: string[] = []
+      const userDisplayContent: unknown[] = [{ type: "text", text: prompt }]
+      for (const id of attachmentIds) {
+        transport.signal?.throwIfAborted()
+        const image = await readWebDeliveryMedia(id)
+        transport.signal?.throwIfAborted()
+        if (!image || !chatImageMime.test(image.mimeType) || image.bytes.length > chatImageLimit()) throw new Error("图片附件无效、已过期或超过识图大小限制，请重新上传。")
+        images.push(`data:${image.mimeType};base64,${Buffer.from(image.bytes).toString("base64")}`)
+        const mount = String(configStore.get().web?.mountPath || "/yui-chat").replace(/\/$/, "")
+        userDisplayContent.push({ type: "image", source: { kind: "url", value: `${mount}/api/chat/media/${id}`, mimeType: image.mimeType }, alt: image.name })
       }
-    }
-    res.json({ ok: true, sessionId, result, session, historyUnavailable })
+      const { chatService } = await import("../../../core/chat/chat-service.js")
+      transport.signal?.throwIfAborted()
+      const event = webTestEvent(sessionId, prompt)
+      event.img = images
+      const result = await chatService.send(event, prompt, {
+        channelId: channelId || undefined,
+        source: "web-test",
+        ...(images.length ? { userDisplayContent } : {}),
+        disableTools: req.body?.enableTools !== true,
+        ...transport,
+        messageAdapter: createWebMessageAdapter(configStore.get() as unknown as Record<string, unknown>, transport.onDelivery),
+        extraSystemPrompt: "当前是已登录管理台的 Web 对话。message_send 投递到当前网页，支持 Markdown、图片和转发内容。当前没有 QQ 用户、群聊或宿主消息事件；不要声称已向 QQ 发送消息或执行宿主命令。",
+      })
+      const { recordWebChatTest } = await import("../../../core/runtime/setup-guide.js")
+      recordWebChatTest(result)
+      // 回查必须用 chatService 实际持久化的键：任务配置 fallback 时 result.channel
+      // 是实际应答渠道，而持久化键固定使用首选渠道 id，按渠道重算会 miss。
+      let session: Awaited<ReturnType<typeof conversationStore.getWebTestSession>> = null
+      let historyUnavailable = false
+      if (result.conversationKey && result.historySaved !== false) {
+        try {
+          session = await conversationStore.getWebTestSession(String(result.conversationKey))
+        } catch {
+          // 模型回复已经完成；保留结果并由页面提示历史暂时无法读取。
+          historyUnavailable = true
+        }
+      }
+      return { ok: true, sessionId, result, session, historyUnavailable }
+    })
   }, { errorStatus: 400 }))
+  app.post("/api/chat/attachments", auth, handleRoute(async (req, res) => {
+    const dataUrl = String(req.body?.dataUrl || "")
+    const name = String(req.body?.name || "图片").slice(0, 160)
+    const match = dataUrl.match(/^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/]+={0,2})$/)
+    if (!match || match[2].length > Math.ceil(chatImageLimit() / 3) * 4) throw new Error("仅支持 PNG、JPEG、WebP、GIF 图片，大小不能超过当前识图限制。")
+    const size = Buffer.from(match[2], "base64").length
+    if (!size || size > chatImageLimit()) throw new Error("图片为空或超过当前识图大小限制。")
+    const id = await cacheWebDeliveryMedia(dataUrl, { name })
+    const mount = String(configStore.get().web?.mountPath || "/yui-chat").replace(/\/$/, "")
+    res.json({ ok: true, id, name, url: `${mount}/api/chat/media/${id}` })
+  }, { errorStatus: 400 }))
+  app.post("/api/chat/media/preview", auth, handleRoute(async (req, res) => {
+    const url = String(req.body?.url || "").trim()
+    if (url.length > 4096 || !/^https?:\/\//i.test(url)) throw new Error("预览只支持 HTTP(S) 资源。")
+    const config = configStore.get()
+    const id = await cacheWebDeliveryMedia(url, { config })
+    const mount = String(config.web?.mountPath || "/yui-chat").replace(/\/$/, "")
+    res.json({ ok: true, url: `${mount}/api/chat/media/${id}` })
+  }, { errorStatus: 400 }))
+  app.get("/api/chat/media/:id", auth, handleRoute(async (req, res) => {
+    const media = await readWebDeliveryMedia(String(req.params.id || ""))
+    if (!media) return res.status(404).json({ ok: false, error: "媒体缓存已过期或不存在。" })
+    const inline = /^(?:image\/(?:png|jpeg|gif|webp|avif)|audio\/(?:mpeg|mp4|ogg|wav|webm)|video\/(?:mp4|webm|ogg))$/i.test(media.mimeType)
+    res.set({
+      "Content-Security-Policy": "default-src 'none'; sandbox",
+      "Content-Disposition": `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(media.name || "media")}`,
+    })
+    return res.type(inline ? media.mimeType : "application/octet-stream").send(media.bytes)
+  }))
   app.get("/api/chat/test/sessions", auth, handleRoute(async (req, res) => {
     const sessions = await conversationStore.listWebTestSessions({ limit: Number(req.query.limit || 50) })
     res.json({ ok: true, sessions })
+  }))
+  app.get("/api/chat/test/sessions/:key", auth, handleRoute(async (req, res) => {
+    const session = await conversationStore.getWebTestSession(String(req.params.key || ""))
+    if (!session) return res.status(404).json({ ok: false, error: "测试会话已过期或不存在。" })
+    res.json({ ok: true, session })
   }))
   app.delete("/api/chat/test/sessions/:key", auth, handleRoute(async (req, res) => {
     const key = String(req.params.key || "")

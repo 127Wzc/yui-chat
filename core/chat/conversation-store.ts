@@ -27,8 +27,10 @@ interface WebTestSession {
   messageCount: number
   lastSeen: number
   lastSeenAt: string
-  messages: Array<{ role: "user" | "assistant"; text: string }>
+  messages: Array<{ role: string; text: string; content?: unknown; name?: string; status?: string; at?: string; progress?: unknown[] }>
 }
+
+type WebTestSessionSummary = Omit<WebTestSession, "messages">
 
 const SWEEP_INTERVAL_MS = 10 * 60 * 1000
 let lastSweepAt = 0
@@ -101,10 +103,51 @@ function parseWebTestConversationKey(key: unknown): { key: string; channelId: st
 function webTestSessionFromRow(row: ConversationRow): WebTestSession | null {
   const identity = parseWebTestConversationKey(row.conversation_key)
   if (!identity) return null
-  const history = historyOf(row.history_json)
-    .map(record)
-    .filter(item => ["user", "assistant"].includes(text(item.role)) && text(item.content).trim())
-    .map(item => ({ role: text(item.role) as "user" | "assistant", text: text(item.content) }))
+  const state = stateOf(row.state_json)
+  const turns = (Array.isArray(state.turns) ? state.turns : []).map(record)
+  const history: WebTestSession["messages"] = []
+  const displayedTurns = new Set<unknown>()
+  const progressTurns = new Set<unknown>()
+  const displayText = (turn: UnknownRecord | undefined) => (Array.isArray(turn?.displayContent) ? turn.displayContent : []).map(record).filter(part => part.type === "text").map(part => text(part.text)).join("\n")
+  const appendDelivery = (turn: UnknownRecord | undefined) => {
+    if (!turn || displayedTurns.has(turn.id) || !Array.isArray(turn.displayContent) || !turn.displayContent.length) return
+    displayedTurns.add(turn.id)
+    history.push({ role: "assistant", text: displayText(turn), content: turn.displayContent, at: text(turn.at) })
+  }
+  let previousTurn: UnknownRecord | undefined
+  for (const item of historyOf(row.history_json).map(record)) {
+    const role = text(item.role)
+    if (!["user", "assistant", "tool"].includes(role) || !text(item.content).trim()) continue
+    const metadata = record(item.metadata)
+    const turn = turns.find(turn => turn.id === metadata.turnId)
+    if (previousTurn?.id !== turn?.id) appendDelivery(previousTurn)
+    previousTurn = turn
+    const tools = (Array.isArray(turn?.toolChain) ? turn.toolChain : []).map(record)
+    const at = text(turn?.at)
+    if (role !== "user" && turn && !progressTurns.has(turn.id) && Array.isArray(turn.progress) && turn.progress.length) {
+      progressTurns.add(turn.id)
+      history.push({ role: "process", text: "本轮执行过程", progress: turn.progress, at })
+    }
+    if (role === "tool") {
+      const trace = tools.find(trace => trace.id === metadata.toolCallId)
+      let result: unknown = item.content
+      try {
+        const saved = record(JSON.parse(text(item.content)))
+        result = saved.result ?? item.content
+        if (typeof result === "string") {
+          try { result = JSON.parse(result) as unknown } catch { /* 普通 Markdown 结果直接展示。 */ }
+        }
+      } catch { /* 旧记录可能直接保存普通文本。 */ }
+      history.push({ role, text: text(trace?.resultPreview || item.content), content: result, name: text(item.name), status: text(record(trace?.metadata).backgroundStatus || trace?.status), at })
+    } else {
+      if (role === "assistant") {
+        appendDelivery(turn)
+        if (displayText(turn) === item.content) continue
+      }
+      history.push({ role, text: text(item.content), ...(role === "user" && Array.isArray(turn?.userDisplayContent) ? { content: turn.userDisplayContent } : {}), at })
+    }
+  }
+  appendDelivery(previousTurn)
   const firstUserMessage = history.find(item => item.role === "user")?.text || "新的测试对话"
   const lastSeen = Number(row.last_seen_at || 0)
   return { ...identity, title: firstUserMessage.slice(0, 60), messageCount: history.length, lastSeen, lastSeenAt: lastSeen ? new Date(lastSeen).toISOString() : "", messages: history }
@@ -203,19 +246,36 @@ export class ConversationStore {
     return Number(result.changes || 0) > 0
   }
 
-  async listWebTestSessions(options: { limit?: unknown } = {}): Promise<WebTestSession[]> {
+  async getWebTestSession(key: string): Promise<WebTestSession | null> {
+    if (!parseWebTestConversationKey(key)) return null
+    const row = await sqliteClient.get<ConversationRow>(
+      "SELECT conversation_key, history_json, state_json, last_seen_at FROM conversations WHERE conversation_key = ? AND expires_at > ?",
+      [key, Date.now()],
+    )
+    return row ? webTestSessionFromRow(row) : null
+  }
+
+  async listWebTestSessions(options: { limit?: unknown } = {}): Promise<WebTestSessionSummary[]> {
     const max = Math.min(100, Math.max(1, Number(options.limit) || 50))
     const now = Date.now()
     await sqliteClient.run("DELETE FROM conversations WHERE expires_at <= ? AND instr(conversation_key, ':p:web-test-') > 0", [now])
     const rows = await sqliteClient.all<ConversationRow>(
-      `SELECT conversation_key, history_json, last_seen_at
+      `SELECT conversation_key, last_seen_at,
+         (SELECT substr(json_extract(item.value, '$.content'), 1, 60) FROM json_each(history_json) item
+          WHERE json_extract(item.value, '$.role') = 'user' LIMIT 1) AS title,
+         json_array_length(history_json) AS message_count
        FROM conversations
        WHERE expires_at > ? AND instr(conversation_key, ':p:web-test-') > 0
        ORDER BY last_seen_at DESC
        LIMIT ?`,
       [now, max],
     )
-    return rows.map(webTestSessionFromRow).filter((row): row is WebTestSession => Boolean(row))
+    return rows.flatMap(row => {
+      const identity = parseWebTestConversationKey(row.conversation_key)
+      if (!identity) return []
+      const lastSeen = Number(row.last_seen_at || 0)
+      return [{ ...identity, title: text(row.title) || "新的测试对话", messageCount: Number(row.message_count || 0), lastSeen, lastSeenAt: lastSeen ? new Date(lastSeen).toISOString() : "" }]
+    })
   }
 
   async deleteWebTestSession(key: string): Promise<number> {

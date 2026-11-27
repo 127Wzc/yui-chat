@@ -642,6 +642,113 @@ try {
   assert.equal(clientView.captureDraft.tokenLimit, clientView.captureDefaults.tokenLimit)
 
   const originalClientFetch = global.fetch
+  const originalWindow = global.window
+  const { createRenderer, nextTick } = await import("vue")
+  const { MemoryManageWorkspace } = await import("../output/runtime/web/client/features/memory/memory-manage-workspace.js")
+  const workspaceRequests = []
+  let workspaceFailure = "", deferWorkspaces = false
+  const pendingWorkspaces = []
+  const renderer = createRenderer({ createElement: () => ({}), createText: () => ({}), createComment: () => ({}), insert() {}, remove() {}, setText() {}, setElementText() {}, patchProp() {}, parentNode: () => null, nextSibling: () => null })
+  let filterView
+  const filterApp = renderer.createApp({ setup() { filterView = MemoryTab.setup().memoryView; return () => null } })
+  try {
+    global.window = { addEventListener() {}, removeEventListener() {} }
+    global.fetch = async url => {
+      const parsed = new URL(String(url), "http://localhost")
+      const includeArchived = parsed.searchParams.get("includeArchived") === "true"
+      const page = { items: [{ id: "current", text: "当前事实" }, ...(includeArchived ? [{ id: "archived", text: "归档测试事实" }] : [])], total: includeArchived ? 2 : 1, page: 1, pageSize: 20 }
+      const isMember = parsed.pathname.includes("/members/")
+      if (!parsed.pathname.endsWith("/captures")) {
+        if (deferWorkspaces) return new Promise(resolve => pendingWorkspaces.push(resolve))
+        if (workspaceFailure === "all") throw new Error("fixture network failure")
+        if (workspaceFailure === (isMember ? "member" : "group")) return { ok: false, status: 500, json: async () => ({ ok: false, error: "fixture workspace failure" }) }
+      }
+      const result = parsed.pathname.endsWith("/captures")
+        ? { capture: { policies: [{ scopeId: "filter-group", enabled: true }] } }
+        : { workspace: isMember ? { groupMemory: page, globalMemory: page } : { groupMemory: page, members: [{ userId: "filter-member", memoryCount: page.total }] } }
+      if (!parsed.pathname.endsWith("/captures")) workspaceRequests.push(parsed)
+      return { ok: true, json: async () => ({ ok: true, ...result }) }
+    }
+    const settle = async () => { await nextTick(); await new Promise(resolve => setImmediate(resolve)); await nextTick() }
+    filterApp.mount({})
+    await settle()
+    assert.equal(filterView.includeArchivedMemories, false, "archive checkbox starts unchecked")
+    await filterView.selectMember({ userId: "filter-member" })
+    assert(workspaceRequests.every(url => url.searchParams.get("includeArchived") === "false"), "initial group and member requests hide archives")
+    const renderWorkspace = async () => {
+      const app = createSSRApp({ components: { MemoryManageWorkspace }, setup: () => ({ view: filterView }), template: '<MemoryManageWorkspace :view="view" />' })
+      for (const [name, component] of Object.entries(components)) app.component(name, component)
+      return renderToString(app)
+    }
+    const renderFilter = async () => (await renderWorkspace()).match(/<input[^>]*type="checkbox"[^>]*>/)?.[0]
+    assert(!/\schecked(?:[\s=>])/.test(await renderFilter()), "rendered archive checkbox is unchecked by default")
+    filterView.changeGroupPage(3)
+    filterView.changeMemberPage(2)
+    await settle()
+    workspaceRequests.length = 0
+    filterView.includeArchivedMemories = true
+    await settle()
+    assert.equal(workspaceRequests.length, 2, "changing the checkbox refreshes group counts and member lists")
+    assert(workspaceRequests.every(url => url.searchParams.get("includeArchived") === "true" && url.searchParams.get("groupPage") === "1"))
+    assert.equal(filterView.groupMemoryPage, 1)
+    assert.equal(filterView.memberMemoryPage, 1)
+    assert.equal(filterView.groupMemory.total, 2)
+    assert.equal(filterView.members[0].memoryCount, 2)
+    assert.equal(filterView.currentMemberMemory.total, 2)
+    assert(/\schecked(?:[\s=>])/.test(await renderFilter()), "rendered archive checkbox reflects the selected filter")
+    filterView.memberScope = "user"
+    await settle()
+    assert.equal(workspaceRequests.at(-1).searchParams.get("includeArchived"), "true", "global memories retain the selected archive filter")
+    filterView.includeArchivedMemories = false
+    await settle()
+    assert.equal(filterView.currentMemberMemory.total, 1, "unchecking hides archives again")
+    assert.equal(filterView.members[0].memoryCount, 1)
+    for (const failure of ["all", "group", "member"]) {
+      filterView.includeArchivedMemories = true
+      await settle()
+      assert.equal(filterView.groupMemory.total, 2)
+      workspaceFailure = failure
+      filterView.includeArchivedMemories = false
+      await settle()
+      assert.equal(filterView.includeArchivedMemories, false)
+      assert.equal(Boolean(filterView.groupWorkspaceError), failure !== "member")
+      assert.equal(Boolean(filterView.memberWorkspaceError), failure !== "group")
+      assert.equal(filterView.groupMemory.total, failure === "member" ? 1 : 0, "failed group reads cannot retain counts from the previous filter")
+      assert.equal(filterView.currentMemberMemory.total, failure === "group" ? 1 : 0, "failed member reads cannot retain previous global results")
+      const failedHtml = await renderWorkspace()
+      assert(failedHtml.includes('role="alert"') && failedHtml.includes("重试"), "read failures render an explicit error and retry action")
+      assert(!failedHtml.includes("归档测试事实") && !failedHtml.includes("先添加一个采集群"), "failed filters show neither stale archives nor a misleading empty setup")
+      workspaceFailure = ""
+      if (filterView.groupWorkspaceError) await filterView.loadGroupWorkspace()
+      if (filterView.memberWorkspaceError) await filterView.loadMemberWorkspace()
+      assert.equal(filterView.groupMemory.total, 1)
+      assert.equal(filterView.currentMemberMemory.total, 1)
+      assert.equal(filterView.groupWorkspaceError + filterView.memberWorkspaceError, "")
+      assert.equal(filterView.memberScope, "user", "retry preserves the selected member scope")
+    }
+    deferWorkspaces = true
+    filterView.includeArchivedMemories = true
+    await settle()
+    assert.equal(pendingWorkspaces.length, 2)
+    assert.equal(filterView.groupWorkspace, null, "filter changes immediately remove the previous results while loading")
+    assert.equal(filterView.memberWorkspace, null)
+    assert((await renderWorkspace()).includes("正在加载群记忆"))
+    deferWorkspaces = false
+    filterView.includeArchivedMemories = false
+    await settle()
+    for (const resolve of pendingWorkspaces) resolve({ ok: false, status: 500, json: async () => ({ ok: false, error: "stale fixture failure" }) })
+    await settle()
+    assert.equal(filterView.groupMemory.total, 1)
+    assert.equal(filterView.currentMemberMemory.total, 1)
+    assert.equal(filterView.groupWorkspaceError + filterView.memberWorkspaceError, "", "late failures from the previous filter cannot clear newer results")
+    filterView.memberScope = "portrait"
+    await settle()
+    assert(/\sdisabled(?:[\s=>])/.test(await renderFilter()), "memory archive filtering is disabled in the portrait view so it cannot discard portrait drafts")
+  } finally {
+    filterApp.unmount()
+    global.fetch = originalClientFetch
+    global.window = originalWindow
+  }
   const { MemoryExtractionWorkspace } = await import("../output/runtime/web/client/features/memory/memory-extraction-workspace.js")
   try {
     const capturePolicy = { scopeId: "new-group", enabled: true, tokenLimit: 200000, retentionDays: 30 }

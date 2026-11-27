@@ -38,6 +38,7 @@ interface MemoryScope extends UnknownRecord {
 
 interface RepositoryOptions extends UnknownRecord {
   limit?: unknown
+  includeArchived?: boolean
   includeCold?: boolean
   includeInteraction?: boolean
   pageSize?: unknown
@@ -375,6 +376,7 @@ export class MemoryRepository {
     const query = String(options.query || "").trim().slice(0, 200)
     const status = options.includeCold ? "('active','warm','cold')" : "('active','warm')"
     const base = "scope_type=? AND owner_id=? AND group_id=? AND type NOT IN ('profile','short') AND NOT (type='episode' AND source='interaction') AND " + (options.includeHistory===true?"status<>'deleted'":"((status IN " + status + " AND (expires_at = 0 OR expires_at > ?)) OR (status='archived' AND validity_reason='pending'))")
+      + (options.includeArchived === false ? " AND (status<>'archived' OR validity_reason='pending')" : "")
     const params:unknown[] = [scopeType, ownerId, groupId,...(options.includeHistory===true?[]:[Date.now()])]
     const filter = query ? " AND text LIKE ?" : ""
     const filterParams = query ? [`%${query}%`] : []
@@ -408,6 +410,7 @@ export class MemoryRepository {
          WHERE scope_type='user_group' AND group_id=? AND type NOT IN ('profile','short')
            AND NOT (type='episode' AND source='interaction')
            AND ${history?"status<>'deleted'":"status IN ('active','warm','cold') AND (expires_at=0 OR expires_at>?)"}
+           ${options.includeArchived === false ? "AND (status<>'archived' OR validity_reason='pending')" : ""}
        )
        WHERE member_id<>''${filter}
        GROUP BY member_id

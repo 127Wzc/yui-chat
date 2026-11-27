@@ -180,11 +180,14 @@ export const MemoryTab = {
     const groupPickerQuery = ref("")
     const selectedGroupId = ref("")
     const groupWorkspace = ref<MemoryRecord | null>(null)
+    const groupWorkspaceError = ref("")
     const groupMemoryQuery = ref("")
     const groupMemoryPage = ref(1)
+    const includeArchivedMemories = ref(false)
     const memberQuery = ref("")
     const selectedMember = ref<MemoryRecord | null>(null)
     const memberWorkspace = ref<MemoryRecord | null>(null)
+    const memberWorkspaceError = ref("")
     const memberScope = ref("user_group")
     const memberMemoryQuery = ref("")
     const memberMemoryPage = ref(1)
@@ -988,11 +991,12 @@ export const MemoryTab = {
         return
       }
       const seq = ++loadSeq.group
+      groupWorkspaceError.value = ""
       if (!options.silent) busy.value = true
       try {
         const result = await request(pageUrl(`/api/memory/groups/${encodeURIComponent(groupId)}/workspace`, {
           groupQuery: groupMemoryQuery.value,
-          includeHistory:true,
+          includeArchived: includeArchivedMemories.value,
           groupPage: groupMemoryPage.value,
           memberQuery: memberQuery.value,
           memberLimit: 100,
@@ -1000,7 +1004,11 @@ export const MemoryTab = {
         }))
         if (seq === loadSeq.group && groupId === selectedGroupId.value) groupWorkspace.value = result.workspace
       } catch (err) {
-        toast(errorMessage(err))
+        if (seq === loadSeq.group && groupId === selectedGroupId.value) {
+          groupWorkspace.value = null
+          groupWorkspaceError.value = errorMessage(err)
+          toast(groupWorkspaceError.value)
+        }
       } finally {
         if (!options.silent) busy.value = false
       }
@@ -1072,6 +1080,7 @@ export const MemoryTab = {
         return
       }
       const seq = ++loadSeq.member
+      memberWorkspaceError.value = ""
       if (!options.silent) busy.value = true
       try {
         const query = memberMemoryQuery.value
@@ -1079,13 +1088,17 @@ export const MemoryTab = {
           groupQuery: memberScope.value === "user_group" ? query : "",
           groupPage: memberScope.value === "user_group" ? memberMemoryPage.value : 1,
           globalQuery: memberScope.value === "user" ? query : "",
-          includeHistory:true,
+          includeArchived: includeArchivedMemories.value,
           globalPage: memberScope.value === "user" ? memberMemoryPage.value : 1,
           pageSize: PAGE_SIZE,
         }))
         if (seq === loadSeq.member && selectedGroupId.value === groupId && selectedMember.value?.userId === userId) memberWorkspace.value = result.workspace
       } catch (err) {
-        toast(errorMessage(err))
+        if (seq === loadSeq.member && selectedGroupId.value === groupId && selectedMember.value?.userId === userId) {
+          memberWorkspace.value = null
+          memberWorkspaceError.value = errorMessage(err)
+          toast(memberWorkspaceError.value)
+        }
       } finally {
         if (!options.silent) busy.value = false
       }
@@ -1629,6 +1642,14 @@ export const MemoryTab = {
     const debouncedGroupSearch = debounce(() => { if (selectedGroupId.value) loadGroupWorkspace({ silent: true }) })
     const debouncedMemberSearch = debounce(() => { if (selectedMember.value) loadMemberWorkspace({ silent: true }) })
     const debouncedCaptureMessageSearch = debounce(() => { if (selectedCapture.value) loadCaptureDetails({ messagesOnly: true }) })
+    watch(includeArchivedMemories, () => {
+      groupMemoryPage.value = 1
+      memberMemoryPage.value = 1
+      groupWorkspace.value = null
+      memberWorkspace.value = null
+      if (selectedGroupId.value) loadGroupWorkspace({ silent: true })
+      if (selectedMember.value) loadMemberWorkspace({ silent: true })
+    })
     watch(groupMemoryQuery, () => {
       groupMemoryPage.value = 1
       debouncedGroupSearch()
@@ -1693,6 +1714,8 @@ export const MemoryTab = {
 
     // 子工作区只接收这个响应式视图对象，所有 API 请求、确认和刷新仍由父组件统一编排。
     const memoryView = reactive({
+      includeArchivedMemories,
+      groupWorkspaceError, memberWorkspaceError, loadGroupWorkspace, loadMemberWorkspace,
       openMaintenanceTasks,
       memoryDetail, memorySources, memoryDetailLoading, memoryDetailError, loadMemoryDetail, memoryPercent, memoryTimeLabel, memorySourceLabel,
       activeWorkspace, extractionPane, busy, captureBusy, captureAction, showGroupPicker, groupPickerQuery, selectedGroupId, selectedPolicy, capture, capturePolicies, filteredPolicies, captureDefaults, captureDraftPolicy, captureDraftDirty, captureDraftEditing, historyBackfillLimit, historyBackfillFrom, backfillLimitMax, extractionModelOptions, groupWorkspace, groupMemory, groupMemoryQuery, groupMemoryPage,

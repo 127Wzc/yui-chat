@@ -12,6 +12,7 @@ import { adapterRegistry } from "../../models/adapters/registry.js"
 import { providerResolver, type ResolvedModelChannel } from "../../models/routing/provider-resolver.js"
 import type { ModelMessage } from "../../models/protocol/types.js"
 import { deliverMessageChain, replyMessageChain } from "../../core/message-chain/delivery.js"
+import type { MessageAdapter } from "../../core/message-chain/adapter.js"
 import { MessageChainBuilder } from "../../core/message-chain/builder.js"
 import type { ContentPart, ForwardNode, ForwardNodePart, MusicPart, ResourceRef, ToolOutput } from "../../core/message-chain/types.js"
 import { fetchBilibiliVideoBuffer, fetchBilibiliVideoDetail } from "./bilibili.js"
@@ -240,6 +241,7 @@ async function sendMessageChainAction(args: ToolArgs, context: MediaToolContext)
   context.execution?.markDispatched?.()
   const receipt = await deliverMessageChain(chain, {
     e: context.e,
+    adapter: context.delivery?.adapter as MessageAdapter | undefined,
     config: context.config,
     quote: typeof context.delivery?.quote === "boolean" ? context.delivery.quote : undefined,
     operationId: text(context.execution?.operationId),
@@ -351,9 +353,10 @@ export class DrawHandoffTool {
     if (!prompt) return "缺少绘图 prompt。"
     const command = `${text(drawHandoff.prefix)} ${text(drawHandoff.promptPrefix)}${prompt}`.trim()
     const shouldSend = args.sendCommand ?? drawHandoff.sendCommand
-    if (shouldSend && context.delivery?.allowCurrentChat !== false && context.e) {
-      await replyMessageChain([{ type: "text", text: command }], { e: context.e, config, quote: response.quoteReply === true, textFiltered: true })
-      return `已发送绘图命令：${command}`
+    const adapter = context.delivery?.adapter as MessageAdapter | undefined
+    if (shouldSend && context.delivery?.allowCurrentChat !== false && context.e && (adapter ? adapter.canSend({ e: context.e }) : hostRuntime.canSendMessage(context.e))) {
+      await replyMessageChain([{ type: "text", text: command }], { e: context.e, adapter, config, quote: response.quoteReply === true, textFiltered: true })
+      return adapter ? `已发送绘图指令文本：${command}` : `已发送绘图命令：${command}`
     }
     const note = shouldSend && context.delivery?.allowCurrentChat === false
       ? "（当前对话不直接发送绘图指令。）"

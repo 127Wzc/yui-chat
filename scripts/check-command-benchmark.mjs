@@ -204,6 +204,7 @@ function selfTest() {
 const args = process.argv.slice(2), options = {}
 for (let i = 0; i < args.length; i++) {
   const flag = args[i]
+  if (flag === "--verify-host") { options[flag] = true; continue }
   assert(["--results", "--split", "--host-root"].includes(flag), `unknown option ${flag}`)
   assert(args[i+1] && !args[i+1].startsWith("--"), `${flag} requires a value`)
   options[flag] = args[++i]
@@ -223,7 +224,8 @@ for (const source of data.files) {
 }
 const split = options["--split"] || "all"
 assert(["all","development","evaluation"].includes(split))
-const status = {datasetSha256:digest(raw),targets:data.targets.length,cases:data.cases.length,sources,scorerSelfTest:"passed",paidModelCalls:0}
+const sourceReviewRequired = sources.changed.length > 0 || sources.missing.length > 0
+const status = {datasetSha256:digest(raw),targets:data.targets.length,cases:data.cases.length,sources,sourceReviewRequired,hostVerification:options["--verify-host"] ? (sourceReviewRequired ? "failed" : "passed") : "informational",scorerSelfTest:"passed",paidModelCalls:0}
 if (options["--results"]) {
   const input = JSON.parse(await fs.readFile(path.resolve(options["--results"]),"utf8"))
   assert.equal(input.run?.datasetSha256,status.datasetSha256,"results belong to a different benchmark revision")
@@ -233,5 +235,5 @@ if (options["--results"]) {
   console.log(JSON.stringify({...status,run:input.run,sourceReviewRequired:sources.changed.length>0 || sources.missing.length>0,report:score(data,input.rows,split,orderingMode)},null,2))
 } else {
   console.log(JSON.stringify({...status,qualityEvaluation:"not-run"},null,2))
-  if (sources.changed.length) process.exitCode=1
 }
+if (options["--verify-host"] && sourceReviewRequired) process.exitCode=1
